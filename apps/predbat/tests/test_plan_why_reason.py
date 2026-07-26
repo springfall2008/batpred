@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import re
+
 from prediction import Prediction
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import
 from utils import calc_percent_limit
@@ -68,17 +70,34 @@ def _get_row(raw_plan, slot_minute):
 
 
 def _codes(row):
-    return [entry["code"] for entry in row.get("reason_details", [])]
+    return [entry["code"] for entry in row.get("reasons", [])]
+
+
+def _render(row, templates):
+    """
+    Mirror of the client-side renderReasonText() in web_helper.py: fill in each reason
+    entry's template with its params, join with a space. Used here to verify the code/params/
+    template contract produces the expected human-readable text end-to-end, not just that the
+    right code was picked.
+    """
+    parts = []
+    for entry in row.get("reasons", []):
+        template = templates.get(entry["code"])
+        if not template:
+            continue
+        text = re.sub(r"\{(\w+)\}", lambda m: str(entry["params"].get(m.group(1), m.group(0))), template)
+        parts.append(text)
+    return " ".join(parts)
 
 
 def run_test_plan_why_reason(my_predbat):
     """
-    Test the per-slot "why" reason text in the JSON plan output (json_row["reason"]),
-    gated behind the plan_why_explanations switch: verify it's entirely absent when
-    the switch is off (zero overhead), and that each plan-slot state category
-    (charge / hold charge / freeze charge / export / hold export / freeze export /
-    manual overrides / no-window "demand" default) produces the expected plain
-    English sentence category.
+    Test the per-slot "why" reason data in the JSON plan output: each row's json_row["reasons"]
+    is a list of {code, params} entries (no baked text - the text lives once in
+    raw_plan["reason_templates"], per maintainer review on PR #4311), covering every plan-slot
+    state category (charge / hold charge / freeze charge / export / hold export / freeze export /
+    manual overrides / no-window "demand" default). Always on - no opt-in switch, confirmed with
+    the maintainer that this doesn't touch the C++ prediction kernel path.
     """
     print("**** Running plan why-reason tests ****")
     failed = False
@@ -90,9 +109,6 @@ def run_test_plan_why_reason(my_predbat):
     def render():
         return my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
 
-    # --- Test 1: switch off -> no reason key at all (zero overhead) ---
-    print("Test switch off omits reason key")
-    my_predbat.plan_why_explanations = False
     my_predbat.charge_window_best = window
     my_predbat.charge_limit_best = [8.0]
     my_predbat.export_window_best = []
@@ -101,99 +117,71 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.manual_freeze_charge_times = []
     my_predbat.manual_export_times = []
     my_predbat.manual_freeze_export_times = []
-    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
-    _, raw_plan = render()
-    row = _get_row(raw_plan, minutes_now)
-    if row is None:
-        print("ERROR: could not find row for minutes_now")
-        failed = True
-    elif "reason" in row or "reason_details" in row:
-        print("ERROR: reason/reason_details keys should be absent when plan_why_explanations is off")
-        failed = True
+    my_predbat.manual_demand_times = []
 
-    my_predbat.plan_why_explanations = True
-
-    # --- Test 2: Chrg ---
+    # --- Test 1: Chrg ---
     print("Test Chrg reason")
-    my_predbat.charge_window_best = window
-    my_predbat.charge_limit_best = [8.0]  # 80% target, not the reserve level
-    my_predbat.export_window_best = []
-    my_predbat.export_limits_best = []
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)  # 20%, well below the 80% target
     _, raw_plan = render()
+    templates = raw_plan["reason_templates"]
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: Chrg scenario missing reason")
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "Charging up to 80" not in row["reason"]:
-        print("ERROR: Chrg reason unexpected: {}".format(row.get("reason")))
+    elif row["reasons"][0]["params"] != {"target_percent": 80, "rate": "{:.2f}".format(row["import_rate"])}:
+        print("ERROR: Chrg params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    if row and _codes(row) != ["charge_low_rate"]:
-        print("ERROR: Chrg reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][0]["params"] != {"target_percent": 80, "rate": row["import_rate"]}:
-        print("ERROR: Chrg reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "Charging up to 80" not in _render(row, templates):
+        print("ERROR: Chrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 3: HoldChrg ---
+    # --- Test 2: HoldChrg ---
     print("Test HoldChrg reason")
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)  # 90%, already above the 80% target
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: HoldChrg scenario missing reason")
+    if row is None or _codes(row) != ["hold_charge_at_target"]:
+        print("ERROR: HoldChrg reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "Holding" not in row["reason"]:
-        print("ERROR: HoldChrg reason unexpected: {}".format(row.get("reason")))
+    elif row["reasons"][0]["params"] != {"target_percent": 80}:
+        print("ERROR: HoldChrg params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    if row and _codes(row) != ["hold_charge_at_target"]:
-        print("ERROR: HoldChrg reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][0]["params"] != {"target_percent": 80}:
-        print("ERROR: HoldChrg reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "Holding" not in _render(row, templates):
+        print("ERROR: HoldChrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 4: FrzChrg ---
+    # --- Test 3: FrzChrg ---
     print("Test FrzChrg reason")
     my_predbat.charge_limit_best = [my_predbat.reserve]  # target == reserve level
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: FrzChrg scenario missing reason")
+    if row is None or _codes(row) != ["freeze_charge_reserve"]:
+        print("ERROR: FrzChrg reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "Freeze charging" not in row["reason"]:
-        print("ERROR: FrzChrg reason unexpected: {}".format(row.get("reason")))
+    elif set(row["reasons"][0]["params"]) != {"rate", "threshold"}:
+        print("ERROR: FrzChrg params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    if row and _codes(row) != ["freeze_charge_reserve"]:
-        print("ERROR: FrzChrg reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and set(row["reason_details"][0]["params"]) != {"rate", "threshold"}:
-        print("ERROR: FrzChrg reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "Freeze charging" not in _render(row, templates):
+        print("ERROR: FrzChrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 5: manual charge override ---
+    # --- Test 4: manual charge override ---
     print("Test manual charge override reason")
     my_predbat.charge_limit_best = [8.0]
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
     my_predbat.manual_charge_times = [minutes_now]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: manual charge scenario missing reason")
+    if row is None or _codes(row) != ["charge_low_rate", "manual_override_charge"]:
+        print("ERROR: manual charge reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "You manually set this slot to charge" not in row["reason"]:
-        print("ERROR: manual charge reason unexpected: {}".format(row.get("reason")))
-        failed = True
-    if row and _codes(row) != ["charge_low_rate", "manual_override"]:
-        print("ERROR: manual charge reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][1]["params"] != {"action": "charge"}:
-        print("ERROR: manual charge reason_details params unexpected: {}".format(row["reason_details"][1]["params"]))
+    elif "You manually set this slot to charge" not in _render(row, templates):
+        print("ERROR: manual charge rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
     my_predbat.manual_charge_times = []
 
-    # --- Test 6: Exp ---
+    # --- Test 5: Exp ---
     print("Test Exp reason")
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
@@ -202,154 +190,116 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)  # 90%, well above the 50% target
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: Exp scenario missing reason")
+    if row is None or _codes(row) != ["export_high_rate"]:
+        print("ERROR: Exp reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "Exporting down to" not in row["reason"]:
-        print("ERROR: Exp reason unexpected: {}".format(row.get("reason")))
+    elif row["reasons"][0]["params"] != {"target_percent": 50.0, "rate": "{:.2f}".format(row["export_rate"])}:
+        print("ERROR: Exp params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    if row and _codes(row) != ["export_high_rate"]:
-        print("ERROR: Exp reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][0]["params"] != {"target_percent": 50.0, "rate": row["export_rate"]}:
-        print("ERROR: Exp reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "Exporting down to" not in _render(row, templates):
+        print("ERROR: Exp rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 7: HoldExp ---
+    # --- Test 6: HoldExp ---
     print("Test HoldExp reason")
     my_predbat.export_limits_best = [95.0]  # 95% target, unreachable this window
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)  # 50%, well below the 95% target
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: HoldExp scenario missing reason")
+    if row is None or _codes(row) != ["hold_export_unreachable"]:
+        print("ERROR: HoldExp reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "not triggered" not in row["reason"]:
-        print("ERROR: HoldExp reason unexpected: {}".format(row.get("reason")))
+    elif row["reasons"][0]["params"] != {"target_percent": 95.0}:
+        print("ERROR: HoldExp params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    if row and _codes(row) != ["hold_export_unreachable"]:
-        print("ERROR: HoldExp reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][0]["params"] != {"target_percent": 95.0}:
-        print("ERROR: HoldExp reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "not triggered" not in _render(row, templates):
+        print("ERROR: HoldExp rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 8: FrzExp ---
+    # --- Test 7: FrzExp ---
     print("Test FrzExp reason")
     my_predbat.export_limits_best = [99]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: FrzExp scenario missing reason")
+    if row is None or _codes(row) != ["freeze_export_below_threshold"]:
+        print("ERROR: FrzExp reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "Freezing export" not in row["reason"]:
-        print("ERROR: FrzExp reason unexpected: {}".format(row.get("reason")))
+    elif set(row["reasons"][0]["params"]) != {"rate", "threshold"}:
+        print("ERROR: FrzExp params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    if row and _codes(row) != ["freeze_export_below_threshold"]:
-        print("ERROR: FrzExp reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and set(row["reason_details"][0]["params"]) != {"rate", "threshold"}:
-        print("ERROR: FrzExp reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "Freezing export" not in _render(row, templates):
+        print("ERROR: FrzExp rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 9: manual export override ---
+    # --- Test 8: manual export override ---
     print("Test manual export override reason")
     my_predbat.export_limits_best = [50.0]
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)
     my_predbat.manual_export_times = [minutes_now]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: manual export scenario missing reason")
+    if row is None or _codes(row) != ["export_high_rate", "manual_override_export"]:
+        print("ERROR: manual export reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "You manually set this slot to export" not in row["reason"]:
-        print("ERROR: manual export reason unexpected: {}".format(row.get("reason")))
-        failed = True
-    if row and _codes(row) != ["export_high_rate", "manual_override"]:
-        print("ERROR: manual export reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][1]["params"] != {"action": "export"}:
-        print("ERROR: manual export reason_details params unexpected: {}".format(row["reason_details"][1]["params"]))
+    elif "You manually set this slot to export" not in _render(row, templates):
+        print("ERROR: manual export rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
     my_predbat.manual_export_times = []
 
-    # --- Test 10: Demand (no charge or export window active) ---
+    # --- Test 9: Demand (no charge or export window active) ---
     print("Test Demand default reason")
     my_predbat.export_window_best = []
     my_predbat.export_limits_best = []
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)  # perfectly flat -> steady
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: Demand scenario missing reason")
+    if row is None or _codes(row) != ["demand_steady"]:
+        print("ERROR: Demand reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "steady" not in row["reason"]:
-        print("ERROR: Demand reason unexpected: {}".format(row.get("reason")))
-        failed = True
-    if row and _codes(row) != ["demand"]:
-        print("ERROR: Demand reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][0]["params"] != {"direction": "steady", "manual_override": False}:
-        print("ERROR: Demand reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "steady" not in _render(row, templates):
+        print("ERROR: Demand rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
-    # --- Test 10b: manual demand override (parity gap found while restructuring - previously
-    # the only override type with no note in the reason text at all) ---
+    # --- Test 10: manual demand override ---
     print("Test manual demand override reason")
     my_predbat.manual_demand_times = [minutes_now]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or "reason" not in row:
-        print("ERROR: manual demand scenario missing reason")
+    if row is None or _codes(row) != ["demand_steady", "manual_override_demand"]:
+        print("ERROR: manual demand reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif "You manually set this slot to demand mode" not in row["reason"]:
-        print("ERROR: manual demand reason unexpected: {}".format(row.get("reason")))
-        failed = True
-    if row and _codes(row) != ["demand"]:
-        print("ERROR: manual demand reason_details codes unexpected: {}".format(_codes(row)))
-        failed = True
-    elif row and row["reason_details"][0]["params"] != {"direction": "steady", "manual_override": True}:
-        print("ERROR: manual demand reason_details params unexpected: {}".format(row["reason_details"][0]["params"]))
+    elif "You manually set this slot to demand mode" not in _render(row, templates):
+        print("ERROR: manual demand rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
     my_predbat.manual_demand_times = []
 
-    # Clean up
-    my_predbat.plan_why_explanations = False
-
-    # --- Test 11: client-side renderer wires row.reason into a title= tooltip ---
-    print("Test renderStateCell wires row.reason into a title attribute")
-    renderer_js = get_plan_renderer_js()
-    if "escapeAttr" not in renderer_js:
-        print("ERROR: expected an escapeAttr() helper in the plan renderer JS")
+    # --- Test 11: reason_templates has an entry for every code used across all scenarios ---
+    print("Test reason_templates covers every code used")
+    all_codes = set()
+    for row in raw_plan["rows"]:
+        all_codes.update(_codes(row))
+    missing = all_codes - set(templates.keys())
+    if missing:
+        print("ERROR: reason_templates missing entries for codes: {}".format(missing))
         failed = True
-    if "row.reason" not in renderer_js:
-        print("ERROR: expected renderStateCell to reference row.reason")
+
+    # --- Test 12: client-side renderer wires reasons/reason_templates into a title= tooltip ---
+    print("Test renderStateCell wires reasons into a title attribute via renderReasonText")
+    renderer_js = get_plan_renderer_js()
+    if "function renderReasonText" not in renderer_js:
+        print("ERROR: expected a renderReasonText() helper in the plan renderer JS")
+        failed = True
+    if "row.reasons" not in renderer_js:
+        print("ERROR: expected renderStateCell to reference row.reasons")
+        failed = True
+    if "reason_templates" not in renderer_js:
+        print("ERROR: expected renderStateCell to reference the shared reason_templates table")
         failed = True
     if "title=" not in renderer_js:
         print("ERROR: expected renderStateCell to emit a title= attribute")
         failed = True
     if "state2_color || '#FFFFFF'}${titleAttr}" not in renderer_js:
         print("ERROR: expected the split (state2) cell to also carry the title= tooltip, not just the first half")
-        failed = True
-
-    # --- Test 12: plan_why_explanations forces the Python prediction engine ---
-    # plan_why_explanations is a CONFIG_ITEMS (HA-exposed) switch, so it's read via
-    # config_index rather than self.args - prediction_kernel_enable is apps.yaml-only
-    # so self.args is sufficient for that one.
-    print("Test plan_why_explanations forces the Python prediction engine off the C++ kernel")
-    my_predbat.args["prediction_kernel_enable"] = True
-    my_predbat.config_index["plan_why_explanations"]["value"] = True
-    my_predbat.fetch_config_options()
-    if my_predbat.prediction_kernel_enable:
-        print("ERROR: expected prediction_kernel_enable to be forced False when plan_why_explanations is on")
-        failed = True
-
-    print("Test plan_why_explanations off leaves the C++ kernel setting alone")
-    my_predbat.args["prediction_kernel_enable"] = True
-    my_predbat.config_index["plan_why_explanations"]["value"] = False
-    my_predbat.fetch_config_options()
-    if not my_predbat.prediction_kernel_enable:
-        print("ERROR: expected prediction_kernel_enable to stay True when plan_why_explanations is off")
         failed = True
 
     if not failed:

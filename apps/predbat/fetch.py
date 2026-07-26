@@ -2265,7 +2265,6 @@ class Fetch:
 
         self.debug_enable = self.get_arg("debug_enable")
         self.plan_debug = self.get_arg("plan_debug")
-        self.plan_why_explanations = self.get_arg("plan_why_explanations")
         self.previous_status = self.get_state_wrapper(self.prefix + ".status")
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
@@ -2466,9 +2465,6 @@ class Fetch:
         self.calculate_export_on_pv = self.get_arg("calculate_export_on_pv")
         self.calculate_second_pass = self.get_arg("calculate_second_pass")
         self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
-        if self.plan_why_explanations and self.prediction_kernel_enable:
-            self.log("Warn: Disabling the C++ prediction kernel because plan_why_explanations is enabled (the 'why' plan explanations require the Python prediction engine)")
-            self.prediction_kernel_enable = False
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
