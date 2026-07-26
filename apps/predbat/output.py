@@ -1246,7 +1246,7 @@ class Output:
                         raw_state = "FrzChrg"
                         limit_percent = soc_percent
                         if reason_parts is not None:
-                            reason_parts.append("Freeze charging — the charge target for this window is set to the reserve level, so no significant charging happens here.")
+                            reason_parts.append("Freeze charging — the battery holds at the reserve level rather than charging further this slot (import rate {:.2f}p/kWh vs. your {:.2f}p/kWh threshold).".format(rate_value_import, import_cost_threshold))
                     elif limit_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
@@ -1308,7 +1308,7 @@ class Output:
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
                     if reason_parts is not None:
-                        reason_parts.append("Freezing export — the battery holds its charge in reserve rather than selling it back to the grid this slot.")
+                        reason_parts.append("Freezing export — the battery holds its charge rather than selling it back this slot (export rate {:.2f}p/kWh vs. your {:.2f}p/kWh threshold).".format(rate_value_export, export_cost_threshold))
                 elif limit < 100:
                     if not had_state:
                         state = ""
