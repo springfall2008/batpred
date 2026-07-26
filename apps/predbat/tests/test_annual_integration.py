@@ -157,8 +157,16 @@ def test_annual_integration(my_predbat):
         failed = True
 
     print("Test: Predbat is billed on actuals, not on the forecast it planned against")
-    # The forecast claims three times the real generation. If the Prediction swap were
-    # skipped, pv_generated_kwh and the cost would follow the inflated forecast.
+    # pv_generated_kwh is derived from the ACTUAL pv_step regardless of scenario
+    # (_billed_result's pv_step argument in annual.py always comes from actual_step), so it is
+    # identical between the honest and inflated runs by construction and does NOT itself
+    # exercise the Prediction swap - the assertion below on it is a sanity check, not proof.
+    # What does exercise the swap is cost: with the swap in place, calculate_plan() commits to
+    # the inflated forecast's phantom solar, then run_prediction() bills against the actuals
+    # that never delivered it, so the inflated run's billed cost should be MATERIALLY worse,
+    # not merely "not cheaper". Observed on this fixture: honest with_predbat cost_p is
+    # -471.6792p, 3x-inflated-forecast cost_p is -461.2486p, a ~10.43p degradation;
+    # material_degradation_p is set below that with margin so the assertion is not a knife edge.
     inflated = StubWeather(peak_kw=4.0, forecast_multiplier=3.0)
     inflated_results = run_one(my_predbat, config, inflated, day)
     honest_pv = results["with_predbat"]["pv_generated_kwh"]
@@ -166,8 +174,14 @@ def test_annual_integration(my_predbat):
     if abs(inflated_pv - honest_pv) > 0.01:
         print("  ERROR: reported PV should track actuals ({}) regardless of the forecast, got {}".format(honest_pv, inflated_pv))
         failed = True
-    if inflated_results["with_predbat"]["cost_p"] < results["with_predbat"]["cost_p"] - 1e-6:
+    honest_cost = results["with_predbat"]["cost_p"]
+    inflated_cost = inflated_results["with_predbat"]["cost_p"]
+    material_degradation_p = 3.0
+    if inflated_cost < honest_cost - 1e-6:
         print("  ERROR: planning against an over-optimistic forecast must not make the billed cost cheaper")
+        failed = True
+    if inflated_cost < honest_cost + material_degradation_p:
+        print("  ERROR: an over-optimistic forecast should cost at least {}p more (over-commits to solar that never arrives); got honest {} vs inflated {}".format(material_degradation_p, honest_cost, inflated_cost))
         failed = True
 
     print("Test: state isolation - a day run in isolation matches the same day run after another")

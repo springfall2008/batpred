@@ -167,6 +167,7 @@ from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
 from tests.test_annual_sampling import test_annual_sampling
 from tests.test_annual_scenarios import test_annual_scenarios
+from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
 
 # Mock the components and plugin system
@@ -413,6 +414,7 @@ def main():
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
         ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
         ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
+        ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
         ("annual_integration", test_annual_integration, "Annual prediction integration tests", True),
     ]
 

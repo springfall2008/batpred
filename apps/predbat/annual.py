@@ -959,6 +959,9 @@ class AnnualPredictor:
         self.tariff = None
         self.load_source = None
         self.caveats = []
+        # month -> [scenario keys] where export exceeded generation, so self_consumed_kwh was
+        # clamped to zero rather than being genuinely negative (see run()'s post-loop caveat)
+        self.grid_arbitrage_scenarios = {}
 
     async def _resolve_location(self, weather_fetch):
         """Return (latitude, longitude) from the config, resolving a postcode if needed."""
@@ -971,7 +974,12 @@ class AnnualPredictor:
         return resolved
 
     async def _build_load_source(self):
-        """Build the load profile source, falling back to synthetic if Octopus data fails."""
+        """Build the load profile source: synthetic, or Octopus consumption data.
+
+        The synthetic fallback is only used to backfill an isolated missing day within
+        an otherwise successful Octopus download; a download that fails outright raises
+        ``AnnualConfigError`` rather than silently substituting the synthetic profile.
+        """
         load_config = self.config["load"]
         year = self.config["year"]
 
@@ -1050,42 +1058,73 @@ class AnnualPredictor:
                 continue
             # The 48 hour plan for the last sampled day can spill into the next month
             next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
-            await self.tariff.fetch_month(next_year, next_month)
+            if not await self.tariff.fetch_month(next_year, next_month):
+                spill_message = "Rate data for {}-{:02d} could not be downloaded, so any plan hours for month {} spilling into it may be costed as free.".format(next_year, next_month, month)
+                self.log("Warn: Annual: {}".format(spill_message))
+                if spill_message not in self.caveats:
+                    self.caveats.append(spill_message)
 
-            samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar) if has_solar else select_samples(None, year, month, samples_per_month, has_solar=False)
+            samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar)
             if not samples:
                 months.append({"month": month, "status": "unavailable", "reason": "no usable weather days", "days": days_in_month, "standing_charge_p": standing_charge_p})
                 completed += 1
                 continue
 
+            surviving_samples = []
             day_results = []
-            for day, _ in samples:
+            failed_days = []
+            for day, weight in samples:
                 midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
-                day_results.append(run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc))
+                try:
+                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc)
+                except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
+                    self.log("Warn: Annual: {} in month {} failed to plan/cost ({}: {}); excluding it from this month's total".format(day.isoformat(), month, type(exc).__name__, exc))
+                    failed_days.append(day.isoformat())
+                    continue
+                surviving_samples.append((day, weight))
+                day_results.append(result)
 
-            totals = self._month_scenarios(samples, day_results)
-            first_midnight = zone.localize(datetime(samples[0][0].year, samples[0][0].month, samples[0][0].day)).astimezone(pytz.utc)
+            if not day_results:
+                months.append({"month": month, "status": "unavailable", "reason": "every sampled day failed to plan", "days": days_in_month, "standing_charge_p": standing_charge_p, "failed_days": failed_days})
+                completed += 1
+                continue
+
+            totals = self._month_scenarios(surviving_samples, day_results)
+            first_midnight = zone.localize(datetime(surviving_samples[0][0].year, surviving_samples[0][0].month, surviving_samples[0][0].day)).astimezone(pytz.utc)
             _, rate_export = self.tariff.rates_for(first_midnight, DAY_MINUTES)
             export_rate = average_rate(rate_export, DAY_MINUTES)
 
             scenarios = {}
             for key in SCENARIO_KEYS:
                 entry = {field: totals[key][field] for field in SCENARIO_FIELDS}
-                entry["export_credit_p"] = entry["export_kwh"] * export_rate
-                entry["self_consumed_kwh"] = max(0.0, entry["pv_generated_kwh"] - entry["export_kwh"])
-                scenarios[key] = {name: round(value, 3) for name, value in entry.items()}
+                entry["export_credit_p_estimate"] = entry["export_kwh"] * export_rate
+                self_consumed = entry["pv_generated_kwh"] - entry["export_kwh"]
+                entry["self_consumed_kwh"] = max(0.0, self_consumed)
+                meaningful = self_consumed >= 0.0
+                rounded = {name: round(value, 3) for name, value in entry.items()}
+                rounded["self_consumed_kwh_meaningful"] = meaningful
+                scenarios[key] = rounded
+                if not meaningful:
+                    self.grid_arbitrage_scenarios.setdefault(month, []).append(key)
 
             months.append(
                 {
                     "month": month,
-                    "status": "ok",
+                    "status": "ok" if not failed_days else "degraded",
                     "days": days_in_month,
-                    "sampled_days": [day.isoformat() for day, _ in samples],
+                    "sampled_days": [day.isoformat() for day, _ in surviving_samples],
+                    "failed_days": failed_days,
                     "standing_charge_p": round(standing_charge_p, 3),
                     "scenarios": scenarios,
                 }
             )
             completed += 1
+
+        if self.grid_arbitrage_scenarios:
+            arbitrage_count = sum(len(keys) for keys in self.grid_arbitrage_scenarios.values())
+            first_month = sorted(self.grid_arbitrage_scenarios)[0]
+            message = "self_consumed_kwh was clamped to zero rather than negative for {} scenario/month row(s) (from month {}): export exceeded generation there. See self_consumed_kwh_meaningful.".format(arbitrage_count, first_month)
+            self.caveats.append(message)
 
         if progress:
             progress(total_units, total_units, "Complete")
@@ -1093,19 +1132,32 @@ class AnnualPredictor:
         return self._build_results(months)
 
     def _build_results(self, months):
-        """Assemble the final results document from the per-month rows."""
-        included = [entry for entry in months if entry["status"] == "ok"]
-        excluded = [entry["month"] for entry in months if entry["status"] != "ok"]
+        """Assemble the final results document from the per-month rows.
 
-        annual_scenarios = {}
-        for key in SCENARIO_KEYS:
-            annual_scenarios[key] = {field: round(sum(entry["scenarios"][key][field] for entry in included), 3) for field in SCENARIO_FIELDS + ["export_credit_p", "self_consumed_kwh"]}
-        standing_total = round(sum(entry["standing_charge_p"] for entry in included), 3)
+        A month that is entirely ``"unavailable"`` (no rate data, no usable weather days, or
+        every sampled day failed) contributes nothing. An ``"ok"`` or ``"degraded"`` month
+        (some, but not all, of its sampled days failed - see ``run()``) still carries real
+        figures and is included. When no month is included at all, ``annual.scenarios`` and
+        ``annual.standing_charge_p`` are ``None`` and ``annual.savings`` is empty rather than
+        reporting a fabricated zero-cost, zero-saving year.
+        """
+        included = [entry for entry in months if entry["status"] in ("ok", "degraded")]
+        excluded = [entry["month"] for entry in months if entry["status"] not in ("ok", "degraded")]
 
+        annual_scenarios = None
+        standing_total = None
         savings = {}
-        if annual_scenarios:
+        if included:
+            annual_scenarios = {}
+            for key in SCENARIO_KEYS:
+                annual_scenarios[key] = {field: round(sum(entry["scenarios"][key][field] for entry in included), 3) for field in SCENARIO_FIELDS + ["export_credit_p_estimate", "self_consumed_kwh"]}
+            standing_total = round(sum(entry["standing_charge_p"] for entry in included), 3)
             savings["pv_battery_vs_none_p"] = round(annual_scenarios["no_pvbat"]["cost_p"] - annual_scenarios["without_predbat"]["cost_p"], 3)
             savings["predbat_vs_baseline_p"] = round(annual_scenarios["without_predbat"]["cost_p"] - annual_scenarios["with_predbat"]["cost_p"], 3)
+        else:
+            no_result_message = "No month produced a usable result, so no annual totals or savings could be calculated."
+            if no_result_message not in self.caveats:
+                self.caveats.append(no_result_message)
 
         return {
             "year": self.config["year"],
