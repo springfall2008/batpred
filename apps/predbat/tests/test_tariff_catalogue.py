@@ -35,6 +35,27 @@ def test_tariff_catalogue(my_predbat):
             failed = True
         seen_ids.add(entry.get("id"))
 
+    print("Test: the built-in catalogue contains exactly the expected ids")
+    expected_ids = [
+        "cap_seg",
+        "eon_next_drive",
+        "igo_fixed",
+        "igo_agile",
+        "go_fixed",
+        "go_agile",
+        "agile_fixed",
+        "agile_agile",
+        "flux",
+        "cosy_fixed",
+        "cosy_agile",
+        "snug_fixed",
+        "iflux",
+    ]
+    actual_ids = [entry["id"] for entry in BUILTIN_TARIFFS]
+    if actual_ids != expected_ids:
+        print("  ERROR: built-in ids changed, expected {} got {}".format(expected_ids, actual_ids))
+        failed = True
+
     print("Test: no built-in entry uses Compare's key names")
     for entry in BUILTIN_TARIFFS:
         for stale in ["rates_import_octopus_url", "rates_export_octopus_url"]:
