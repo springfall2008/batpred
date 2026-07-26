@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 import pytz
 
-from annual import DAY_MINUTES, MAX_SESSIONS_PER_WEEK, PLAN_MINUTES, SCENARIO_FIELDS, SCENARIO_KEYS, _blend_results, _run_scenarios, car_charging_schedule, run_day, validate_config
+from annual import DAY_MINUTES, MAX_SESSIONS_PER_WEEK, PLAN_MINUTES, SCENARIO_FIELDS, SCENARIO_KEYS, _run_scenarios, car_charging_schedule, run_day, validate_config
 from annual_load import SyntheticLoadProfile
 from tests.test_infra import reset_inverter
 
@@ -259,13 +259,18 @@ def test_annual_integration(my_predbat):
         failed = True
 
     print("Test: the blended result equals f * with-car leg + (1 - f) * standalone no-car leg")
-    # Proves two things at once: the blend arithmetic itself, and that the with-car leg
-    # does not contaminate the without-car leg it runs alongside (run_day() runs the
-    # with-car leg first, then the without-car leg, on the SAME predbat instance with no
-    # reset_inverter() between them - only reset_sample_state() separates them, exactly as
-    # reproduced below). If reset_sample_state() ever stopped clearing the scenario-3 car
-    # overrides (car_charging_planned, car_charging_limit, etc.), the without-car leg run
-    # here would silently inherit them and this comparison would drift outside tolerance.
+    # What this covers: run_day()'s WIRING - that it feeds the two legs into the blend in
+    # the right order, with the right fraction, and mutates nothing else along the way.
+    # The expected value below is computed with explicit arithmetic rather than by calling
+    # _blend_results(), so a bug inside _blend_results() cannot cancel itself out across
+    # both sides of the comparison.
+    #
+    # What it does NOT cover, despite the tempting reading: leg contamination. The manual
+    # replay below runs the same two legs through the same code path in the same order as
+    # run_day() does, so a reset_sample_state() regression would corrupt both sides
+    # identically and stay inside tolerance. Regression cover for the car-field reset is
+    # the state-based assertion in test_annual_bootstrap.py; blend arithmetic on fabricated
+    # inputs is covered in test_annual_scenarios.py.
     car_annual_kwh = car_config["load"]["car_charging_kwh"]
     car_rate_kw = car_config["load"]["car_rate_kw"]
     sessions_per_week, session_kwh = car_charging_schedule(car_annual_kwh, car_rate_kw)
@@ -277,11 +282,10 @@ def test_annual_integration(my_predbat):
     with_car_leg = _run_scenarios(my_predbat, car_config, weather, StubTariff(), car_load_source, day, midnight, car_kwh=session_kwh, car_rate_kw=car_rate_kw)
     standalone_no_car_leg = _run_scenarios(my_predbat, car_config, weather, StubTariff(), car_load_source, day, midnight, car_kwh=0.0, car_rate_kw=car_rate_kw)
 
-    expected_blend = _blend_results(with_car_leg, standalone_no_car_leg, fraction)
     run_day_blend = run_one(my_predbat, car_config, weather, day)
     for key in SCENARIO_KEYS:
         for field in SCENARIO_FIELDS:
-            expected_value = expected_blend[key][field]
+            expected_value = fraction * with_car_leg[key][field] + (1.0 - fraction) * standalone_no_car_leg[key][field]
             actual_value = run_day_blend[key][field]
             if abs(expected_value - actual_value) > 1e-6:
                 print("  ERROR: blended {}.{} = {}, expected f * with_car_leg + (1 - f) * standalone_no_car_leg = {}".format(key, field, actual_value, expected_value))
