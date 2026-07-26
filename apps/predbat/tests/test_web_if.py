@@ -14,6 +14,23 @@ import os
 import shutil
 import tempfile
 from components import Components
+from web_helper import get_plan_renderer_js
+
+
+def test_plan_renderer_renders_batch_controls():
+    """
+    Ensure the plan renderer exposes the batch selection controls and syncs
+    the runtime batch state.
+    """
+    renderer_js = get_plan_renderer_js()
+    assert "predbatSelectedTimeOverrides" in renderer_js
+    assert "setSelectedTimeOverrides(getSelectedTimeOverrides())" in renderer_js
+    assert "openDropdown(dropdownId)" in renderer_js
+    assert "Batch select" in renderer_js
+    assert "Cancel Batch" in renderer_js
+    assert "batch-select-action" in renderer_js
+    assert "cancel-batch" in renderer_js
+    assert "querySelectorAll('a.batch-select-action, a.cancel-batch')" in renderer_js
 
 
 def run_test_web_if(my_predbat):
@@ -238,6 +255,16 @@ def run_test_web_if(my_predbat):
             accessed_endpoints.add(("POST", "/plan_override"))
         else:
             print("ERROR: Unexpected response from /plan_override: {} - {}".format(res.status_code, res.text))
+            failed = 1
+
+        print("Test POST /plan_override with multiple times")
+        address = "http://127.0.0.1:5052/plan_override"
+        data = {"time": "00:00,01:00", "action": "Manual Demand"}
+        res = requests.post(address, data=data)
+        if res.status_code in [200]:
+            accessed_endpoints.add(("POST", "/plan_override"))
+        else:
+            print("ERROR: Unexpected response from /plan_override with multiple times: {} - {}".format(res.status_code, res.text))
             failed = 1
 
         # Test /rate_override POST
