@@ -1234,14 +1234,20 @@ def build_label(config):
     A selector listing five bare timestamps tells the user nothing about which
     run was which, which defeats the point of keeping more than one.
     """
+    # Normalise once: `config or {}` is NOT enough, because any truthy non-dict
+    # (a string, an int, a non-empty list - i.e. a corrupted stored document)
+    # short-circuits past it and then raises on .get(). A label failure must never
+    # take out the page the user needs in order to start a fresh run.
+    config = config if isinstance(config, dict) else {}
+
     parts = []
-    battery = config.get("battery") if isinstance(config, dict) else None
+    battery = config.get("battery")
     if isinstance(battery, dict) and battery.get("size_kwh"):
         parts.append("{}kWh battery".format(battery["size_kwh"]))
     else:
         parts.append("no battery")
 
-    solar = config.get("solar") if isinstance(config, dict) else None
+    solar = config.get("solar")
     if solar:
         total_kwp = sum(array.get("kwp", 0) for array in solar if isinstance(array, dict))
         if total_kwp:
@@ -1249,7 +1255,7 @@ def build_label(config):
     else:
         parts.append("no solar")
 
-    parts.append(_describe_tariff((config or {}).get("tariff")))
+    parts.append(_describe_tariff(config.get("tariff")))
     return " · ".join(parts)
 
 
