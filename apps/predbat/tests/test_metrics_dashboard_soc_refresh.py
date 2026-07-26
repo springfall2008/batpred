@@ -44,6 +44,13 @@ def test_soc_chart_center_text_reads_live_data(my_predbat):
     assert "chart.data.datasets[0].data[0]" in plugin_block, "afterDraw should read the live percentage from the chart's own current data, not a closed-over value"
     assert "MD_DATA.battery_soc_kwh" in plugin_block, "afterDraw should read the live kWh figure from the MD_DATA global, not a closed-over value"
 
+    # Also assert the exact pre-fix stale patterns are gone, not just that the new reads are present -
+    # otherwise a partial revert (e.g. leaving one stale read alongside the new one) would still pass
+    # (Copilot review on #4308).
+    assert "mdFmt(pct," not in plugin_block, "afterDraw should not read the bare pct value closed over at chart creation time"
+    assert "d.battery_soc_kwh" not in plugin_block, "afterDraw should not read battery_soc_kwh from the closed-over d parameter"
+    assert "d.battery_max_kwh" not in plugin_block, "afterDraw should not read battery_max_kwh from the closed-over d parameter"
+
     print("✓ afterDraw plugin reads live chart data and MD_DATA, not stale closure values")
     print("✓ Test passed")
     return False
