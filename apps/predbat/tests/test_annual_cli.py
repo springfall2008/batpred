@@ -62,6 +62,36 @@ def sample_results_no_usable_month():
     }
 
 
+def sample_results_with_degraded_month():
+    """Return a results document containing one 'degraded' month, built from fewer samples.
+
+    Mirrors what ``AnnualPredictor.run()`` emits when some, but not all, of a month's
+    sampled days failed to plan: the month still carries real ``scenarios`` figures and
+    a non-empty ``failed_days`` list, and - unlike an "unavailable" month - it IS counted
+    in ``annual.months_included`` and is absent from ``annual.months_excluded``.
+    """
+    scenarios = {
+        "no_pvbat": {"cost_p": 9000.0, "import_kwh": 300.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 0.0, "self_consumed_kwh": 0.0, "self_consumed_kwh_meaningful": True},
+        "without_predbat": {"cost_p": 7000.0, "import_kwh": 250.0, "export_kwh": 15.0, "pv_generated_kwh": 100.0, "battery_throughput_kwh": 80.0, "export_credit_p_estimate": 200.0, "self_consumed_kwh": 85.0, "self_consumed_kwh_meaningful": True},
+        "with_predbat": {"cost_p": 5000.0, "import_kwh": 230.0, "export_kwh": 30.0, "pv_generated_kwh": 100.0, "battery_throughput_kwh": 120.0, "export_credit_p_estimate": 450.0, "self_consumed_kwh": 70.0, "self_consumed_kwh_meaningful": True},
+    }
+    return {
+        "year": 2025,
+        "config": {},
+        "months": [
+            {"month": 3, "status": "degraded", "days": 31, "sampled_days": ["2025-03-10"], "failed_days": ["2025-03-24"], "standing_charge_p": 1860.0, "scenarios": scenarios},
+        ],
+        "annual": {
+            "scenarios": scenarios,
+            "standing_charge_p": 1860.0,
+            "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": 2000.0},
+            "months_included": 1,
+            "months_excluded": [],
+        },
+        "caveats": [],
+    }
+
+
 def test_annual_cli(my_predbat):
     """Verify the table output reports every month, including excluded ones."""
     failed = False
@@ -96,6 +126,32 @@ def test_annual_cli(my_predbat):
     print("Test: the excluded-month count is stated alongside the annual totals")
     if "1 of 12" not in table:
         print("  ERROR: the table should state how many months are included, got:\n{}".format(table))
+        failed = True
+
+    print("Test: the export credit line warns it is already included in cost, not additional income")
+    if "export credit" not in table.lower():
+        print("  ERROR: the table should show an export credit line, got:\n{}".format(table))
+        failed = True
+    if "already included" not in table.lower():
+        print("  ERROR: the export credit line must warn it is already counted inside cost, to stop it being double-counted, got:\n{}".format(table))
+        failed = True
+
+    print("Test: a degraded month (some sampled days failed) is costed and included, not treated as unavailable")
+    degraded_table = format_table(sample_results_with_degraded_month())
+    if "unavailable" in degraded_table.lower():
+        print("  ERROR: a degraded month must not be rendered as unavailable, got:\n{}".format(degraded_table))
+        failed = True
+    if "£90.00" not in degraded_table:
+        print("  ERROR: the degraded month's no_pvbat cost (9000p = £90.00) should still be rendered, got:\n{}".format(degraded_table))
+        failed = True
+    if "Excluded months" in degraded_table:
+        print("  ERROR: a degraded month must not appear as excluded, got:\n{}".format(degraded_table))
+        failed = True
+    if "1 of 12" not in degraded_table:
+        print("  ERROR: the degraded month should still count towards months_included, got:\n{}".format(degraded_table))
+        failed = True
+    if "degraded" not in degraded_table.lower():
+        print("  ERROR: the table should signal that the month came from fewer samples than planned, got:\n{}".format(degraded_table))
         failed = True
 
     print("Test: when no month is usable, the table does not fabricate a zero-cost year")

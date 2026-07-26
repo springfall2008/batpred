@@ -29,17 +29,18 @@ SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "without_predbat": "Without Pred
 
 
 def _format_pence(pence, currency):
-    """Format a pence amount as a pounds figure, or append an explicit currency label.
+    """Format a pence amount as an explicitly-labelled pounds figure.
 
-    ``cost_p`` and friends are stored in pence throughout the results document,
-    so the default ``currency="p"`` simply renders the pounds equivalent with no
-    suffix (the values are conventionally reported in £ once divided). Any other
-    ``currency`` value is appended so a caller adapting this for a non-GBP config
-    still gets a labelled figure rather than a bare, ambiguous number.
+    ``cost_p`` and friends are stored in pence throughout the results document.
+    A bare "12.34" tells the reader nothing about the unit, so the default
+    ``currency="p"`` renders the pounds equivalent with a leading "£" (e.g.
+    "£12.34") rather than an unlabelled number. Any other ``currency`` value is
+    appended as a label instead, so a caller adapting this for a non-GBP config
+    still gets an unambiguous figure.
     """
     amount = pence / 100.0
     if currency == "p":
-        return "{:.2f}".format(amount)
+        return "£{:.2f}".format(amount)
     return "{:.2f} {}".format(amount, currency)
 
 
@@ -144,13 +145,22 @@ def main(argv=None):
         sys.stderr.write("Config error: {}\n".format(error))
         return 2
 
+    exit_code = 0
     if args.out:
-        with open(args.out, "w") as handle:
-            json.dump(results, handle, indent=2)
-        sys.stderr.write("Results written to {}\n".format(args.out))
+        try:
+            with open(args.out, "w") as handle:
+                json.dump(results, handle, indent=2)
+            sys.stderr.write("Results written to {}\n".format(args.out))
+        except (OSError, TypeError, ValueError) as error:
+            # The projection just took several minutes to compute; a failed write to
+            # --out must not throw the results away. The table below is still printed
+            # and the failure is only reported through a non-zero exit code, so a
+            # caller relying on --out to have succeeded is not fooled into thinking it did.
+            sys.stderr.write("Could not write results to {}: {}\n".format(args.out, error))
+            exit_code = 1
 
     print(format_table(results))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
