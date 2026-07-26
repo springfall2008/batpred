@@ -250,6 +250,9 @@ def run_test_plan_why_reason(my_predbat):
     if "title=" not in renderer_js:
         print("ERROR: expected renderStateCell to emit a title= attribute")
         failed = True
+    if "state2_color || '#FFFFFF'}${titleAttr}" not in renderer_js:
+        print("ERROR: expected the split (state2) cell to also carry the title= tooltip, not just the first half")
+        failed = True
 
     # --- Test 12: plan_why_explanations forces the Python prediction engine ---
     # plan_why_explanations is a CONFIG_ITEMS (HA-exposed) switch, so it's read via

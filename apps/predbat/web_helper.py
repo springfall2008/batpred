@@ -6727,9 +6727,11 @@ def get_plan_renderer_js():
         html += row.state_text || '';
         html += '</td>';
 
-        // Second state cell if split
+        // Second state cell if split - same combined reason text as the first half, since
+        // json_row.reason is a single string covering both halves of a split (e.g. charging
+        // and freeze-exporting in the same slot), not two separately-attributed sentences.
         if (row.split && row.state2_text) {
-            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${titleAttr}>${row.state2_text}</td>`;
         }
 
         return html;
