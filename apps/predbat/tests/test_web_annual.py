@@ -9,6 +9,9 @@
 
 """Tests for the Annual tab's prefill and configuration handling."""
 
+import builtins
+from unittest.mock import patch
+
 from annual import validate_config
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage
@@ -49,11 +52,35 @@ def test_web_annual(my_predbat):
             print("  ERROR: solar should fall back to the default array")
             failed = True
 
+        print("Test: prefill_config() never reads apps.yaml (or anything else) from disk")
+        # The unconfigured case above is exactly where this matters: apps.yaml may not
+        # exist at all. Tracks every open() call made during prefill_config() and asserts
+        # none of them targets apps.yaml, rather than relying on inspection alone.
+        with patch("builtins.open", wraps=builtins.open) as mock_open:
+            make_page(my_predbat).prefill_config()
+        opened_paths = [call.args[0] for call in mock_open.call_args_list]
+        if any(str(path).endswith("apps.yaml") for path in opened_paths):
+            print("  ERROR: prefill_config() must never read apps.yaml from disk, opened {}".format(opened_paths))
+            failed = True
+
         print("Test: a zero soc_max counts as unset and falls back to the default")
         my_predbat.args["soc_max"] = 0
         config = make_page(my_predbat).prefill_config()
         if config["battery"]["size_kwh"] != DEFAULT_CONFIG["battery"]["size_kwh"]:
             print("  ERROR: a zero soc_max should fall back, got {}".format(config["battery"]["size_kwh"]))
+            failed = True
+
+        print("Test: a multi-inverter soc_max list is summed rather than treated as absent")
+        # soc_max is a sensor_list in APPS_SCHEMA - a real multi-inverter system holds a
+        # list here, not a scalar, and the annual model wants one total usable capacity.
+        my_predbat.args["soc_max"] = [6.0, 6.5]
+        page = make_page(my_predbat)
+        config = page.prefill_config()
+        if config["battery"]["size_kwh"] != 12.5:
+            print("  ERROR: a multi-inverter soc_max should be summed to a total capacity, got {}".format(config["battery"]["size_kwh"]))
+            failed = True
+        if not page.is_configured():
+            print("  ERROR: a multi-inverter battery should count as configured")
             failed = True
 
         print("Test: configured values are read from args and used")
@@ -81,6 +108,24 @@ def test_web_annual(my_predbat):
         if not make_page(my_predbat).is_configured():
             print("  ERROR: a configured solar array alone should count as configured")
             failed = True
+
+        print("Test: an Octopus tariff URL survives prefill (a dotted URL must not be read as an entity id)")
+        # get_arg()'s default indirect=True treats any dotted string as a Home Assistant
+        # entity id to resolve; a URL is full of dots, so this only passes if the URL
+        # fields are read with indirect=False.
+        import_url = "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/"
+        export_url = "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+        my_predbat.args["rates_import_octopus_url"] = import_url
+        my_predbat.args["rates_export_octopus_url"] = export_url
+        config = make_page(my_predbat).prefill_config()
+        if config["tariff"].get("import_octopus_url") != import_url:
+            print("  ERROR: the Octopus import URL should survive into tariff.import_octopus_url, got {}".format(config["tariff"]))
+            failed = True
+        if config["tariff"].get("export_octopus_url") != export_url:
+            print("  ERROR: the Octopus export URL should survive into tariff.export_octopus_url, got {}".format(config["tariff"]))
+            failed = True
+        my_predbat.args.pop("rates_import_octopus_url", None)
+        my_predbat.args.pop("rates_export_octopus_url", None)
 
         print("Test: the catalogue merges the user's compare_list")
         my_predbat.args["compare_list"] = [{"id": "mine", "name": "My tariff", "rates_import_octopus_url": "https://example.com/x"}]

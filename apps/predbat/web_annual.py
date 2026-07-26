@@ -44,14 +44,21 @@ class AnnualPage:
         self.base = web_interface.base
         self.log = web_interface.log
 
-    def _arg(self, name, default=None):
+    def _arg(self, name, default=None, indirect=True, combine=False):
         """Read one configuration value from the in-memory args dictionary.
 
         Never reads apps.yaml from disk: the file may not exist at all in some
         deployments, which is exactly where the unconfigured case matters most.
+
+        ``indirect`` defaults to True to match ``get_arg()``'s own default, but a
+        caller reading a value that can itself contain a literal dot - a URL, most
+        obviously - must pass False. With indirect left True, ``resolve_arg()``
+        (``userinterface.py``) treats any dotted string as a Home Assistant entity
+        id, fails to find one, and silently returns the default instead of the
+        real value - see the call sites below for the field this bit precisely.
         """
         try:
-            return self.base.get_arg(name, default)
+            return self.base.get_arg(name, default, indirect=indirect, combine=combine)
         except Exception:
             return default
 
@@ -104,7 +111,11 @@ class AnnualPage:
         Those two are what signal a configured system; with neither, the form
         shows a banner saying the values on screen are examples.
         """
-        battery_kwh = self._arg("soc_max", 0.0) or 0
+        # combine=True sums a multi-inverter soc_max (a sensor_list in APPS_SCHEMA) into one
+        # total usable capacity, which is what the annual model wants. Without it, get_arg()'s
+        # float-default coercion raises on a list, is caught internally, and silently returns
+        # the default - a multi-inverter system would otherwise read as unconfigured.
+        battery_kwh = self._arg("soc_max", 0.0, combine=True) or 0
         try:
             battery_kwh = float(battery_kwh)
         except (TypeError, ValueError):
@@ -127,7 +138,11 @@ class AnnualPage:
         if arrays:
             config["solar"] = arrays
 
-        battery_kwh = self._arg("soc_max", 0.0) or 0
+        # combine=True sums a multi-inverter soc_max (a sensor_list in APPS_SCHEMA) into one
+        # total usable capacity, which is what the annual model wants. Without it, get_arg()'s
+        # float-default coercion raises on a list, is caught internally, and silently returns
+        # the default - a multi-inverter system would otherwise read as unconfigured.
+        battery_kwh = self._arg("soc_max", 0.0, combine=True) or 0
         try:
             battery_kwh = float(battery_kwh)
         except (TypeError, ValueError):
@@ -149,8 +164,13 @@ class AnnualPage:
         if inverter_type:
             config["battery"]["hybrid"] = True
 
-        import_url = self._arg("rates_import_octopus_url", None)
-        export_url = self._arg("rates_export_octopus_url", None)
+        # indirect=False: these values are URLs, full of literal dots, which get_arg()'s
+        # default indirect=True would otherwise treat as a Home Assistant entity id to look
+        # up - failing to find one and silently returning None instead of the real URL. See
+        # compare.py's and fetch.py's own Octopus URL reads for the same requirement. Do not
+        # "simplify" this back to the _arg() default.
+        import_url = self._arg("rates_import_octopus_url", None, indirect=False)
+        export_url = self._arg("rates_export_octopus_url", None, indirect=False)
         if import_url:
             config["tariff"] = {"import_octopus_url": import_url, "standing_charge_p_per_day": DEFAULT_CONFIG["tariff"]["standing_charge_p_per_day"]}
             if export_url:
