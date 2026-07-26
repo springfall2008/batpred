@@ -1,0 +1,113 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+
+"""Tests for the annual prediction command line output."""
+
+from annual_cli import format_table
+
+
+def sample_results():
+    """Return a small results document covering an ok month and an unavailable one."""
+    scenarios = {
+        "no_pvbat": {"cost_p": 12000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 0.0, "self_consumed_kwh": 0.0, "self_consumed_kwh_meaningful": True},
+        "without_predbat": {"cost_p": 8000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "export_credit_p_estimate": 300.0, "self_consumed_kwh": 100.0, "self_consumed_kwh_meaningful": True},
+        "with_predbat": {"cost_p": 6000.0, "import_kwh": 280.0, "export_kwh": 45.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "export_credit_p_estimate": 675.0, "self_consumed_kwh": 75.0, "self_consumed_kwh_meaningful": True},
+    }
+    return {
+        "year": 2025,
+        "config": {},
+        "months": [
+            {"month": 1, "status": "ok", "days": 31, "sampled_days": ["2025-01-08", "2025-01-24"], "standing_charge_p": 1860.0, "scenarios": scenarios},
+            {"month": 2, "status": "unavailable", "reason": "no rate data available", "days": 28, "standing_charge_p": 1680.0},
+        ],
+        "annual": {
+            "scenarios": scenarios,
+            "standing_charge_p": 1860.0,
+            "savings": {"pv_battery_vs_none_p": 4000.0, "predbat_vs_baseline_p": 2000.0},
+            "months_included": 1,
+            "months_excluded": [2],
+        },
+        "caveats": ["An example caveat."],
+    }
+
+
+def sample_results_no_usable_month():
+    """Return a results document where every month is unavailable and no annual total exists.
+
+    Mirrors what ``AnnualPredictor._build_results`` returns when nothing is included:
+    ``annual.scenarios`` and ``annual.standing_charge_p`` are ``None`` and ``savings`` is
+    empty. ``format_table`` must not divide those ``None`` values or print them as zeroes.
+    """
+    return {
+        "year": 2025,
+        "config": {},
+        "months": [
+            {"month": 1, "status": "unavailable", "reason": "no rate data available", "days": 31, "standing_charge_p": 1860.0},
+            {"month": 2, "status": "unavailable", "reason": "no usable weather days", "days": 28, "standing_charge_p": 1680.0},
+        ],
+        "annual": {
+            "scenarios": None,
+            "standing_charge_p": None,
+            "savings": {},
+            "months_included": 0,
+            "months_excluded": [1, 2],
+        },
+        "caveats": ["No month produced a usable result, so no annual totals or savings could be calculated."],
+    }
+
+
+def test_annual_cli(my_predbat):
+    """Verify the table output reports every month, including excluded ones."""
+    failed = False
+    print("**** Testing annual CLI output ****")
+
+    table = format_table(sample_results())
+
+    print("Test: the table names the year and every scenario")
+    for fragment in ["2025", "No PV/Battery", "Without Predbat", "With Predbat"]:
+        if fragment not in table:
+            print("  ERROR: the table should mention '{}'".format(fragment))
+            failed = True
+
+    print("Test: an unavailable month is shown as excluded, never as zero")
+    if "unavailable" not in table.lower():
+        print("  ERROR: the table must state that February was unavailable")
+        failed = True
+    if "no rate data available" not in table:
+        print("  ERROR: the table should state why the month was excluded")
+        failed = True
+
+    print("Test: annual savings appear")
+    if "Savings" not in table:
+        print("  ERROR: the table should include a savings section")
+        failed = True
+
+    print("Test: caveats are printed rather than buried in the JSON")
+    if "An example caveat." not in table:
+        print("  ERROR: caveats must be shown to the user")
+        failed = True
+
+    print("Test: the excluded-month count is stated alongside the annual totals")
+    if "1 of 12" not in table:
+        print("  ERROR: the table should state how many months are included, got:\n{}".format(table))
+        failed = True
+
+    print("Test: when no month is usable, the table does not fabricate a zero-cost year")
+    empty_table = format_table(sample_results_no_usable_month())
+    if "0 of 12" not in empty_table:
+        print("  ERROR: the table should state 0 of 12 months were used, got:\n{}".format(empty_table))
+        failed = True
+    if "Savings" in empty_table:
+        print("  ERROR: the table must not print a savings section when there is no annual total")
+        failed = True
+    if "0.00" in empty_table:
+        print("  ERROR: the table must not render the missing annual total as a zero cost, got:\n{}".format(empty_table))
+        failed = True
+
+    return failed

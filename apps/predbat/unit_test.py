@@ -169,6 +169,7 @@ from tests.test_annual_sampling import test_annual_sampling
 from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
+from tests.test_annual_cli import test_annual_cli
 
 # Mock the components and plugin system
 
@@ -416,6 +417,7 @@ def main():
         ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
         ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
         ("annual_integration", test_annual_integration, "Annual prediction integration tests", True),
+        ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
     ]
 
     # Parse command line arguments
