@@ -1535,8 +1535,12 @@ class AnnualPage:
         self.base = web_interface.base
         self.log = web_interface.log
 
-    def _arg(self, name, default=None):
+    def _arg(self, name, default=None, indirect=True):
         """Read one configuration value from the in-memory args dictionary.
+
+        Pass indirect=False for any value that may contain a dot but is NOT an entity
+        id - a URL, most obviously. resolve_arg would otherwise try to resolve it as a
+        Home Assistant entity and hand back None.
 
         Pass a FLOAT default for any numeric field. get_arg() type-directs its
         coercion off the default's type, so an int default silently truncates a
@@ -1546,7 +1550,7 @@ class AnnualPage:
         deployments, which is exactly where the unconfigured case matters most.
         """
         try:
-            return self.base.get_arg(name, default)
+            return self.base.get_arg(name, default, indirect=indirect)
         except Exception:
             return default
 
@@ -1644,8 +1648,13 @@ class AnnualPage:
         if inverter_type:
             config["battery"]["hybrid"] = True
 
-        import_url = self._arg("rates_import_octopus_url", None)
-        export_url = self._arg("rates_export_octopus_url", None)
+        # indirect=False is REQUIRED here. resolve_arg (userinterface.py:149) treats any
+        # dotted string as a Home Assistant entity id and looks it up, and a URL is full
+        # of dots - so with the default indirect=True the URL resolves to None and the
+        # prefill silently does nothing. Every other call site in the codebase passes
+        # indirect=False for these two args; see compare.py:75 and fetch.py:848.
+        import_url = self._arg("rates_import_octopus_url", None, indirect=False)
+        export_url = self._arg("rates_export_octopus_url", None, indirect=False)
         if import_url:
             config["tariff"] = {"import_octopus_url": import_url, "standing_charge_p_per_day": DEFAULT_CONFIG["tariff"]["standing_charge_p_per_day"]}
             if export_url:
