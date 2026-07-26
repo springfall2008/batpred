@@ -107,10 +107,25 @@ def format_table(results, currency="p"):
     return "\n".join(lines)
 
 
-def make_progress(quiet):
-    """Return a progress callback that writes to stderr, or None when quiet."""
+def make_progress(quiet, machine=False):
+    """Return a progress callback writing to stderr, or None when quiet.
+
+    Machine mode emits one JSON object per line so the parent process never has
+    to parse prose - the human wording is free to change without breaking a
+    caller. Progress always goes to stderr so stdout carries only the result,
+    whichever mode is in use.
+    """
     if quiet:
         return None
+
+    if machine:
+
+        def progress(completed, total, message):
+            """Emit one JSON progress record to stderr."""
+            sys.stderr.write(json.dumps({"completed": completed, "total": total, "message": message}) + "\n")
+            sys.stderr.flush()
+
+        return progress
 
     def progress(completed, total, message):
         """Report progress to stderr so stdout stays parseable."""
@@ -127,6 +142,7 @@ def main(argv=None):
     parser.add_argument("--out", default=None, help="Write the results JSON to this path")
     parser.add_argument("--work-dir", default="./annual_work", help="Working directory for the headless Predbat instance and cache")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
+    parser.add_argument("--machine", action="store_true", help="Emit results as JSON on stdout and progress as JSON on stderr, for a calling process")
     args = parser.parse_args(argv)
 
     try:
@@ -144,7 +160,7 @@ def main(argv=None):
         # sample days and car-charging shortfalls must stay visible even in a quiet run, per
         # the "failures are visible, never silent" contract.
         predictor = AnnualPredictor(config, log=print, storage=storage, work_dir=args.work_dir)
-        results = asyncio.run(predictor.run(progress=make_progress(args.quiet)))
+        results = asyncio.run(predictor.run(progress=make_progress(args.quiet, machine=args.machine)))
     except AnnualConfigError as error:
         sys.stderr.write("Config error: {}\n".format(error))
         return 2
@@ -152,18 +168,25 @@ def main(argv=None):
     exit_code = 0
     if args.out:
         try:
-            with open(args.out, "w") as handle:
+            with open(args.out, "w", encoding="utf-8") as handle:
                 json.dump(results, handle, indent=2)
-            sys.stderr.write("Results written to {}\n".format(args.out))
         except (OSError, TypeError, ValueError) as error:
             # The projection just took several minutes to compute; a failed write to
-            # --out must not throw the results away. The table below is still printed
-            # and the failure is only reported through a non-zero exit code, so a
-            # caller relying on --out to have succeeded is not fooled into thinking it did.
+            # --out must not throw the results away. The table (or JSON, in machine mode)
+            # below is still emitted and the failure is only reported through a non-zero
+            # exit code, so a caller relying on --out to have succeeded is not fooled into
+            # thinking it did.
             sys.stderr.write("Could not write results to {}: {}\n".format(args.out, error))
             exit_code = 1
 
-    print(format_table(results))
+    if args.machine:
+        # The parent reads exactly one JSON object from stdout; the human table would
+        # corrupt it, so it is suppressed rather than merely reordered.
+        json.dump(results, sys.stdout)
+        sys.stdout.write("\n")
+    else:
+        print(format_table(results))
+
     return exit_code
 
 

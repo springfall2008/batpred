@@ -15,7 +15,7 @@ import tempfile
 from contextlib import redirect_stderr, redirect_stdout
 
 import annual_cli
-from annual_cli import format_table
+from annual_cli import format_table, make_progress
 
 
 class _StubPredictor:
@@ -212,6 +212,59 @@ def test_annual_cli(my_predbat):
 
     if _StubPredictor.captured_log is not print:
         print("  ERROR: --quiet should still construct AnnualPredictor with log=print, got {}".format(_StubPredictor.captured_log))
+        failed = True
+
+    return failed
+
+
+def test_annual_cli_machine(my_predbat):
+    """Verify machine mode emits JSON progress on stderr and nothing human on stdout."""
+    import io
+    import json
+    import sys
+
+    failed = False
+    print("**** Testing annual CLI machine mode ****")
+
+    print("Test: machine progress writes one JSON object per line to stderr")
+    captured = io.StringIO()
+    original_stderr = sys.stderr
+    sys.stderr = captured
+    try:
+        progress = make_progress(quiet=False, machine=True)
+        progress(3, 12, "Month 03/2025")
+    finally:
+        sys.stderr = original_stderr
+
+    line = captured.getvalue().strip()
+    try:
+        parsed = json.loads(line)
+    except ValueError:
+        print("  ERROR: machine progress should be JSON, got {!r}".format(line))
+        parsed = {}
+        failed = True
+    if parsed.get("completed") != 3 or parsed.get("total") != 12 or parsed.get("message") != "Month 03/2025":
+        print("  ERROR: unexpected progress payload {}".format(parsed))
+        failed = True
+
+    print("Test: human progress is unchanged when machine mode is off")
+    captured = io.StringIO()
+    sys.stderr = captured
+    try:
+        progress = make_progress(quiet=False, machine=False)
+        progress(3, 12, "Month 03/2025")
+    finally:
+        sys.stderr = original_stderr
+    if "[3/12]" not in captured.getvalue():
+        print("  ERROR: expected the human form, got {!r}".format(captured.getvalue()))
+        failed = True
+
+    print("Test: quiet still suppresses progress in both modes")
+    if make_progress(quiet=True, machine=False) is not None:
+        print("  ERROR: quiet should give no progress callback")
+        failed = True
+    if make_progress(quiet=True, machine=True) is not None:
+        print("  ERROR: quiet should give no progress callback in machine mode either")
         failed = True
 
     return failed
