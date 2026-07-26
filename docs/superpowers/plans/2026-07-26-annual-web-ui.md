@@ -1538,6 +1538,10 @@ class AnnualPage:
     def _arg(self, name, default=None):
         """Read one configuration value from the in-memory args dictionary.
 
+        Pass a FLOAT default for any numeric field. get_arg() type-directs its
+        coercion off the default's type, so an int default silently truncates a
+        real float - soc_max 12.5 would come back as 12.
+
         Never reads apps.yaml from disk: the file may not exist at all in some
         deployments, which is exactly where the unconfigured case matters most.
         """
@@ -1595,7 +1599,7 @@ class AnnualPage:
         Those two are what signal a configured system; with neither, the form
         shows a banner saying the values on screen are examples.
         """
-        battery_kwh = self._arg("soc_max", 0) or 0
+        battery_kwh = self._arg("soc_max", 0.0) or 0.0
         try:
             battery_kwh = float(battery_kwh)
         except (TypeError, ValueError):
@@ -1618,7 +1622,7 @@ class AnnualPage:
         if arrays:
             config["solar"] = arrays
 
-        battery_kwh = self._arg("soc_max", 0) or 0
+        battery_kwh = self._arg("soc_max", 0.0) or 0.0
         try:
             battery_kwh = float(battery_kwh)
         except (TypeError, ValueError):
@@ -1628,7 +1632,7 @@ class AnnualPage:
             config["battery"]["size_kwh"] = battery_kwh
 
         for arg_name, field, divisor in [("inverter_limit", "inverter_kw", 1000.0), ("export_limit", "export_limit_kw", 1000.0)]:
-            watts = self._arg(arg_name, 0) or 0
+            watts = self._arg(arg_name, 0.0) or 0.0
             try:
                 watts = float(watts)
             except (TypeError, ValueError):
