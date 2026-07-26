@@ -279,6 +279,37 @@ def test_config_item_range_clamp(my_predbat):
     my_predbat.expose_config("metric_min_improvement_plan", int_item.get("default"), force_ha=True)
     my_predbat.expose_config("expert_mode", original_expert_mode, force_ha=True)
 
+    # Test 5: update entities are synthesised after release discovery and must not be
+    # restored from history. An empty lookup gets registered by HAHistory and retried
+    # every two minutes, causing repeated wide-window history queries.
+    update_item = None
+    for config_item in my_predbat.CONFIG_ITEMS:
+        if config_item.get("type") == "update":
+            update_item = config_item
+            break
+
+    assert update_item is not None, "Update config item not found"
+    original_update_value = update_item.get("value")
+    original_history_loader = my_predbat.load_previous_value_from_ha
+    history_requests = []
+
+    def track_history_request(entity, attribute=None):
+        history_requests.append(entity)
+        return original_history_loader(entity, attribute=attribute)
+
+    update_item["value"] = None
+    my_predbat.load_previous_value_from_ha = track_history_request
+    try:
+        my_predbat.load_user_config()
+    finally:
+        my_predbat.load_previous_value_from_ha = original_history_loader
+        update_item["value"] = original_update_value
+
+    update_entity = "update.{}_{}".format(my_predbat.prefix, update_item["name"])
+    assert update_entity not in history_requests, f"{update_entity} must not be restored from history"
+    assert my_predbat.prefix + ".status" in history_requests, "Non-update history fallback should remain active"
+    print("✓ Update config entity skips history restore while normal fallback remains active")
+
     # Restore original state
     my_predbat.args = original_args
     my_predbat.had_errors = original_had_errors
