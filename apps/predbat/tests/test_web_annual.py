@@ -18,7 +18,7 @@ from unittest.mock import patch
 from aiohttp import web as aiohttp_web
 
 from annual import validate_config
-from annual_store import list_runs
+from annual_store import list_runs, save_run
 from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage
@@ -357,6 +357,29 @@ def test_web_annual_form(my_predbat):
         print("Test: current values are rendered into the inputs")
         if 'value="3800"' not in html.replace("'", '"'):
             print("  ERROR: the annual kWh value should appear in the form")
+            failed = True
+
+        print("Test: the form offers a debug checkbox, defaulting off")
+        form = page.render_form(page.prefill_config())
+        if 'name="debug"' not in form:
+            print("  ERROR: the form should offer a debug checkbox")
+            failed = True
+        if re.search(r'name="debug"[^>]*checked', form):
+            print("  ERROR: debug must default to off")
+            failed = True
+
+        print("Test: a submitted debug checkbox becomes a true config flag")
+        debug_postdata = valid_postdata()
+        debug_postdata["debug"] = "on"
+        debug_config = page.config_from_post(debug_postdata)
+        if debug_config.get("debug") is not True:
+            print("  ERROR: debug should be True when checked, got {!r}".format(debug_config.get("debug")))
+            failed = True
+
+        print("Test: an unchecked debug box is False, not absent")
+        debug_config = page.config_from_post(valid_postdata())
+        if debug_config.get("debug") is not False:
+            print("  ERROR: debug should be False when unchecked, got {!r}".format(debug_config.get("debug")))
             failed = True
 
         print("Test: validation errors are shown with the form still populated")
@@ -789,6 +812,23 @@ def test_web_annual_results(my_predbat):
         print("  ERROR: the selected run should be downloadable as JSON")
         failed = True
 
+    print("Test: a run with captured plans offers a plan viewer")
+    debug_results = copy.deepcopy(sample_run_results())
+    debug_results["months"][0]["plans"] = [{"day": "2025-01-15", "leg": "single", "scenarios": {"with_predbat": {"rows": [], "soc_max": 9.5}}}]
+    html_text = page.render_results(debug_results, runs, runs[0]["id"])
+    if "annual-plan-viewer" not in html_text:
+        print("  ERROR: a run with plans should render the plan viewer")
+        failed = True
+    if "renderPlanTable" not in html_text:
+        print("  ERROR: the viewer must use the existing plan renderer")
+        failed = True
+
+    print("Test: a run with no captured plans renders no viewer")
+    html_text = page.render_results(sample_run_results(), runs, runs[0]["id"])
+    if "annual-plan-viewer" in html_text:
+        print("  ERROR: a non-debug run must not show an empty plan viewer")
+        failed = True
+
     print("Test: with no runs at all the view says so rather than rendering an empty chart")
     empty = page.render_results(None, [], None)
     if "apexcharts" in empty.lower() and "series" in empty.lower():
@@ -917,7 +957,7 @@ def test_web_annual_post_numeric_coercion(my_predbat):
 
 
 def test_web_annual_routes_registered(my_predbat):
-    """Verify all six Annual routes are registered, so a typo'd path cannot ship green."""
+    """Verify all seven Annual routes are registered, so a typo'd path cannot ship green."""
     failed = False
     print("**** Testing web_annual route registration ****")
 
@@ -936,10 +976,85 @@ def test_web_annual_routes_registered(my_predbat):
         ("GET", "/annual_status"),
         ("POST", "/annual_cancel"),
         ("GET", "/annual_download"),
+        ("GET", "/annual_plan"),
     }
     missing = expected - registered
     if missing:
         print("  ERROR: missing route registrations: {}".format(missing))
+        failed = True
+
+    return failed
+
+
+def test_web_annual_plan_route(my_predbat):
+    """Verify the plan viewer's route: resolves a captured plan, and 404s (never 500s) otherwise.
+
+    ``./annual_plan``'s query string is attacker-controlled, so ``_find_plan`` must
+    coerce defensively rather than let a malformed ``month``/``index`` raise out of
+    the handler - a 500 here would be a defect, per the plan doc's own caution.
+    """
+    failed = False
+    print("**** Testing web_annual plan route ****")
+
+    page = make_page(my_predbat)
+    storage = RaceStorage()
+    page._storage = lambda: storage
+
+    debug_results = copy.deepcopy(sample_run_results())
+    debug_results["months"][0]["plans"] = [
+        {"day": "2025-01-08", "leg": "single", "scenarios": {"with_predbat": {"rows": [], "soc_max": 9.5}}},
+        {"day": "2025-01-24", "leg": "single", "scenarios": {"with_predbat": {"rows": [], "soc_max": 9.5}}},
+    ]
+    asyncio.run(save_run(storage, debug_results, page.config_from_post(valid_postdata()), "20250108-plans"))
+
+    print("Test: _find_plan resolves a valid month/index/scenario to its raw_plan dict")
+    plan = page._find_plan(debug_results, "1", "1", "with_predbat")
+    if plan != {"rows": [], "soc_max": 9.5}:
+        print("  ERROR: expected the second plan's with_predbat scenario, got {!r}".format(plan))
+        failed = True
+
+    print("Test: _find_plan returns None rather than raising on a non-numeric month/index")
+    for month, index in [("not-a-number", "0"), ("1", "also-not-a-number"), (None, "0"), ("1", None)]:
+        try:
+            result = page._find_plan(debug_results, month, index, "with_predbat")
+        except Exception as error:  # noqa: BLE001 - the point of this test is that nothing escapes
+            print("  ERROR: _find_plan must never raise, got {} for month={!r} index={!r}".format(error, month, index))
+            failed = True
+            continue
+        if result is not None:
+            print("  ERROR: a malformed query should resolve to None, got {!r}".format(result))
+            failed = True
+
+    print("Test: _find_plan returns None for an out-of-range index and an unknown scenario")
+    if page._find_plan(debug_results, "1", "99", "with_predbat") is not None:
+        print("  ERROR: an out-of-range index should resolve to None")
+        failed = True
+    if page._find_plan(debug_results, "1", "0", "not_a_scenario") is not None:
+        print("  ERROR: an unknown scenario should resolve to None")
+        failed = True
+
+    print("Test: the route returns the plan JSON for a valid query")
+    response = asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "20250108-plans", "month": "1", "index": "0", "scenario": "with_predbat"})))
+    if response.status != 200:
+        print("  ERROR: a valid query should return 200, got {}".format(response.status))
+        failed = True
+
+    print("Test: an unknown run id 404s rather than 500ing")
+    response = asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "no-such-run", "month": "1", "index": "0", "scenario": "with_predbat"})))
+    if response.status != 404:
+        print("  ERROR: an unknown run should 404, got {}".format(response.status))
+        failed = True
+
+    print("Test: a hostile, non-numeric month/index 404s rather than 500ing")
+    response = asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "20250108-plans", "month": "'; DROP TABLE", "index": "0", "scenario": "with_predbat"})))
+    if response.status != 404:
+        print("  ERROR: a malformed query should 404, got {}".format(response.status))
+        failed = True
+
+    print("Test: a missing run query parameter 404s rather than 500ing")
+    response = asyncio.run(page.html_annual_plan(FakeRequest(query={})))
+    if response.status != 404:
+        print("  ERROR: an absent run parameter should 404, got {}".format(response.status))
         failed = True
 
     return failed

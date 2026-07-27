@@ -29,6 +29,7 @@ from annual import AnnualConfigError, validate_config
 from annual_job import AnnualJob
 from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
+from web_helper import get_plan_css, get_plan_renderer_js
 
 # Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
 # Predbat's house chart trio (#2196F3/#FF9800/#4CAF50) FAILS here: green vs orange is
@@ -362,6 +363,8 @@ class AnnualPage:
         text += "<details><summary>Advanced</summary>\n"
         text += self._number_field("year", "Year to model (blank for the most recent complete year)", config.get("year"))
         text += self._number_field("samples_per_month", "Days sampled per month", config.get("samples_per_month", 2), step="1")
+        text += '<div class="annual-field"><label for="debug">Save plans for debugging</label><input type="checkbox" id="debug" name="debug" {}></div>\n'.format("checked" if config.get("debug") else "")
+        text += '<p class="annual-note">Keeps each sampled day\'s plan so you can inspect it below. Makes the saved run much larger.</p>\n'
         text += self._number_field("pv10_derate_fallback", "P10 fallback derate", config.get("pv10_derate_fallback", 0.7))
         for index, array in enumerate(solar):
             text += self._number_field("solar_efficiency_{}".format(index), "Array {} efficiency".format(index + 1), array.get("efficiency", 0.95))
@@ -472,6 +475,9 @@ class AnnualPage:
         config["samples_per_month"] = numeric("samples_per_month", 2)
         if value("pv10_derate_fallback"):
             config["pv10_derate_fallback"] = numeric("pv10_derate_fallback")
+        # A checkbox absent from postdata means unchecked - matches how battery_hybrid
+        # is read above; there is no "off" value to see, only "on" or nothing at all.
+        config["debug"] = postdata.get("debug") is not None
 
         return config
 
@@ -649,6 +655,51 @@ class AnnualPage:
             return web.json_response({"error": "No stored run with id {}".format(run_id)}, status=404)
         return web.json_response(results, headers={"Content-Disposition": 'attachment; filename="annual-{}.json"'.format(run_id)})
 
+    async def html_annual_plan(self, request):
+        """Return one captured plan as JSON, for the results page's plan viewer to render.
+
+        Only present at all under a debug run (see ``"plans"`` in Task 1's month-row
+        addition); a non-debug run's stored results carry no ``"plans"`` key on any
+        month, so ``_find_plan`` falls through to None and this 404s, same as any
+        other query it cannot resolve.
+        """
+        run_id = request.query.get("run", "")
+        results = await load_run(self._storage(), run_id) if run_id else None
+        if not results:
+            return web.json_response({"error": "run not found"}, status=404)
+        plan = self._find_plan(results, request.query.get("month"), request.query.get("index"), request.query.get("scenario"))
+        if plan is None:
+            return web.json_response({"error": "plan not found"}, status=404)
+        return web.json_response(plan)
+
+    @staticmethod
+    def _find_plan(results, month, index, scenario):
+        """Return one captured plan's raw_plan dict, or None when it cannot be resolved.
+
+        ``month``, ``index`` and ``scenario`` arrive straight off the query string,
+        which is attacker-controlled - this must coerce defensively and never raise
+        out of the handler above; any failure to resolve simply becomes a None the
+        handler turns into a 404, not a 500.
+        """
+        if not isinstance(results, dict) or not scenario:
+            return None
+        try:
+            month = int(month)
+            index = int(index)
+        except (TypeError, ValueError):
+            return None
+        for entry in results.get("months", []) or []:
+            if not isinstance(entry, dict) or entry.get("month") != month:
+                continue
+            plans = entry.get("plans") or []
+            if index < 0 or index >= len(plans):
+                return None
+            plan_entry = plans[index]
+            if not isinstance(plan_entry, dict):
+                return None
+            return plan_entry.get("scenarios", {}).get(scenario)
+        return None
+
     @staticmethod
     def _pounds(pence):
         """Return a pence value formatted as pounds with an explicit unit."""
@@ -696,6 +747,7 @@ class AnnualPage:
 
         text += self._render_chart(results)
         text += self._render_month_table(results)
+        text += self._render_plan_viewer(results, selected_id)
         text += self._render_caveats(results)
         if selected_id:
             text += '<p><a href="./annual_download?run={}">Download this run as JSON</a></p>\n'.format(html.escape(str(selected_id), quote=True))
@@ -777,6 +829,72 @@ class AnnualPage:
                     round(scenario.get("battery_throughput_kwh", 0), 1),
                 )
         text += "</table>\n"
+        return text
+
+    def _render_plan_viewer(self, results, selected_id):
+        """Return the captured-plan viewer, or nothing when this run captured no plans.
+
+        A debug run's month rows carry a non-empty ``"plans"`` list (see Task 1); a
+        non-debug run has no ``"plans"`` key on any month at all, so ``options``
+        stays empty and this returns "" - no empty viewer shell must appear for an
+        ordinary run.
+
+        The day options are built in the results document's own order - months
+        1..12, each month's plans in the order the engine sampled them - which is
+        already chronological, so no separate sort is needed.
+        """
+        options = []
+        for entry in results.get("months", []) or []:
+            plans = entry.get("plans") or []
+            for index, plan in enumerate(plans):
+                day = plan.get("day", "")
+                leg = plan.get("leg", "single")
+                label = day if leg == "single" else "{} ({})".format(day, leg)
+                value = "{}:{}".format(entry.get("month"), index)
+                options.append((value, label))
+
+        if not options:
+            return ""
+
+        text = "<h2>Captured plans</h2>\n"
+        text += '<div class="annual-plan-viewer">\n'
+        text += '<div class="annual-field"><label for="annual-plan-day">Day</label><select id="annual-plan-day" onchange="annualLoadPlan()">\n'
+        for value, label in options:
+            text += '<option value="{}">{}</option>\n'.format(html.escape(value, quote=True), html.escape(label, quote=True))
+        text += "</select></div>\n"
+        text += '<div class="annual-field"><label for="annual-plan-scenario">Scenario</label><select id="annual-plan-scenario" onchange="annualLoadPlan()">\n'
+        for key in SCENARIO_ORDER:
+            text += '<option value="{}">{}</option>\n'.format(html.escape(key, quote=True), html.escape(SCENARIO_LABELS[key], quote=True))
+        text += "</select></div>\n"
+        text += '<div class="annual-field"><label for="annual-plan-debug">Show debug columns</label><input type="checkbox" id="annual-plan-debug" onchange="annualLoadPlan()"></div>\n'
+        text += "<div id='annual-plan-container'></div>\n"
+        text += get_plan_css()
+        text += get_plan_renderer_js()
+        text += "<script>\n"
+        text += "const ANNUAL_RUN_ID = {};\n".format(json.dumps(selected_id))
+        text += """const ANNUAL_EMPTY_OVERRIDES = {
+    manual_charge_times: [], manual_export_times: [], manual_freeze_charge_times: [],
+    manual_freeze_export_times: [], manual_demand_times: [],
+    manual_import_rates: [], manual_export_rates: [], manual_load_adjust: [], manual_soc: []
+};
+async function annualLoadPlan() {
+    const [month, index] = document.getElementById('annual-plan-day').value.split(':');
+    const scenario = document.getElementById('annual-plan-scenario').value;
+    const showDebug = document.getElementById('annual-plan-debug').checked;
+    const container = document.getElementById('annual-plan-container');
+    const params = new URLSearchParams({run: ANNUAL_RUN_ID, month: month, index: index, scenario: scenario});
+    try {
+        const response = await fetch('./annual_plan?' + params.toString());
+        if (!response.ok) { container.innerHTML = '<p>That plan is not available.</p>'; return; }
+        container.innerHTML = renderPlanTable(await response.json(), ANNUAL_EMPTY_OVERRIDES, showDebug, false);
+    } catch (error) {
+        container.innerHTML = '<p>Could not load that plan.</p>';
+    }
+}
+annualLoadPlan();
+</script>
+"""
+        text += "</div>\n"
         return text
 
     def _render_caveats(self, results):

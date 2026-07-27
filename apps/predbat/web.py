@@ -426,6 +426,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/annual_status", self.annual_page.html_annual_status)
         app.router.add_post("/annual_cancel", self.annual_page.html_annual_cancel)
         app.router.add_get("/annual_download", self.annual_page.html_annual_download)
+        app.router.add_get("/annual_plan", self.annual_page.html_annual_plan)
 
     async def start(self):
         # Start the web server
