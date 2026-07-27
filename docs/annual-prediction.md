@@ -156,6 +156,77 @@ six hours (a very low charge rate against very high mileage), the tool still use
 sessions but logs a warning: the sessions run long, so the overflow effect — and
 therefore Predbat's advantage — is understated.
 
+## Using the web interface
+
+The Predbat web UI has an **Annual** tab alongside Dash, Plan, Entities, Charts and
+Compare. Unlike the rest of the UI it needs neither Home Assistant nor a configured
+Predbat instance — it is the tool a prospective buyer reaches for before they have
+installed anything, as well as the quick option for an existing user.
+
+### The form
+
+The form prefills from your live Predbat setup wherever it can: location, solar arrays,
+battery capacity and inverter/export limits, and any Octopus import/export tariff URLs
+and DNO region already configured. Anything it cannot determine — most commonly the
+whole form, on an instance with no battery and no solar array configured — falls back to
+example values for a plausible UK home, and a banner above the form says so explicitly
+("Predbat isn't configured yet — these are example values, edit them to match your
+home"). When your own setup supplies a battery or a solar array, the banner is absent and
+the fields it can read are the real ones; any remaining gaps still use the same example
+values, so the form is always complete rather than partially blank.
+
+The **Tariff** dropdown lists a curated set of built-in Octopus products (Agile, Cosy,
+Flux, Intelligent Go and so on) plus, if your `apps.yaml` has a `compare_list`, your own
+entries from it — a user entry with the same id as a built-in replaces it rather than
+appearing twice. Picking an entry fills in the import/export URL fields beneath it, and
+those fields stay editable afterwards, so a dropdown choice is a starting point rather
+than a lock. If the chosen URL contains `{dno_region}` (as the Octopus product codes do),
+the **Octopus region letter** field is required; leaving it blank is rejected up front,
+with the field named in the error, rather than left to fail as a 404 partway through the
+run. Choosing **Custom** clears the URL fields for hand-entered rates.
+
+Every field the CLI's `annual.yaml` accepts has a form equivalent, including the
+manual-usage/Octopus-consumption choice under **Load** and the year, sample count and P10
+fallback derate under **Advanced**. **Save** stores the configuration without running it;
+**Run** validates, stores it and starts a run.
+
+### Running
+
+A run takes roughly one to three minutes with the default two samples per month, or two
+to six minutes with a car configured (each sampled day is planned twice — with and
+without a charging session — to work out how often the car overflows the cheap window).
+Once started it shows a progress bar with the current step and elapsed time, and it keeps
+running on the server if you navigate away or close the tab — come back to the Annual tab
+later and the same run is still there, or already finished. Only one run is active at a
+time: submitting **Run** again while one is already in progress does not queue a second
+run or interrupt the first, though any form edits you made are still saved.
+
+**Cancel** stops the running job. There is deliberately no automatic redirect or reload
+when a run finishes — an earlier version of the page did that and it would silently
+discard whatever you had typed into the form in the meantime. Instead, once a run
+completes the progress area shows a **view results** link, and polling stops; following
+the link (or just refreshing) shows the results below the form.
+
+### Comparing runs
+
+The last five completed runs are kept, each labelled with a short summary of its
+configuration (battery size, solar size, tariff) rather than just a timestamp. A selector
+above the results lets you switch between them — instantly, with no re-run — so you can
+compare a 5 kWh battery against a 10 kWh one, or two tariffs, side by side. Each stored
+run can also be downloaded as its raw JSON results document.
+
+### The results view
+
+The results view mirrors the CLI's output: an annual totals table, the chart below, a
+month-by-month breakdown and the run's caveats. Two things carry over unchanged from how
+the engine reports them, and matter for reading the numbers correctly:
+
+- A month with `status: unavailable` is left out of the chart and the totals — it is
+  never drawn as a zero-cost bar or counted as a free month.
+- Where `self_consumed_kwh_meaningful` is `false` for a scenario, the table shows "not
+  meaningful" instead of a number, rather than a self-consumption figure that looks
+  precise but is not.
+
 ## Running it
 
 ```bash
