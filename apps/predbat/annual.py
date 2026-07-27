@@ -1573,11 +1573,11 @@ class AnnualPredictor:
         costs = build_costs(total_kwp, battery_kwh, self.config["costs"])
         payback = build_payback(annual_scenarios, costs, len(included), self.config["costs"])
         if not payback.get("available"):
-            self.caveats.append("Payback could not be calculated: {}".format(payback["reason"]))
+            payback_message = "Payback could not be calculated: {}".format(payback["reason"])
         else:
-            self.caveats.append(
-                "Payback is simple payback - capital divided by the modelled annual saving. It ignores panel degradation, electricity price inflation, battery replacement and finance costs, so treat it as a comparison aid rather than a financial projection."
-            )
+            payback_message = "Payback is simple payback - capital divided by the modelled annual saving. It ignores panel degradation, electricity price inflation, battery replacement and finance costs, so treat it as a comparison aid rather than a financial projection."
+        if payback_message not in self.caveats:
+            self.caveats.append(payback_message)
 
         return {
             "year": self.config["year"],

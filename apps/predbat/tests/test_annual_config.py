@@ -410,6 +410,20 @@ def test_annual_config(my_predbat):
     config["annual"]["location"] = {"latitude": 0, "longitude": 200}
     failed = expect_error("longitude out of range", config, "longitude", failed)
 
+    print("Test: a negative costs value raises AnnualConfigError, not a bare ValueError")
+    # _validated_costs() must translate annual_costs.resolve_costs()'s ValueError into
+    # AnnualConfigError - the CLI and web layer only catch the latter, so a config
+    # problem inside the costs block must surface the same way every other config
+    # mistake in this file does, not leak the pure module's own exception type.
+    config = base_config()
+    config["annual"]["costs"] = {"battery_install_gbp": -100}
+    failed = expect_config_error_type("negative costs value", config, failed)
+
+    print("Test: an unrecognised costs key raises AnnualConfigError, not a bare ValueError")
+    config = base_config()
+    config["annual"]["costs"] = {"not_a_real_setting": 100}
+    failed = expect_config_error_type("unrecognised costs key", config, failed)
+
     print("Test: scrub_secrets removes API keys without mutating the original")
     config = base_config()
     config["annual"]["load"]["octopus"] = {"api_key": "sk_live_secret", "account_id": "A-1"}
