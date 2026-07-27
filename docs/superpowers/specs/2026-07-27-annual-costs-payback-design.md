@@ -68,11 +68,30 @@ fraction of — the PV-plus-battery saving. Deriving it arithmetically was consi
 rejected for the same reason `self_consumed_kwh` was removed: it would look like a
 measurement and be an assumption.
 
-**Chart colour:** a fourth series needs a fourth colour. It must be chosen from the
-Okabe-Ito set and **validated with the dataviz validator against the other three, in both
-light and dark mode, before use** — not eyeballed. The existing three
-(`#0072B2`, `#D55E00`, `#009E73`) must not change, since users will compare against
-earlier runs.
+**Chart colour: `#9439ef`.** Chosen by running the dataviz validator over a 216-colour
+sweep against the existing three in both light and dark mode, not by eye. The existing
+three (`#0072B2`, `#D55E00`, `#009E73`) are unchanged.
+
+```
+#0072B2, #9439ef, #D55E00, #009E73   (scenario order)
+
+light  CVD separation   worst all-pairs #9439ef↔#0072B2  ΔE 9.2 (deutan)   PASS
+       Normal-vision    worst all-pairs #009E73↔#0072B2  ΔE 18.7           PASS
+       Contrast         all 4 >= 3:1                                       PASS
+dark   Lightness band   all 4 inside L 0.48–0.67                           PASS
+       Contrast         all 4 >= 3:1                                       PASS
+```
+
+Worth recording because the obvious candidates all fail. The Okabe-Ito colours that look
+right — `#E69F00`, `#56B4E9` — sit at L 0.75 and 0.74, outside the dark band (0.48–0.67),
+and both drop below 3:1 contrast in light mode. `#CC79A7` reaches only ΔE 7.6 against the
+green under deuteranopia, inside the 6–8 band that is legal only with secondary encoding.
+`#AA4499` passes both modes but only at ΔE 6.4 against the blue under protanopia — and the
+blue is its immediate neighbour in scenario order, which is the worst place for a marginal
+pair. `#9439ef` clears every check outright, so the chart needs no secondary-encoding
+relief to be legible.
+
+**Do not substitute a colour here without re-running the validator in both modes.**
 
 ## 3. Cost model
 
