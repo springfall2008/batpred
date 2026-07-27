@@ -270,9 +270,6 @@ mode: single
 Manually run the automation and then make sure the Solcast integration is working in Home Assistant by going to 'Settings' / 'Developer Tools' / 'States', filtering on 'solcast',
 and check that you can see the half-hourly solar forecasts in the Solcast entities.
 
-### Solcast Clearsky Install
-
-If you want Predbat to model inverter clipping more accurately, you can use the [Solcast Clearsky Integration](https://github.com/autoSteve/ha-solcast-clearsky). This integration piggybacks from the base Solcast integration and automatically calculates a clearsky forecast using the Solcast array configuration, providing unclipped forecast data to Predbat.
 
 ### No solar
 
