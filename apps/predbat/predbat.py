@@ -1774,11 +1774,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.validate_config()
                     config_changed = True
 
-                # Retry auto config if we have unmatched regexes
-                if hasattr(self, "unmatched_args") and len(self.unmatched_args) > 0:
-                    # Give HA 10 minutes from startup to fully load entities before final disable
-                    time_since_start = (self.now_utc_real - self.started_time).total_seconds() / 60.0
-                    self.auto_config(final=(time_since_start > 10))
+                # Retry auto config (and finalise after 10 minutes from startup)
+                time_since_start = (self.now_utc_real - self.started_time).total_seconds() / 60.0
+                self.auto_config(final=(time_since_start > 10))
 
                 # Run the prediction
                 self.update_pred(scheduled=True)

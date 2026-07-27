@@ -1020,6 +1020,9 @@ class LoadMLComponent(ComponentBase):
         if self.current_predictions:
             prev_value = 0
             for minute, value in self.current_predictions.items():
+                value = safe_float(value)
+                if value is None:
+                    value = 0.0
                 timestamp = self.midnight_utc + timedelta(minutes=minute + self.minutes_now)
                 timestamp_str = timestamp.strftime(TIME_FORMAT)
                 # Reset at midnight
