@@ -138,10 +138,32 @@ costs:
   pv_rate_small_gbp_per_kwp: 1780     # anchored at 2 kWp
   pv_rate_medium_gbp_per_kwp: 1697    # anchored at 7 kWp
   pv_rate_large_gbp_per_kwp: 1262     # anchored at 30 kWp
+  predbat_annual_gbp: 0               # recurring, not capital - see below
 ```
 
 Every value is validated as a non-negative number. An absent `costs` block uses the
 defaults, so existing configs keep working untouched.
+
+### Predbat's own cost
+
+`predbat_annual_gbp` is a **recurring yearly** cost, defaulting to `0` — Predbat is free
+when self-hosted. The hosted web version is expected to charge around £100/year, so the
+field exists to model that; it stays at zero unless set.
+
+Because it recurs, it is **not** added to capital. It reduces the net annual saving of the
+Predbat row only:
+
+```
+predbat_net_annual_saving = (no_pvbat - with_predbat) - predbat_annual_gbp
+```
+
+That is the correct treatment for a subscription, and it makes the comparison honest in
+both directions: if the fee exceeds what Predbat adds over a plain timer, the Predbat row's
+payback becomes *worse* than the PV-plus-battery row's, or fails to pay back at all. That
+is a real and useful signal, not something to smooth over.
+
+It does not touch any scenario's `cost_p`, which stays a pure electricity figure. The fee
+is applied at the payback layer, where it belongs.
 
 ## 4. Payback
 
@@ -151,14 +173,16 @@ Simple payback in years, each measured against the no-system baseline:
 |---|---|---|
 | PV only | PV | `no_pvbat.cost_p − pv_only.cost_p` |
 | PV + battery | PV + battery | `no_pvbat.cost_p − without_predbat.cost_p` |
-| PV + battery + Predbat | PV + battery | `no_pvbat.cost_p − with_predbat.cost_p` |
+| PV + battery + Predbat | PV + battery | `no_pvbat.cost_p − with_predbat.cost_p` **− `predbat_annual_gbp`** |
 
 ```
-years = capital_gbp / (annual_saving_p / 100)
+years = capital_gbp / annual_saving_gbp
 ```
 
-Note the three rows share only two capital figures: Predbat is software, so it adds saving
-without adding cost — which is precisely what makes its row worth showing.
+The three rows share only two capital figures: Predbat is software, so it adds no capital.
+Where it has a recurring fee, that is subtracted from its annual saving instead (see
+Predbat's own cost, above) — which is what makes its row a genuine comparison rather than a
+free upgrade.
 
 ### Two honesty guards
 
@@ -196,7 +220,7 @@ The engine writes both blocks so the CLI gets them without any web-layer involve
   "payback": {
     "pv_only": {"pays_back": true, "years": 9.4, "capital_gbp": 8651.0, "annual_saving_gbp": 920.3},
     "pv_battery": {"pays_back": true, "years": 11.2, "capital_gbp": 12001.0, "annual_saving_gbp": 1071.5},
-    "pv_battery_predbat": {"pays_back": true, "years": 8.1, "capital_gbp": 12001.0, "annual_saving_gbp": 1481.6}
+    "pv_battery_predbat": {"pays_back": true, "years": 8.7, "capital_gbp": 12001.0, "annual_saving_gbp": 1381.6, "gross_annual_saving_gbp": 1481.6, "predbat_annual_gbp": 100.0}
   }
 }
 ```
@@ -226,6 +250,12 @@ series and row.
 - payback arithmetic, including a zero and a negative saving producing `pays_back: false`
 - payback suppressed when `months_included < 12`
 - custom `costs` values overriding every default
+- `predbat_annual_gbp` reducing only the Predbat row's saving, leaving capital and the
+  other two rows untouched
+- a `predbat_annual_gbp` large enough to exceed what Predbat adds, producing a *worse*
+  payback than the PV-plus-battery row — and, when it exceeds the whole saving,
+  `pays_back: false`. This is the case a naive "subscription as capital" implementation
+  would get wrong, so it is asserted explicitly.
 
 Engine and web tests cover: `panels`/`panel_watts` deriving `kwp`; both-supplied being
 rejected; the `pv_only` scenario appearing in month rows and annual totals; the form's
