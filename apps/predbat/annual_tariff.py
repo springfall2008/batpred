@@ -21,6 +21,13 @@ from utils import minute_data
 
 MINUTES_PER_DAY = 24 * 60
 
+# How long a downloaded "current rates" snapshot (see _fetch_current_pattern) stays
+# cached to persistent storage. Unlike a per-month ranged download, which covers a
+# fixed historical date and can never change, this is a snapshot of "now" - without
+# an expiry, re-running the tool after a genuine price change would keep replaying
+# the first run's now-stale rates forever.
+CURRENT_PATTERN_CACHE_HOURS = 24
+
 
 def build_period_url(base_url, start_utc, end_utc):
     """Append period_from/period_to to an Octopus rates URL, preserving existing query parameters.
@@ -84,6 +91,12 @@ class AnnualTariff:
         # mirroring AnnualWeather.fallback_months so AnnualPredictor.run() can raise
         # a caveat about it.
         self.fallback_months = set()
+        # (year, month) pairs where export was priced at zero because neither the
+        # month's own ranged download nor the current-rates fallback produced any
+        # rows. Without this, that fact was only ever a log line - the original bug
+        # this module exists to fix, just relocated to the fallback's own failure
+        # path - so AnnualPredictor.run() surfaces it as a caveat too.
+        self.unpaid_export_months = set()
 
     def _resolve_url(self, url, name, dno_region=None):
         """Substitute templated arguments such as {dno_region} into a tariff URL, without mutating predbat.args."""
@@ -97,20 +110,32 @@ class AnnualTariff:
         return await fetch_json(url, self.log, "Octopus rate request", {"accept": "application/json", "user-agent": "predbat/1.0"}, 60)
 
     async def _download_octopus(self, base_url, start_utc, end_utc, cache_key):
-        """Download every page of Octopus rates for a date range, returning raw result rows."""
+        """Download every page of Octopus rates for a date range, returning (rows, failed)."""
         return await self._download_rows(build_period_url(base_url, start_utc, end_utc), cache_key)
 
-    async def _download_rows(self, url, cache_key):
-        """Download every page of Octopus rates starting from the given URL, returning raw result rows.
+    async def _download_rows(self, url, cache_key, expiry=None):
+        """Download every page of Octopus rates starting from the given URL.
+
+        Returns ``(rows, failed)``. ``failed`` is True only when a page request
+        errored or the page-cap safety limit was hit with pages still remaining - in
+        both cases we do not actually know what rates exist, so this must not be
+        confused with a request that completed successfully and genuinely found zero
+        rows (``rows == []``, ``failed == False``): only the latter is a real "no
+        history for this date" signal that the current-rates fallback should act on.
+        Collapsing both cases to a bare empty list, as an earlier version of this
+        method did, would let one transient 502 silently trigger the fallback.
 
         Shared by the per-month ranged download and the bare-URL current-rates
         download used by ``_fetch_current_pattern``; the only difference between
-        them is the URL each starts from.
+        them is the URL each starts from. ``expiry`` is passed straight through to
+        ``storage.save`` - the bare-URL download is a snapshot of "now", so unlike
+        the per-month ranged downloads (which cover fixed, unchanging historical
+        dates) it must not be cached forever.
         """
         if self.storage:
             cached = await self.storage.load("annual", cache_key)
             if isinstance(cached, list) and cached:
-                return cached
+                return cached, False
 
         rows = []
         pages = 0
@@ -129,14 +154,15 @@ class AnnualTariff:
 
         # A run only reaches its natural end when `url` runs out on its own. If a page
         # request failed, or the safety cap was hit while pages remained, `rows` is a
-        # truncated download - it must not be parsed, used, or cached as if complete.
+        # truncated download - it must not be parsed, used, or cached as if complete,
+        # and the caller must be told this was a failure, not a genuine empty result.
         if truncated or url:
             if not truncated:
                 self.log("Warn: Annual: rate download for {} hit the {}-page cap with more pages remaining; not caching a partial result".format(cache_key, pages))
-            return []
+            return [], True
         if rows and self.storage:
-            await self.storage.save("annual", cache_key, rows, format="json")
-        return rows
+            await self.storage.save("annual", cache_key, rows, format="json", expiry=expiry)
+        return rows, False
 
     @staticmethod
     def _rows_to_stamped_rates(rows, start_utc, days):
@@ -155,12 +181,29 @@ class AnnualTariff:
         Octopus peak windows are defined on the local clock, so each row's
         ``valid_from`` is converted to local time via ``self.timezone`` before its
         minute-of-day is taken as the key - keying by UTC minute-of-day would slide
-        the peak by an hour across a DST boundary. A row spanning multiple 30 minute
-        slots is expanded across every slot it covers, and where rows overlap the
-        slot keeps the rate of whichever row has the most recent ``valid_from``.
+        the peak by an hour across a DST boundary.
+
+        A row with no ``valid_to`` is how Octopus publishes a flat product's current,
+        open-ended rate - it is not a 30 minute row, it applies to every time of day
+        until superseded. The same is true of any row spanning a day or more (a
+        historical rate change on a flat product). Both are expanded across every one
+        of the 48 daily slots rather than just the 30 minutes after ``valid_from``;
+        treating an open-ended row as 30 minutes would leave 47 of 48 slots unrated,
+        which ``rates_for`` then silently treats as free. A row shorter than a day
+        (the half-hourly shape of a variable/Agile-style product) is still expanded
+        slot-by-slot as before. Where rows overlap on a slot, the slot keeps the rate
+        of whichever row has the most recent ``valid_from``, so a genuinely
+        time-limited row still overrides an open-ended base rate.
         """
         pattern = {}
         sources = {}
+
+        def claim(minute_of_day, rate, valid_from):
+            """Give a local minute-of-day slot to a row's rate, unless a more recent row already claimed it."""
+            if sources.get(minute_of_day) is None or valid_from > sources[minute_of_day]:
+                pattern[minute_of_day] = rate
+                sources[minute_of_day] = valid_from
+
         for row in rows:
             try:
                 rate = float(row["value_inc_vat"])
@@ -168,17 +211,23 @@ class AnnualTariff:
             except (KeyError, TypeError, ValueError):
                 continue
             valid_to_raw = row.get("valid_to")
-            try:
-                valid_to = pytz.utc.localize(datetime.strptime(valid_to_raw, "%Y-%m-%dT%H:%M:%SZ")) if valid_to_raw else valid_from + timedelta(minutes=30)
-            except ValueError:
-                valid_to = valid_from + timedelta(minutes=30)
+            valid_to = None
+            if valid_to_raw:
+                try:
+                    valid_to = pytz.utc.localize(datetime.strptime(valid_to_raw, "%Y-%m-%dT%H:%M:%SZ"))
+                except ValueError:
+                    valid_to = None
+
+            if valid_to is None or (valid_to - valid_from) >= timedelta(minutes=MINUTES_PER_DAY):
+                for minute_of_day in range(0, MINUTES_PER_DAY, 30):
+                    claim(minute_of_day, rate, valid_from)
+                continue
+
             slots = max(1, int((valid_to - valid_from).total_seconds() // 60 // 30))
             for slot in range(slots):
                 local_dt = (valid_from + timedelta(minutes=30 * slot)).astimezone(self.timezone)
                 minute_of_day = local_dt.hour * 60 + local_dt.minute
-                if sources.get(minute_of_day) is None or valid_from > sources[minute_of_day]:
-                    pattern[minute_of_day] = rate
-                    sources[minute_of_day] = valid_from
+                claim(minute_of_day, rate, valid_from)
         return pattern
 
     async def _fetch_current_pattern(self, side):
@@ -196,7 +245,11 @@ class AnnualTariff:
         if cached is not None:
             return cached
         url = self.import_url if side == "import" else self.export_url
-        rows = await self._download_rows(url, "current_pattern_{}".format(side)) if url else []
+        if url:
+            expiry = datetime.now(pytz.utc) + timedelta(hours=CURRENT_PATTERN_CACHE_HOURS)
+            rows, _ = await self._download_rows(url, "current_pattern_{}".format(side), expiry=expiry)
+        else:
+            rows = []
         pattern = self._rows_to_local_pattern(rows)
         self._current_pattern[cache_attr] = pattern
         return pattern
@@ -205,18 +258,24 @@ class AnnualTariff:
         """Repeat a local-time daily rate pattern across a UTC date range.
 
         Produces the same ``{utc_stamp: rate}`` shape as ``_rows_to_stamped_rates``
-        so ``rates_for`` is untouched. Each 30 minute UTC slot in the range is
-        converted to local time for that specific historical date before looking up
-        its rate, so the same local peak window lands on the correct UTC hour either
-        side of a DST boundary.
+        - crucially, stamped at every minute, not just every 30 minutes: ``rates_for``
+        looks up one stamp per minute (``midnight_utc + timedelta(minutes=minute)``
+        for every ``minute`` in the window), and a dict only carrying the 48
+        half-hour boundaries would leave 1392 of every 1440 minutes unmatched, which
+        ``rates_for`` then silently prices at nothing. Each minute's UTC stamp is
+        converted to local time for that specific historical date before its
+        containing half-hour slot is looked up in the pattern, so the same local peak
+        window lands on the correct UTC hour either side of a DST boundary.
         """
         stamped = {}
         if not pattern:
             return stamped
-        for slot in range(days * 48):
-            stamp_utc = start_utc + timedelta(minutes=30 * slot)
+        total_minutes = days * MINUTES_PER_DAY
+        for minute in range(total_minutes):
+            stamp_utc = start_utc + timedelta(minutes=minute)
             local_dt = stamp_utc.astimezone(self.timezone)
-            rate = pattern.get(local_dt.hour * 60 + local_dt.minute)
+            slot_minute_of_day = ((local_dt.hour * 60 + local_dt.minute) // 30) * 30
+            rate = pattern.get(slot_minute_of_day)
             if rate is not None:
                 stamped[stamp_utc] = rate
         return stamped
@@ -237,9 +296,15 @@ class AnnualTariff:
             import_rates = {}
             export_rates = {}
             if self.import_url:
-                rows = await self._download_octopus(self.import_url, start_utc, end_utc, "rates_import_{}_{:02d}".format(year, month))
+                rows, failed = await self._download_octopus(self.import_url, start_utc, end_utc, "rates_import_{}_{:02d}".format(year, month))
                 if rows:
                     import_rates = self._rows_to_stamped_rates(rows, start_utc, days)
+                elif failed:
+                    # A download failure tells us nothing about whether history exists;
+                    # falling back here would let one transient error silently overwrite
+                    # a real historical month with today's rates. Preserve the original
+                    # "unavailable" behaviour exactly.
+                    self.log("Warn: Annual: no import rates available for {}-{:02d}".format(year, month))
                 else:
                     pattern = await self._fetch_current_pattern("import")
                     if pattern:
@@ -249,9 +314,12 @@ class AnnualTariff:
                     else:
                         self.log("Warn: Annual: no import rates available for {}-{:02d}".format(year, month))
             if self.export_url:
-                rows = await self._download_octopus(self.export_url, start_utc, end_utc, "rates_export_{}_{:02d}".format(year, month))
+                rows, failed = await self._download_octopus(self.export_url, start_utc, end_utc, "rates_export_{}_{:02d}".format(year, month))
                 if rows:
                     export_rates = self._rows_to_stamped_rates(rows, start_utc, days)
+                elif failed:
+                    self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
+                    self.unpaid_export_months.add((year, month))
                 else:
                     pattern = await self._fetch_current_pattern("export")
                     if pattern:
@@ -260,6 +328,7 @@ class AnnualTariff:
                         self.log("Warn: Annual: no export rates available for {}-{:02d}; using today's rates repeated across the month instead".format(year, month))
                     else:
                         self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
+                        self.unpaid_export_months.add((year, month))
 
             # Only import failing makes the month unusable: rates_for's gate is
             # `self.import_url or self.export_url`, so an export-only configuration

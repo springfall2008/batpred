@@ -12,6 +12,7 @@
 import asyncio
 import builtins
 import copy
+import json
 import re
 from unittest.mock import patch
 
@@ -21,7 +22,7 @@ from annual import validate_config
 from annual_store import list_runs, save_run
 from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
-from web_annual import DEFAULT_CONFIG, AnnualPage
+from web_annual import DEFAULT_CONFIG, AnnualPage, _json_for_script
 
 
 class FakeRequest:
@@ -852,6 +853,41 @@ def test_web_annual_results(my_predbat):
         print("  ERROR: _render_chart should not emit its own <script src=...apexcharts...> tag; get_header_html already loads it")
         failed = True
 
+    print("Test: a month whose rates were synthesised from the current-rates fallback is marked in the table and the chart, not indistinguishable from a real month")
+    synthesised_results = copy.deepcopy(sample_run_results())
+    synthesised_results["months"][0]["rates_synthesised"] = ["export", "import"]
+    synthesised_html = page.render_results(synthesised_results, runs, "20260726-101500")
+    if "rates synthesised" not in synthesised_html.lower():
+        print("  ERROR: expected a visible marker on the month row whose rates were synthesised")
+        failed = True
+    if "jan" not in page._render_chart(synthesised_results).lower():
+        print("  ERROR: expected the chart's synthesised-rates note to name the affected month (Jan)")
+        failed = True
+
+    print("Test: a month with no rates_synthesised entry (the normal case) shows no synthesised marker")
+    if "rates synthesised" in page._render_month_table(sample_run_results()).lower():
+        print("  ERROR: a month with real historical rates must not be marked as synthesised")
+        failed = True
+    if "annual-note" in page._render_chart(sample_run_results()) and "synthesised" in page._render_chart(sample_run_results()).lower():
+        print("  ERROR: the chart must not show a synthesised-rates note when no month used the fallback")
+        failed = True
+
+    print("Test: _json_for_script neutralises a literal </script> so it cannot close the surrounding tag early")
+    dangerous = "run-id-</script><script>alert(1)</script>"
+    escaped = _json_for_script(dangerous)
+    if "</script>" in escaped:
+        print("  ERROR: expected every '</script>' to be escaped, got {!r}".format(escaped))
+        failed = True
+    if "<\\/script>" not in escaped:
+        print("  ERROR: expected the standard '<\\/script>' escape, got {!r}".format(escaped))
+        failed = True
+    if json.loads(escaped) != dangerous:
+        print("  ERROR: escaping must not change the decoded value once parsed back out of the page, got {!r}".format(json.loads(escaped)))
+        failed = True
+    if _json_for_script({"a": 1}) != '{"a": 1}':
+        print("  ERROR: expected an ordinary payload with no '</' sequence to serialise unchanged, got {!r}".format(_json_for_script({"a": 1})))
+        failed = True
+
     return failed
 
 
@@ -1056,5 +1092,35 @@ def test_web_annual_plan_route(my_predbat):
     if response.status != 404:
         print("  ERROR: an absent run parameter should 404, got {}".format(response.status))
         failed = True
+
+    print("Test: a corrupt stored 'plans' structure (not a list) resolves to None rather than raising")
+    # A dict would previously reach `plans[index]`, which raises KeyError for an int key
+    # that is not present - escaping the None-on-any-failure contract the docstring
+    # promises. Every shape here must resolve to None without raising.
+    corrupt_results = copy.deepcopy(sample_run_results())
+    for corrupt_plans in [{"0": "not a list"}, "also not a list", 42, None]:
+        corrupt_results["months"][0]["plans"] = corrupt_plans
+        try:
+            result = page._find_plan(corrupt_results, "1", "0", "with_predbat")
+        except Exception as error:  # noqa: BLE001 - the point of this test is that nothing escapes
+            print("  ERROR: _find_plan must never raise on a corrupt 'plans' structure, got {} for plans={!r}".format(error, corrupt_plans))
+            failed = True
+            continue
+        if result is not None:
+            print("  ERROR: a corrupt 'plans' structure should resolve to None, got {!r} for plans={!r}".format(result, corrupt_plans))
+            failed = True
+
+    print("Test: a corrupt 'scenarios' entry (not a dict) inside an otherwise-valid plan resolves to None rather than raising")
+    corrupt_results = copy.deepcopy(sample_run_results())
+    corrupt_results["months"][0]["plans"] = [{"day": "2025-01-08", "leg": "single", "scenarios": ["not", "a", "dict"]}]
+    try:
+        result = page._find_plan(corrupt_results, "1", "0", "with_predbat")
+    except Exception as error:  # noqa: BLE001
+        print("  ERROR: _find_plan must never raise on a corrupt 'scenarios' entry, got {}".format(error))
+        failed = True
+    else:
+        if result is not None:
+            print("  ERROR: a corrupt 'scenarios' entry should resolve to None, got {!r}".format(result))
+            failed = True
 
     return failed

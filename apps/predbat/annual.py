@@ -90,6 +90,19 @@ def _require_number(value, field, minimum=None, maximum=None, integer=False, exc
     return number
 
 
+def _coerce_bool(value):
+    """Coerce a config value to a bool the way the rest of the codebase does (see web.py's setting toggles).
+
+    A bare ``bool`` passes through unchanged. Anything else is compared, case-insensitively,
+    against the usual truthy string forms - ``bool("false")`` is ``True`` in plain Python
+    (any non-empty string is truthy), which would silently turn an explicit ``debug: "false"``
+    in a YAML/JSON config into debug mode being enabled.
+    """
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "on", "1", "yes")
+
+
 def _validate_solar(raw):
     """Normalise the solar array list, applying defaults and rejecting arrays without kwp."""
     if raw is None:
@@ -243,7 +256,7 @@ def validate_config(config, today=None):
         "load": _validate_load(raw.get("load")),
         "tariff": _validate_tariff(raw.get("tariff")),
         "samples_per_month": samples_per_month,
-        "debug": bool(raw.get("debug", False)),
+        "debug": _coerce_bool(raw.get("debug", False)),
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
@@ -1282,6 +1295,36 @@ class AnnualPredictor:
                     totals[key][field] += result[key][field] * weight
         return totals
 
+    @staticmethod
+    def _synthesised_sides(fallback_months, year, month):
+        """Return the sorted sides ('import'/'export') whose rates for this one month came from the tariff's current-rates fallback.
+
+        ``fallback_months`` is ``AnnualTariff.fallback_months`` - a set of
+        ``(year, month, side)`` triples covering every month in the run, not just this
+        one - so this filters down to the (usually empty) subset that applies here.
+        Attached to each month's row so a synthesised month is not indistinguishable
+        from a real one in the results document, the chart or the table.
+        """
+        return sorted(side for fb_year, fb_month, side in fallback_months if fb_year == year and fb_month == month)
+
+    @staticmethod
+    def _tariff_fallback_caveats(fallback_months, unpaid_export_months, year):
+        """Return the caveat strings describing a tariff's current-rates fallback and/or wholly-unpriced export months.
+
+        Both are properties of the whole run (``AnnualTariff`` accumulates them across
+        every ``fetch_month`` call), not of any single sampled day, so this is called
+        once after the month loop rather than from inside it. Returns an empty list
+        when the tariff needed neither.
+        """
+        caveats = []
+        if fallback_months:
+            fallback_list = ", ".join("{}-{:02d} ({})".format(fb_year, fb_month, side) for fb_year, fb_month, side in sorted(fallback_months))
+            caveats.append("No historical rates were available for {} on this tariff, likely because it launched after {}. Those months' rates are today's rates repeated across the month, not what was actually charged then.".format(fallback_list, year))
+        if unpaid_export_months:
+            unpaid_list = ", ".join("{}-{:02d}".format(unpaid_year, unpaid_month) for unpaid_year, unpaid_month in sorted(unpaid_export_months))
+            caveats.append("No export rates at all (historical or current) could be found for {} on this tariff, so export was priced at zero for those months. If this tariff pays for export, savings for those months are understated.".format(unpaid_list))
+        return caveats
+
     async def run(self, progress=None):
         """Run the full annual projection and return the results document."""
         year = self.config["year"]
@@ -1405,17 +1448,19 @@ class AnnualPredictor:
                 "failed_days": failed_days,
                 "standing_charge_p": round(standing_charge_p, 3),
                 "scenarios": scenarios,
+                # Which sides of *this* month's rates (if any) came from the tariff's
+                # current-rates fallback rather than a real historical download -
+                # carried onto the row itself, not just into a run-wide caveat, so a
+                # synthesised month is not indistinguishable from a real one in the
+                # JSON, the chart or the table.
+                "rates_synthesised": self._synthesised_sides(self.tariff.fallback_months, year, month),
             }
             if self.config["debug"]:
                 row["plans"] = month_plans
             months.append(row)
             completed += 1
 
-        if self.tariff.fallback_months:
-            fallback_list = ", ".join("{}-{:02d} ({})".format(fb_year, fb_month, side) for fb_year, fb_month, side in sorted(self.tariff.fallback_months))
-            self.caveats.append(
-                "No historical rates were available for {} on this tariff, likely because it launched after {}. Those months' rates are today's rates repeated across the month, not what was actually charged then.".format(fallback_list, year)
-            )
+        self.caveats.extend(self._tariff_fallback_caveats(self.tariff.fallback_months, self.tariff.unpaid_export_months, year))
 
         if progress:
             progress(total_units, total_units, "Complete")

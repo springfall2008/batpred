@@ -93,14 +93,16 @@ class FakeAnnualStorage:
     def __init__(self):
         """Start with an empty in-memory store."""
         self.store = {}
+        self.expiries = {}
 
     async def load(self, namespace, key):
         """Return the previously saved value for a key, or None if nothing was saved."""
         return self.store.get((namespace, key))
 
-    async def save(self, namespace, key, value, format="json"):
-        """Record the value under the given key as if it had been persisted to disk."""
+    async def save(self, namespace, key, value, format="json", expiry=None):
+        """Record the value under the given key as if it had been persisted to disk, capturing any expiry passed."""
         self.store[(namespace, key)] = value
+        self.expiries[(namespace, key)] = expiry
 
 
 def test_annual_tariff(my_predbat):
@@ -474,6 +476,128 @@ def test_annual_tariff(my_predbat):
         failed = True
     if not any(("export" in message) and ("unpaid" in message) for message in empty_pattern_logged):
         print("  ERROR: expected the existing 'treating export as unpaid' warning when export has no rates at all, got {}".format(empty_pattern_logged))
+        failed = True
+    if (2025, 8) not in all_empty_tariff.unpaid_export_months:
+        print("  ERROR: a wholly-unpriced export month must be recorded in unpaid_export_months so the run can raise a caveat about it, got {}".format(all_empty_tariff.unpaid_export_months))
+        failed = True
+
+    print("Test: an open-ended (valid_to: null) row - how Octopus publishes a flat product's current rate - fills every slot of the day, not just 30 minutes")
+    open_ended_calls = []
+
+    async def open_ended_fetch(url):
+        """Serve an empty ranged download and, for the bare URL, a single open-ended row exactly as OUTGOING-VAR-24-10-26 (a real flat export product) publishes its current rate."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        open_ended_calls.append(url)
+        return {"results": [{"value_inc_vat": 12.0, "valid_from": "2026-03-01T00:00:00Z", "valid_to": None}], "next": None}
+
+    open_ended_config = {"export_octopus_url": "https://example.com/export/", "standing_charge_p_per_day": 0.0}
+    open_ended_tariff = AnnualTariff(open_ended_config, log=print, predbat=my_predbat, fetch_json=open_ended_fetch, timezone="Europe/London")
+    if not asyncio.run(open_ended_tariff.fetch_month(2025, 4)):
+        print("  ERROR: fetch_month should fall back to the open-ended current pattern")
+        failed = True
+    open_ended_midnight = pytz.utc.localize(datetime(2025, 4, 10))
+    _, open_ended_export = open_ended_tariff.rates_for(open_ended_midnight, 24 * 60)
+    if len(open_ended_export) != 24 * 60:
+        print("  ERROR: an open-ended row must rate every one of the day's 1440 minutes, got {} minutes rated".format(len(open_ended_export)))
+        failed = True
+    if any(abs(rate - 12.0) > 0.001 for rate in open_ended_export.values()):
+        print("  ERROR: every minute should carry the open-ended rate 12.0, got distinct values {}".format(set(open_ended_export.values())))
+        failed = True
+
+    print("Test: a genuinely time-limited row still overrides an open-ended base rate for the slots it covers (most-recent-valid_from precedence)")
+
+    # Mirrors the real OUTGOING-VAR-24-10-26 payload verified during review: a closed
+    # historical rate (15.0p, in force until the rate change) plus the open-ended
+    # current rate that superseded it (12.0p). The open-ended row's valid_from is more
+    # recent, so it must win for every slot, not just the 30 minutes after it starts.
+    async def precedence_fetch(url):
+        """Serve an empty ranged download and, for the bare URL, an open-ended current rate plus the closed rate it superseded."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        return {
+            "results": [
+                {"value_inc_vat": 12.0, "valid_from": "2026-03-01T00:00:00Z", "valid_to": None},
+                {"value_inc_vat": 15.0, "valid_from": "2024-10-25T23:00:00Z", "valid_to": "2026-03-01T00:00:00Z"},
+            ],
+            "next": None,
+        }
+
+    precedence_tariff = AnnualTariff(open_ended_config, log=print, predbat=my_predbat, fetch_json=precedence_fetch, timezone="Europe/London")
+    if not asyncio.run(precedence_tariff.fetch_month(2025, 5)):
+        print("  ERROR: fetch_month should fall back to the current pattern")
+        failed = True
+    precedence_midnight = pytz.utc.localize(datetime(2025, 5, 10))
+    _, precedence_export = precedence_tariff.rates_for(precedence_midnight, 24 * 60)
+    if len(precedence_export) != 24 * 60 or any(abs(rate - 12.0) > 0.001 for rate in precedence_export.values()):
+        print("  ERROR: the more recent open-ended row (12.0) should win every slot over the older closed row (15.0), got values {}".format(set(precedence_export.values())))
+        failed = True
+
+    print("Test: a genuine download failure (not a genuinely empty result) does not trigger the current-rates fallback")
+    failure_bare_calls = []
+
+    async def failure_then_bare_fetch(url):
+        """Simulate the ranged download failing outright (not a clean zero-row response) while the bare URL would happily serve a pattern if it were ever called."""
+        if "period_from" in url:
+            return None
+        failure_bare_calls.append(url)
+        return {"results": build_current_pattern_rows(), "next": None}
+
+    failure_config = {"import_octopus_url": "https://example.com/import/", "standing_charge_p_per_day": 0.0}
+    failure_tariff = AnnualTariff(failure_config, log=print, predbat=my_predbat, fetch_json=failure_then_bare_fetch, timezone="Europe/London")
+    if asyncio.run(failure_tariff.fetch_month(2025, 9)):
+        print("  ERROR: a genuine download failure must not fall back and must report the month unavailable, exactly as before this feature existed")
+        failed = True
+    if failure_tariff.month_available(2025, 9):
+        print("  ERROR: September 2025 must not be reported available after a genuine download failure")
+        failed = True
+    if failure_tariff.fallback_months:
+        print("  ERROR: a genuine download failure must not be recorded as a fallback, got {}".format(failure_tariff.fallback_months))
+        failed = True
+    if failure_bare_calls:
+        print("  ERROR: the bare-URL current pattern must never be requested after a genuine download failure (only after a confirmed, genuinely empty result), got {} calls".format(len(failure_bare_calls)))
+        failed = True
+
+    print("Test: the page-cap safety limit is also treated as a failure, not a genuinely empty result")
+    cap_bare_calls = []
+
+    async def cap_then_bare_fetch(url):
+        """Simulate the ranged download hitting the page-cap (always reporting another page) while the bare URL would happily serve a pattern if it were ever called."""
+        if "period_from" in url:
+            return {"results": build_agile_results(date(2025, 10, 1), 1, 20.0), "next": url + "&more"}
+        cap_bare_calls.append(url)
+        return {"results": build_current_pattern_rows(), "next": None}
+
+    cap_config = {"import_octopus_url": "https://example.com/import/", "standing_charge_p_per_day": 0.0}
+    cap_fallback_tariff = AnnualTariff(cap_config, log=print, predbat=my_predbat, fetch_json=cap_then_bare_fetch, timezone="Europe/London")
+    if asyncio.run(cap_fallback_tariff.fetch_month(2025, 10)):
+        print("  ERROR: a page-cap truncation must not fall back and must report the month unavailable")
+        failed = True
+    if cap_bare_calls:
+        print("  ERROR: the bare-URL current pattern must never be requested after a page-cap truncation, got {} calls".format(len(cap_bare_calls)))
+        failed = True
+
+    print("Test: the current-rates snapshot is cached with an expiry, not forever")
+    expiry_storage = FakeAnnualStorage()
+    expiry_tariff = AnnualTariff(fallback_config, log=print, predbat=my_predbat, storage=expiry_storage, fetch_json=fallback_fetch, timezone="Europe/London")
+    asyncio.run(expiry_tariff.fetch_month(2025, 11))
+    export_pattern_expiry = expiry_storage.expiries.get(("annual", "current_pattern_export"))
+    if export_pattern_expiry is None:
+        print("  ERROR: expected the current-rates pattern cache entry to carry a non-None expiry (a 'now' snapshot must not be cached forever), got {}".format(expiry_storage.expiries))
+        failed = True
+
+    # The per-month ranged download, by contrast, covers a fixed historical date that can
+    # never change, so it must still be cached with no expiry - proved here against a real,
+    # non-empty ranged download (the expiry_tariff case above never actually cached a ranged
+    # entry at all, since its ranged downloads were empty, so it couldn't tell them apart).
+    history_storage = FakeAnnualStorage()
+    history_tariff = AnnualTariff(config, log=print, predbat=my_predbat, storage=history_storage, fetch_json=fake_fetch, timezone="Europe/London")
+    asyncio.run(history_tariff.fetch_month(2025, 3))
+    if ("annual", "rates_export_2025_03") not in history_storage.expiries:
+        print("  ERROR: expected the real historical download to have been cached at all, got {}".format(history_storage.store.keys()))
+        failed = True
+    if history_storage.expiries.get(("annual", "rates_export_2025_03")) is not None:
+        print("  ERROR: a per-month historical download must still be cached with no expiry, got {}".format(history_storage.expiries.get(("annual", "rates_export_2025_03"))))
         failed = True
 
     return failed

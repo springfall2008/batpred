@@ -55,6 +55,20 @@ DEFAULT_CONFIG = {
 CONFIG_FILENAME = "annual.yaml"
 
 
+def _json_for_script(value):
+    """Serialise a value for embedding inside an inline ``<script>`` block.
+
+    Plain ``json.dumps`` does not escape ``</`` sequences, so a value containing the
+    literal text ``</script>`` (for example a run id echoed back off the query
+    string, or free text that ends up inside a chart payload) would close the
+    surrounding script tag early and let the remainder be parsed as HTML/JS of the
+    attacker's choosing. Escaping the forward slash after ``<`` is the standard,
+    JSON-semantics-preserving fix (JSON has no meaning for a preceding backslash on
+    ``/``, so this round-trips through ``JSON.parse`` unchanged).
+    """
+    return json.dumps(value).replace("</", "<\\/")
+
+
 class AnnualPage:
     """Renders and drives the Annual prediction tab."""
 
@@ -691,13 +705,20 @@ class AnnualPage:
         for entry in results.get("months", []) or []:
             if not isinstance(entry, dict) or entry.get("month") != month:
                 continue
-            plans = entry.get("plans") or []
-            if index < 0 or index >= len(plans):
+            plans = entry.get("plans")
+            # A corrupt stored run could have "plans" as anything at all (a dict, a
+            # string, ...) - indexing a non-list with an int would raise KeyError or
+            # TypeError instead of the None this method's docstring promises never to
+            # let escape, so a non-list is treated the same as no plans at all.
+            if not isinstance(plans, list) or index < 0 or index >= len(plans):
                 return None
             plan_entry = plans[index]
             if not isinstance(plan_entry, dict):
                 return None
-            return plan_entry.get("scenarios", {}).get(scenario)
+            scenarios = plan_entry.get("scenarios")
+            if not isinstance(scenarios, dict):
+                return None
+            return scenarios.get(scenario)
         return None
 
     @staticmethod
@@ -800,13 +821,19 @@ class AnnualPage:
         # ApexCharts itself is already loaded by get_header_html() (web_helper.py); a
         # second <script src> tag here would just be a redundant, wasted fetch.
         text = '<div id="annual-chart"></div>\n'
-        text += "<script>\nvar annualOptions = {};\n".format(json.dumps(payload))
+        synthesised_months = [calendar.month_abbr[entry["month"]] for entry in results.get("months", []) if entry.get("rates_synthesised")]
+        if synthesised_months:
+            # The bar itself carries no visual marker - it is real Predbat plan output,
+            # just costed against a fallback rate pattern - so a reader would otherwise
+            # have no way to tell these months apart from any other bar in the chart.
+            text += "<p class='annual-note'>Rates for {} were synthesised from today's rates because no historical rates were available (see caveats below) - treat those bars as indicative, not historical.</p>\n".format(", ".join(synthesised_months))
+        text += "<script>\nvar annualOptions = {};\n".format(_json_for_script(payload))
         text += "annualOptions.tooltip.y = {formatter: function (v) { return '£' + v.toFixed(2); }};\n"
         text += "new ApexCharts(document.querySelector('#annual-chart'), annualOptions).render();\n</script>\n"
         return text
 
     def _render_month_table(self, results):
-        """Return the per-month energy breakdown, marking degraded and unavailable months."""
+        """Return the per-month energy breakdown, marking degraded, unavailable and rate-synthesised months."""
         text = "<h2>By month</h2>\n<table class='comparison-table'>\n"
         text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th></tr>\n"
         for entry in results.get("months", []):
@@ -816,6 +843,13 @@ class AnnualPage:
                 text += "<tr class='annual-unavailable'><td>{}</td><td colspan='6'>unavailable — {}</td></tr>\n".format(name, reason)
                 continue
             suffix = " (degraded — {} sampled day(s) failed)".format(len(entry.get("failed_days", []))) if entry.get("status") == "degraded" else ""
+            synthesised = entry.get("rates_synthesised") or []
+            if synthesised:
+                # A synthesised month is still "ok"/"degraded" - it produced a real,
+                # usable plan - so it is not caught by the unavailable branch above.
+                # Without this, it renders identically to a month priced from real
+                # historical rates, which is exactly the ambiguity being fixed here.
+                suffix += " <span class='annual-synthesised-tag' title='Rates for this month came from today&#39;s rates, not what was actually charged then'>rates synthesised: {}</span>".format(html.escape(", ".join(synthesised), quote=True))
             for key in SCENARIO_ORDER:
                 scenario = entry.get("scenarios", {}).get(key, {})
                 text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(
@@ -871,7 +905,7 @@ class AnnualPage:
         text += get_plan_css()
         text += get_plan_renderer_js()
         text += "<script>\n"
-        text += "const ANNUAL_RUN_ID = {};\n".format(json.dumps(selected_id))
+        text += "const ANNUAL_RUN_ID = {};\n".format(_json_for_script(selected_id))
         text += """const ANNUAL_EMPTY_OVERRIDES = {
     manual_charge_times: [], manual_export_times: [], manual_freeze_charge_times: [],
     manual_freeze_export_times: [], manual_demand_times: [],
@@ -924,6 +958,7 @@ annualLoadPlan();
 .annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
 .annual-caveats li { margin-bottom: 0.35rem; }
 .annual-unavailable { opacity: 0.6; font-style: italic; }
+.annual-synthesised-tag { font-size: 0.75rem; font-weight: 600; color: #D55E00; border: 1px solid #D55E00; border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; }
 </style>
 """
 

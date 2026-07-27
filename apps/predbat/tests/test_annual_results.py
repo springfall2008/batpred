@@ -193,6 +193,45 @@ def test_annual_results(my_predbat):
         print("  ERROR: expected average_rate of an empty dict to be 0.0 rather than raising, got {}".format(average_rate({}, 10)))
         failed = True
 
+    print("Test: _synthesised_sides filters a run-wide fallback_months set down to the one requested month")
+    fallback_months = {(2025, 3, "export"), (2025, 3, "import"), (2025, 4, "export"), (2024, 3, "export")}
+    sides = predictor._synthesised_sides(fallback_months, 2025, 3)
+    if sides != ["export", "import"]:
+        print("  ERROR: expected ['export', 'import'] for (2025, 3), got {}".format(sides))
+        failed = True
+    if predictor._synthesised_sides(fallback_months, 2025, 5) != []:
+        print("  ERROR: a month with no fallback entries should return an empty list, got {}".format(predictor._synthesised_sides(fallback_months, 2025, 5)))
+        failed = True
+
+    print("Test: _tariff_fallback_caveats reports nothing when the tariff needed neither fallback")
+    if AnnualPredictor._tariff_fallback_caveats(set(), set(), 2025) != []:
+        print("  ERROR: expected no caveats when both sets are empty, got {}".format(AnnualPredictor._tariff_fallback_caveats(set(), set(), 2025)))
+        failed = True
+
+    print("Test: _tariff_fallback_caveats names the affected months for a current-rates fallback")
+    caveats = AnnualPredictor._tariff_fallback_caveats({(2025, 7, "import"), (2025, 7, "export")}, set(), 2025)
+    if len(caveats) != 1:
+        print("  ERROR: expected exactly one caveat for a fallback-only case, got {}".format(caveats))
+        failed = True
+    elif "2025-07" not in caveats[0] or "today's rates" not in caveats[0]:
+        print("  ERROR: expected the fallback caveat to name the month and explain what happened, got {!r}".format(caveats[0]))
+        failed = True
+
+    print("Test: _tariff_fallback_caveats separately reports a month where export could not be priced at all")
+    caveats = AnnualPredictor._tariff_fallback_caveats(set(), {(2025, 9)}, 2025)
+    if len(caveats) != 1:
+        print("  ERROR: expected exactly one caveat for an unpaid-export-only case, got {}".format(caveats))
+        failed = True
+    elif "2025-09" not in caveats[0] or "zero" not in caveats[0]:
+        print("  ERROR: expected the unpaid-export caveat to name the month and say export was priced at zero, got {!r}".format(caveats[0]))
+        failed = True
+
+    print("Test: _tariff_fallback_caveats returns both caveats together when both conditions apply")
+    caveats = AnnualPredictor._tariff_fallback_caveats({(2025, 7, "import")}, {(2025, 9)}, 2025)
+    if len(caveats) != 2:
+        print("  ERROR: expected both caveats when both sets are non-empty, got {}".format(caveats))
+        failed = True
+
     if test_annual_debug_flag():
         failed = True
 
@@ -222,6 +261,25 @@ def test_annual_debug_flag():
     print("Test: debug is not echoed into the scrubbed raw config as a secret")
     if config["raw"].get("debug") != "on":
         print("  ERROR: raw config should retain the submitted value")
+        failed = True
+
+    print("Test: debug='false' (a non-empty string) is coerced to False, not the bare bool('false') == True bug")
+    # Plain Python's bool("false") is True (any non-empty string is truthy), which is
+    # exactly the trap _coerce_bool exists to avoid: an explicit, well-meaning "debug:
+    # false" in a submitted config must not silently turn debug mode on.
+    raw = base_config()
+    raw["debug"] = "false"
+    config = validate_config(raw)
+    if config["debug"] is not False:
+        print("  ERROR: debug='false' should coerce to False, got {!r}".format(config["debug"]))
+        failed = True
+
+    print("Test: a real bool for debug passes through unchanged")
+    raw = base_config()
+    raw["debug"] = True
+    config = validate_config(raw)
+    if config["debug"] is not True:
+        print("  ERROR: debug=True should stay True, got {!r}".format(config["debug"]))
         failed = True
     return failed
 
