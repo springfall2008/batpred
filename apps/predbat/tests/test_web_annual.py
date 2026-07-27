@@ -929,16 +929,31 @@ def test_web_annual_results(my_predbat):
             failed = True
 
     print("Test: the PV-only scenario appears in the chart and the month table")
-    if "#9439ef" not in html:
-        print("  ERROR: the validated PV-only colour should be present")
+    # Scoped to _render_chart()/_render_month_table() directly, not the whole page: a
+    # substring check over `html` would also be satisfied by the payback table's own
+    # "PV only" label (see _render_payback), so it would stay green even if "pv_only"
+    # were dropped from SCENARIO_ORDER and vanished from both the chart and the table.
+    chart_html = page._render_chart(results)
+    month_table_html = page._render_month_table(results)
+    if "#9439ef" not in chart_html:
+        print("  ERROR: the validated PV-only colour should be present in the chart")
         failed = True
-    if "PV only" not in html:
-        print("  ERROR: the PV-only scenario should be labelled in the results")
+    if "PV only" not in chart_html:
+        print("  ERROR: the PV-only scenario should be labelled in the chart")
+        failed = True
+    if "PV only" not in month_table_html:
+        print("  ERROR: the PV-only scenario should be labelled in the month table")
         failed = True
 
     print("Test: the payback table shows all three purchase options")
+    # Scoped to _render_payback() directly: "PV only" and "With Predbat" are also
+    # SCENARIO_LABELS values that appear in the chart/month table regardless of what
+    # the payback table renders, so a whole-page substring check would stay green even
+    # with a payback row missing. Only "PV + battery" happens to be unique to this
+    # table, which is exactly the gap that let a dropped row ship silently.
+    payback_html = page._render_payback(results)
     for label in ["PV only", "PV + battery", "With Predbat"]:
-        if label not in html:
+        if label not in payback_html:
             print("  ERROR: the payback table should include {}".format(label))
             failed = True
 

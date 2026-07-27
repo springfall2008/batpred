@@ -319,10 +319,10 @@ cheaper than a 4.0 kWp one purely from crossing a band boundary. Battery cost is
 usable capacity. A system with no PV, or no battery, costs nothing for the part it does
 not have.
 
-All seven of these — the three PV band rates and their two anchoring costs,
-`battery_install_gbp`, `battery_per_kwh_gbp` and `predbat_annual_gbp` below — are editable
-under **Advanced** on the web form, or `annual.costs` in the config file, if your own
-quotes differ from the published medians.
+All seven of these — the three PV band rates, `pv_minimum_gbp`, `battery_install_gbp`,
+`battery_per_kwh_gbp` and `predbat_annual_gbp` below — are editable under **Advanced** on
+the web form, or `annual.costs` in the config file, if your own quotes differ from the
+published medians.
 
 `predbat_annual_gbp` (default £0) is different from the other six: it is a **recurring**
 yearly cost, not a one-off capital cost, and it is not added to the install price. Predbat
