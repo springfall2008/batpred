@@ -159,6 +159,10 @@ class ComponentBase(ABC):
         """Get the number of errors that have occurred in this component"""
         return self.count_errors
 
+    def is_calculating(self):
+        """Return whether the component is currently performing a long-running calculation."""
+        return False
+
     async def start(self):
         """
         Start the component's main operation loop.
