@@ -235,12 +235,18 @@ def test_annual_debug_capture(my_predbat):
     capture, and that a capturing run never leaves ``predbat.debug_enable`` on). This
     exercises the capture helper directly instead, against the same kind of minimal plan
     state ``test_plan_json_rate_adjust.py`` builds - empty charge/export windows, no
-    search - but drives it through ``_billed_result(save=...)``, the SAME call
-    ``_run_scenarios()`` makes, rather than calling ``predbat.run_prediction()`` by hand.
-    An earlier version of this test called ``run_prediction(save="best")`` directly, which
-    happened to populate ``predict_*_best`` too, but masked a real bug: production's
-    ``_billed_result()`` never passed ``save`` at all, so ``_capture_plan()`` raised
-    ``AttributeError`` on the actual annual-engine path every time debug was switched on.
+    search - drawing on the SAME two-call sequence production uses: ``_billed_result()``
+    with no ``save`` argument (unchanged since before this feature), followed by
+    ``_capture_plan()``, which does its own internal ``save="best"`` re-run to populate
+    ``predict_*_best`` without leaking a standing charge into the billed figures above.
+    An earlier version of both this test and the production code threaded ``save``
+    into ``_billed_result()`` itself; that was wrong on two counts, in order: first, it
+    was simply absent from production (``_billed_result()`` never passed ``save`` at
+    all, so ``_capture_plan()`` raised ``AttributeError`` there), and once that was
+    fixed by threading ``save="best"`` into the billed run, that in turn silently added
+    a standing charge into ``cost_p`` (``prediction.py``'s ``enable_standing_charge``),
+    which the annual engine already accounts for separately. Both regressions are
+    covered below and in ``test_annual_integration.py``.
     """
     failed = False
     print("Test: _capture_plan returns a renderer-ready plan with non-empty rows")
@@ -267,12 +273,11 @@ def test_annual_debug_capture(my_predbat):
     my_predbat.export_window_best = []
     my_predbat.export_limits_best = []
 
-    # The production call sequence: _run_scenarios() calls _billed_result(..., save="best"
-    # if plans is not None else None) and THEN _capture_plan() reads the predict_*_best
-    # attributes that call's save="best" just populated. Calling run_prediction() directly
-    # here (as an earlier version of this test did) would not have caught the bug where
-    # _billed_result() stopped threading save through.
-    _billed_result(my_predbat, my_predbat.end_record, pv_step, save="best")
+    # The production call sequence: _run_scenarios() always calls _billed_result() with no
+    # save argument, then - only under debug - _capture_plan(), which does its own internal
+    # save="best" run. billed_before/billed_after bracket the capture so the regression
+    # guard below can prove the capture changed nothing about the billed numbers.
+    billed_before = _billed_result(my_predbat, my_predbat.end_record, pv_step)
 
     plan = _capture_plan(my_predbat, pv_step, pv_step, load_step, load_step, my_predbat.end_record)
     if not plan.get("rows"):
@@ -284,6 +289,18 @@ def test_annual_debug_capture(my_predbat):
     if "end_record" not in plan:
         print("  ERROR: expected 'end_record' in the captured plan")
         failed = True
+
+    print("Test: capturing a plan does not change the billed figures (no standing charge leak)")
+    # _capture_plan()'s internal save="best" run must not perturb anything _billed_result()
+    # reads (charge/export windows and limits, soc_kw, predbat.prediction), so an identical
+    # _billed_result() call straight after capture must reproduce the exact same figures -
+    # this is the direct, single-scenario mirror of test_annual_integration.py's regression
+    # guard, which proves the same thing through the full three-scenario production path.
+    billed_after = _billed_result(my_predbat, my_predbat.end_record, pv_step)
+    for field in billed_before:
+        if billed_before[field] != billed_after[field]:
+            print("  ERROR: {} = {} before capture but {} after - capturing a plan must not change the billed figures".format(field, billed_before[field], billed_after[field]))
+            failed = True
 
     print("Test: capturing plans does not leak predbat.debug_enable on")
     if my_predbat.debug_enable is not False:

@@ -873,7 +873,7 @@ def _baseline_charge_window(predbat):
     return windows, [predbat.soc_max for _ in windows]
 
 
-def _billed_result(predbat, end_record, pv_step, save=None):
+def _billed_result(predbat, end_record, pv_step):
     """Run one scenario to completion and return its billed figures.
 
     The battery-value correction (metric_end minus metric_start) values whatever
@@ -891,19 +891,14 @@ def _billed_result(predbat, end_record, pv_step, save=None):
     typically the battery scenarios, never the no-battery baseline — for a reason
     that has nothing to do with money actually billed.
 
-    ``save``, when set to ``"best"``, makes ``run_prediction()`` also copy
-    ``predict_soc_best``/``predict_clipped_best``/``predict_iboost_best``/
-    ``predict_carbon_best``/``predict_metric_best`` onto ``predbat`` (see
-    ``plan.py``'s ``run_prediction()``) - the attributes ``publish_html_plan()``
-    unconditionally reads. Those are otherwise never populated on the annual engine's
-    headless path, since neither this call nor ``calculate_plan(publish=False)``
-    passes ``save`` by default. This must be the SAME run the billed figures come
-    from, not a second one: a second run would double the planning cost per scenario
-    and - because ``run_prediction()`` is not required to be side-effect-free between
-    calls - is not guaranteed to reproduce identical figures.
+    This ALWAYS runs with ``save=None`` (``run_prediction()``'s default) and must
+    keep doing so: ``save="best"`` (or ``"compare"``/``"yesterday"``) switches on
+    ``enable_standing_charge`` inside ``prediction.py`` (see ``_capture_plan()``,
+    which needs a save="best" run for an unrelated reason and re-runs the prediction
+    from scratch rather than reusing this one, precisely to keep that flag off here).
     """
     cost, import_kwh_battery, import_kwh_house, export_kwh, _, final_soc, _, battery_cycle, _, final_iboost, _ = predbat.run_prediction(
-        predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record, save=save
+        predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record
     )
     metric_start, _ = predbat.compute_metric(end_record, predbat.soc_kw, predbat.soc_kw, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     metric_end, _ = predbat.compute_metric(end_record, final_soc, final_soc, cost, cost, final_iboost, final_iboost, 0, 0, 0, 0, 0, 0)
@@ -1005,7 +1000,25 @@ def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_recor
     builds it from ``charge_limit_best``/``charge_window_best``/``export_*_best`` and the step
     data, exactly as they stand for the scenario just costed. ``publish=False`` keeps it from
     touching Home Assistant, so this is safe in a headless run: it only reads state and returns.
+
+    ``publish_html_plan()`` unconditionally reads ``predict_soc_best``/
+    ``predict_clipped_best``/``predict_iboost_best``/``predict_carbon_best``/
+    ``predict_metric_best`` off ``predbat``, which ``run_prediction()`` only populates
+    when called with ``save="best"`` (or ``"compare"``/``"yesterday"`` - see
+    ``plan.py``). This function therefore re-runs the prediction once more, purely to
+    populate that state, rather than asking the BILLED run (``_billed_result()``) to
+    pass ``save="best"`` itself. That is deliberate, not a missed optimisation:
+    ``save="best"`` also switches on ``enable_standing_charge`` inside
+    ``prediction.py``, which would add a standing charge into the returned cost - but
+    the annual engine already accounts for standing charge separately, as its own
+    per-month ``standing_charge_p`` field built from the annual config's tariff, not
+    from the live instance's unrelated ``metric_standing_charge`` (``fetch.py``). Do
+    not "simplify" this back to reusing the billed run's ``save`` flag - that
+    silently double-counts the standing charge in every debug-captured scenario. The
+    extra prediction is a real doubling of planning cost per scenario, but it only
+    happens under the opt-in debug flag.
     """
+    predbat.run_prediction(predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record, save="best")
     _, raw_plan = predbat.publish_html_plan(pv_step, pv_step10, load_step, load_step10, end_record, publish=False, prediction=predbat.prediction)
     return raw_plan
 
@@ -1022,12 +1035,12 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     scenario key, each holding that scenario's plan captured against the same PV and load
     series it was billed against - a plan drawn from a different series would defeat the
     point of the feature, which is cross-checking the billed numbers. Leaving it ``None``
-    (the default) skips every capture, so a non-debug run pays no extra cost. Capturing
-    also asks each ``_billed_result()`` call to run its (single) prediction with
-    ``save="best"`` instead of running a second one: ``save`` only gates copying,
-    logging and dashboard writes that happen after the billed figures are already
-    computed, so it must never change ``cost_p``/``import_kwh``/etc - see
-    ``test_annual_debug_capture()`` for the regression guard on that.
+    (the default) skips every capture, so a non-debug run pays no extra cost. Each
+    capture (see ``_capture_plan()``) re-runs the prediction it captures from, rather
+    than reusing the billed ``_billed_result()`` run, so the billed ``cost_p``/
+    ``import_kwh``/etc are always from a ``save=None`` run and never carry the standing
+    charge ``save="best"`` adds - see ``test_annual_debug_capture()`` and
+    ``test_annual_integration.py``'s identical-billed-figures regression guard.
     """
     prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh)
 
@@ -1051,7 +1064,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.export_window_best = []
     predbat.export_limits_best = []
     predbat.prediction = Prediction(predbat, zero_step, zero_step, load_step, load_step, soc_kw=0, soc_max=0)
-    results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step, save="best" if plans is not None else None)
+    results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step)
     if plans is not None:
         plans["no_pvbat"] = _capture_plan(predbat, zero_step, zero_step, load_step, load_step, DAY_MINUTES)
 
@@ -1064,7 +1077,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.export_window_best = []
     predbat.export_limits_best = []
     predbat.prediction = Prediction(predbat, actual_step, actual_step, load_step, load_step, soc_kw=START_SOC_KWH)
-    results["without_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step, save="best" if plans is not None else None)
+    results["without_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
     if plans is not None:
         plans["without_predbat"] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
 
@@ -1108,7 +1121,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     # grid, identical regardless of which PV series build_step_data() was called with.
     predbat_load_step, _, _ = build_step_data(predbat, forecast_pv, p10_pv)
     predbat.prediction = Prediction(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, soc_kw=START_SOC_KWH)
-    results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step, save="best" if plans is not None else None)
+    results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
     if plans is not None:
         plans["with_predbat"] = _capture_plan(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, DAY_MINUTES)
 
