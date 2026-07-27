@@ -56,7 +56,14 @@ def test_annual_job(my_predbat):
         print("  ERROR: the results document should be parsed from stdout, got {}".format(job.results))
         failed = True
     elapsed_first = job.status().get("elapsed")
-    time.sleep(0.2)
+    # elapsed is int()-truncated to whole seconds, so a sleep shorter than a second
+    # (0.2s, say) usually lands inside the same truncated second and would pass this
+    # assertion even if the freeze were removed and elapsed kept advancing with wall
+    # time - discriminating only by luck, on whichever side of a second boundary the
+    # first read happened to fall. Sleeping past a full second guarantees at least
+    # one more second has elapsed on the wall clock than before, so a still-advancing
+    # elapsed is caught deterministically rather than only sometimes.
+    time.sleep(1.1)
     elapsed_second = job.status().get("elapsed")
     if elapsed_first != elapsed_second:
         print("  ERROR: elapsed should freeze once a run is complete, got {} then {}".format(elapsed_first, elapsed_second))

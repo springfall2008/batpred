@@ -19,6 +19,7 @@ import datetime
 import html
 import json
 import os
+import re
 import sys
 
 import yaml
@@ -66,6 +67,14 @@ class AnnualPage:
         # is shared by every request from every visitor, so an attribute here would
         # leak one person's failed validation onto everyone else's later, unrelated
         # page load (see html_annual's `error` parameter instead).
+        #
+        # _running_config IS safe to hold as instance state, unlike the error above:
+        # AnnualJob itself only ever runs one job at a time (see AnnualJob.start()), so
+        # there is only ever one "currently running" config to remember, not one per
+        # visitor. It is set just before job.start() succeeds and cleared once the
+        # finished run has been dealt with, one way or another (see
+        # _consume_terminal_state).
+        self._running_config = None
 
     def _arg(self, name, default=None, indirect=True, combine=False):
         """Read one configuration value from the in-memory args dictionary.
@@ -368,9 +377,14 @@ class AnnualPage:
     def config_from_post(self, postdata):
         """Rebuild a config dict from submitted form fields.
 
-        Values are left as the strings the browser sent; validate_config() in the
-        engine does the coercion and range checking, so there is exactly one place
-        that decides what a valid number is.
+        Numeric-context fields are coerced to int/float here; a value that fails to
+        parse is left as the original string so validate_config() - the sole authority
+        on what is IN RANGE - still sees exactly what the user typed and can raise its
+        usual, actionable "must be a number, got '...'" error. This coercion never
+        applies a minimum, a maximum, or any other opinion about validity: it exists
+        only so the web side's own uses of the config before validate_config runs (the
+        run label, the on-disk YAML, a re-render after a failure) are numerically
+        sound, not so that config_from_post becomes a second, competing validator.
         """
 
         def value(name, default=None):
@@ -380,14 +394,30 @@ class AnnualPage:
                 return default
             return str(raw).strip()
 
+        def numeric(name, default=None):
+            """Return one posted field coerced to int/float, or the default when absent.
+
+            A value that does not parse as a number is returned unchanged (as the
+            posted string) rather than raising here - see the docstring above.
+            """
+            raw = value(name)
+            if raw is None:
+                return default
+            if re.fullmatch(r"[+-]?\d+", raw):
+                return int(raw)
+            try:
+                return float(raw)
+            except ValueError:
+                return raw
+
         config = {}
 
         location = {}
         if value("postcode"):
             location["postcode"] = value("postcode")
         if value("latitude") is not None and value("longitude") is not None:
-            location["latitude"] = value("latitude")
-            location["longitude"] = value("longitude")
+            location["latitude"] = numeric("latitude")
+            location["longitude"] = numeric("longitude")
         config["location"] = location
 
         arrays = []
@@ -395,10 +425,10 @@ class AnnualPage:
         while value("solar_kwp_{}".format(index)) is not None:
             arrays.append(
                 {
-                    "kwp": value("solar_kwp_{}".format(index)),
-                    "declination": value("solar_declination_{}".format(index), 35),
-                    "azimuth": value("solar_azimuth_{}".format(index), 180),
-                    "efficiency": value("solar_efficiency_{}".format(index), 0.95),
+                    "kwp": numeric("solar_kwp_{}".format(index)),
+                    "declination": numeric("solar_declination_{}".format(index), 35),
+                    "azimuth": numeric("solar_azimuth_{}".format(index), 180),
+                    "efficiency": numeric("solar_efficiency_{}".format(index), 0.95),
                 }
             )
             index += 1
@@ -407,9 +437,9 @@ class AnnualPage:
 
         if value("battery_size_kwh") is not None:
             config["battery"] = {
-                "size_kwh": value("battery_size_kwh"),
-                "inverter_kw": value("battery_inverter_kw", 5.0),
-                "export_limit_kw": value("battery_export_limit_kw", 5.0),
+                "size_kwh": numeric("battery_size_kwh"),
+                "inverter_kw": numeric("battery_inverter_kw", 5.0),
+                "export_limit_kw": numeric("battery_export_limit_kw", 5.0),
                 "hybrid": bool(postdata.get("battery_hybrid")),
             }
 
@@ -419,13 +449,13 @@ class AnnualPage:
             config["load"] = {"octopus": {"api_key": value("load_octopus_api_key", ""), "account_id": value("load_octopus_account_id", "")}}
         else:
             config["load"] = {
-                "annual_kwh": value("load_annual_kwh", 3800),
+                "annual_kwh": numeric("load_annual_kwh", 3800),
                 "shape": value("load_shape", "flat"),
-                "car_charging_kwh": value("load_car_charging_kwh", 0),
-                "car_rate_kw": value("load_car_rate_kw", 7.4),
+                "car_charging_kwh": numeric("load_car_charging_kwh", 0),
+                "car_rate_kw": numeric("load_car_rate_kw", 7.4),
             }
 
-        tariff = {"standing_charge_p_per_day": value("tariff_standing_charge", 0)}
+        tariff = {"standing_charge_p_per_day": numeric("tariff_standing_charge", 0)}
         if value("tariff_import_url"):
             tariff["import_octopus_url"] = value("tariff_import_url")
         if value("tariff_export_url"):
@@ -438,10 +468,10 @@ class AnnualPage:
         config["tariff"] = tariff
 
         if value("year"):
-            config["year"] = value("year")
-        config["samples_per_month"] = value("samples_per_month", 2)
+            config["year"] = numeric("year")
+        config["samples_per_month"] = numeric("samples_per_month", 2)
         if value("pv10_derate_fallback"):
-            config["pv10_derate_fallback"] = value("pv10_derate_fallback")
+            config["pv10_derate_fallback"] = numeric("pv10_derate_fallback")
 
         return config
 
@@ -483,6 +513,15 @@ class AnnualPage:
 
         Returns None when the job is not currently in a terminal state, so callers
         fall back to a plain, side-effect-free ``self.job.status()``.
+
+        A storage failure while saving the just-finished run is caught rather than
+        left to propagate: letting it escape would 500 this poll, which the page's
+        JS turns into a silent retry-as-idle (see annualPoll's ``.catch``) with the
+        run's results gone for good - the user would see nothing at all. Instead the
+        ``status`` already claimed as "complete" above is downgraded to "failed" with
+        an explanatory message, so THIS poll - the one the page's JS is actually
+        looking at, since polling stops the moment any terminal state is reported -
+        carries the failure visibly.
         """
         status = self.job.status()
         if status["state"] not in ("complete", "failed", "cancelled"):
@@ -492,8 +531,16 @@ class AnnualPage:
         self.job.state = "idle"
         self.job.error = None
         if status["state"] == "complete" and results is not None:
-            config = getattr(self, "_running_config", None) or self.load_config()
-            await self._store_completed_run(config, results)
+            config = self._running_config or self.load_config()
+            try:
+                await self._store_completed_run(config, results)
+            except Exception as exception:  # noqa: BLE001 - a storage failure must be visible, never silent - see the docstring above
+                message = "The run finished but its results could not be saved: {}".format(exception)
+                self.log("Warn: Annual: {}".format(message))
+                self.job.state = "failed"
+                self.job.error = message
+                status = dict(status, state="failed", error=message)
+            self._running_config = None
         return status
 
     async def _store_completed_run(self, config, results):
@@ -517,16 +564,24 @@ class AnnualPage:
         status["runs"] = await list_runs(self._storage())
         return status
 
-    async def html_annual(self, request, error=None):
+    async def html_annual(self, request, error=None, config=None):
         """Render the Annual tab: the form, then the selected run's results.
 
         ``error`` is a validation message threaded through from a POST handler in
         the same request-response cycle, not read off ``self`` - the page object is
         shared by every visitor, so storing it as instance state would leak one
         person's failed validation onto everyone else's later, unrelated page load.
+
+        ``config`` is likewise threaded through from a POST handler rather than
+        always re-read from disk: on a validation failure (or a refused second run)
+        nothing was ever saved, so re-reading ``self.load_config()`` here would
+        silently discard whatever the visitor had actually typed and re-render the
+        previous, unrelated saved configuration instead - the opposite of the "form
+        still populated with what was entered" behaviour ``render_form`` promises.
         """
         self.web.default_page = "./annual"
-        config = self.load_config()
+        if config is None:
+            config = self.load_config()
 
         text = self.web.get_header("Predbat Annual")
         text += "<body>\n"
@@ -550,7 +605,7 @@ class AnnualPage:
         error = self.validation_error(config)
         if not error:
             self.save_config(config)
-        return await self.html_annual(request, error=error)
+        return await self.html_annual(request, error=error, config=config)
 
     async def html_annual_run(self, request):
         """Validate, save, and spawn the run."""
@@ -558,14 +613,24 @@ class AnnualPage:
         config = self.config_from_post(postdata)
         error = self.validation_error(config)
         if error:
-            return await self.html_annual(request, error=error)
+            return await self.html_annual(request, error=error, config=config)
+
+        # Checked BEFORE anything is saved or _running_config is touched: doing this
+        # after job.start()'s own refusal (it also checks) would have already
+        # overwritten the in-flight run's config and state with this second run's,
+        # so the run that was actually working would finish labelled with the
+        # wrong battery size, array size and tariff - and nothing on screen would
+        # say so, since job.start()'s refusal on its own leaves `error` at None.
+        if self.job.state == "running":
+            error = "A run is already in progress. Wait for it to finish, or cancel it, before starting another."
+            return await self.html_annual(request, error=error, config=config)
 
         self.save_config(config)
         self._running_config = config
         started = await self.job.start(self.cli_command(self._config_path()))
         if not started and self.job.state != "running":
             error = self.job.status().get("error") or "The run could not be started"
-        return await self.html_annual(request, error=error)
+        return await self.html_annual(request, error=error, config=config)
 
     async def html_annual_status(self, request):
         """Return the job status as JSON for the page to poll."""
@@ -599,6 +664,10 @@ class AnnualPage:
 
         if not results:
             text += "<p>No results yet — fill in the form above and press Run.</p>\n</div>\n"
+            return text
+
+        if not isinstance(results, dict):
+            text += "<p>This run's results file is missing or could not be read.</p>\n</div>\n"
             return text
 
         annual = results.get("annual", {}) or {}
@@ -676,8 +745,9 @@ class AnnualPage:
             "legend": {"position": "top"},
             "tooltip": {"y": {"formatter": None}},
         }
+        # ApexCharts itself is already loaded by get_header_html() (web_helper.py); a
+        # second <script src> tag here would just be a redundant, wasted fetch.
         text = '<div id="annual-chart"></div>\n'
-        text += '<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>\n'
         text += "<script>\nvar annualOptions = {};\n".format(json.dumps(payload))
         text += "annualOptions.tooltip.y = {formatter: function (v) { return '£' + v.toFixed(2); }};\n"
         text += "new ApexCharts(document.querySelector('#annual-chart'), annualOptions).render();\n</script>\n"

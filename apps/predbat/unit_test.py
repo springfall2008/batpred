@@ -78,7 +78,10 @@ from tests.test_web_annual import (
     test_web_annual_results,
     test_web_annual_routes,
     test_web_annual_routes_registered,
+    test_web_annual_run_refuses_while_running,
+    test_web_annual_store_failure_surfaces,
     test_web_annual_terminal_state,
+    test_web_annual_validation_error_preserves_input,
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
@@ -314,6 +317,9 @@ def main():
         ("web_annual_terminal_state", test_web_annual_terminal_state, "Annual web tab terminal-state claim/no-redirect-loop tests", False),
         ("web_annual_error_isolation", test_web_annual_error_isolation, "Annual web tab per-request error isolation tests", False),
         ("web_annual_routes_registered", test_web_annual_routes_registered, "Annual web tab route registration test", False),
+        ("web_annual_validation_error_preserves_input", test_web_annual_validation_error_preserves_input, "Annual web tab validation error keeps posted form input tests", False),
+        ("web_annual_run_refuses_while_running", test_web_annual_run_refuses_while_running, "Annual web tab second-run refusal tests", False),
+        ("web_annual_store_failure_surfaces", test_web_annual_store_failure_surfaces, "Annual web tab storage-failure visibility tests", False),
         ("web_annual_post_numeric_coercion", test_web_annual_post_numeric_coercion, "Annual web tab posted-form numeric coercion tests", False),
         ("web_history_table", run_web_history_table_tests, "Web /entity history table bucketing tests", False),
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),

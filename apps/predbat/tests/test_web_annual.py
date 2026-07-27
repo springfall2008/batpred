@@ -18,6 +18,7 @@ from unittest.mock import patch
 from aiohttp import web as aiohttp_web
 
 from annual import validate_config
+from annual_store import list_runs
 from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage
@@ -69,6 +70,57 @@ def option_tag(html_text, value):
     """Return the ``<option>`` tag whose ``value`` attribute equals ``value``, or None."""
     match = re.search(r'<option value="{}"[^>]*>'.format(re.escape(value)), html_text)
     return match.group(0) if match else None
+
+
+class RaisingStorage:
+    """A Storage stand-in whose ``save()`` always raises, for exercising failure handling.
+
+    Real storage backends do real I/O and can genuinely fail - a full disk, a
+    Predbat.com backend outage - so the web layer that sits on top of Storage must
+    survive that, not just the happy path every other fake in this module models.
+    """
+
+    def __init__(self):
+        """Start with nothing stored."""
+        self.store = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Always fail, as if the backend were unavailable."""
+        raise RuntimeError("storage backend unavailable")
+
+    async def load(self, module, filename):
+        """Return a stored value, or None. Never actually populated, since save() always raises."""
+        return self.store.get((module, filename))
+
+
+def valid_postdata():
+    """Return a complete, valid postdata dict, exactly as a browser would submit it.
+
+    Every value is a plain string - as aiohttp's ``request.post()`` always returns -
+    so a test built on this dict exercises the same string-only shape ``config_from_post``
+    sees in production, not a hand-built config that happens to already be numeric.
+    """
+    return {
+        "postcode": "SW1A 1AA",
+        "solar_kwp_0": "5.6",
+        "solar_declination_0": "35",
+        "solar_azimuth_0": "180",
+        "solar_efficiency_0": "0.95",
+        "battery_size_kwh": "9.5",
+        "battery_inverter_kw": "5.0",
+        "battery_export_limit_kw": "5.0",
+        "battery_hybrid": "on",
+        "load_source": "manual",
+        "load_annual_kwh": "3800",
+        "load_shape": "flat",
+        "load_car_charging_kwh": "2500",
+        "load_car_rate_kw": "7.4",
+        "tariff_id": CUSTOM_ID,
+        "tariff_import_url": "https://example.com/import/",
+        "tariff_export_url": "https://example.com/export/",
+        "tariff_standing_charge": "60.0",
+        "samples_per_month": "2",
+    }
 
 
 def test_web_annual(my_predbat):
@@ -432,7 +484,12 @@ def test_web_annual_terminal_state(my_predbat):
     page._storage = lambda: storage
     page.job.state = "complete"
     page.job.results = {"year": 2025, "annual": {"months_included": 12}}
-    page._running_config = page.prefill_config()
+    # Seeded from config_from_post(), not prefill_config(): prefill_config() already
+    # returns a fully numeric config, which is exactly why the original cut of this
+    # test passed while every REAL web-initiated run - which always goes through
+    # config_from_post() and therefore carries string values - crashed build_label()
+    # with a TypeError before the run's index entry was ever written (see FIX 1).
+    page._running_config = page.config_from_post(valid_postdata())
 
     async def poll_twice_concurrently():
         """Run two status_payload() polls concurrently on the same event loop."""
@@ -443,6 +500,22 @@ def test_web_annual_terminal_state(my_predbat):
     run_saves = [call for call in storage.save_calls if call[1].startswith("run_")]
     if len(run_saves) != 1:
         print("  ERROR: two concurrent polls should save the finished run exactly once, got {} save() calls: {}".format(len(run_saves), storage.save_calls))
+        failed = True
+
+    print("Test: the run built from a string-only, web-posted config stores successfully and lands in the index")
+    # Before FIX 1, build_label() raised on the string 'kwp' here, which happened
+    # AFTER save_run() had already written the run_<id> blob but BEFORE the index
+    # entry referencing it - so the blob was orphaned and the page kept saying "No
+    # results yet" no matter how long the run had taken.
+    if first.get("state") == "failed" or second.get("state") == "failed":
+        print("  ERROR: a web-posted config must not fail to store, got states {} / {}".format(first.get("state"), second.get("state")))
+        failed = True
+    index = asyncio.run(list_runs(storage))
+    if not index:
+        print("  ERROR: the finished run should have landed in the index, got an empty index")
+        failed = True
+    elif "9.5kWh battery" not in index[0].get("label", "") or "5.6kWp" not in index[0].get("label", ""):
+        print("  ERROR: the indexed run's label should reflect the posted battery and solar size, got {!r}".format(index[0].get("label")))
         failed = True
 
     print("Test: exactly one of the two concurrent polls is told the run is 'complete'")
@@ -486,6 +559,143 @@ def test_web_annual_error_isolation(my_predbat):
     later = asyncio.run(page.html_annual(FakeRequest()))
     if "Could not run" in later.text:
         print("  ERROR: a later GET must not show a previous request's validation error")
+        failed = True
+
+    return failed
+
+
+def test_web_annual_validation_error_preserves_input(my_predbat):
+    """Verify a validation failure re-renders what was POSTED, not the config on disk.
+
+    Both html_annual_post and html_annual_run used to render their error via
+    html_annual(request, error=...), which called self.load_config() and re-rendered
+    from disk rather than from anything on this request - so a validation failure
+    silently discarded everything the visitor had just typed and showed them the
+    previous saved config (or the prefill) instead. render_form's own docstring, and
+    the spec's failure table, both promise the form stays populated with what was
+    entered.
+    """
+    failed = False
+    print("**** Testing web_annual validation error preserves posted input ****")
+
+    page = make_page(my_predbat)
+
+    # No postcode/latitude/longitude, so validation fails on location - and a load
+    # figure far from both DEFAULT_CONFIG's 3800 and anything already on disk, so
+    # its presence in the response can only be explained by the posted value having
+    # survived, not a coincidental match with some other config.
+    bad_postdata = dict(valid_postdata())
+    del bad_postdata["postcode"]
+    bad_postdata["load_annual_kwh"] = "4321"
+
+    print("Test: html_annual_post keeps the posted value on a validation failure")
+    response = asyncio.run(page.html_annual_post(FakeRequest(bad_postdata)))
+    if "Could not run" not in response.text:
+        print("  ERROR: an invalid POST should render its own validation error")
+        failed = True
+    if 'value="4321"' not in response.text.replace("'", '"'):
+        print("  ERROR: the posted load figure (4321) should still be in the form after a validation failure, it was discarded instead")
+        failed = True
+
+    print("Test: html_annual_run keeps the posted value on a validation failure too")
+    response = asyncio.run(page.html_annual_run(FakeRequest(bad_postdata)))
+    if "Could not run" not in response.text:
+        print("  ERROR: an invalid run request should render its own validation error")
+        failed = True
+    if 'value="4321"' not in response.text.replace("'", '"'):
+        print("  ERROR: the posted load figure (4321) should still be in the form after a failed run request, it was discarded instead")
+        failed = True
+
+    return failed
+
+
+def test_web_annual_run_refuses_while_running(my_predbat):
+    """Verify a second Run while one is in flight is refused BEFORE it can clobber the first.
+
+    html_annual_run used to call save_config() and set self._running_config = config
+    before job.start()'s own "already running" check could refuse it - so a second
+    Run submitted while the first was still executing silently relabelled the
+    in-flight run under the second request's battery size, array size and tariff
+    once it finished, with `error` left at None so the page showed no indication
+    anything had been refused.
+    """
+    failed = False
+    print("**** Testing web_annual second-run refusal ****")
+
+    page = make_page(my_predbat)
+    page.job.state = "running"  # a run already in flight, without spawning a real child
+    first_running_config = {"battery": {"size_kwh": 9.5}, "solar": [{"kwp": 5.6}], "tariff": {}}
+    page._running_config = first_running_config
+
+    save_calls = []
+    page.save_config = lambda config: save_calls.append(config)
+
+    other_postdata = dict(valid_postdata())
+    other_postdata["battery_size_kwh"] = "99"
+    other_postdata["solar_kwp_0"] = "77"
+
+    response = asyncio.run(page.html_annual_run(FakeRequest(other_postdata)))
+
+    print("Test: the second run is refused with a clear, visible message")
+    if "already in progress" not in response.text.lower():
+        print("  ERROR: refusing a second run should say so clearly, got no such message in the response")
+        failed = True
+
+    print("Test: the refused request's config is never saved")
+    if save_calls:
+        print("  ERROR: a refused second run must not save its config, got save_config() called with {}".format(save_calls))
+        failed = True
+
+    print("Test: the in-flight run's config is untouched by the refused second request")
+    if page._running_config != first_running_config:
+        print("  ERROR: a refused second run must not overwrite the in-flight run's config, got {}".format(page._running_config))
+        failed = True
+
+    print("Test: the job itself is left exactly as it was (still 'running')")
+    if page.job.state != "running":
+        print("  ERROR: a refused second run must not touch the in-flight job's state, got {}".format(page.job.state))
+        failed = True
+
+    return failed
+
+
+def test_web_annual_store_failure_surfaces(my_predbat):
+    """Verify a Storage failure while saving a finished run is caught and shown, not silent.
+
+    _store_completed_run() used to be awaited AFTER the terminal state had already
+    been claimed and job.results cleared, so any exception from it propagated
+    straight out of status_payload(), 500ing the poller - which the page's own JS
+    '.catch' turns into a silent 5-second retry that then reports 'idle', with the
+    run's results gone for good and nothing on screen to say so.
+    """
+    failed = False
+    print("**** Testing web_annual store-failure visibility ****")
+
+    page = make_page(my_predbat)
+    storage = RaisingStorage()
+    page._storage = lambda: storage
+    page.job.state = "complete"
+    page.job.results = {"year": 2025, "annual": {"months_included": 12}}
+    page._running_config = page.config_from_post(valid_postdata())
+
+    print("Test: status_payload() does not raise when storage.save() fails")
+    try:
+        status = asyncio.run(page.status_payload())
+    except Exception as error:
+        print("  ERROR: a storage failure must not propagate out of status_payload(), got {}".format(error))
+        return True
+
+    print("Test: the failure is reported as 'failed' with an explanatory error, not silently as 'idle' or 'complete'")
+    if status.get("state") != "failed":
+        print("  ERROR: a storage failure while saving should be reported as 'failed', got {}".format(status.get("state")))
+        failed = True
+    if not status.get("error"):
+        print("  ERROR: a storage failure should carry an explanatory error message, got none")
+        failed = True
+
+    print("Test: the job itself carries the same error, so a fresh page load also sees it once")
+    if page.job.error != status.get("error"):
+        print("  ERROR: the job's own error should match what this poll reported, got job.error={!r} vs status.error={!r}".format(page.job.error, status.get("error")))
         failed = True
 
     return failed
@@ -586,6 +796,20 @@ def test_web_annual_results(my_predbat):
         failed = True
     if "no results" not in empty.lower():
         print("  ERROR: the empty state should say there are no results yet")
+        failed = True
+
+    print("Test: a corrupt, non-dict run blob says so rather than 500ing on results.get(...)")
+    corrupt = page.render_results("not actually a results document", runs, "20260726-101500")
+    if "could not be read" not in corrupt.lower() and "missing" not in corrupt.lower():
+        print("  ERROR: a corrupt (non-dict) run blob should render a readable-failure message, got {!r}".format(corrupt))
+        failed = True
+
+    print("Test: apexcharts is loaded once by get_header_html, not duplicated by the chart")
+    # Checked narrowly for a <script src=...> tag, not any mention of "apexcharts" -
+    # the chart's own `new ApexCharts(...)` constructor call is legitimate and must
+    # stay; it is the second CDN <script> fetch that was the duplicate.
+    if "<script src=" in page._render_chart(sample_run_results()).lower():
+        print("  ERROR: _render_chart should not emit its own <script src=...apexcharts...> tag; get_header_html already loads it")
         failed = True
 
     return failed

@@ -54,16 +54,26 @@ def main():
         # Stderr is spread across many moderate lines rather than one huge
         # one - a single line over the StreamReader's own line-length limit
         # would raise an unrelated error and prove nothing about deadlocking.
+        #
+        # ~1 MiB, not ~200 KiB: the sequential-blocking failure mode this test
+        # exists to catch is "read stdout to completion, THEN read stderr" (or
+        # vice versa) - which only actually blocks once the stream being written
+        # first fills its OS pipe buffer AND the child still has more to write
+        # after that. 200 KiB against a ~192 KiB buffer left only 2% headroom -
+        # any small platform difference in pipe sizing could pass a genuinely
+        # sequential implementation by accident. 1 MiB is comfortably past any
+        # realistic pipe buffer, so the test discriminates reliably instead of
+        # by luck.
         line_filler = "x" * 500
         written = 0
         step = 0
-        while written < 200000:
+        while written < 1000000:
             step += 1
             payload = json.dumps({"completed": step, "total": step, "message": line_filler})
             sys.stderr.write(payload + "\n")
             written += len(payload) + 1
         sys.stderr.flush()
-        filler = "x" * 200000
+        filler = "x" * 1000000
         json.dump({"year": 2025, "months": [], "annual": {"months_included": 0}, "filler": filler}, sys.stdout)
         return 0
 
