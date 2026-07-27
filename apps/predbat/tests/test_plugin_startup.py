@@ -7,8 +7,12 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import os
+import shutil
+import tempfile
 from unittest.mock import MagicMock, patch
 from predbat import PredBat
+from plugin_system import PluginSystem
 
 
 def test_plugin_startup_order(my_predbat):
@@ -141,5 +145,46 @@ def test_plugin_startup_order(my_predbat):
         failed = 1
     else:
         print(f"OK: Plugin successfully registered endpoint /test")
+
+    return failed
+
+
+def test_plugin_discovery_skips_imported_base_class(my_predbat):
+    """
+    Discovery must instantiate the class DEFINED in the plugin file, not a class
+    it merely imports.
+
+    inspect.getmembers() returns members alphabetically and the name-based strategy
+    takes the first class ending in "Plugin". Every plugin does
+    `from plugin_system import PredBatPlugin`, so any plugin class sorting AFTER
+    "PredBatPlugin" had the abstract base instantiated instead of itself — the
+    plugin logged as loaded successfully, registered no hooks, and did nothing.
+    """
+    print("*** Running test: Plugin discovery skips imported base classes")
+    failed = 0
+
+    base = MagicMock()
+    base.log = MagicMock()
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        # Class name deliberately sorts AFTER "PredBatPlugin".
+        with open(os.path.join(tmpdir, "zz_sorts_last_plugin.py"), "w", encoding="utf-8") as fh:
+            fh.write("from plugin_system import PredBatPlugin\n\n\nclass ZzSortsLastPlugin(PredBatPlugin):\n    pass\n")
+
+        plugin_system = PluginSystem(base)
+        plugin_system.discover_plugins([tmpdir])
+        loaded = list(plugin_system.plugins.values())
+
+        if len(loaded) != 1:
+            print("ERROR: expected exactly one discovered plugin, got {}".format(len(loaded)))
+            failed = 1
+        elif type(loaded[0]).__name__ != "ZzSortsLastPlugin":
+            print("ERROR: discovery instantiated {}, expected ZzSortsLastPlugin".format(type(loaded[0]).__name__))
+            failed = 1
+        else:
+            print("OK: discovery instantiated the plugin class, not the imported base")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     return failed
