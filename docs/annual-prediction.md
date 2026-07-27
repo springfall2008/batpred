@@ -168,7 +168,13 @@ installed anything, as well as the quick option for an existing user.
 
 The form prefills from your live Predbat setup wherever it can: location, solar arrays,
 battery capacity and inverter/export limits, and any Octopus import/export tariff URLs
-and DNO region already configured. Anything it cannot determine — most commonly the
+and DNO region already configured. If your `octopus_api_key` and `octopus_api_account`
+are both set, they are filled in too and **Import from Octopus** is selected, since your
+real metered consumption models the year far better than the synthetic profile. Only a
+complete pair counts — a key with no account cannot download anything, so an incomplete
+one is ignored rather than offered as a run that would fail partway through.
+
+Anything it cannot determine — most commonly the
 whole form, on an instance with no battery and no solar array configured — falls back to
 example values for a plausible UK home, and a banner above the form says so explicitly
 ("Predbat isn't configured yet — these are example values, edit them to match your

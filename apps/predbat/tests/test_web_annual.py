@@ -360,6 +360,59 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: the annual kWh value should appear in the form")
             failed = True
 
+        print("Test: a configured Octopus key and account prefill, select the Octopus source, and still validate")
+        # _validate_load treats octopus and annual_kwh as mutually exclusive, so a prefill
+        # that merely ADDED the octopus block to the default load would render fine and
+        # then fail the moment it was run. Validating here is the assertion that matters.
+        my_predbat.args["octopus_api_key"] = "sk_live_exampleKey123"
+        my_predbat.args["octopus_api_account"] = "A-1234ABCD"
+        octopus_page = make_page(my_predbat)
+        octopus_config = octopus_page.prefill_config()
+        if (octopus_config.get("load") or {}).get("octopus", {}).get("api_key") != "sk_live_exampleKey123":
+            print("  ERROR: a configured Octopus API key should prefill, got {}".format(octopus_config.get("load")))
+            failed = True
+        if (octopus_config.get("load") or {}).get("octopus", {}).get("account_id") != "A-1234ABCD":
+            print("  ERROR: a configured Octopus account should prefill, got {}".format(octopus_config.get("load")))
+            failed = True
+        if "annual_kwh" in (octopus_config.get("load") or {}):
+            print("  ERROR: the prefilled octopus load must not also carry annual_kwh - they are mutually exclusive")
+            failed = True
+        try:
+            validate_config(octopus_config)
+        except Exception as error:
+            print("  ERROR: an Octopus-prefilled config must validate, got {}".format(error))
+            failed = True
+        octopus_form = octopus_page.render_form(octopus_config)
+        if not re.search(r'value="octopus"[^>]*checked', octopus_form):
+            print("  ERROR: the Octopus radio should be selected when a key and account are configured")
+            failed = True
+        # The manual inputs must still show usable values, so switching the radio back
+        # does not present an empty form.
+        if 'id="load_annual_kwh"' not in octopus_form or 'value=""' in octopus_form.split('id="load_annual_kwh"')[1][:80]:
+            print("  ERROR: the manual consumption field should still show a default value")
+            failed = True
+
+        print("Test: a key without an account (or the reverse) does not select the Octopus source")
+        # An incomplete pair cannot download anything, so offering it would only produce
+        # a run that fails partway through.
+        my_predbat.args["octopus_api_key"] = "sk_live_exampleKey123"
+        my_predbat.args.pop("octopus_api_account", None)
+        partial_config = make_page(my_predbat).prefill_config()
+        if "octopus" in (partial_config.get("load") or {}):
+            print("  ERROR: an API key with no account must not select the Octopus source")
+            failed = True
+        my_predbat.args.pop("octopus_api_key", None)
+
+        print("Test: the long free-text fields are rendered wide")
+        # An Octopus rates URL is ~130 characters; at the default input width it is
+        # unreadable without scrolling inside the box.
+        wide_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        for field in ["load_octopus_api_key", "load_octopus_account_id", "tariff_import_url", "tariff_export_url"]:
+            row = re.search(r'<div class="annual-field[^"]*">\s*<label for="{}".*?</div>'.format(field), wide_form, re.S)
+            if not row or "annual-field-wide" not in row.group(0):
+                print("  ERROR: {} should be rendered as a wide field".format(field))
+                failed = True
+
         print("Test: the two submit buttons say what they do, and only the run button marks the tab")
         # "Save" next to results that save themselves reads as though it saves the run;
         # it only ever saved the form. The labels have to distinguish the two actions.

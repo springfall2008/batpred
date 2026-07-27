@@ -227,6 +227,27 @@ class AnnualPage:
         if dno_region:
             config["tariff"]["dno_region"] = dno_region
 
+        # indirect=False for the same reason as the URLs above: an Octopus API key is a
+        # dotted string ("sk_live_..." keys are not, but account ids and keys are free
+        # text and must not be resolved as entity ids), so leaving indirect at its True
+        # default risks silently returning None instead of the configured value.
+        api_key = self._arg("octopus_api_key", None, indirect=False)
+        account_id = self._arg("octopus_api_account", None, indirect=False)
+        if api_key and account_id:
+            # Both are needed to download consumption - a key without an account (or the
+            # reverse) cannot fetch anything, so only a complete pair is worth offering.
+            # Selecting the Octopus source as well as filling the fields is the point:
+            # this user has real metered consumption available, which models their year
+            # far better than the synthetic annual-kWh profile the default falls back to.
+            #
+            # Replaces the load block rather than adding to it: _validate_load treats
+            # octopus and annual_kwh/car_charging_kwh as mutually exclusive (the metered
+            # series already includes car charging, so carrying both would double-count
+            # it) and rejects a config holding both. render_form falls back to
+            # DEFAULT_CONFIG for the manual inputs, so they still show sensible values if
+            # the user switches the radio back to "Enter my usage".
+            config["load"] = {"octopus": {"api_key": str(api_key), "account_id": str(account_id)}, "shape": config["load"].get("shape", "flat")}
+
         return config
 
     def catalogue(self):
@@ -272,13 +293,19 @@ class AnnualPage:
             name=name, label=label, step=step, value=html.escape(str(value), quote=True) if value is not None else "", suffix=" {}".format(suffix) if suffix else ""
         )
 
-    def _text_field(self, name, label, value):
+    def _text_field(self, name, label, value, wide=False):
         """Return one labelled text input row.
 
         ``value`` is HTML-escaped before interpolation - it is user-controlled
         (a postcode, an Octopus API key or account id, a tariff URL, a DNO region).
+
+        ``wide`` puts the input on its own full-width line beneath the label, for the
+        long values - rates URLs and API keys - that are otherwise shown through a
+        keyhole and cannot be read or checked without scrolling within the box.
         """
-        return '<div class="annual-field"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(name=name, label=label, value=html.escape(str(value), quote=True) if value is not None else "")
+        return '<div class="annual-field{wide}"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(
+            name=name, label=label, wide=" annual-field-wide" if wide else "", value=html.escape(str(value), quote=True) if value is not None else ""
+        )
 
     def render_form(self, config, errors=None):
         """Return the configuration form as HTML, populated from ``config``.
@@ -340,8 +367,8 @@ class AnnualPage:
         text += "</div>\n"
         text += '<div class="annual-field"><label><input type="radio" name="load_source" value="octopus" {}> Import from Octopus</label></div>\n'.format("checked" if using_octopus else "")
         text += '<div class="annual-subgroup" id="load-octopus">\n'
-        text += self._text_field("load_octopus_api_key", "Octopus API key", (load.get("octopus") or {}).get("api_key", ""))
-        text += self._text_field("load_octopus_account_id", "Account ID", (load.get("octopus") or {}).get("account_id", ""))
+        text += self._text_field("load_octopus_api_key", "Octopus API key", (load.get("octopus") or {}).get("api_key", ""), wide=True)
+        text += self._text_field("load_octopus_account_id", "Account ID", (load.get("octopus") or {}).get("account_id", ""), wide=True)
         text += '<p class="annual-note">Your meter readings already include any car charging, so the figures above are not used with this option.</p>\n'
         text += "</div>\n"
         text += "</fieldset>\n"
@@ -368,8 +395,8 @@ class AnnualPage:
                 html.escape(entry["name"], quote=True),
             )
         text += "</select></div>\n"
-        text += self._text_field("tariff_import_url", "Import rates URL", tariff.get("import_octopus_url", ""))
-        text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""))
+        text += self._text_field("tariff_import_url", "Import rates URL", tariff.get("import_octopus_url", ""), wide=True)
+        text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""), wide=True)
         text += self._text_field("tariff_dno_region", "Octopus region letter", tariff.get("dno_region", ""))
         text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", 60.0), suffix="p/day")
         text += "</fieldset>\n"
@@ -953,6 +980,12 @@ annualLoadPlan();
 .annual-form-wrap legend { font-weight: 600; }
 .annual-field { margin: 0.35rem 0; }
 .annual-field label { display: inline-block; min-width: 20rem; }
+/* An Octopus rates URL runs to ~130 characters and an API key to ~32, so the default
+   input width shows a keyhole view of both. These sit on their own line under the label
+   rather than beside it, so they can use the full width without pushing the form wide;
+   max-width keeps them inside the column on a narrow screen. */
+.annual-field.annual-field-wide label { display: block; min-width: 0; margin-bottom: 0.15rem; }
+.annual-field-wide input[type="text"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
 .annual-subgroup { margin-left: 1.5rem; }
 .annual-note { font-size: 0.85rem; opacity: 0.8; }
 .annual-banner { border-left: 4px solid #D55E00; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
