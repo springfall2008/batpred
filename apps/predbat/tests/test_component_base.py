@@ -80,6 +80,14 @@ class TestComponent(ComponentBase):
         return self.return_true_on_run
 
 
+def test_component_base_not_calculating(my_predbat):
+    """Test that components are not calculating unless they explicitly say otherwise."""
+    component = TestComponent(MockBase())
+    assert not component.is_calculating(), "ComponentBase should default to not calculating"
+    print("PASS: ComponentBase defaults to not calculating")
+    return False
+
+
 def test_component_base_immediate_success(my_predbat):
     """Test component that succeeds on first run"""
     print("\n*** Test: ComponentBase immediate success ***")
@@ -356,6 +364,7 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
+        ("not_calculating", test_component_base_not_calculating, "Component defaults to not calculating"),
         ("immediate_success", test_component_base_immediate_success, "Component starts immediately on first successful run"),
         ("backoff_sequence", test_component_base_backoff_sequence, "Component uses backoff on startup failures"),
         ("stop_during_backoff", test_component_base_stop_during_backoff, "Component respects api_stop during backoff"),
