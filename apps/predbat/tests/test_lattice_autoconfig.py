@@ -6,6 +6,7 @@ import os
 import sys
 import threading
 import unittest
+from dataclasses import replace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -14,9 +15,11 @@ from lattice_autoconfig import (
     AutoConfigCompileError,
     CompileStatus,
     LatticeAutoConfigCompiler,
+    MaterializationReadiness,
     ProviderAlias,
     ProviderHealth,
     ProviderIdentityAlias,
+    ProviderRoleAssignment,
     ProviderSnapshot,
     compile_auto_config,
 )
@@ -50,9 +53,35 @@ def fragment(provider, generation, node_id="INV1", kind="inverter"):
     }
 
 
-def snapshot(provider, generation=1, node_id="INV1", kind="inverter", health=ProviderHealth.HEALTHY, aliases=(), identity_aliases=()):
+def snapshot(
+    provider,
+    generation=1,
+    node_id="INV1",
+    kind="inverter",
+    health=ProviderHealth.HEALTHY,
+    aliases=(),
+    identity_aliases=(),
+    role_assignments=(),
+):
     """Build one typed provider snapshot."""
-    return ProviderSnapshot(provider, generation, health, fragment(provider, generation, node_id=node_id, kind=kind), aliases, identity_aliases)
+    return ProviderSnapshot(
+        provider,
+        generation,
+        health,
+        fragment(provider, generation, node_id=node_id, kind=kind),
+        aliases,
+        identity_aliases,
+        role_assignments,
+    )
+
+
+def ready_plan():
+    """Copy a compiled shadow plan into a future-materializer test harness."""
+    plan = compile_auto_config((snapshot("gateway"),))
+    return replace(
+        plan,
+        materialization_readiness=MaterializationReadiness(True, ()),
+    )
 
 
 class MutableReader:
@@ -72,11 +101,34 @@ class MutableReader:
 class TestPlanCompilation(unittest.TestCase):
     """Compiler output is safe, immutable, deterministic, and attributable."""
 
+    def test_materialization_readiness_rejects_inconsistent_state(self):
+        """Readiness is derived exactly from a normalized blocker tuple."""
+        readiness = MaterializationReadiness(
+            False,
+            [" config_projection_bindings_missing "],
+        )
+
+        self.assertEqual(
+            readiness.blockers,
+            ("config_projection_bindings_missing",),
+        )
+        with self.assertRaisesRegex(ValueError, "absence of blockers"):
+            MaterializationReadiness(True, ("projection_missing",))
+        with self.assertRaisesRegex(ValueError, "absence of blockers"):
+            MaterializationReadiness(False, ())
+        with self.assertRaisesRegex(ValueError, "unique"):
+            MaterializationReadiness(False, ("projection_missing", "projection_missing"))
+        with self.assertRaisesRegex(ValueError, "non-empty"):
+            MaterializationReadiness(False, (" ",))
+        with self.assertRaisesRegex(ValueError, "iterable of strings"):
+            MaterializationReadiness(False, "projection_missing")
+
     def test_order_independent_digest_and_provider_qualified_aliases(self):
         """Input order and shared local alias names cannot alter a plan."""
-        alias = ProviderAlias("battery", "INV1", frozenset((AliasRole.REFERENCE, AliasRole.PRIMARY, AliasRole.CONTROL)))
-        gateway = snapshot("gateway", aliases=(alias,), identity_aliases=(ProviderIdentityAlias("serial", "SER123", "INV1"),))
-        cloud = snapshot("cloud", aliases=(alias,), identity_aliases=(ProviderIdentityAlias("serial", "SER123", "INV1"),))
+        gateway_alias = ProviderAlias("battery", "INV1", frozenset((AliasRole.REFERENCE, AliasRole.PRIMARY, AliasRole.CONTROL)))
+        cloud_alias = ProviderAlias("battery", "INV1")
+        gateway = snapshot("gateway", aliases=(gateway_alias,), identity_aliases=(ProviderIdentityAlias("serial", "SER123", "INV1"),))
+        cloud = snapshot("cloud", aliases=(cloud_alias,), identity_aliases=(ProviderIdentityAlias("serial", "SER123", "INV1"),))
 
         left = compile_auto_config((gateway, cloud))
         right = compile_auto_config((cloud, gateway))
@@ -85,6 +137,10 @@ class TestPlanCompilation(unittest.TestCase):
         self.assertEqual([binding.qualified_name for binding in left.aliases], ["cloud:battery", "gateway:battery"])
         self.assertEqual(dict(left.provider_generations), {"cloud": 1, "gateway": 1})
         self.assertEqual({field.name for field in left.fields}, {"alias.cloud:battery", "alias.gateway:battery", "control_target", "primary_target"})
+        self.assertEqual(left.primary_target, "identity:serial:SER123")
+        self.assertEqual(left.control_target, "identity:serial:SER123")
+        self.assertEqual(left.primary_targets, ())
+        self.assertEqual(left.control_targets, ())
         self.assertTrue(all(field.provenance for field in left.fields))
         with self.assertRaises(TypeError):
             left.topology["scope"] = "fragment"
@@ -181,12 +237,12 @@ class TestPlanCompilation(unittest.TestCase):
         """Several distinct target nodes cannot silently pick a winner."""
         primary_a = ProviderAlias("battery", "INV1", frozenset((AliasRole.PRIMARY,)))
         primary_b = ProviderAlias("battery", "INV2", frozenset((AliasRole.PRIMARY,)))
-        with self.assertRaisesRegex(AutoConfigCompileError, "ambiguous primary"):
+        with self.assertRaisesRegex(AutoConfigCompileError, "ambiguous legacy primary"):
             compile_auto_config((snapshot("gateway", node_id="INV1", aliases=(primary_a,)), snapshot("cloud", node_id="INV2", aliases=(primary_b,))))
 
         control_a = ProviderAlias("control", "INV1", frozenset((AliasRole.CONTROL,)))
         control_b = ProviderAlias("control", "INV2", frozenset((AliasRole.CONTROL,)))
-        with self.assertRaisesRegex(AutoConfigCompileError, "ambiguous control"):
+        with self.assertRaisesRegex(AutoConfigCompileError, "ambiguous legacy control"):
             compile_auto_config((snapshot("gateway", node_id="INV1", aliases=(control_a,)), snapshot("cloud", node_id="INV2", aliases=(control_b,))))
 
     def test_alias_must_target_provider_local_identity(self):
@@ -194,6 +250,157 @@ class TestPlanCompilation(unittest.TestCase):
         bad = ProviderAlias("battery", "INV2")
         with self.assertRaisesRegex(AutoConfigCompileError, "unknown provider-local node"):
             compile_auto_config((snapshot("gateway", node_id="INV1", aliases=(bad,)), snapshot("cloud", node_id="INV2")))
+
+    def test_indexed_roles_are_order_independent_and_contiguous(self):
+        """Indexed targets sort by group, role, and index regardless of input order."""
+        first = snapshot(
+            "a",
+            node_id="A",
+            role_assignments=(
+                ProviderRoleAssignment(AliasRole.CONTROL, "battery", 1, "A"),
+                ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 0, "A"),
+            ),
+        )
+        second = snapshot(
+            "z",
+            node_id="Z",
+            role_assignments=(
+                ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 1, "Z"),
+                ProviderRoleAssignment(AliasRole.CONTROL, "battery", 0, "Z"),
+            ),
+        )
+
+        left = compile_auto_config((second, first))
+        right = compile_auto_config((first, second))
+
+        self.assertEqual(left.digest, right.digest)
+        self.assertEqual(
+            [(target.group, target.index, target.node_id) for target in left.primary_targets],
+            [
+                ("battery", 0, "provider:a:A"),
+                ("battery", 1, "provider:z:Z"),
+            ],
+        )
+        self.assertEqual(
+            [(target.group, target.index, target.node_id) for target in left.control_targets],
+            [
+                ("battery", 0, "provider:z:Z"),
+                ("battery", 1, "provider:a:A"),
+            ],
+        )
+        self.assertEqual(
+            [(item.group, item.role, item.index) for item in left.role_assignments],
+            sorted((item.group, item.role, item.index) for item in left.role_assignments),
+        )
+        self.assertEqual(
+            {field.name for field in left.fields if field.name.startswith(("primary_targets", "control_targets"))},
+            {
+                "primary_targets.battery.0",
+                "primary_targets.battery.1",
+                "control_targets.battery.0",
+                "control_targets.battery.1",
+            },
+        )
+        indexed_fields = [field for field in left.fields if field.name.startswith(("primary_targets", "control_targets"))]
+        self.assertTrue(all(field.provenance for field in indexed_fields))
+        self.assertTrue(all(item in left.provenance for field in indexed_fields for item in field.provenance))
+        self.assertFalse(left.materialization_readiness.ready)
+        self.assertEqual(left.materialization_readiness.blockers, ("config_projection_bindings_missing",))
+        with self.assertRaises(AttributeError):
+            left.primary_targets[0].node_id = "changed"
+
+    def test_provider_role_assignment_rejects_reference_and_negative_index(self):
+        """Only indexed primary/control assignments with non-negative indices exist."""
+        with self.assertRaisesRegex(ValueError, "PRIMARY or CONTROL"):
+            ProviderRoleAssignment(AliasRole.REFERENCE, "battery", 0, "INV1")
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            ProviderRoleAssignment(AliasRole.PRIMARY, "battery", -1, "INV1")
+
+    def test_indexed_role_indices_must_be_contiguous_per_group_and_role(self):
+        """A gap in one role sequence fails without affecting another sequence."""
+        assignments = (
+            ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 0, "INV1"),
+            ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 2, "INV1"),
+        )
+        with self.assertRaisesRegex(AutoConfigCompileError, "indices must be contiguous"):
+            compile_auto_config((snapshot("gateway", role_assignments=assignments),))
+
+    def test_correlated_providers_may_share_one_index(self):
+        """Explicit strong identity correlation permits duplicate provider assertions."""
+        gateway_identity = ProviderIdentityAlias("serial", "SER123", "gw")
+        cloud_identity = ProviderIdentityAlias("serial", "SER123", "cloud")
+        gateway_role = ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 0, "gw")
+        cloud_role = ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 0, "cloud")
+        plan = compile_auto_config(
+            (
+                snapshot("gateway", node_id="gw", identity_aliases=(gateway_identity,), role_assignments=(gateway_role,)),
+                snapshot("cloud", node_id="cloud", identity_aliases=(cloud_identity,), role_assignments=(cloud_role,)),
+            )
+        )
+
+        self.assertEqual(len(plan.primary_targets), 1)
+        self.assertEqual(plan.primary_targets[0].node_id, "identity:serial:SER123")
+        self.assertEqual({item.provider_id for item in plan.primary_targets[0].provenance}, {"gateway", "cloud"})
+
+    def test_uncorrelated_providers_conflicting_at_one_index_fail_closed(self):
+        """Equal role slots cannot select unrelated provider-local nodes."""
+        gateway_role = ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 0, "gw")
+        cloud_role = ProviderRoleAssignment(AliasRole.PRIMARY, "battery", 0, "cloud")
+        with self.assertRaisesRegex(AutoConfigCompileError, "conflicting primary target"):
+            compile_auto_config(
+                (
+                    snapshot("gateway", node_id="gw", role_assignments=(gateway_role,)),
+                    snapshot("cloud", node_id="cloud", role_assignments=(cloud_role,)),
+                )
+            )
+
+    def test_same_node_may_fill_multiple_indices(self):
+        """An EMS aggregate can fan one canonical node out over several indices."""
+        assignments = (
+            ProviderRoleAssignment(AliasRole.PRIMARY, "ems", 0, "EMS"),
+            ProviderRoleAssignment(AliasRole.PRIMARY, "ems", 1, "EMS"),
+        )
+        plan = compile_auto_config((snapshot("ge-cloud", node_id="EMS", role_assignments=assignments),))
+
+        self.assertEqual([target.node_id for target in plan.primary_targets], ["provider:ge-cloud:EMS", "provider:ge-cloud:EMS"])
+
+    def test_legacy_and_indexed_role_assignments_cannot_mix(self):
+        """A plan must use exactly one target-addressing model."""
+        legacy = ProviderAlias("battery", "INV1", frozenset((AliasRole.PRIMARY,)))
+        indexed = ProviderRoleAssignment(AliasRole.CONTROL, "battery", 0, "INV1")
+        with self.assertRaisesRegex(AutoConfigCompileError, "cannot be mixed"):
+            compile_auto_config((snapshot("gateway", aliases=(legacy,), role_assignments=(indexed,)),))
+
+    def test_multiple_legacy_assignments_are_ambiguous_even_when_correlated(self):
+        """The singular compatibility field represents exactly one assertion."""
+        gateway_alias = ProviderAlias("battery", "gw", frozenset((AliasRole.PRIMARY,)))
+        cloud_alias = ProviderAlias("battery", "cloud", frozenset((AliasRole.PRIMARY,)))
+        gateway_identity = ProviderIdentityAlias("serial", "SER123", "gw")
+        cloud_identity = ProviderIdentityAlias("serial", "SER123", "cloud")
+        with self.assertRaisesRegex(AutoConfigCompileError, "ambiguous legacy primary"):
+            compile_auto_config(
+                (
+                    snapshot("gateway", node_id="gw", aliases=(gateway_alias,), identity_aliases=(gateway_identity,)),
+                    snapshot("cloud", node_id="cloud", aliases=(cloud_alias,), identity_aliases=(cloud_identity,)),
+                )
+            )
+
+    def test_reference_only_plan_is_explicitly_shadow_only(self):
+        """Reference discovery compiles but exposes every write blocker."""
+        reference = ProviderAlias("battery", "INV1")
+        plan = compile_auto_config((snapshot("gateway", aliases=(reference,)),))
+
+        self.assertFalse(plan.materialization_readiness.ready)
+        self.assertEqual(
+            plan.materialization_readiness.blockers,
+            (
+                "indexed_primary_targets_missing",
+                "indexed_control_targets_missing",
+                "config_projection_bindings_missing",
+            ),
+        )
+        self.assertIsNone(plan.primary_target)
+        self.assertIsNone(plan.control_target)
 
 
 class TestInvalidationStateMachine(unittest.TestCase):
@@ -265,8 +472,9 @@ class TestInvalidationStateMachine(unittest.TestCase):
         self.assertEqual(run.attempts, 2)
         self.assertEqual(state["calls"], 2)
         self.assertEqual(dict(run.plan.provider_generations), {"gateway": 2})
-        self.assertEqual([dict(request.plan.provider_generations) for request in requests], [{"gateway": 2}])
-        self.assertEqual(run.materializations, 1)
+        self.assertEqual(requests, [])
+        self.assertEqual(run.materializations, 0)
+        self.assertFalse(run.plan.materialization_readiness.ready)
         self.assertFalse(run.pending)
 
     def test_all_accepted_invalidation_causes_survive_coalescing(self):
@@ -395,7 +603,7 @@ class TestInvalidationStateMachine(unittest.TestCase):
 
         self.assertEqual(failed.status, CompileStatus.STALE)
         self.assertIs(failed.plan, last_known_good)
-        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(requests), 0)
         self.assertEqual(
             set(dict(failed.plan.provider_generations)),
             {"gateway", "cloud"},
@@ -406,38 +614,24 @@ class TestInvalidationStateMachine(unittest.TestCase):
         )
         self.assertTrue(failed.pending)
 
-    def test_materialization_failure_is_retryable_without_new_generation(self):
-        """Caller-driven retry can materialize the same complete generation."""
+    def test_shadow_only_plan_never_invokes_materializer(self):
+        """A not-ready plan remains observable without reaching a write callback."""
         reader = MutableReader(snapshot("gateway", generation=1))
         requests = []
 
         def materialize(request):
-            """Fail once, then accept the exact same semantic plan."""
+            """Record any unsafe hand-off to make the test fail."""
             requests.append(request)
-            if len(requests) == 1:
-                raise RuntimeError("temporary config store failure")
 
         compiler = LatticeAutoConfigCompiler({"gateway": reader}, materialize)
-        failed = compiler.drain()
+        run = compiler.drain()
 
-        self.assertEqual(failed.status, CompileStatus.STALE)
-        self.assertIsNone(failed.plan)
-        self.assertEqual(failed.materializations, 0)
-        self.assertTrue(failed.pending)
-        self.assertIn(
-            "materialization_failed",
-            {issue.code for issue in failed.issues},
-        )
-
-        recovered = compiler.drain()
-
-        self.assertEqual(recovered.status, CompileStatus.FRESH)
-        self.assertIsNotNone(recovered.plan)
-        self.assertEqual(recovered.materializations, 1)
-        self.assertFalse(recovered.pending)
-        self.assertEqual(reader.calls, 2)
-        self.assertEqual(len(requests), 2)
-        self.assertEqual(requests[0].plan.digest, requests[1].plan.digest)
+        self.assertEqual(run.status, CompileStatus.FRESH)
+        self.assertIsNotNone(run.plan)
+        self.assertFalse(run.plan.materialization_readiness.ready)
+        self.assertEqual(run.materializations, 0)
+        self.assertFalse(run.pending)
+        self.assertEqual(requests, [])
 
     def test_unchanged_digest_skips_materialization(self):
         """A newer generation with identical semantics updates provenance only."""
@@ -450,13 +644,14 @@ class TestInvalidationStateMachine(unittest.TestCase):
         self.assertTrue(compiler.invalidate("gateway", 2, "heartbeat refresh"))
         second = compiler.drain()
 
-        self.assertEqual(first.materializations, 1)
+        self.assertEqual(first.materializations, 0)
         self.assertEqual(second.materializations, 0)
-        self.assertEqual(len(requests), 1)
+        self.assertEqual(len(requests), 0)
+        self.assertEqual(first.plan.digest, second.plan.digest)
         self.assertEqual(dict(second.plan.provider_generations), {"gateway": 2})
 
-    def test_materializer_feedback_token_cannot_recompile(self):
-        """A materializer-caused integration event is not a feedback loop."""
+    def test_shadow_plan_cannot_create_materializer_feedback(self):
+        """A blocked hand-off cannot cause an integration feedback loop."""
         reader = MutableReader(snapshot("gateway", generation=1))
         feedback_results = []
         holder = {}
@@ -469,10 +664,84 @@ class TestInvalidationStateMachine(unittest.TestCase):
         holder["compiler"] = compiler
         run = compiler.drain()
 
-        self.assertEqual(feedback_results, [False])
+        self.assertEqual(feedback_results, [])
         self.assertEqual(run.attempts, 1)
-        self.assertEqual(run.materializations, 1)
+        self.assertEqual(run.materializations, 0)
         self.assertFalse(run.pending)
+
+    def test_ready_plan_retries_after_materializer_failure(self):
+        """A failed hand-off is not treated as a successful materialization."""
+        requests = []
+
+        def materialize(request):
+            """Fail the first hand-off and accept the retry."""
+            requests.append(request)
+            if len(requests) == 1:
+                raise RuntimeError("temporary write failure")
+
+        compiler = LatticeAutoConfigCompiler(materializer=materialize)
+        plan = ready_plan()
+
+        count, issues = compiler._materialize_if_changed(plan)
+        self.assertEqual(count, 0)
+        self.assertEqual([issue.code for issue in issues], ["materialization_failed"])
+
+        count, issues = compiler._materialize_if_changed(plan)
+        self.assertEqual(count, 1)
+        self.assertEqual(issues, ())
+        self.assertEqual(len(requests), 2)
+
+    def test_ready_plan_unchanged_digest_skips_materialization(self):
+        """Bookkeeping-only generation changes do not repeat a ready hand-off."""
+        requests = []
+        compiler = LatticeAutoConfigCompiler(materializer=requests.append)
+        plan = ready_plan()
+
+        count, issues = compiler._materialize_if_changed(plan)
+        self.assertEqual((count, issues), (1, ()))
+        compiler._active_plan = plan
+        newer_generation = replace(
+            plan,
+            provider_generations=(("gateway", 2),),
+        )
+
+        count, issues = compiler._materialize_if_changed(newer_generation)
+        self.assertEqual((count, issues), (0, ()))
+        self.assertEqual(len(requests), 1)
+
+    def test_ready_plan_suppresses_materializer_feedback_token(self):
+        """A ready hand-off cannot invalidate itself through its feedback token."""
+        feedback_results = []
+        holder = {}
+
+        def materialize(request):
+            """Echo the hand-off token through the provider invalidation API."""
+            feedback_results.append(
+                holder["compiler"].invalidate(
+                    "gateway",
+                    2,
+                    "materialized config observed",
+                    request.feedback_token,
+                )
+            )
+
+        compiler = LatticeAutoConfigCompiler(
+            {"gateway": MutableReader(snapshot("gateway"))},
+            materialize,
+        )
+        holder["compiler"] = compiler
+
+        count, issues = compiler._materialize_if_changed(ready_plan())
+
+        self.assertEqual((count, issues), (1, ()))
+        self.assertEqual(feedback_results, [False])
+        self.assertTrue(
+            compiler.invalidate(
+                "gateway",
+                2,
+                "independent provider change",
+            )
+        )
 
     def test_every_attempt_fresh_reads_all_providers(self):
         """Independent invalidations still re-read the complete provider set."""
