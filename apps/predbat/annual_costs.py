@@ -166,9 +166,18 @@ def build_payback(annual_scenarios, costs, months_included, settings):
     if baseline is None:
         return {"available": False, "reason": "The no-PV/battery baseline is missing, so there is nothing to compare against."}
 
+    # Every scenario the rows below need must actually be present with a numeric cost_p.
+    # A missing scenario is a different situation to a zero saving, and must not be
+    # silently treated as one - see saving_gbp() below, which indexes directly once this
+    # has passed, rather than defaulting a missing key to the baseline.
+    required = ("no_pvbat", "pv_only", "without_predbat", "with_predbat")
+    missing = [key for key in required if not isinstance(annual_scenarios.get(key, {}).get("cost_p"), (int, float))]
+    if missing:
+        return {"available": False, "reason": "The following scenario(s) are missing from this run, so there is nothing to compare against: {}.".format(", ".join(missing))}
+
     def saving_gbp(key):
         """Return the annual saving in GBP of one scenario against the no-system baseline."""
-        return (baseline - annual_scenarios.get(key, {}).get("cost_p", baseline)) / 100.0
+        return (baseline - annual_scenarios[key]["cost_p"]) / 100.0
 
     return {
         "available": True,

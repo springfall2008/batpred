@@ -125,6 +125,16 @@ def test_annual_costs(my_predbat):
         print("  ERROR: 11 months should refuse payback and say why, got {}".format(partial))
         failed = True
 
+    print("Test: a missing scenario is refused rather than treated as a zero saving")
+    # Reachable when a stored run predates the pv_only scenario, or an engine change
+    # drops one - .get(key, {}).get("cost_p", baseline) would silently read this as no
+    # saving at all ("never pays back"), which is a different claim to "cannot be priced".
+    incomplete = {"no_pvbat": {"cost_p": 200000.0}, "without_predbat": {"cost_p": 110000.0}, "with_predbat": {"cost_p": 80000.0}}
+    missing = build_payback(incomplete, costs, 12, settings)
+    if missing.get("available") is not False or "pv_only" not in str(missing.get("reason", "")):
+        print("  ERROR: a missing pv_only scenario should refuse payback and name it, got {}".format(missing))
+        failed = True
+
     print("Test: a full year produces all three payback rows")
     full = build_payback(scenarios, costs, 12, settings)
     for key, capital in [("pv_only", costs["pv_gbp"]), ("pv_battery", costs["total_gbp"]), ("pv_battery_predbat", costs["total_gbp"])]:
