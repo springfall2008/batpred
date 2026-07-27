@@ -74,6 +74,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from web_annual import AnnualPage
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
@@ -308,6 +309,8 @@ class WebInterface(ComponentBase):
         # Plugin registration system
         self.registered_endpoints = []
 
+        self.annual_page = AnnualPage(self)
+
     def register_endpoint(self, path, handler, method="GET"):
         """
         Register a new endpoint with the web interface
@@ -437,6 +440,12 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        app.router.add_get("/annual", self.annual_page.html_annual)
+        app.router.add_post("/annual", self.annual_page.html_annual_post)
+        app.router.add_post("/annual_run", self.annual_page.html_annual_run)
+        app.router.add_get("/annual_status", self.annual_page.html_annual_status)
+        app.router.add_post("/annual_cancel", self.annual_page.html_annual_cancel)
+        app.router.add_get("/annual_download", self.annual_page.html_annual_download)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)

@@ -160,6 +160,55 @@ def test_web_annual(my_predbat):
     return failed
 
 
+def test_web_annual_routes(my_predbat):
+    """Verify the run command, validation gating and the status payload."""
+    import asyncio
+
+    failed = False
+    print("**** Testing web_annual routes ****")
+
+    page = make_page(my_predbat)
+
+    print("Test: the CLI command targets annual_cli.py in machine mode")
+    command = page.cli_command("/tmp/annual.yaml")
+    if "--machine" not in command:
+        print("  ERROR: the child must be run in machine mode, got {}".format(command))
+        failed = True
+    if not any("annual_cli.py" in part for part in command):
+        print("  ERROR: the command should invoke annual_cli.py, got {}".format(command))
+        failed = True
+    if "--config" not in command or "/tmp/annual.yaml" not in command:
+        print("  ERROR: the config path should be passed, got {}".format(command))
+        failed = True
+
+    print("Test: the status payload is JSON-serialisable and names its state")
+    status = asyncio.run(page.status_payload())
+    for key in ["state", "completed", "total", "message", "elapsed"]:
+        if key not in status:
+            print("  ERROR: status is missing '{}', got {}".format(key, status))
+            failed = True
+    if status.get("state") != "idle":
+        print("  ERROR: a fresh page should report idle, got {}".format(status.get("state")))
+        failed = True
+
+    print("Test: an invalid config is rejected before anything is spawned")
+    bad = {"location": {}, "load": {"annual_kwh": 1}, "tariff": {"rates_import": [{"rate": 5}]}}
+    error = page.validation_error(bad)
+    if not error:
+        print("  ERROR: an invalid config should produce an error message")
+        failed = True
+    if page.job.state != "idle":
+        print("  ERROR: validation must not start a job, state was {}".format(page.job.state))
+        failed = True
+
+    print("Test: a valid config produces no error")
+    if page.validation_error(page.prefill_config()):
+        print("  ERROR: the prefill config should validate, got {}".format(page.validation_error(page.prefill_config())))
+        failed = True
+
+    return failed
+
+
 def test_web_annual_form(my_predbat):
     """Verify the form renders every group, reflects config, and round-trips a post."""
     failed = False

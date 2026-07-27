@@ -7991,6 +7991,7 @@ setTimeout(function() {
 <a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
 <a href='./compare'>Compare</a>
+<a href='./annual'>Annual</a>
 <a href='./log'>Log</a>
 <a href='./config'>Config</a>
 <a href='./apps'>Apps"""

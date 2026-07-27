@@ -14,11 +14,17 @@ the prospective-buyer path the tool exists to serve.
 """
 
 import copy
+import datetime
 import html
 import os
+import sys
 
 import yaml
+from aiohttp import web
 
+from annual import AnnualConfigError, validate_config
+from annual_job import AnnualJob
+from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
 
 # A plausible UK home, used for any field the live instance cannot supply. These
@@ -44,6 +50,8 @@ class AnnualPage:
         self.web = web_interface
         self.base = web_interface.base
         self.log = web_interface.log
+        self.job = AnnualJob(log=self.log)
+        self.last_error = None
 
     def _arg(self, name, default=None, indirect=True, combine=False):
         """Read one configuration value from the in-memory args dictionary.
@@ -419,3 +427,172 @@ class AnnualPage:
             config["pv10_derate_fallback"] = value("pv10_derate_fallback")
 
         return config
+
+    def cli_command(self, config_path):
+        """Return the argv for the child process that performs the run."""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "annual_cli.py")
+        work_dir = os.path.join(self.base.config_root, "annual_work")
+        return [sys.executable, script, "--config", config_path, "--work-dir", work_dir, "--machine"]
+
+    def validation_error(self, config):
+        """Return a message when the config is invalid, or None when it is fine.
+
+        Validation runs here for immediate feedback, but the same validate_config
+        runs again inside the child and remains the authority.
+        """
+        try:
+            validate_config(config)
+        except AnnualConfigError as error:
+            return str(error)
+        return None
+
+    def _storage(self):
+        """Return the Storage component, or None when it is unavailable."""
+        components = getattr(self.base, "components", None)
+        return components.get_component("storage") if components else None
+
+    async def status_payload(self):
+        """Return the polling payload: job state plus the stored run list."""
+        payload = self.job.status()
+        payload["runs"] = await list_runs(self._storage())
+        return payload
+
+    async def _store_completed_run(self, config):
+        """Save a finished run into the ring, once."""
+        if self.job.state != "complete" or self.job.results is None:
+            return
+        run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        await save_run(self._storage(), self.job.results, config, run_id)
+        self.job.results = None
+
+    async def html_annual(self, request):
+        """Render the Annual tab: the form, then the selected run's results."""
+        self.web.default_page = "./annual"
+        config = self.load_config()
+
+        text = self.web.get_header("Predbat Annual")
+        text += "<body>\n"
+        text += self.render_css()
+        text += self.render_form(config, errors=self.last_error)
+        text += self.render_progress()
+
+        storage = self._storage()
+        runs = await list_runs(storage)
+        selected = request.query.get("run") or (runs[0]["id"] if runs else None)
+        results = await load_run(storage, selected) if selected else None
+        text += self.render_results(results, runs, selected)
+        text += self.render_script()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
+    async def html_annual_post(self, request):
+        """Save the configuration without running."""
+        postdata = await request.post()
+        config = self.config_from_post(postdata)
+        self.last_error = self.validation_error(config)
+        if not self.last_error:
+            self.save_config(config)
+        return await self.html_annual(request)
+
+    async def html_annual_run(self, request):
+        """Validate, save, and spawn the run."""
+        postdata = await request.post()
+        config = self.config_from_post(postdata)
+        self.last_error = self.validation_error(config)
+        if self.last_error:
+            return await self.html_annual(request)
+
+        self.save_config(config)
+        self._running_config = config
+        started = await self.job.start(self.cli_command(self._config_path()))
+        if not started and self.job.state != "running":
+            self.last_error = self.job.status().get("error") or "The run could not be started"
+        return await self.html_annual(request)
+
+    async def html_annual_status(self, request):
+        """Return the job status as JSON for the page to poll."""
+        if self.job.state == "complete" and self.job.results is not None:
+            await self._store_completed_run(getattr(self, "_running_config", self.load_config()))
+        return web.json_response(await self.status_payload())
+
+    async def html_annual_cancel(self, request):
+        """Cancel a running job."""
+        await self.job.cancel()
+        return web.json_response(self.job.status())
+
+    async def html_annual_download(self, request):
+        """Return one stored run's raw results document as a JSON download."""
+        run_id = request.query.get("run")
+        results = await load_run(self._storage(), run_id)
+        if results is None:
+            return web.json_response({"error": "No stored run with id {}".format(run_id)}, status=404)
+        return web.json_response(results, headers={"Content-Disposition": 'attachment; filename="annual-{}.json"'.format(run_id)})
+
+    def render_results(self, results, runs, selected_id):
+        """Placeholder replaced in full by the results task; keeps the page renderable."""
+        return "<p>No results yet — fill in the form above and press Run.</p>\n"
+
+    def render_css(self):
+        """Return the scoped styles for the tab."""
+        return """<style>
+.annual-form-wrap fieldset { border: 1px solid var(--md-border, #cbd5e1); margin-bottom: 1rem; padding: 0.75rem; }
+.annual-form-wrap legend { font-weight: 600; }
+.annual-field { margin: 0.35rem 0; }
+.annual-field label { display: inline-block; min-width: 20rem; }
+.annual-subgroup { margin-left: 1.5rem; }
+.annual-note { font-size: 0.85rem; opacity: 0.8; }
+.annual-banner { border-left: 4px solid #D55E00; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.annual-error { border-left: 4px solid #b00020; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
+.annual-progress { margin: 1rem 0; }
+.annual-bar { height: 1.25rem; border: 1px solid var(--md-border, #cbd5e1); }
+.annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
+.annual-caveats li { margin-bottom: 0.35rem; }
+.annual-unavailable { opacity: 0.6; font-style: italic; }
+</style>
+"""
+
+    def render_progress(self):
+        """Return the progress area, hidden until a run starts."""
+        return """<div class="annual-progress" id="annual-progress" style="display:none">
+  <div class="annual-bar"><div class="annual-bar-fill" id="annual-bar-fill"></div></div>
+  <p id="annual-progress-text"></p>
+  <button type="button" onclick="annualCancel()">Cancel</button>
+</div>
+"""
+
+    def render_script(self):
+        """Return the polling and tariff-picker script."""
+        return """<script>
+function annualTariffChanged() {
+  var select = document.getElementById('tariff_id');
+  var option = select.options[select.selectedIndex];
+  document.getElementById('tariff_import_url').value = option.getAttribute('data-import') || '';
+  document.getElementById('tariff_export_url').value = option.getAttribute('data-export') || '';
+}
+function annualCancel() { fetch('./annual_cancel', {method: 'POST'}); }
+function annualPoll() {
+  fetch('./annual_status').then(function (r) { return r.json(); }).then(function (s) {
+    var box = document.getElementById('annual-progress');
+    var button = document.getElementById('annual-run-button');
+    if (s.state === 'running') {
+      box.style.display = 'block';
+      if (button) { button.disabled = true; }
+      var pct = s.total ? Math.round((s.completed / s.total) * 100) : 0;
+      document.getElementById('annual-bar-fill').style.width = pct + '%';
+      document.getElementById('annual-progress-text').textContent = s.message + ' — ' + pct + '% (' + s.elapsed + 's)';
+    } else {
+      if (button) { button.disabled = false; }
+      if (s.state === 'complete') { window.location = './annual'; return; }
+      if (s.state === 'failed' || s.state === 'cancelled') {
+        box.style.display = 'block';
+        document.getElementById('annual-progress-text').textContent = s.state + (s.error ? ': ' + s.error : '');
+        return;
+      }
+      box.style.display = 'none';
+    }
+    setTimeout(annualPoll, 1000);
+  }).catch(function () { setTimeout(annualPoll, 5000); });
+}
+annualPoll();
+</script>
+"""
