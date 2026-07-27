@@ -37,6 +37,32 @@ def build_agile_results(start_day, days, base_rate):
     return results
 
 
+def build_current_pattern_rows(days=2, base_rate=9.0, peak_rate=16.0):
+    """Build a synthetic bare-URL "current rates" payload with a fixed daily two-rate shape.
+
+    Mirrors the verified real-world product OUTGOING-PRIME-FIX-12M-26-06-23: a 9.0p base
+    rate with a 16.0p peak between 15:00 and 18:00 UTC, repeating daily. The anchor date is
+    in July, so this UTC window is genuinely observed as 16:00-19:00 local (BST) - matching
+    the real product's documented behaviour and giving the DST-boundary test something
+    real to catch. Rows are returned newest first, as the real bare endpoint does.
+    """
+    results = []
+    start = pytz.utc.localize(datetime(2026, 7, 20))
+    for slot in range(days * 48):
+        valid_from = start + timedelta(minutes=30 * slot)
+        valid_to = valid_from + timedelta(minutes=30)
+        rate = peak_rate if 15 <= valid_from.hour < 18 else base_rate
+        results.append(
+            {
+                "value_inc_vat": rate,
+                "valid_from": valid_from.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "valid_to": valid_to.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+    results.reverse()
+    return results
+
+
 def build_month_aware_fetch(rate_by_month):
     """Build a fetch stub whose synthesised page's base rate depends on the requested month.
 
@@ -337,6 +363,117 @@ def test_annual_tariff(my_predbat):
     print("Test: standing charge is carried through from config")
     if abs(tariff.standing_charge_p_per_day - 60.0) > 0.001:
         print("  ERROR: standing charge expected 60.0, got {}".format(tariff.standing_charge_p_per_day))
+        failed = True
+
+    print("Test: a month with real historical rates does not trigger the current-rates fallback")
+    if tariff.fallback_months:
+        print("  ERROR: a tariff with real historical data must not record a fallback, got {}".format(tariff.fallback_months))
+        failed = True
+
+    print("Test: an empty ranged download falls back to the bare-URL current-rates pattern, keyed by local time of day")
+    bare_calls = {"import": 0, "export": 0}
+
+    async def fallback_fetch(url):
+        """Serve an empty ranged download (a tariff with no historical rates for this date) and a two-rate bare-URL pattern for the current rates, counting bare-URL requests per side."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        if "/import/" in url:
+            bare_calls["import"] += 1
+        elif "/export/" in url:
+            bare_calls["export"] += 1
+        return {"results": build_current_pattern_rows(), "next": None}
+
+    fallback_config = {"import_octopus_url": "https://example.com/import/", "export_octopus_url": "https://example.com/export/", "standing_charge_p_per_day": 0.0}
+    fallback_tariff = AnnualTariff(fallback_config, log=print, predbat=my_predbat, fetch_json=fallback_fetch, timezone="Europe/London")
+
+    if not asyncio.run(fallback_tariff.fetch_month(2025, 7)):
+        print("  ERROR: fetch_month should fall back to the current pattern and report July 2025 available")
+        failed = True
+    if not fallback_tariff.month_available(2025, 7):
+        print("  ERROR: July 2025 should be reported available via the fallback pattern")
+        failed = True
+    if (2025, 7, "import") not in fallback_tariff.fallback_months or (2025, 7, "export") not in fallback_tariff.fallback_months:
+        print("  ERROR: expected both (2025, 7, 'import') and (2025, 7, 'export') recorded as fallback months, got {}".format(fallback_tariff.fallback_months))
+        failed = True
+
+    print("Test: the fallback pattern places the peak rate at the correct local hour either side of a DST boundary")
+    # The synthetic bare pattern's peak is 15:00-18:00 UTC as genuinely observed in BST
+    # (see build_current_pattern_rows), i.e. 16:00-19:00 local. Keying by UTC minute-of-day
+    # instead of local would leave the peak at UTC 15:00-18:00 in both months below, so July's
+    # assertion would still pass but January's would not - which is exactly what this pair of
+    # assertions is designed to catch.
+    july_midnight = pytz.utc.localize(datetime(2025, 7, 10))
+    july_import, july_export = fallback_tariff.rates_for(july_midnight, 24 * 60)
+    if abs(july_export[15 * 60] - 16.0) > 0.01:
+        print("  ERROR: July (BST) peak export at UTC 15:00 (local 16:00) expected 16.0, got {}".format(july_export.get(15 * 60)))
+        failed = True
+    if abs(july_export[14 * 60 + 30] - 9.0) > 0.01:
+        print("  ERROR: July (BST) base export at UTC 14:30 (local 15:30) expected 9.0, got {}".format(july_export.get(14 * 60 + 30)))
+        failed = True
+    if abs(july_import[15 * 60] - 16.0) > 0.01:
+        print("  ERROR: import must fall back the same way as export; July peak import at UTC 15:00 expected 16.0, got {}".format(july_import.get(15 * 60)))
+        failed = True
+
+    if not asyncio.run(fallback_tariff.fetch_month(2025, 1)):
+        print("  ERROR: fetch_month should fall back to the current pattern for January 2025 too")
+        failed = True
+    if not fallback_tariff.month_available(2025, 1):
+        print("  ERROR: January 2025 should remain available via the fallback pattern (import falling back must not return False)")
+        failed = True
+    jan_midnight = pytz.utc.localize(datetime(2025, 1, 10))
+    jan_import, jan_export = fallback_tariff.rates_for(jan_midnight, 24 * 60)
+    if abs(jan_export[16 * 60] - 16.0) > 0.01:
+        print("  ERROR: January (GMT) peak export at UTC 16:00 (local 16:00) expected 16.0, got {}".format(jan_export.get(16 * 60)))
+        failed = True
+    if abs(jan_export[15 * 60] - 9.0) > 0.01:
+        print("  ERROR: January (GMT) base export at UTC 15:00 expected 9.0 (the peak must not have slid an hour early as it would with a UTC-keyed pattern), got {}".format(jan_export.get(15 * 60)))
+        failed = True
+
+    print("Test: the current-rates pattern is downloaded at most once per side across twelve fetch_month calls")
+    count_calls = {"import": 0, "export": 0}
+
+    async def counting_fallback_fetch(url):
+        """Serve an always-empty ranged download and a bare-URL pattern, counting bare-URL requests per side."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        if "/import/" in url:
+            count_calls["import"] += 1
+        elif "/export/" in url:
+            count_calls["export"] += 1
+        return {"results": build_current_pattern_rows(), "next": None}
+
+    counting_tariff = AnnualTariff(fallback_config, log=print, predbat=my_predbat, fetch_json=counting_fallback_fetch, timezone="Europe/London")
+    for fallback_month in range(1, 13):
+        asyncio.run(counting_tariff.fetch_month(2025, fallback_month))
+    if count_calls["import"] != 1 or count_calls["export"] != 1:
+        print("  ERROR: expected the bare-URL current pattern requested exactly once per side across twelve fetch_month calls, got {}".format(count_calls))
+        failed = True
+
+    print("Test: a tariff whose ranged and bare downloads are both empty is not silently priced free")
+    empty_pattern_logged = []
+
+    def capture_empty_pattern_log(message):
+        """Capture log messages for assertion, while still printing them for visibility."""
+        empty_pattern_logged.append(message)
+        print(message)
+
+    async def all_empty_fetch(url):
+        """Simulate a tariff with no historical rates and no current rates either - every request returns nothing."""
+        return {"results": [], "next": None}
+
+    all_empty_config = {"import_octopus_url": "https://example.com/import/", "export_octopus_url": "https://example.com/export/", "standing_charge_p_per_day": 0.0}
+    all_empty_tariff = AnnualTariff(all_empty_config, log=capture_empty_pattern_log, predbat=my_predbat, fetch_json=all_empty_fetch, timezone="Europe/London")
+    if asyncio.run(all_empty_tariff.fetch_month(2025, 8)):
+        print("  ERROR: fetch_month should report unavailable when both the ranged and bare downloads are empty")
+        failed = True
+    if all_empty_tariff.month_available(2025, 8):
+        print("  ERROR: August 2025 must not be reported available when nothing at all was returned")
+        failed = True
+    if all_empty_tariff.fallback_months:
+        print("  ERROR: no fallback should be recorded when the bare pattern is also empty, got {}".format(all_empty_tariff.fallback_months))
+        failed = True
+    if not any(("export" in message) and ("unpaid" in message) for message in empty_pattern_logged):
+        print("  ERROR: expected the existing 'treating export as unpaid' warning when export has no rates at all, got {}".format(empty_pattern_logged))
         failed = True
 
     return failed

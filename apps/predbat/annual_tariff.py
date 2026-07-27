@@ -39,7 +39,7 @@ def build_period_url(base_url, start_utc, end_utc):
 class AnnualTariff:
     """Import and export rates for arbitrary historical dates."""
 
-    def __init__(self, config, log, predbat, storage=None, fetch_json=None):
+    def __init__(self, config, log, predbat, storage=None, fetch_json=None, timezone="UTC"):
         """Configure the tariff from the annual config's ``tariff`` block.
 
         Octopus product codes are region-suffixed. ``resolve_arg``'s ``extra_args``
@@ -48,12 +48,17 @@ class AnnualTariff:
         different region is never clobbered by this tariff's region. Without a
         region a URL silently 404s and the month is reported unavailable, which
         looks like an outage rather than a config mistake.
+
+        ``timezone`` is the annual config's IANA timezone name, used only to key the
+        current-rates fallback pattern (see ``_fetch_current_pattern``) by local
+        minute-of-day rather than UTC.
         """
         self.config = config
         self.log = log
         self.predbat = predbat
         self.storage = storage
         self.fetch_json = fetch_json or self._default_fetch_json
+        self.timezone = pytz.timezone(timezone)
         dno_region = config.get("dno_region")
         self.import_url = self._resolve_url(config.get("import_octopus_url"), "import_octopus_url", dno_region)
         self.export_url = self._resolve_url(config.get("export_octopus_url"), "export_octopus_url", dno_region)
@@ -69,6 +74,16 @@ class AnnualTariff:
         # per-entry logging and load_scaling_dynamic mutation roughly 365 times a year.
         self._basic_import_table = None
         self._basic_export_table = None
+        # Lazily fetched, cached current-rates fallback patterns (see
+        # _fetch_current_pattern): None means not yet fetched, {} means fetched but
+        # empty. fetch_month is called twelve times a run and must not re-download
+        # this twelve times.
+        self._current_pattern = {"import": None, "export": None}
+        # (year, month, "import"/"export") triples where a month's rates were
+        # synthesised from the current pattern instead of that month's own download,
+        # mirroring AnnualWeather.fallback_months so AnnualPredictor.run() can raise
+        # a caveat about it.
+        self.fallback_months = set()
 
     def _resolve_url(self, url, name, dno_region=None):
         """Substitute templated arguments such as {dno_region} into a tariff URL, without mutating predbat.args."""
@@ -83,12 +98,20 @@ class AnnualTariff:
 
     async def _download_octopus(self, base_url, start_utc, end_utc, cache_key):
         """Download every page of Octopus rates for a date range, returning raw result rows."""
+        return await self._download_rows(build_period_url(base_url, start_utc, end_utc), cache_key)
+
+    async def _download_rows(self, url, cache_key):
+        """Download every page of Octopus rates starting from the given URL, returning raw result rows.
+
+        Shared by the per-month ranged download and the bare-URL current-rates
+        download used by ``_fetch_current_pattern``; the only difference between
+        them is the URL each starts from.
+        """
         if self.storage:
             cached = await self.storage.load("annual", cache_key)
             if isinstance(cached, list) and cached:
                 return cached
 
-        url = build_period_url(base_url, start_utc, end_utc)
         rows = []
         pages = 0
         truncated = False
@@ -126,6 +149,78 @@ class AnnualTariff:
         parsed, _ = minute_data(rows, days + 1, start_utc, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
         return {start_utc + timedelta(minutes=minute): rate for minute, rate in parsed.items()}
 
+    def _rows_to_local_pattern(self, rows):
+        """Reduce Octopus rate rows to a repeating daily pattern keyed by local minute-of-day.
+
+        Octopus peak windows are defined on the local clock, so each row's
+        ``valid_from`` is converted to local time via ``self.timezone`` before its
+        minute-of-day is taken as the key - keying by UTC minute-of-day would slide
+        the peak by an hour across a DST boundary. A row spanning multiple 30 minute
+        slots is expanded across every slot it covers, and where rows overlap the
+        slot keeps the rate of whichever row has the most recent ``valid_from``.
+        """
+        pattern = {}
+        sources = {}
+        for row in rows:
+            try:
+                rate = float(row["value_inc_vat"])
+                valid_from = pytz.utc.localize(datetime.strptime(row["valid_from"], "%Y-%m-%dT%H:%M:%SZ"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            valid_to_raw = row.get("valid_to")
+            try:
+                valid_to = pytz.utc.localize(datetime.strptime(valid_to_raw, "%Y-%m-%dT%H:%M:%SZ")) if valid_to_raw else valid_from + timedelta(minutes=30)
+            except ValueError:
+                valid_to = valid_from + timedelta(minutes=30)
+            slots = max(1, int((valid_to - valid_from).total_seconds() // 60 // 30))
+            for slot in range(slots):
+                local_dt = (valid_from + timedelta(minutes=30 * slot)).astimezone(self.timezone)
+                minute_of_day = local_dt.hour * 60 + local_dt.minute
+                if sources.get(minute_of_day) is None or valid_from > sources[minute_of_day]:
+                    pattern[minute_of_day] = rate
+                    sources[minute_of_day] = valid_from
+        return pattern
+
+    async def _fetch_current_pattern(self, side):
+        """Download a tariff URL's current rates and reduce them to a repeating local-time daily pattern.
+
+        The bare URL (no ``period_from``/``period_to``) returns the tariff's current
+        rates, which for a fixed product repeat the same shape every day. Used as a
+        fallback when a historical month's own ranged download comes back empty -
+        typically because the tariff launched after that historical date. Cached on
+        the instance so ``fetch_month``, which runs up to twelve times a year, only
+        downloads this once per side.
+        """
+        cache_attr = "import" if side == "import" else "export"
+        cached = self._current_pattern[cache_attr]
+        if cached is not None:
+            return cached
+        url = self.import_url if side == "import" else self.export_url
+        rows = await self._download_rows(url, "current_pattern_{}".format(side)) if url else []
+        pattern = self._rows_to_local_pattern(rows)
+        self._current_pattern[cache_attr] = pattern
+        return pattern
+
+    def _stamped_rates_from_pattern(self, pattern, start_utc, days):
+        """Repeat a local-time daily rate pattern across a UTC date range.
+
+        Produces the same ``{utc_stamp: rate}`` shape as ``_rows_to_stamped_rates``
+        so ``rates_for`` is untouched. Each 30 minute UTC slot in the range is
+        converted to local time for that specific historical date before looking up
+        its rate, so the same local peak window lands on the correct UTC hour either
+        side of a DST boundary.
+        """
+        stamped = {}
+        if not pattern:
+            return stamped
+        for slot in range(days * 48):
+            stamp_utc = start_utc + timedelta(minutes=30 * slot)
+            local_dt = stamp_utc.astimezone(self.timezone)
+            rate = pattern.get(local_dt.hour * 60 + local_dt.minute)
+            if rate is not None:
+                stamped[stamp_utc] = rate
+        return stamped
+
     async def fetch_month(self, year, month):
         """Fetch (or synthesise) the rates covering one calendar month plus a one day buffer.
 
@@ -143,16 +238,28 @@ class AnnualTariff:
             export_rates = {}
             if self.import_url:
                 rows = await self._download_octopus(self.import_url, start_utc, end_utc, "rates_import_{}_{:02d}".format(year, month))
-                if not rows:
-                    self.log("Warn: Annual: no import rates available for {}-{:02d}".format(year, month))
-                    return False
-                import_rates = self._rows_to_stamped_rates(rows, start_utc, days)
+                if rows:
+                    import_rates = self._rows_to_stamped_rates(rows, start_utc, days)
+                else:
+                    pattern = await self._fetch_current_pattern("import")
+                    if pattern:
+                        import_rates = self._stamped_rates_from_pattern(pattern, start_utc, days)
+                        self.fallback_months.add((year, month, "import"))
+                        self.log("Warn: Annual: no import rates available for {}-{:02d}; using today's rates repeated across the month instead".format(year, month))
+                    else:
+                        self.log("Warn: Annual: no import rates available for {}-{:02d}".format(year, month))
             if self.export_url:
                 rows = await self._download_octopus(self.export_url, start_utc, end_utc, "rates_export_{}_{:02d}".format(year, month))
                 if rows:
                     export_rates = self._rows_to_stamped_rates(rows, start_utc, days)
                 else:
-                    self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
+                    pattern = await self._fetch_current_pattern("export")
+                    if pattern:
+                        export_rates = self._stamped_rates_from_pattern(pattern, start_utc, days)
+                        self.fallback_months.add((year, month, "export"))
+                        self.log("Warn: Annual: no export rates available for {}-{:02d}; using today's rates repeated across the month instead".format(year, month))
+                    else:
+                        self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
 
             # Only import failing makes the month unusable: rates_for's gate is
             # `self.import_url or self.export_url`, so an export-only configuration

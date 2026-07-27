@@ -1322,7 +1322,7 @@ class AnnualPredictor:
 
         self.predbat = create_headless_predbat(self.work_dir, self.config["timezone"], self.log)
         self.load_source = await self._build_load_source()
-        self.tariff = AnnualTariff(self.config["tariff"], log=self.log, predbat=self.predbat, storage=self.storage)
+        self.tariff = AnnualTariff(self.config["tariff"], log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
 
         zone = pytz.timezone(self.config["timezone"])
         months = []
@@ -1410,6 +1410,12 @@ class AnnualPredictor:
                 row["plans"] = month_plans
             months.append(row)
             completed += 1
+
+        if self.tariff.fallback_months:
+            fallback_list = ", ".join("{}-{:02d} ({})".format(fb_year, fb_month, side) for fb_year, fb_month, side in sorted(self.tariff.fallback_months))
+            self.caveats.append(
+                "No historical rates were available for {} on this tariff, likely because it launched after {}. Those months' rates are today's rates repeated across the month, not what was actually charged then.".format(fallback_list, year)
+            )
 
         if progress:
             progress(total_units, total_units, "Complete")
