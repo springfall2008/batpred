@@ -210,7 +210,8 @@ the link (or just refreshing) shows the results below the form.
 
 ### Comparing runs
 
-The last five completed runs are kept, each labelled with a short summary of its
+Every completed run is saved automatically — there is nothing to press — and the last
+twenty are kept, each labelled with a short summary of its
 configuration (battery size, solar size, tariff) rather than just a timestamp. A selector
 above the results lets you switch between them — instantly, with no re-run — so you can
 compare a 5 kWh battery against a 10 kWh one, or two tariffs, side by side. Each stored
@@ -321,7 +322,7 @@ so anything you already know about reading a Predbat plan applies unchanged.
 Two things to know before turning it on:
 
 - **The saved run gets much larger.** A year at the default two samples per month keeps
-  72 plans (144 with a car configured). Runs are stored through the same five-run
+  72 plans (144 with a car configured). Runs are stored through the same twenty-run
   rotation as any other, so a debug run displaces older runs at the same rate.
 - **It does not change the numbers.** The flag only retains plan data that the engine
   already computes; it does not enable Predbat's own `debug_enable`, which would disable

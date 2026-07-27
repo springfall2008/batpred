@@ -13,7 +13,7 @@ Storage abstraction rather than the filesystem, because there may not be one.
 
 import datetime
 
-MAX_RUNS = 5
+MAX_RUNS = 20
 STORAGE_MODULE = "annual"
 INDEX_NAME = "runs_index"
 
