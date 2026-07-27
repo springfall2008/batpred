@@ -42,6 +42,28 @@ class AliasRole(Enum):
     CONTROL = "control"
 
 
+class ProjectionValueKind(Enum):
+    """Kind of one provider-published PredBat configuration value."""
+
+    ENTITY = "entity"
+    CONSTANT = "constant"
+    NONE = "none"
+
+
+class ProjectionRouting(Enum):
+    """Relationship between projected values and selected indexed targets."""
+
+    LEAF = "leaf"
+    COORDINATOR = "coordinator"
+
+
+class ProjectionCardinality(Enum):
+    """Shape of one projected PredBat configuration argument."""
+
+    SCALAR = "scalar"
+    PER_INDEX = "per_index"
+
+
 class CompileStatus(Enum):
     """Observable compiler state after a drain."""
 
@@ -122,6 +144,136 @@ class ProviderRoleAssignment:
 
 
 @dataclass(frozen=True)
+class ProviderProjectionValue:
+    """One ordered provider-local entity, constant, or explicit None value."""
+
+    node_id: str
+    kind: ProjectionValueKind
+    value: object = None
+    capability: Optional[str] = None
+    identity_kind: Optional[str] = None
+    identity_value: Optional[str] = None
+    access_path_id: Optional[str] = None
+
+    def __post_init__(self):
+        """Validate the value and normalize its optional source selectors."""
+        if not isinstance(self.node_id, str) or not self.node_id.strip():
+            raise ValueError("projection value node_id must be a non-empty string")
+        if not isinstance(self.kind, ProjectionValueKind):
+            raise ValueError("projection value kind must be a ProjectionValueKind")
+        if self.kind is ProjectionValueKind.ENTITY:
+            if not isinstance(self.value, str) or not self.value.strip():
+                raise ValueError("projection entity value must be a non-empty string")
+            if not isinstance(self.capability, str) or not self.capability.strip():
+                raise ValueError("projection entity value must name a capability")
+            value = self.value.strip()
+        elif self.kind is ProjectionValueKind.CONSTANT:
+            if not isinstance(self.value, (str, int, float, bool)) or self.value is None:
+                raise ValueError("projection constant must be a non-None JSON scalar")
+            value = self.value
+            _canonical_json(value)
+        else:
+            if self.value is not None:
+                raise ValueError("projection None value must carry value=None")
+            value = None
+
+        capability = self.capability
+        if capability is not None:
+            if not isinstance(capability, str) or not capability.strip():
+                raise ValueError("projection capability must be a non-empty string")
+            capability = capability.strip()
+
+        identity_kind = self.identity_kind
+        identity_value = self.identity_value
+        if (identity_kind is None) != (identity_value is None):
+            raise ValueError("projection identity selector requires both kind and value")
+        if identity_kind is not None:
+            if not isinstance(identity_kind, str) or not identity_kind.strip():
+                raise ValueError("projection identity kind must be a non-empty string")
+            if not isinstance(identity_value, str) or not identity_value.strip():
+                raise ValueError("projection identity value must be a non-empty string")
+            identity_kind = identity_kind.strip().lower()
+            identity_value = identity_value.strip()
+
+        access_path_id = self.access_path_id
+        if access_path_id is not None:
+            if not isinstance(access_path_id, str) or not access_path_id.strip():
+                raise ValueError("projection access_path_id must be a non-empty string")
+            access_path_id = access_path_id.strip()
+
+        object.__setattr__(self, "node_id", self.node_id.strip())
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "capability", capability)
+        object.__setattr__(self, "identity_kind", identity_kind)
+        object.__setattr__(self, "identity_value", identity_value)
+        object.__setattr__(self, "access_path_id", access_path_id)
+
+
+@dataclass(frozen=True)
+class ProviderConfigProjection:
+    """Generic provider contract for one PredBat configuration argument."""
+
+    argument: str
+    role: AliasRole
+    group: str
+    routing: ProjectionRouting
+    cardinality: ProjectionCardinality
+    values: tuple
+    required: bool = True
+    transforms: tuple = ()
+
+    def __post_init__(self):
+        """Validate and normalize one immutable projection declaration."""
+        if not isinstance(self.argument, str) or not self.argument.strip():
+            raise ValueError("projection argument must be a non-empty string")
+        if self.role not in (AliasRole.PRIMARY, AliasRole.CONTROL):
+            raise ValueError("projection role must be PRIMARY or CONTROL")
+        if not isinstance(self.group, str) or not self.group.strip():
+            raise ValueError("projection group must be a non-empty string")
+        if not isinstance(self.routing, ProjectionRouting):
+            raise ValueError("projection routing must be a ProjectionRouting")
+        if not isinstance(self.cardinality, ProjectionCardinality):
+            raise ValueError("projection cardinality must be a ProjectionCardinality")
+        if not isinstance(self.required, bool):
+            raise ValueError("projection required must be a boolean")
+        values = tuple(self.values)
+        if not values or any(not isinstance(value, ProviderProjectionValue) for value in values):
+            raise ValueError("projection values must contain ProviderProjectionValue values")
+        if self.cardinality is ProjectionCardinality.SCALAR and len(values) != 1:
+            raise ValueError("scalar projection must contain exactly one value")
+        transforms = tuple(self.transforms)
+        if any(not isinstance(transform, str) or not transform.strip() for transform in transforms):
+            raise ValueError("projection transforms must be non-empty strings")
+        transforms = tuple(transform.strip() for transform in transforms)
+        if len(transforms) != len(set(transforms)):
+            raise ValueError("projection transforms must be unique")
+        object.__setattr__(self, "argument", self.argument.strip())
+        object.__setattr__(self, "group", self.group.strip())
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "transforms", transforms)
+
+
+@dataclass(frozen=True)
+class UserConfigOverride:
+    """Explicit user-owned final value for one projected configuration argument."""
+
+    argument: str
+    value: object
+    source_path: str
+
+    def __post_init__(self):
+        """Detach the override value and retain its explicit source path."""
+        if not isinstance(self.argument, str) or not self.argument.strip():
+            raise ValueError("override argument must be a non-empty string")
+        if not isinstance(self.source_path, str) or not self.source_path.strip():
+            raise ValueError("override source_path must be a non-empty string")
+        value = _freeze(copy.deepcopy(self.value))
+        object.__setattr__(self, "argument", self.argument.strip())
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "source_path", self.source_path.strip())
+
+
+@dataclass(frozen=True)
 class ProviderSnapshot:
     """One integration's immutable generation of health, topology, and aliases."""
 
@@ -132,6 +284,7 @@ class ProviderSnapshot:
     aliases: tuple = ()
     identity_aliases: tuple = ()
     role_assignments: tuple = ()
+    config_projections: tuple = ()
 
     def __post_init__(self):
         """Validate scalar fields and detach caller-owned mutable data."""
@@ -152,11 +305,15 @@ class ProviderSnapshot:
         role_assignments = tuple(self.role_assignments)
         if any(not isinstance(assignment, ProviderRoleAssignment) for assignment in role_assignments):
             raise ValueError("role_assignments must contain ProviderRoleAssignment values")
+        config_projections = tuple(self.config_projections)
+        if any(not isinstance(projection, ProviderConfigProjection) for projection in config_projections):
+            raise ValueError("config_projections must contain ProviderConfigProjection values")
         object.__setattr__(self, "provider_id", self.provider_id.strip())
         object.__setattr__(self, "topology_fragment", _freeze(copy.deepcopy(dict(self.topology_fragment))))
         object.__setattr__(self, "aliases", aliases)
         object.__setattr__(self, "identity_aliases", identity_aliases)
         object.__setattr__(self, "role_assignments", role_assignments)
+        object.__setattr__(self, "config_projections", config_projections)
 
 
 @dataclass(frozen=True)
@@ -254,6 +411,43 @@ class AutoConfigField:
 
 
 @dataclass(frozen=True)
+class ProjectionCandidate:
+    """One normalized provider candidate for a projected argument."""
+
+    argument: str
+    provider_id: str
+    generation: int
+    role: str
+    group: str
+    routing: str
+    cardinality: str
+    required: bool
+    values: tuple
+    value_kinds: tuple
+    capabilities: tuple
+    identity_selectors: tuple
+    access_path_ids: tuple
+    transforms: tuple
+    specificities: tuple
+    provenance: tuple
+
+
+@dataclass(frozen=True)
+class ProjectedConfigArgument:
+    """Effective immutable PredBat argument plus all provider candidates."""
+
+    name: str
+    value: object
+    cardinality: str
+    required: bool
+    transforms: tuple
+    provenance: tuple
+    candidate_provenance: tuple
+    candidates: tuple
+    override_source: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class AutoConfigPlan:
     """Deterministic immutable result of compiling all usable fragments."""
 
@@ -267,6 +461,8 @@ class AutoConfigPlan:
     primary_target: Optional[str]
     control_target: Optional[str]
     materialization_readiness: MaterializationReadiness
+    config_arguments: tuple
+    projected_config: Mapping
     fields: tuple
     provenance: tuple
     provider_generations: tuple
@@ -350,6 +546,31 @@ def _semantic_topology(site):
     return topology
 
 
+def _projection_payload(projection):
+    """Return one provider projection in deterministic plain form."""
+    return {
+        "argument": projection.argument,
+        "role": projection.role.value,
+        "group": projection.group,
+        "routing": projection.routing.value,
+        "cardinality": projection.cardinality.value,
+        "required": projection.required,
+        "transforms": projection.transforms,
+        "values": [
+            {
+                "node_id": value.node_id,
+                "kind": value.kind.value,
+                "value": value.value,
+                "capability": value.capability,
+                "identity_kind": value.identity_kind,
+                "identity_value": value.identity_value,
+                "access_path_id": value.access_path_id,
+            }
+            for value in projection.values
+        ],
+    }
+
+
 def _fingerprint_snapshot(snapshot):
     """Bind a provider generation to exactly one health/fragment/alias value."""
     aliases = [
@@ -377,6 +598,19 @@ def _fingerprint_snapshot(snapshot):
         }
         for assignment in sorted(snapshot.role_assignments, key=lambda item: (item.group, item.role.value, item.index, item.node_id))
     ]
+    config_projections = [
+        _projection_payload(projection)
+        for projection in sorted(
+            snapshot.config_projections,
+            key=lambda item: (
+                item.argument,
+                item.group,
+                item.role.value,
+                item.routing.value,
+                item.cardinality.value,
+            ),
+        )
+    ]
     payload = {
         "provider": snapshot.provider_id,
         "generation": snapshot.generation,
@@ -385,6 +619,7 @@ def _fingerprint_snapshot(snapshot):
         "aliases": aliases,
         "identity_aliases": identity_aliases,
         "role_assignments": role_assignments,
+        "config_projections": config_projections,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -682,6 +917,359 @@ def _compile_roles(snapshots, bindings, identity_bindings, provider_nodes, canon
     return role_bindings, primary_targets, control_targets, legacy_targets, readiness
 
 
+def _projection_sort_key(projection):
+    """Return the stable ordering key for provider projection declarations."""
+    return (
+        projection.argument,
+        projection.group,
+        projection.role.value,
+        projection.routing.value,
+        projection.cardinality.value,
+        _canonical_json(_projection_payload(projection)),
+    )
+
+
+def _projection_topology_sources(document, provider_id):
+    """Index provider-owned access paths and capability-to-path bindings."""
+    access_paths = {}
+    capabilities = set()
+    for node in document.get("nodes", ()):
+        node_id = str(node["id"])
+        for access_path in node.get("accessPaths", ()):
+            path_id = str(access_path["id"])
+            owner = access_path.get("provider", provider_id)
+            access_paths[(node_id, path_id)] = owner
+        for capability in node.get("capabilities", ()):
+            capabilities.add(
+                (
+                    node_id,
+                    str(capability["capability"]),
+                    str(capability["accessPath"]),
+                )
+            )
+    return access_paths, capabilities
+
+
+def _projection_override_value(override, candidate):
+    """Validate and return an override in the provider candidate's shape."""
+    value = override.value
+    if candidate.cardinality == ProjectionCardinality.PER_INDEX.value:
+        if not isinstance(value, tuple):
+            raise AutoConfigCompileError("override {} must be an ordered per-index sequence".format(override.argument))
+        if len(value) != len(candidate.values):
+            raise AutoConfigCompileError(
+                "override {} cardinality mismatch: expected {}, got {}".format(
+                    override.argument,
+                    len(candidate.values),
+                    len(value),
+                )
+            )
+        values = value
+    else:
+        if isinstance(value, (tuple, Mapping)):
+            raise AutoConfigCompileError("override {} must be a scalar value".format(override.argument))
+        values = (value,)
+    for item in values:
+        if not isinstance(item, (str, int, float, bool)) and item is not None:
+            raise AutoConfigCompileError("override {} contains a non-scalar value".format(override.argument))
+        _canonical_json(item)
+    if candidate.required and any(item is None for item in values):
+        raise AutoConfigCompileError("override {} leaves a required slot empty".format(override.argument))
+    return value
+
+
+def _compile_config_projections(
+    snapshots,
+    primary_targets,
+    control_targets,
+    provider_nodes,
+    canonical_by_node,
+    documents_by_provider,
+    user_overrides,
+):
+    """Compile provider projection candidates into effective PredBat arguments."""
+    targets_by_role_group = {}
+    for role, targets in (
+        (AliasRole.PRIMARY, primary_targets),
+        (AliasRole.CONTROL, control_targets),
+    ):
+        for target in targets:
+            targets_by_role_group.setdefault((role, target.group), []).append(target)
+    targets_by_role_group = {key: tuple(sorted(targets, key=lambda item: item.index)) for key, targets in targets_by_role_group.items()}
+
+    candidates_by_argument = {}
+    for snapshot in snapshots:
+        access_paths, capabilities = _projection_topology_sources(
+            documents_by_provider[snapshot.provider_id],
+            snapshot.provider_id,
+        )
+        identity_assertions = {(alias.kind, alias.value, alias.node_id) for alias in snapshot.identity_aliases}
+        seen_arguments = set()
+        for projection_index, projection in enumerate(sorted(snapshot.config_projections, key=_projection_sort_key)):
+            if projection.argument in seen_arguments:
+                raise AutoConfigCompileError(
+                    "provider {} repeats projection argument {}".format(
+                        snapshot.provider_id,
+                        projection.argument,
+                    )
+                )
+            seen_arguments.add(projection.argument)
+            targets = targets_by_role_group.get(
+                (projection.role, projection.group),
+                (),
+            )
+            if not targets:
+                raise AutoConfigCompileError(
+                    "projection {} has no selected {} targets in group {}".format(
+                        projection.argument,
+                        projection.role.value,
+                        projection.group,
+                    )
+                )
+            if projection.cardinality is ProjectionCardinality.PER_INDEX and len(projection.values) != len(targets):
+                raise AutoConfigCompileError(
+                    "projection {} cardinality mismatch: expected {}, got {}".format(
+                        projection.argument,
+                        len(targets),
+                        len(projection.values),
+                    )
+                )
+            if projection.routing is ProjectionRouting.COORDINATOR and len({target.node_id for target in targets}) != 1:
+                raise AutoConfigCompileError("coordinator projection {} requires one canonical target".format(projection.argument))
+
+            values = []
+            kinds = []
+            specificities = []
+            provenance = []
+            for value_index, value in enumerate(projection.values):
+                if value.node_id not in provider_nodes[snapshot.provider_id]:
+                    raise AutoConfigCompileError(
+                        "projection {} targets unknown provider-local node {}".format(
+                            projection.argument,
+                            value.node_id,
+                        )
+                    )
+                if value.kind is ProjectionValueKind.ENTITY:
+                    matching_capabilities = {
+                        access_path_id
+                        for (
+                            node_id,
+                            capability,
+                            access_path_id,
+                        ) in capabilities
+                        if node_id == value.node_id and capability == value.capability
+                    }
+                    if not matching_capabilities:
+                        raise AutoConfigCompileError(
+                            "projection {} capability {} is not published by node {}".format(
+                                projection.argument,
+                                value.capability,
+                                value.node_id,
+                            )
+                        )
+                    if value.access_path_id is not None and value.access_path_id not in matching_capabilities:
+                        raise AutoConfigCompileError(
+                            "projection {} capability {} is not bound to access path {}".format(
+                                projection.argument,
+                                value.capability,
+                                value.access_path_id,
+                            )
+                        )
+                target_index = value_index if projection.cardinality is ProjectionCardinality.PER_INDEX else 0
+                canonical_node_id = canonical_by_node[(snapshot.provider_id, value.node_id)]
+                target = targets[target_index]
+                if canonical_node_id != target.node_id:
+                    raise AutoConfigCompileError(
+                        "projection {} slot {} is unrelated to selected canonical target {}".format(
+                            projection.argument,
+                            target_index,
+                            target.node_id,
+                        )
+                    )
+
+                specificity = 0
+                if value.identity_kind is not None:
+                    identity = (
+                        value.identity_kind,
+                        value.identity_value,
+                        value.node_id,
+                    )
+                    if identity not in identity_assertions:
+                        raise AutoConfigCompileError(
+                            "projection {} identity selector is not asserted by provider {}".format(
+                                projection.argument,
+                                snapshot.provider_id,
+                            )
+                        )
+                    specificity = 1
+                if value.access_path_id is not None:
+                    owner = access_paths.get((value.node_id, value.access_path_id))
+                    if owner != snapshot.provider_id:
+                        raise AutoConfigCompileError(
+                            "projection {} access path {} is not provider-owned".format(
+                                projection.argument,
+                                value.access_path_id,
+                            )
+                        )
+                    specificity = 2
+                if projection.required and value.kind is ProjectionValueKind.NONE:
+                    raise AutoConfigCompileError(
+                        "projection {} leaves required slot {} empty".format(
+                            projection.argument,
+                            target_index,
+                        )
+                    )
+
+                field_path = "/projected_config/{}".format(projection.argument)
+                if projection.cardinality is ProjectionCardinality.PER_INDEX:
+                    field_path += "/{}".format(target_index)
+                values.append(value.value)
+                kinds.append(value.kind.value)
+                specificities.append(specificity)
+                provenance.append(
+                    (
+                        FieldProvenance(
+                            field_path,
+                            snapshot.provider_id,
+                            snapshot.generation,
+                            "/config_projections/{}/values/{}".format(
+                                projection_index,
+                                value_index,
+                            ),
+                        ),
+                    )
+                )
+
+            candidate = ProjectionCandidate(
+                argument=projection.argument,
+                provider_id=snapshot.provider_id,
+                generation=snapshot.generation,
+                role=projection.role.value,
+                group=projection.group,
+                routing=projection.routing.value,
+                cardinality=projection.cardinality.value,
+                required=projection.required,
+                values=tuple(values),
+                value_kinds=tuple(kinds),
+                capabilities=tuple(value.capability for value in projection.values),
+                identity_selectors=tuple(
+                    (
+                        value.identity_kind,
+                        value.identity_value,
+                    )
+                    if value.identity_kind is not None
+                    else None
+                    for value in projection.values
+                ),
+                access_path_ids=tuple(value.access_path_id for value in projection.values),
+                transforms=projection.transforms,
+                specificities=tuple(specificities),
+                provenance=tuple(provenance),
+            )
+            candidates_by_argument.setdefault(
+                projection.argument,
+                [],
+            ).append(candidate)
+
+    overrides = {}
+    for override in tuple(user_overrides):
+        if not isinstance(override, UserConfigOverride):
+            raise ValueError("user_overrides must contain UserConfigOverride values")
+        if override.argument in overrides:
+            raise AutoConfigCompileError("duplicate user override for {}".format(override.argument))
+        overrides[override.argument] = override
+    unknown_overrides = sorted(set(overrides) - set(candidates_by_argument))
+    if unknown_overrides:
+        raise AutoConfigCompileError("user override has no provider candidate: {}".format(", ".join(unknown_overrides)))
+
+    arguments = []
+    projected_config = {}
+    for argument, unordered_candidates in sorted(candidates_by_argument.items()):
+        candidates = tuple(
+            sorted(
+                unordered_candidates,
+                key=lambda item: (item.provider_id, item.generation),
+            )
+        )
+        metadata = {
+            (
+                candidate.role,
+                candidate.group,
+                candidate.routing,
+                candidate.cardinality,
+                candidate.required,
+                candidate.transforms,
+                len(candidate.values),
+            )
+            for candidate in candidates
+        }
+        if len(metadata) != 1:
+            raise AutoConfigCompileError("conflicting projection contract for {}".format(argument))
+        first = candidates[0]
+        candidate_provenance = tuple(source for candidate in candidates for slot_sources in candidate.provenance for source in slot_sources)
+        override = overrides.get(argument)
+        selected_values = []
+        selected_provenance = []
+        if override is None:
+            for index in range(len(first.values)):
+                highest_specificity = max(candidate.specificities[index] for candidate in candidates)
+                selected = tuple(candidate for candidate in candidates if candidate.specificities[index] == highest_specificity)
+                kinds = {candidate.value_kinds[index] for candidate in selected}
+                if len(kinds) != 1:
+                    raise AutoConfigCompileError(
+                        "projection {} type mismatch at slot {}".format(
+                            argument,
+                            index,
+                        )
+                    )
+                canonical_values = {_canonical_json(candidate.values[index]) for candidate in selected}
+                if len(canonical_values) != 1:
+                    raise AutoConfigCompileError(
+                        "ambiguous multi-provider projection {} at slot {}".format(
+                            argument,
+                            index,
+                        )
+                    )
+                selected_values.append(selected[0].values[index])
+                selected_provenance.extend(source for candidate in selected for source in candidate.provenance[index])
+            if first.cardinality == ProjectionCardinality.PER_INDEX.value:
+                effective_value = tuple(selected_values)
+            else:
+                effective_value = selected_values[0]
+            override_source = None
+        else:
+            effective_value = _projection_override_value(override, first)
+            override_source = override.source_path
+            selected_provenance = [
+                FieldProvenance(
+                    "/projected_config/{}".format(argument),
+                    "user_override",
+                    0,
+                    override.source_path,
+                )
+            ]
+
+        effective_value = _freeze(effective_value)
+        projected_config[argument] = effective_value
+        arguments.append(
+            ProjectedConfigArgument(
+                name=argument,
+                value=effective_value,
+                cardinality=first.cardinality,
+                required=first.required,
+                transforms=first.transforms,
+                provenance=tuple(selected_provenance),
+                candidate_provenance=candidate_provenance,
+                candidates=candidates,
+                override_source=override_source,
+            )
+        )
+    return (
+        tuple(arguments),
+        _freeze(projected_config),
+    )
+
+
 def _field_provenance(
     snapshots,
     bindings,
@@ -745,7 +1333,7 @@ def _field_provenance(
     return tuple(sorted(provenance, key=lambda item: (item.field_path, item.provider_id, item.generation, item.source_path)))
 
 
-def compile_auto_config(snapshots):
+def compile_auto_config(snapshots, user_overrides=()):
     """Compile usable provider snapshots into one deterministic immutable plan."""
     snapshots = tuple(sorted(snapshots, key=lambda item: item.provider_id))
     if not snapshots:
@@ -755,6 +1343,7 @@ def compile_auto_config(snapshots):
         raise AutoConfigCompileError("duplicate provider snapshots are not allowed")
 
     documents = []
+    documents_by_provider = {}
     provider_nodes = {}
     for snapshot in snapshots:
         document = decode_topology(_plain(snapshot.topology_fragment))
@@ -765,6 +1354,7 @@ def compile_auto_config(snapshots):
             raise AutoConfigCompileError("provider {} supplied fragment owned by {}".format(snapshot.provider_id, document_provider))
         nodes = _document_node_ids(document, snapshot.provider_id)
         provider_nodes[snapshot.provider_id] = nodes
+        documents_by_provider[snapshot.provider_id] = document
         documents.append(document)
     documents, canonical_by_node, identity_bindings = _correlate_identities(snapshots, documents, provider_nodes)
 
@@ -800,6 +1390,22 @@ def compile_auto_config(snapshots):
     control_target = legacy_targets[AliasRole.CONTROL]
 
     topology_snapshot = merge_topologies(documents)
+    config_arguments, projected_config = _compile_config_projections(
+        snapshots,
+        primary_targets,
+        control_targets,
+        provider_nodes,
+        canonical_by_node,
+        documents_by_provider,
+        user_overrides,
+    )
+    if config_arguments:
+        blockers = tuple(blocker for blocker in readiness.blockers if blocker != "config_projection_bindings_missing") + ("atomic_materializer_missing",)
+        readiness = MaterializationReadiness(
+            ready=False,
+            blockers=blockers,
+        )
+
     fields = []
     for binding in bindings:
         source = FieldProvenance(
@@ -835,6 +1441,14 @@ def compile_auto_config(snapshots):
                     target.provenance,
                 )
             )
+    for argument in config_arguments:
+        fields.append(
+            AutoConfigField(
+                "config.{}".format(argument.name),
+                argument.value,
+                argument.provenance,
+            )
+        )
     fields = tuple(sorted(fields, key=lambda item: item.name))
 
     semantic = {
@@ -876,10 +1490,21 @@ def compile_auto_config(snapshots):
             "ready": readiness.ready,
             "blockers": readiness.blockers,
         },
+        "config_arguments": [
+            {
+                "name": argument.name,
+                "value": argument.value,
+                "cardinality": argument.cardinality,
+                "required": argument.required,
+                "transforms": argument.transforms,
+            }
+            for argument in config_arguments
+        ],
+        "projected_config": projected_config,
         "fields": [{"name": field.name, "value": field.value} for field in fields],
     }
     digest = hashlib.sha256(_canonical_json(semantic).encode("utf-8")).hexdigest()
-    provenance = _field_provenance(
+    base_provenance = _field_provenance(
         snapshots,
         bindings,
         identity_bindings,
@@ -889,6 +1514,18 @@ def compile_auto_config(snapshots):
         control_targets,
         topology_snapshot,
         canonical_by_node,
+    )
+    projection_provenance = tuple(source for argument in config_arguments for source in (argument.candidate_provenance + argument.provenance))
+    provenance = tuple(
+        sorted(
+            set(base_provenance + projection_provenance),
+            key=lambda item: (
+                item.field_path,
+                item.provider_id,
+                item.generation,
+                item.source_path,
+            ),
+        )
     )
     return AutoConfigPlan(
         digest=digest,
@@ -901,6 +1538,8 @@ def compile_auto_config(snapshots):
         primary_target=primary_target,
         control_target=control_target,
         materialization_readiness=readiness,
+        config_arguments=config_arguments,
+        projected_config=projected_config,
         fields=fields,
         provenance=provenance,
         provider_generations=tuple((snapshot.provider_id, snapshot.generation) for snapshot in snapshots),
