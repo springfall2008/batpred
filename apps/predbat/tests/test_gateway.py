@@ -1970,6 +1970,30 @@ class TestNumberEvent:
         gw.publish_command = fake_publish_command
         return gw
 
+    def _make_initialized_gateway(self, lattice_control_enable, lattice_charge_power_limit_enable):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            lattice_control_enable=lattice_control_enable,
+            lattice_charge_power_limit_enable=lattice_charge_power_limit_enable,
+        )
+        gw.log = MagicMock()
+        gw._suffix_to_serial = {"456789": "CE123456789"}
+        gw._published = []
+
+        async def fake_publish_command(command, **kwargs):
+            gw._published.append((command, kwargs))
+
+        gw.publish_command = fake_publish_command
+        return gw
+
     def _run(self, coro):
         import asyncio
 
@@ -1984,6 +2008,65 @@ class TestNumberEvent:
         gw = self._make_gateway()
         self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000"))
         assert gw._published == [("set_charge_rate", {"power_w": 3000, "serial": "CE123456789"})]
+
+    def test_lattice_charge_rate_resolves_serial_provenance_and_dispatches(self):
+        """Both gates route charge rate through Lattice with the exact provider-local source ref."""
+        from lattice_control import CAPABILITY_CHARGE_POWER_LIMIT
+        from lattice_topology import SourceCapabilityRef
+        from unittest.mock import AsyncMock, MagicMock
+
+        gw = self._make_initialized_gateway(lattice_control_enable=True, lattice_charge_power_limit_enable=True)
+        source = SourceCapabilityRef(
+            provider="predbat-gateway",
+            topology_version="0.2.0",
+            doc_version=17,
+            cap_ref=23,
+            node_id="CE123456789",
+            capability=CAPABILITY_CHARGE_POWER_LIMIT,
+            access_path="gw-local",
+        )
+        gw._lattice_topology.source_ref = MagicMock(return_value=source)
+        gw._lattice_dispatcher.dispatch_charge_power = AsyncMock()
+
+        self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000"))
+
+        assert gw._lattice_charge_control_active is True
+        gw._lattice_topology.source_ref.assert_called_once_with("CE123456789", CAPABILITY_CHARGE_POWER_LIMIT)
+        dispatch_args = gw._lattice_dispatcher.dispatch_charge_power.await_args.args
+        assert dispatch_args[:2] == (source, 3000)
+        assert callable(dispatch_args[2])
+        assert gw._published == []
+
+    def test_lattice_charge_rate_requires_both_flags(self):
+        """Either disabled gate preserves the existing immediate legacy command path."""
+        from unittest.mock import AsyncMock
+
+        for lattice_control_enable, capability_enable in ((False, True), (True, False)):
+            gw = self._make_initialized_gateway(
+                lattice_control_enable=lattice_control_enable,
+                lattice_charge_power_limit_enable=capability_enable,
+            )
+            gw._lattice_dispatcher.dispatch_charge_power = AsyncMock()
+
+            self._run(gw.number_event("number.predbat_gateway_456789_charge_rate", "3000"))
+
+            assert gw._lattice_charge_control_active is False
+            assert gw._published == [("set_charge_rate", {"power_w": 3000, "serial": "CE123456789"})]
+            gw._lattice_dispatcher.dispatch_charge_power.assert_not_awaited()
+
+    def test_lattice_ack_routes_suffix_and_payload_to_dispatcher(self):
+        """ACK routing strips the topic prefix and forwards only the command id and bytes."""
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        gw = self._make_initialized_gateway(lattice_control_enable=True, lattice_charge_power_limit_enable=True)
+        gw._lattice_dispatcher.accept_ack = MagicMock()
+        payload = b"protobuf-ack"
+        message = SimpleNamespace(topic=f"{gw.topic_lattice_ack_prefix}cmd-123", payload=payload)
+
+        self._run(gw._handle_message(message))
+
+        gw._lattice_dispatcher.accept_ack.assert_called_once_with("cmd-123", payload)
 
     def test_discharge_rate_routes_correctly(self):
         """discharge_rate entity → set_discharge_rate with power_w (not charge_rate)."""
