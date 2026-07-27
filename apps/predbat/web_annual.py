@@ -212,3 +212,182 @@ class AnnualPage:
         except OSError as error:
             self.log("Warn: Annual: could not write {}: {}".format(path, error))
             raise
+
+    def _number_field(self, name, label, value, step="any", suffix=""):
+        """Return one labelled numeric input row."""
+        return '<div class="annual-field"><label for="{name}">{label}</label><input type="number" step="{step}" id="{name}" name="{name}" value="{value}">{suffix}</div>\n'.format(
+            name=name, label=label, step=step, value=value if value is not None else "", suffix=" {}".format(suffix) if suffix else ""
+        )
+
+    def _text_field(self, name, label, value):
+        """Return one labelled text input row."""
+        return '<div class="annual-field"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(name=name, label=label, value=value if value is not None else "")
+
+    def render_form(self, config, errors=None):
+        """Return the configuration form as HTML, populated from ``config``.
+
+        ``errors`` is displayed above the form with every field left as the user
+        entered it - losing their input on a validation failure would be worse
+        than the failure.
+        """
+        solar = config.get("solar") or [{}]
+        battery = config.get("battery") or {}
+        load = config.get("load") or {}
+        tariff = config.get("tariff") or {}
+        location = config.get("location") or {}
+
+        text = '<div class="annual-form-wrap">\n'
+
+        if errors:
+            text += '<div class="annual-error"><strong>Could not run:</strong> {}</div>\n'.format(errors)
+
+        if not self.is_configured():
+            text += '<div class="annual-banner">Predbat isn\'t configured yet — these are <strong>example values</strong>, edit them to match your home.</div>\n'
+
+        text += '<form action="./annual_run" method="post" id="annualform">\n'
+
+        text += "<fieldset><legend>Location</legend>\n"
+        text += self._text_field("postcode", "Postcode", location.get("postcode", ""))
+        text += self._number_field("latitude", "Latitude (instead of postcode)", location.get("latitude"))
+        text += self._number_field("longitude", "Longitude", location.get("longitude"))
+        text += "</fieldset>\n"
+
+        text += "<fieldset><legend>Solar</legend>\n"
+        for index, array in enumerate(solar):
+            text += '<div class="annual-array"><strong>Array {}</strong>\n'.format(index + 1)
+            text += self._number_field("solar_kwp_{}".format(index), "Peak power", array.get("kwp"), suffix="kWp")
+            text += self._number_field("solar_declination_{}".format(index), "Pitch", array.get("declination", 35), suffix="degrees")
+            text += self._number_field("solar_azimuth_{}".format(index), "Azimuth (180 = south)", array.get("azimuth", 180), suffix="degrees")
+            text += "</div>\n"
+        text += "</fieldset>\n"
+
+        text += "<fieldset><legend>Battery</legend>\n"
+        text += self._number_field("battery_size_kwh", "Usable capacity", battery.get("size_kwh"), suffix="kWh")
+        text += self._number_field("battery_inverter_kw", "Inverter size", battery.get("inverter_kw"), suffix="kW")
+        text += self._number_field("battery_export_limit_kw", "Export limit", battery.get("export_limit_kw"), suffix="kW")
+        text += '<div class="annual-field"><label for="battery_hybrid">Hybrid inverter</label><input type="checkbox" id="battery_hybrid" name="battery_hybrid" {}></div>\n'.format("checked" if battery.get("hybrid", True) else "")
+        text += "</fieldset>\n"
+
+        using_octopus = "octopus" in load
+        text += "<fieldset><legend>Load</legend>\n"
+        text += '<div class="annual-field"><label><input type="radio" name="load_source" value="manual" {}> Enter my usage</label></div>\n'.format("" if using_octopus else "checked")
+        text += '<div class="annual-subgroup" id="load-manual">\n'
+        text += self._number_field("load_annual_kwh", "Annual consumption", load.get("annual_kwh", DEFAULT_CONFIG["load"]["annual_kwh"]), suffix="kWh")
+        shape = load.get("shape", "flat")
+        text += '<div class="annual-field"><label for="load_shape">Usage pattern</label><select id="load_shape" name="load_shape">\n'
+        for value, caption in [("flat", "About the same through the day"), ("night", "More at night"), ("day", "More during the day")]:
+            text += '<option value="{}" {}>{}</option>\n'.format(value, "selected" if shape == value else "", caption)
+        text += "</select></div>\n"
+        text += self._number_field("load_car_charging_kwh", "Car charging per year (0 for none)", load.get("car_charging_kwh", 0), suffix="kWh")
+        text += self._number_field("load_car_rate_kw", "Charger power", load.get("car_rate_kw", 7.4), suffix="kW")
+        text += "</div>\n"
+        text += '<div class="annual-field"><label><input type="radio" name="load_source" value="octopus" {}> Import from Octopus</label></div>\n'.format("checked" if using_octopus else "")
+        text += '<div class="annual-subgroup" id="load-octopus">\n'
+        text += self._text_field("load_octopus_api_key", "Octopus API key", (load.get("octopus") or {}).get("api_key", ""))
+        text += self._text_field("load_octopus_account_id", "Account ID", (load.get("octopus") or {}).get("account_id", ""))
+        text += '<p class="annual-note">Your meter readings already include any car charging, so the figures above are not used with this option.</p>\n'
+        text += "</div>\n"
+        text += "</fieldset>\n"
+
+        text += "<fieldset><legend>Tariff</legend>\n"
+        text += '<div class="annual-field"><label for="tariff_id">Tariff</label><select id="tariff_id" name="tariff_id" onchange="annualTariffChanged()">\n'
+        for entry in self.catalogue():
+            text += '<option value="{}" data-import="{}" data-export="{}">{}</option>\n'.format(entry["id"], entry.get("import_octopus_url", ""), entry.get("export_octopus_url", ""), entry["name"])
+        text += "</select></div>\n"
+        text += self._text_field("tariff_import_url", "Import rates URL", tariff.get("import_octopus_url", ""))
+        text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""))
+        text += self._text_field("tariff_dno_region", "Octopus region letter", tariff.get("dno_region", ""))
+        text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", 60.0), suffix="p/day")
+        text += "</fieldset>\n"
+
+        text += "<details><summary>Advanced</summary>\n"
+        text += self._number_field("year", "Year to model (blank for the most recent complete year)", config.get("year"))
+        text += self._number_field("samples_per_month", "Days sampled per month", config.get("samples_per_month", 2), step="1")
+        text += self._number_field("pv10_derate_fallback", "P10 fallback derate", config.get("pv10_derate_fallback", 0.7))
+        for index, array in enumerate(solar):
+            text += self._number_field("solar_efficiency_{}".format(index), "Array {} efficiency".format(index + 1), array.get("efficiency", 0.95))
+        text += "</details>\n"
+
+        text += '<button type="submit" id="annual-run-button">Run</button>\n'
+        text += "</form>\n</div>\n"
+        return text
+
+    def config_from_post(self, postdata):
+        """Rebuild a config dict from submitted form fields.
+
+        Values are left as the strings the browser sent; validate_config() in the
+        engine does the coercion and range checking, so there is exactly one place
+        that decides what a valid number is.
+        """
+
+        def value(name, default=None):
+            """Return one posted field, or the default when absent or blank."""
+            raw = postdata.get(name)
+            if raw is None or str(raw).strip() == "":
+                return default
+            return str(raw).strip()
+
+        config = {}
+
+        location = {}
+        if value("postcode"):
+            location["postcode"] = value("postcode")
+        if value("latitude") is not None and value("longitude") is not None:
+            location["latitude"] = value("latitude")
+            location["longitude"] = value("longitude")
+        config["location"] = location
+
+        arrays = []
+        index = 0
+        while value("solar_kwp_{}".format(index)) is not None:
+            arrays.append(
+                {
+                    "kwp": value("solar_kwp_{}".format(index)),
+                    "declination": value("solar_declination_{}".format(index), 35),
+                    "azimuth": value("solar_azimuth_{}".format(index), 180),
+                    "efficiency": value("solar_efficiency_{}".format(index), 0.95),
+                }
+            )
+            index += 1
+        if arrays:
+            config["solar"] = arrays
+
+        if value("battery_size_kwh") is not None:
+            config["battery"] = {
+                "size_kwh": value("battery_size_kwh"),
+                "inverter_kw": value("battery_inverter_kw", 5.0),
+                "export_limit_kw": value("battery_export_limit_kw", 5.0),
+                "hybrid": bool(postdata.get("battery_hybrid")),
+            }
+
+        # The engine rejects an Octopus block alongside manual figures, because the
+        # meter series already contains any car charging. Send one or the other.
+        if value("load_source", "manual") == "octopus":
+            config["load"] = {"octopus": {"api_key": value("load_octopus_api_key", ""), "account_id": value("load_octopus_account_id", "")}}
+        else:
+            config["load"] = {
+                "annual_kwh": value("load_annual_kwh", 3800),
+                "shape": value("load_shape", "flat"),
+                "car_charging_kwh": value("load_car_charging_kwh", 0),
+                "car_rate_kw": value("load_car_rate_kw", 7.4),
+            }
+
+        tariff = {"standing_charge_p_per_day": value("tariff_standing_charge", 0)}
+        if value("tariff_import_url"):
+            tariff["import_octopus_url"] = value("tariff_import_url")
+        if value("tariff_export_url"):
+            tariff["export_octopus_url"] = value("tariff_export_url")
+        if value("tariff_dno_region"):
+            tariff["dno_region"] = value("tariff_dno_region")
+        if not tariff.get("import_octopus_url"):
+            tariff["rates_import"] = DEFAULT_CONFIG["tariff"]["rates_import"]
+            tariff["rates_export"] = DEFAULT_CONFIG["tariff"]["rates_export"]
+        config["tariff"] = tariff
+
+        if value("year"):
+            config["year"] = value("year")
+        config["samples_per_month"] = value("samples_per_month", 2)
+        if value("pv10_derate_fallback"):
+            config["pv10_derate_fallback"] = value("pv10_derate_fallback")
+
+        return config

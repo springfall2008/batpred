@@ -12,6 +12,7 @@ aiomqtt
 aios
 Alertfeed
 allclose
+annualform
 Anson
 apexcharts
 apikey

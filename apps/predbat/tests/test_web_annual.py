@@ -13,6 +13,7 @@ import builtins
 from unittest.mock import patch
 
 from annual import validate_config
+from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage
 
@@ -142,6 +143,130 @@ def test_web_annual(my_predbat):
             validate_config(DEFAULT_CONFIG)
         except Exception as error:
             print("  ERROR: DEFAULT_CONFIG must be valid, got {}".format(error))
+            failed = True
+
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_web_annual_form(my_predbat):
+    """Verify the form renders every group, reflects config, and round-trips a post."""
+    failed = False
+    print("**** Testing web_annual form ****")
+
+    saved_args = dict(my_predbat.args)
+    try:
+        # compare_list is also cleared: the coverage/apps.yaml test fixture ships an
+        # active demo compare_list whose entries share ids with several built-ins (see
+        # test_web_annual's own "catalogue merges the user's compare_list" case below)
+        # and, by the documented "a user entry replaces a built-in of the same id" rule,
+        # would otherwise silently substitute their names for the ones this test checks.
+        for key in ["soc_max", "open_meteo_forecast", "forecast_solar", "compare_list"]:
+            my_predbat.args.pop(key, None)
+        page = make_page(my_predbat)
+        config = page.prefill_config()
+        html = page.render_form(config)
+
+        print("Test: every configuration group is present")
+        for heading in ["Location", "Solar", "Battery", "Load", "Tariff", "Advanced"]:
+            if heading not in html:
+                print("  ERROR: the form is missing the '{}' group".format(heading))
+                failed = True
+
+        print("Test: an unconfigured instance gets the example-values banner")
+        if "example values" not in html.lower():
+            print("  ERROR: an unconfigured instance should be told these are examples")
+            failed = True
+
+        print("Test: a configured instance does NOT get the banner")
+        my_predbat.args["soc_max"] = 10.0
+        configured_html = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if "example values" in configured_html.lower():
+            print("  ERROR: a configured instance should not be told its values are examples")
+            failed = True
+        my_predbat.args.pop("soc_max", None)
+
+        print("Test: the tariff dropdown lists the catalogue and a Custom entry")
+        if CUSTOM_ID not in html:
+            print("  ERROR: the dropdown should offer a Custom entry")
+            failed = True
+        if "Agile import / Agile export" not in html:
+            print("  ERROR: the dropdown should list the built-in tariffs")
+            failed = True
+
+        print("Test: the load source is a radio pair, not two independent sections")
+        if html.count('type="radio"') < 2:
+            print("  ERROR: expected a radio pair for the load source")
+            failed = True
+        if "octopus" not in html.lower():
+            print("  ERROR: the Octopus load option should be offered")
+            failed = True
+
+        print("Test: current values are rendered into the inputs")
+        if 'value="3800"' not in html.replace("'", '"'):
+            print("  ERROR: the annual kWh value should appear in the form")
+            failed = True
+
+        print("Test: validation errors are shown with the form still populated")
+        html_with_error = page.render_form(config, errors="annual.solar[0] is missing kwp")
+        if "annual.solar[0] is missing kwp" not in html_with_error:
+            print("  ERROR: the error message should be displayed")
+            failed = True
+        if 'value="3800"' not in html_with_error.replace("'", '"'):
+            print("  ERROR: the form should stay populated when an error is shown")
+            failed = True
+
+        print("Test: config_from_post rebuilds a config the engine accepts")
+        postdata = {
+            "postcode": "SW1A 1AA",
+            "solar_kwp_0": "5.6",
+            "solar_declination_0": "35",
+            "solar_azimuth_0": "180",
+            "solar_efficiency_0": "0.95",
+            "battery_size_kwh": "9.5",
+            "battery_inverter_kw": "5.0",
+            "battery_export_limit_kw": "5.0",
+            "battery_hybrid": "on",
+            "load_source": "manual",
+            "load_annual_kwh": "3800",
+            "load_shape": "flat",
+            "load_car_charging_kwh": "2500",
+            "load_car_rate_kw": "7.4",
+            "tariff_id": CUSTOM_ID,
+            "tariff_import_url": "https://example.com/import/",
+            "tariff_export_url": "https://example.com/export/",
+            "tariff_standing_charge": "60.0",
+            "samples_per_month": "2",
+        }
+        rebuilt = page.config_from_post(postdata)
+        try:
+            # config_from_post deliberately leaves posted values as the strings the
+            # browser sent - validate_config() is the one place that coerces and range
+            # checks them - so the round trip is only meaningful once validated.
+            validated = validate_config(rebuilt)
+        except Exception as error:
+            print("  ERROR: a posted form should rebuild into a valid config, got {}".format(error))
+            failed = True
+            validated = None
+        if validated is not None and validated.get("load", {}).get("car_charging_kwh") != 2500:
+            print("  ERROR: car charging should survive the round trip, got {}".format(rebuilt["load"]))
+            failed = True
+
+        print("Test: choosing the Octopus load source drops the manual figures")
+        postdata["load_source"] = "octopus"
+        postdata["load_octopus_api_key"] = "sk_test"
+        postdata["load_octopus_account_id"] = "A-1234ABCD"
+        rebuilt = page.config_from_post(postdata)
+        if "annual_kwh" in rebuilt["load"] or "car_charging_kwh" in rebuilt["load"]:
+            print("  ERROR: the manual figures must not be sent alongside Octopus, got {}".format(rebuilt["load"]))
+            failed = True
+        try:
+            validate_config(rebuilt)
+        except Exception as error:
+            print("  ERROR: the Octopus form should rebuild into a valid config, got {}".format(error))
             failed = True
 
     finally:
