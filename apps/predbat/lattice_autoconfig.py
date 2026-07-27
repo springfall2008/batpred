@@ -99,6 +99,29 @@ class ProviderIdentityAlias:
 
 
 @dataclass(frozen=True)
+class ProviderRoleAssignment:
+    """A provider-local indexed primary or control role assertion."""
+
+    role: AliasRole
+    group: str
+    index: int
+    node_id: str
+
+    def __post_init__(self):
+        """Validate and normalise one indexed role assertion."""
+        if self.role not in (AliasRole.PRIMARY, AliasRole.CONTROL):
+            raise ValueError("role assignment must be PRIMARY or CONTROL")
+        if not isinstance(self.group, str) or not self.group.strip():
+            raise ValueError("role assignment group must be a non-empty string")
+        if not isinstance(self.index, int) or isinstance(self.index, bool) or self.index < 0:
+            raise ValueError("role assignment index must be a non-negative integer")
+        if not isinstance(self.node_id, str) or not self.node_id.strip():
+            raise ValueError("role assignment node_id must be a non-empty string")
+        object.__setattr__(self, "group", self.group.strip())
+        object.__setattr__(self, "node_id", self.node_id.strip())
+
+
+@dataclass(frozen=True)
 class ProviderSnapshot:
     """One integration's immutable generation of health, topology, and aliases."""
 
@@ -108,6 +131,7 @@ class ProviderSnapshot:
     topology_fragment: Mapping
     aliases: tuple = ()
     identity_aliases: tuple = ()
+    role_assignments: tuple = ()
 
     def __post_init__(self):
         """Validate scalar fields and detach caller-owned mutable data."""
@@ -125,10 +149,14 @@ class ProviderSnapshot:
         identity_aliases = tuple(self.identity_aliases)
         if any(not isinstance(alias, ProviderIdentityAlias) for alias in identity_aliases):
             raise ValueError("identity_aliases must contain ProviderIdentityAlias values")
+        role_assignments = tuple(self.role_assignments)
+        if any(not isinstance(assignment, ProviderRoleAssignment) for assignment in role_assignments):
+            raise ValueError("role_assignments must contain ProviderRoleAssignment values")
         object.__setattr__(self, "provider_id", self.provider_id.strip())
         object.__setattr__(self, "topology_fragment", _freeze(copy.deepcopy(dict(self.topology_fragment))))
         object.__setattr__(self, "aliases", aliases)
         object.__setattr__(self, "identity_aliases", identity_aliases)
+        object.__setattr__(self, "role_assignments", role_assignments)
 
 
 @dataclass(frozen=True)
@@ -152,6 +180,58 @@ class IdentityBinding:
     value: str
     local_node_id: str
     canonical_node_id: str
+
+
+@dataclass(frozen=True)
+class RoleAssignmentBinding:
+    """One normalized provider assertion for an indexed plan role."""
+
+    provider_id: str
+    generation: int
+    role: str
+    group: str
+    index: int
+    local_node_id: str
+    canonical_node_id: str
+
+
+@dataclass(frozen=True)
+class IndexedRoleTarget:
+    """One deterministic indexed primary or control target."""
+
+    group: str
+    index: int
+    node_id: str
+    provenance: tuple
+
+
+@dataclass(frozen=True)
+class MaterializationReadiness:
+    """Fail-closed decision exposed to a future config materializer."""
+
+    ready: bool
+    blockers: tuple
+
+    def __post_init__(self):
+        """Normalise blockers and reject contradictory readiness state."""
+        if not isinstance(self.ready, bool):
+            raise ValueError("materialization readiness must be a boolean")
+        if isinstance(self.blockers, str):
+            raise ValueError("materialization blockers must be an iterable of strings")
+        try:
+            blockers = tuple(self.blockers)
+        except TypeError as exc:
+            raise ValueError("materialization blockers must be an iterable of strings") from exc
+        if any(not isinstance(blocker, str) for blocker in blockers):
+            raise ValueError("materialization blockers must be non-empty strings")
+        blockers = tuple(blocker.strip() for blocker in blockers)
+        if any(not blocker for blocker in blockers):
+            raise ValueError("materialization blockers must be non-empty strings")
+        if len(blockers) != len(set(blockers)):
+            raise ValueError("materialization blockers must be unique")
+        if self.ready != (not blockers):
+            raise ValueError("materialization readiness must equal absence of blockers")
+        object.__setattr__(self, "blockers", blockers)
 
 
 @dataclass(frozen=True)
@@ -181,6 +261,12 @@ class AutoConfigPlan:
     topology: Mapping
     aliases: tuple
     identity_aliases: tuple
+    role_assignments: tuple
+    primary_targets: tuple
+    control_targets: tuple
+    primary_target: Optional[str]
+    control_target: Optional[str]
+    materialization_readiness: MaterializationReadiness
     fields: tuple
     provenance: tuple
     provider_generations: tuple
@@ -282,6 +368,15 @@ def _fingerprint_snapshot(snapshot):
         }
         for alias in sorted(snapshot.identity_aliases, key=lambda item: (item.kind, item.value, item.node_id))
     ]
+    role_assignments = [
+        {
+            "role": assignment.role.value,
+            "group": assignment.group,
+            "index": assignment.index,
+            "node_id": assignment.node_id,
+        }
+        for assignment in sorted(snapshot.role_assignments, key=lambda item: (item.group, item.role.value, item.index, item.node_id))
+    ]
     payload = {
         "provider": snapshot.provider_id,
         "generation": snapshot.generation,
@@ -289,6 +384,7 @@ def _fingerprint_snapshot(snapshot):
         "fragment": snapshot.topology_fragment,
         "aliases": aliases,
         "identity_aliases": identity_aliases,
+        "role_assignments": role_assignments,
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -449,7 +545,154 @@ def _correlate_identities(snapshots, documents, provider_nodes):
     return tuple(normalized_documents), canonical_by_node, identity_bindings
 
 
-def _field_provenance(snapshots, bindings, identity_bindings, primary_target, control_target, topology_snapshot, canonical_by_node):
+def _compile_roles(snapshots, bindings, identity_bindings, provider_nodes, canonical_by_node):
+    """Validate legacy/indexed roles and return deterministic target outputs."""
+    legacy_by_role = {role: tuple(binding for binding in bindings if role.value in binding.roles) for role in (AliasRole.PRIMARY, AliasRole.CONTROL)}
+    legacy_assignments = tuple(binding for role_bindings in legacy_by_role.values() for binding in role_bindings)
+
+    role_bindings = []
+    qualified_assignments = set()
+    generation_by_provider = {snapshot.provider_id: snapshot.generation for snapshot in snapshots}
+    for snapshot in snapshots:
+        assignments = sorted(snapshot.role_assignments, key=lambda item: (item.group, item.role.value, item.index, item.node_id))
+        for assignment in assignments:
+            if assignment.node_id not in provider_nodes[snapshot.provider_id]:
+                raise AutoConfigCompileError(
+                    "role assignment {}:{}:{} targets unknown provider-local node {}".format(
+                        assignment.group,
+                        assignment.role.value,
+                        assignment.index,
+                        assignment.node_id,
+                    )
+                )
+            qualified_key = (snapshot.provider_id, assignment.group, assignment.role.value, assignment.index)
+            if qualified_key in qualified_assignments:
+                raise AutoConfigCompileError(
+                    "role assignment collision for {}:{}:{}:{}".format(
+                        snapshot.provider_id,
+                        assignment.group,
+                        assignment.role.value,
+                        assignment.index,
+                    )
+                )
+            qualified_assignments.add(qualified_key)
+            role_bindings.append(
+                RoleAssignmentBinding(
+                    provider_id=snapshot.provider_id,
+                    generation=snapshot.generation,
+                    role=assignment.role.value,
+                    group=assignment.group,
+                    index=assignment.index,
+                    local_node_id=assignment.node_id,
+                    canonical_node_id=canonical_by_node[(snapshot.provider_id, assignment.node_id)],
+                )
+            )
+    role_bindings = tuple(
+        sorted(
+            role_bindings,
+            key=lambda item: (item.group, item.role, item.index, item.provider_id, item.local_node_id),
+        )
+    )
+
+    if role_bindings and legacy_assignments:
+        raise AutoConfigCompileError("legacy and indexed role assignments cannot be mixed")
+
+    legacy_targets = {}
+    if not role_bindings:
+        for role, role_aliases in legacy_by_role.items():
+            if len(role_aliases) > 1:
+                raise AutoConfigCompileError("ambiguous legacy {} assignments".format(role.value))
+            legacy_targets[role] = role_aliases[0].node_id if role_aliases else None
+    else:
+        legacy_targets = {AliasRole.PRIMARY: None, AliasRole.CONTROL: None}
+
+    indices_by_group_role = {}
+    assignments_by_slot = {}
+    for binding in role_bindings:
+        group_role = (binding.group, binding.role)
+        indices_by_group_role.setdefault(group_role, set()).add(binding.index)
+        assignments_by_slot.setdefault((binding.group, binding.role, binding.index), []).append(binding)
+    for (group, role), indices in sorted(indices_by_group_role.items()):
+        ordered = sorted(indices)
+        expected = list(range(ordered[-1] + 1))
+        if ordered != expected:
+            raise AutoConfigCompileError(
+                "{} {} indices must be contiguous from zero; got {}".format(
+                    group,
+                    role,
+                    ordered,
+                )
+            )
+
+    correlated_providers = {}
+    for binding in identity_bindings:
+        correlated_providers.setdefault(binding.canonical_node_id, set()).add(binding.provider_id)
+
+    indexed_targets = {AliasRole.PRIMARY: [], AliasRole.CONTROL: []}
+    for (group, role_value, index), assignments in sorted(assignments_by_slot.items()):
+        canonical_nodes = {assignment.canonical_node_id for assignment in assignments}
+        if len(canonical_nodes) != 1:
+            raise AutoConfigCompileError(
+                "conflicting {} target for {} index {}: {}".format(
+                    role_value,
+                    group,
+                    index,
+                    sorted(canonical_nodes),
+                )
+            )
+        canonical_node_id = next(iter(canonical_nodes))
+        providers = {assignment.provider_id for assignment in assignments}
+        if len(providers) > 1 and not providers.issubset(correlated_providers.get(canonical_node_id, set())):
+            raise AutoConfigCompileError(
+                "providers sharing {} {} index {} require explicit strong identity correlation".format(
+                    group,
+                    role_value,
+                    index,
+                )
+            )
+        provenance = tuple(
+            FieldProvenance(
+                "/{}_targets/{}/{}/node_id".format(role_value, group, index),
+                assignment.provider_id,
+                generation_by_provider[assignment.provider_id],
+                "/role_assignments/{}/{}/{}".format(role_value, group, index),
+            )
+            for assignment in assignments
+        )
+        indexed_targets[AliasRole(role_value)].append(
+            IndexedRoleTarget(
+                group=group,
+                index=index,
+                node_id=canonical_node_id,
+                provenance=provenance,
+            )
+        )
+
+    primary_targets = tuple(indexed_targets[AliasRole.PRIMARY])
+    control_targets = tuple(indexed_targets[AliasRole.CONTROL])
+    blockers = []
+    if not primary_targets:
+        blockers.append("indexed_primary_targets_missing")
+    if not control_targets:
+        blockers.append("indexed_control_targets_missing")
+    if legacy_assignments:
+        blockers.append("legacy_role_assignments_present")
+    blockers.append("config_projection_bindings_missing")
+    readiness = MaterializationReadiness(ready=False, blockers=tuple(blockers))
+    return role_bindings, primary_targets, control_targets, legacy_targets, readiness
+
+
+def _field_provenance(
+    snapshots,
+    bindings,
+    identity_bindings,
+    primary_target,
+    control_target,
+    primary_targets,
+    control_targets,
+    topology_snapshot,
+    canonical_by_node,
+):
     """Build deterministic source coordinates for every generated field."""
     provenance = []
     for snapshot in snapshots:
@@ -485,6 +728,8 @@ def _field_provenance(snapshots, bindings, identity_bindings, primary_target, co
                         "/aliases/{}".format(binding.qualified_name.split(":", 1)[1]),
                     )
                 )
+    for target in primary_targets + control_targets:
+        provenance.extend(target.provenance)
     generations = {snapshot.provider_id: snapshot.generation for snapshot in snapshots}
     local_by_canonical = {(provider_id, canonical_node_id): local_node_id for (provider_id, local_node_id), canonical_node_id in canonical_by_node.items()}
     for key, source in topology_snapshot.provenance.items():
@@ -544,12 +789,15 @@ def compile_auto_config(snapshots):
             )
     bindings = tuple(sorted(bindings, key=lambda item: item.qualified_name))
 
-    targets = {}
-    for role in (AliasRole.PRIMARY, AliasRole.CONTROL):
-        role_targets = sorted({binding.node_id for binding in bindings if role.value in binding.roles})
-        if len(role_targets) > 1:
-            raise AutoConfigCompileError("ambiguous {} target: {}".format(role.value, ", ".join(role_targets)))
-        targets[role] = role_targets[0] if role_targets else None
+    role_bindings, primary_targets, control_targets, legacy_targets, readiness = _compile_roles(
+        snapshots,
+        bindings,
+        identity_bindings,
+        provider_nodes,
+        canonical_by_node,
+    )
+    primary_target = legacy_targets[AliasRole.PRIMARY]
+    control_target = legacy_targets[AliasRole.CONTROL]
 
     topology_snapshot = merge_topologies(documents)
     fields = []
@@ -561,8 +809,10 @@ def compile_auto_config(snapshots):
             "/aliases/{}".format(binding.qualified_name.split(":", 1)[1]),
         )
         fields.append(AutoConfigField("alias.{}".format(binding.qualified_name), binding.node_id, (source,)))
-    for name, role in (("primary_target", AliasRole.PRIMARY), ("control_target", AliasRole.CONTROL)):
-        target = targets[role]
+    for name, target, role in (
+        ("primary_target", primary_target, AliasRole.PRIMARY),
+        ("control_target", control_target, AliasRole.CONTROL),
+    ):
         if target is None:
             continue
         sources = tuple(
@@ -576,6 +826,15 @@ def compile_auto_config(snapshots):
             if binding.node_id == target and role.value in binding.roles
         )
         fields.append(AutoConfigField(name, target, sources))
+    for name, targets in (("primary_targets", primary_targets), ("control_targets", control_targets)):
+        for target in targets:
+            fields.append(
+                AutoConfigField(
+                    "{}.{}.{}".format(name, target.group, target.index),
+                    target.node_id,
+                    target.provenance,
+                )
+            )
     fields = tuple(sorted(fields, key=lambda item: item.name))
 
     semantic = {
@@ -598,6 +857,25 @@ def compile_auto_config(snapshots):
             }
             for binding in identity_bindings
         ],
+        "role_assignments": [
+            {
+                "provider_id": binding.provider_id,
+                "role": binding.role,
+                "group": binding.group,
+                "index": binding.index,
+                "local_node_id": binding.local_node_id,
+                "canonical_node_id": binding.canonical_node_id,
+            }
+            for binding in role_bindings
+        ],
+        "primary_targets": [{"group": target.group, "index": target.index, "node_id": target.node_id} for target in primary_targets],
+        "control_targets": [{"group": target.group, "index": target.index, "node_id": target.node_id} for target in control_targets],
+        "primary_target": primary_target,
+        "control_target": control_target,
+        "materialization_readiness": {
+            "ready": readiness.ready,
+            "blockers": readiness.blockers,
+        },
         "fields": [{"name": field.name, "value": field.value} for field in fields],
     }
     digest = hashlib.sha256(_canonical_json(semantic).encode("utf-8")).hexdigest()
@@ -605,8 +883,10 @@ def compile_auto_config(snapshots):
         snapshots,
         bindings,
         identity_bindings,
-        targets[AliasRole.PRIMARY],
-        targets[AliasRole.CONTROL],
+        primary_target,
+        control_target,
+        primary_targets,
+        control_targets,
         topology_snapshot,
         canonical_by_node,
     )
@@ -615,6 +895,12 @@ def compile_auto_config(snapshots):
         topology=_freeze(topology_snapshot.site),
         aliases=bindings,
         identity_aliases=identity_bindings,
+        role_assignments=role_bindings,
+        primary_targets=primary_targets,
+        control_targets=control_targets,
+        primary_target=primary_target,
+        control_target=control_target,
+        materialization_readiness=readiness,
         fields=fields,
         provenance=provenance,
         provider_generations=tuple((snapshot.provider_id, snapshot.generation) for snapshot in snapshots),
@@ -758,7 +1044,7 @@ class LatticeAutoConfigCompiler:
     def _materialize_if_changed(self, plan):
         """Hand a changed plan to the injected materializer exactly once."""
         with self._lock:
-            if self._materializer is None or (self._active_plan is not None and plan.digest == self._active_plan.digest):
+            if not plan.materialization_readiness.ready or self._materializer is None or (self._active_plan is not None and plan.digest == self._active_plan.digest):
                 return 0, ()
             self._token_counter += 1
             feedback_token = "lattice-autoconfig-{}".format(self._token_counter)
