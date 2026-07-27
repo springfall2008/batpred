@@ -19,6 +19,7 @@ from utils import calc_percent_limit
 import pytz as _pytz
 
 from component_base import ComponentBase
+from lattice_control import CAPABILITY_CHARGE_POWER_LIMIT, LatticeScalarDispatcher
 from lattice_topology import LatticeTopologyStore, TopologyValidationError
 
 try:
@@ -182,6 +183,8 @@ class GatewayMQTT(ComponentBase):
         gateway_evc_automatic=False,
         gateway_evc_control=False,
         lattice_projection_enable=False,
+        lattice_control_enable=False,
+        lattice_charge_power_limit_enable=False,
         **kwargs,
     ):
         """Initialize gateway configuration and build MQTT topic strings.
@@ -202,12 +205,18 @@ class GatewayMQTT(ComponentBase):
                 enabled, car_charging_now is omitted from auto-config to prevent a feedback loop.
             lattice_projection_enable: Enable read-only retained topology ingestion and shadow diagnostics.
                 Off by default. This does not publish Lattice control messages or alter legacy commands.
+            lattice_control_enable: Per-hub gate for Lattice control. Off by default.
+            lattice_charge_power_limit_enable: Per-capability gate for the first scalar write path.
+                Off by default and effective only when lattice_control_enable is also true.
             **kwargs: Additional keyword arguments (ignored).
         """
         self.gateway_device_id = gateway_device_id
         self.gateway_evc_automatic = bool(gateway_evc_automatic)
         self.gateway_evc_control = bool(gateway_evc_control)
         self.lattice_projection_enable = bool(lattice_projection_enable)
+        self.lattice_control_enable = bool(lattice_control_enable)
+        self.lattice_charge_power_limit_enable = bool(lattice_charge_power_limit_enable)
+        self._lattice_charge_control_active = self.lattice_control_enable and self.lattice_charge_power_limit_enable
         self.mqtt_host = mqtt_host
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
@@ -239,6 +248,9 @@ class GatewayMQTT(ComponentBase):
         self.topic_command = f"{self._topic_base}/command"
         self.topic_ev_command = f"{self._topic_base}/ev/command"
         self.topic_topology = f"{self._topic_base}/topology"
+        self.topic_lattice_control = f"{self._topic_base}/control"
+        self.topic_lattice_ack_prefix = f"{self._topic_base}/ack/"
+        self.topic_lattice_result_get_prefix = f"{self._topic_base}/result/get/"
 
         # Runtime state
         self._mqtt_client = None
@@ -257,6 +269,13 @@ class GatewayMQTT(ComponentBase):
         self._refresh_in_progress = False
         self._error_count = 0
         self._lattice_topology = LatticeTopologyStore()
+        self._lattice_dispatcher = LatticeScalarDispatcher(
+            publish=self._publish_raw,
+            storage=self.storage,
+            log=getattr(self, "log", getattr(self.base, "log", print)),
+            control_topic=self.topic_lattice_control,
+            result_get_prefix=self.topic_lattice_result_get_prefix,
+        )
 
         # Entity naming prefix
         self.prefix = "predbat"
@@ -625,9 +644,13 @@ class GatewayMQTT(ComponentBase):
                     await client.subscribe(self.topic_status, qos=1)
                     await client.subscribe(self.topic_online, qos=1)
                     subscribed_topics = [self.topic_status, self.topic_online]
-                    if self.lattice_projection_enable:
+                    if self.lattice_projection_enable or self._lattice_charge_control_active:
                         await client.subscribe(self.topic_topology, qos=1)
                         subscribed_topics.append(self.topic_topology)
+                    if self._lattice_charge_control_active:
+                        ack_topic = "{}+".format(self.topic_lattice_ack_prefix)
+                        await client.subscribe(ack_topic, qos=1)
+                        subscribed_topics.append(ack_topic)
                     self.log("Info: GatewayMQTT: Subscribed to {}".format(", ".join(subscribed_topics)))
 
                     async for message in client.messages:
@@ -671,8 +694,11 @@ class GatewayMQTT(ComponentBase):
         try:
             if topic == self.topic_status:
                 self._process_telemetry(message.payload)
-            elif topic == self.topic_topology and self.lattice_projection_enable:
+            elif topic == self.topic_topology and (self.lattice_projection_enable or self._lattice_charge_control_active):
                 self._process_lattice_topology(message.payload)
+            elif topic.startswith(self.topic_lattice_ack_prefix):
+                command_id = topic[len(self.topic_lattice_ack_prefix) :]
+                self._lattice_dispatcher.accept_ack(command_id, message.payload)
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
@@ -1752,7 +1778,16 @@ class GatewayMQTT(ComponentBase):
         if "_discharge_rate" in entity_id:
             await self.publish_command("set_discharge_rate", power_w=val, serial=serial)
         elif "_charge_rate" in entity_id:
-            await self.publish_command("set_charge_rate", power_w=val, serial=serial)
+            if getattr(self, "_lattice_charge_control_active", False):
+                source = self._lattice_topology.source_ref(serial, CAPABILITY_CHARGE_POWER_LIMIT)
+
+                async def legacy_charge_rate():
+                    """Issue the existing gateway command only after definite non-application."""
+                    await self.publish_command("set_charge_rate", power_w=val, serial=serial)
+
+                await self._lattice_dispatcher.dispatch_charge_power(source, val, legacy_charge_rate)
+            else:
+                await self.publish_command("set_charge_rate", power_w=val, serial=serial)
         elif "_reserve" in entity_id:
             await self.publish_command("set_reserve", target_soc=val, serial=serial)
         elif "_target_soc" in entity_id:

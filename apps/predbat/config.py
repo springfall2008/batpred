@@ -51,6 +51,19 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "lattice_control_enable",
+        "friendly_name": "Lattice Control for this Hub (experimental)",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "lattice_charge_power_limit_enable",
+        "friendly_name": "Lattice Battery Charge Power Control (experimental)",
+        "type": "switch",
+        "default": False,
+        "enable": "lattice_control_enable",
+    },
+    {
         "name": "active",
         "friendly_name": "Predbat Active",
         "type": "switch",
