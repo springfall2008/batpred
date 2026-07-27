@@ -13,9 +13,11 @@ the tab is usable by someone who has not configured Predbat at all - which is
 the prospective-buyer path the tool exists to serve.
 """
 
+import calendar
 import copy
 import datetime
 import html
+import json
 import os
 import sys
 
@@ -26,6 +28,15 @@ from annual import AnnualConfigError, validate_config
 from annual_job import AnnualJob
 from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
+
+# Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
+# Predbat's house chart trio (#2196F3/#FF9800/#4CAF50) FAILS here: green vs orange is
+# only deltaE 3.6 under protanopia, so roughly one man in twelve could not tell
+# "Without Predbat" from "With Predbat" - the exact comparison this chart exists to
+# make. Do not substitute without re-running the validator.
+SCENARIO_COLOURS = {"no_pvbat": "#0072B2", "without_predbat": "#D55E00", "with_predbat": "#009E73"}
+SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
+SCENARIO_ORDER = ["no_pvbat", "without_predbat", "with_predbat"]
 
 # A plausible UK home, used for any field the live instance cannot supply. These
 # are an EXAMPLE, not a recommendation - the form says so, because a visitor
@@ -573,9 +584,146 @@ class AnnualPage:
             return web.json_response({"error": "No stored run with id {}".format(run_id)}, status=404)
         return web.json_response(results, headers={"Content-Disposition": 'attachment; filename="annual-{}.json"'.format(run_id)})
 
+    @staticmethod
+    def _pounds(pence):
+        """Return a pence value formatted as pounds with an explicit unit."""
+        try:
+            return "£{:.2f}".format(float(pence) / 100.0)
+        except (TypeError, ValueError):
+            return "n/a"
+
     def render_results(self, results, runs, selected_id):
-        """Placeholder replaced in full by the results task; keeps the page renderable."""
-        return "<p>No results yet — fill in the form above and press Run.</p>\n"
+        """Return the results view: selector, totals, chart, monthly table, caveats."""
+        text = '<div class="annual-results">\n'
+        text += self._render_selector(runs, selected_id)
+
+        if not results:
+            text += "<p>No results yet — fill in the form above and press Run.</p>\n</div>\n"
+            return text
+
+        annual = results.get("annual", {}) or {}
+        scenarios = annual.get("scenarios")
+        included = annual.get("months_included", 0)
+
+        text += "<h2>Annual totals for {}</h2>\n".format(html.escape(str(results.get("year", "")), quote=True))
+        if not scenarios:
+            text += "<p>No month produced a usable result, so there is no annual figure.</p>\n"
+        else:
+            text += "<table class='comparison-table'><tr><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th></tr>\n"
+            for key in SCENARIO_ORDER:
+                entry = scenarios.get(key, {})
+                text += "<tr><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(SCENARIO_LABELS[key], self._pounds(entry.get("cost_p")), round(entry.get("import_kwh", 0), 1), round(entry.get("export_kwh", 0), 1))
+            text += "</table>\n"
+            savings = annual.get("savings", {}) or {}
+            text += "<p><strong>PV and battery save {}</strong> against no system.</p>\n".format(self._pounds(savings.get("pv_battery_vs_none_p", 0)))
+            text += "<p><strong>Predbat saves a further {}</strong> against a timer-controlled battery.</p>\n".format(self._pounds(savings.get("predbat_vs_baseline_p", 0)))
+            text += "<p>Standing charge (identical in every scenario): {}</p>\n".format(self._pounds(annual.get("standing_charge_p", 0)))
+
+        text += "<p>Based on {} of 12 months.".format(included)
+        excluded = annual.get("months_excluded") or []
+        if excluded:
+            text += " Excluded: {}.".format(", ".join(calendar.month_abbr[month] for month in excluded))
+        text += "</p>\n"
+
+        text += self._render_chart(results)
+        text += self._render_month_table(results)
+        text += self._render_caveats(results)
+        if selected_id:
+            text += '<p><a href="./annual_download?run={}">Download this run as JSON</a></p>\n'.format(html.escape(str(selected_id), quote=True))
+        text += "</div>\n"
+        return text
+
+    def _render_selector(self, runs, selected_id):
+        """Return the run selector, or nothing when there are no stored runs."""
+        if not runs:
+            return ""
+        text = '<form action="./annual" method="get" class="annual-selector"><label for="run">Run</label><select id="run" name="run" onchange="this.form.submit()">\n'
+        for run in runs:
+            run_id = html.escape(str(run["id"]), quote=True)
+            label = html.escape(str(run.get("label", run["id"])), quote=True)
+            text += '<option value="{}" {}>{} — {}</option>\n'.format(run_id, "selected" if run["id"] == selected_id else "", label, run_id)
+        text += "</select></form>\n"
+        return text
+
+    def _render_chart(self, results):
+        """Return the grouped monthly bar chart.
+
+        Only months with a usable result contribute a bar. An unavailable month is
+        left out of the series entirely rather than plotted as zero - a zero-height
+        bar reads as free electricity, which is the opposite of what happened.
+        """
+        categories = []
+        series = {key: [] for key in SCENARIO_ORDER}
+        for entry in results.get("months", []):
+            if entry.get("status") not in ("ok", "degraded"):
+                continue
+            categories.append(calendar.month_abbr[entry["month"]])
+            for key in SCENARIO_ORDER:
+                series[key].append(round(entry.get("scenarios", {}).get(key, {}).get("cost_p", 0) / 100.0, 2))
+
+        if not categories:
+            return "<p>No month produced a usable result, so there is nothing to chart.</p>\n"
+
+        payload = {
+            "chart": {"type": "bar", "height": 400, "toolbar": {"show": False}},
+            "series": [{"name": SCENARIO_LABELS[key], "data": series[key]} for key in SCENARIO_ORDER],
+            "colors": [SCENARIO_COLOURS[key] for key in SCENARIO_ORDER],
+            "xaxis": {"categories": categories},
+            "yaxis": {"title": {"text": "Cost (£)"}},
+            "plotOptions": {"bar": {"columnWidth": "70%", "borderRadius": 4, "borderRadiusApplication": "end"}},
+            "stroke": {"show": True, "width": 2, "colors": ["transparent"]},
+            "dataLabels": {"enabled": False},
+            "legend": {"position": "top"},
+            "tooltip": {"y": {"formatter": None}},
+        }
+        text = '<div id="annual-chart"></div>\n'
+        text += '<script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>\n'
+        text += "<script>\nvar annualOptions = {};\n".format(json.dumps(payload))
+        text += "annualOptions.tooltip.y = {formatter: function (v) { return '£' + v.toFixed(2); }};\n"
+        text += "new ApexCharts(document.querySelector('#annual-chart'), annualOptions).render();\n</script>\n"
+        return text
+
+    def _render_month_table(self, results):
+        """Return the per-month energy breakdown, marking degraded and unavailable months."""
+        text = "<h2>By month</h2>\n<table class='comparison-table'>\n"
+        text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Self-consumed</th><th>Battery</th></tr>\n"
+        for entry in results.get("months", []):
+            name = calendar.month_abbr[entry["month"]]
+            if entry.get("status") not in ("ok", "degraded"):
+                reason = html.escape(str(entry.get("reason", "no result")), quote=True)
+                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='7'>unavailable — {}</td></tr>\n".format(name, reason)
+                continue
+            suffix = " (degraded — {} sampled day(s) failed)".format(len(entry.get("failed_days", []))) if entry.get("status") == "degraded" else ""
+            for key in SCENARIO_ORDER:
+                scenario = entry.get("scenarios", {}).get(key, {})
+                if scenario.get("self_consumed_kwh_meaningful", True):
+                    self_consumed = "{} kWh".format(round(scenario.get("self_consumed_kwh", 0), 1))
+                else:
+                    self_consumed = "<span class='annual-unavailable' title='The battery exported more than the PV generated, so this figure is not meaningful'>not meaningful</span>"
+                text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{}</td><td>{} kWh</td></tr>\n".format(
+                    name if key == SCENARIO_ORDER[0] else "",
+                    suffix if key == SCENARIO_ORDER[0] else "",
+                    SCENARIO_LABELS[key],
+                    self._pounds(scenario.get("cost_p")),
+                    round(scenario.get("import_kwh", 0), 1),
+                    round(scenario.get("export_kwh", 0), 1),
+                    round(scenario.get("pv_generated_kwh", 0), 1),
+                    self_consumed,
+                    round(scenario.get("battery_throughput_kwh", 0), 1),
+                )
+        text += "</table>\n"
+        return text
+
+    def _render_caveats(self, results):
+        """Return the caveats the engine attached to this run."""
+        caveats = results.get("caveats") or []
+        if not caveats:
+            return ""
+        text = "<h2>Caveats</h2>\n<ul class='annual-caveats'>\n"
+        for caveat in caveats:
+            text += "<li>{}</li>\n".format(html.escape(str(caveat), quote=True))
+        text += "</ul>\n"
+        return text
 
     def render_css(self):
         """Return the scoped styles for the tab."""

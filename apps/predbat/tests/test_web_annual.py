@@ -491,6 +491,106 @@ def test_web_annual_error_isolation(my_predbat):
     return failed
 
 
+def sample_run_results():
+    """Return a results document covering an ok, a degraded and an unavailable month."""
+    scenarios = {
+        "no_pvbat": {"cost_p": 18000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 0.0, "self_consumed_kwh": 0.0, "self_consumed_kwh_meaningful": True},
+        "without_predbat": {"cost_p": 9000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "export_credit_p_estimate": 300.0, "self_consumed_kwh": 100.0, "self_consumed_kwh_meaningful": True},
+        "with_predbat": {"cost_p": 6600.0, "import_kwh": 280.0, "export_kwh": 145.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "export_credit_p_estimate": 675.0, "self_consumed_kwh": 0.0, "self_consumed_kwh_meaningful": False},
+    }
+    return {
+        "year": 2025,
+        "months": [
+            {"month": 1, "status": "ok", "days": 31, "sampled_days": ["2025-01-08", "2025-01-24"], "standing_charge_p": 1860.0, "scenarios": scenarios},
+            {"month": 2, "status": "degraded", "days": 28, "failed_days": ["2025-02-14"], "standing_charge_p": 1680.0, "scenarios": scenarios},
+            {"month": 3, "status": "unavailable", "reason": "no rate data available", "days": 31, "standing_charge_p": 1860.0},
+        ],
+        "annual": {"scenarios": scenarios, "standing_charge_p": 3540.0, "savings": {"pv_battery_vs_none_p": 9000.0, "predbat_vs_baseline_p": 2400.0}, "months_included": 2, "months_excluded": [3]},
+        "caveats": ["An example caveat about the P10 fallback."],
+    }
+
+
+def test_web_annual_results(my_predbat):
+    """Verify the results view: totals, chart series, month statuses, caveats, selector."""
+    failed = False
+    print("**** Testing web_annual results ****")
+
+    page = make_page(my_predbat)
+    runs = [{"id": "20260726-101500", "label": "9.5kWh battery · 5.6kWp · Agile", "months_included": 12}, {"id": "20260725-090000", "label": "no battery · 5.6kWp · Agile", "months_included": 12}]
+    html = page.render_results(sample_run_results(), runs, "20260726-101500")
+
+    print("Test: the annual savings figures are shown")
+    if "90.00" not in html:
+        print("  ERROR: the PV/battery saving (9000p = £90.00) should be shown")
+        failed = True
+    if "24.00" not in html:
+        print("  ERROR: the Predbat saving (2400p = £24.00) should be shown")
+        failed = True
+
+    print("Test: the validated colourblind-safe palette is used, not the house trio")
+    for colour in ["#0072B2", "#D55E00", "#009E73"]:
+        if colour not in html:
+            print("  ERROR: expected the validated colour {} in the chart".format(colour))
+            failed = True
+    for banned in ["#4CAF50", "#FF9800", "#2196F3"]:
+        if banned in html:
+            print("  ERROR: {} fails CVD separation for this chart and must not be used".format(banned))
+            failed = True
+
+    print("Test: an unavailable month is marked, never drawn as zero")
+    if "unavailable" not in html.lower():
+        print("  ERROR: the unavailable month should be marked as such")
+        failed = True
+    if "no rate data available" not in html:
+        print("  ERROR: the reason for exclusion should be shown")
+        failed = True
+
+    print("Test: a degraded month is shown with its cost and flagged as partial")
+    if "degraded" not in html.lower():
+        print("  ERROR: the degraded month should be flagged")
+        failed = True
+
+    print("Test: months_included is stated so the annual figure's coverage is clear")
+    if "2 of 12" not in html:
+        print("  ERROR: the annual figure should say how many months it covers")
+        failed = True
+
+    print("Test: caveats are displayed, not buried in the JSON")
+    if "An example caveat about the P10 fallback." not in html:
+        print("  ERROR: caveats must be shown to the user")
+        failed = True
+
+    print("Test: self_consumed_kwh is qualified when it is not meaningful")
+    if "not meaningful" not in html.lower():
+        print("  ERROR: a non-meaningful self-consumption figure should be qualified, not shown bare")
+        failed = True
+
+    print("Test: the run selector lists every stored run and marks the selected one")
+    for run in runs:
+        if run["label"] not in html:
+            print("  ERROR: run {} should appear in the selector".format(run["id"]))
+            failed = True
+    if "selected" not in html:
+        print("  ERROR: the selected run should be marked in the dropdown")
+        failed = True
+
+    print("Test: a download link is offered for the selected run")
+    if "annual_download?run=20260726-101500" not in html:
+        print("  ERROR: the selected run should be downloadable as JSON")
+        failed = True
+
+    print("Test: with no runs at all the view says so rather than rendering an empty chart")
+    empty = page.render_results(None, [], None)
+    if "apexcharts" in empty.lower() and "series" in empty.lower():
+        print("  ERROR: no chart should be drawn when there are no results")
+        failed = True
+    if "no results" not in empty.lower():
+        print("  ERROR: the empty state should say there are no results yet")
+        failed = True
+
+    return failed
+
+
 def test_web_annual_routes_registered(my_predbat):
     """Verify all six Annual routes are registered, so a typo'd path cannot ship green."""
     failed = False

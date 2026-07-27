@@ -87,6 +87,7 @@ datalog
 datap
 datapoints
 datas
+dataviz
 dateutil
 dayname
 daynumber
