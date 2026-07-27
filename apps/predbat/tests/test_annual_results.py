@@ -232,6 +232,19 @@ def test_annual_results(my_predbat):
         print("  ERROR: expected both caveats when both sets are non-empty, got {}".format(caveats))
         failed = True
 
+    print("Test: _tariff_fallback_caveats excludes a spill-month entry from the following year (fetch_month(year + 1, 1) can itself hit a fallback)")
+    # December's spill fetch loads January of the *next* year purely so the last sampled
+    # day's 48 hour plan has rates to spill into - there is no row for that month
+    # anywhere in this year's results document, so a caveat naming "2026-01" inside a
+    # 2025 report would refer to nothing a reader can find.
+    caveats = AnnualPredictor._tariff_fallback_caveats({(2025, 12, "import"), (2026, 1, "import")}, {(2026, 1)}, 2025)
+    if len(caveats) != 1:
+        print("  ERROR: expected only the fallback caveat (for 2025-12), the spill month's entries should be filtered out entirely, got {}".format(caveats))
+        failed = True
+    elif "2026-01" in caveats[0] or "2025-12" not in caveats[0]:
+        print("  ERROR: expected the caveat to name 2025-12 but not the spill month 2026-01, got {!r}".format(caveats[0]))
+        failed = True
+
     if test_annual_debug_flag():
         failed = True
 

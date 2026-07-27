@@ -12,6 +12,7 @@ structure. Fetching is done a month at a time and sliced per sampled day.
 """
 
 import calendar
+import hashlib
 from datetime import datetime, timedelta
 
 import pytz
@@ -69,6 +70,14 @@ class AnnualTariff:
         dno_region = config.get("dno_region")
         self.import_url = self._resolve_url(config.get("import_octopus_url"), "import_octopus_url", dno_region)
         self.export_url = self._resolve_url(config.get("export_octopus_url"), "export_octopus_url", dno_region)
+        # A short hash of each fully-resolved (region already substituted) URL, mixed
+        # into every cache key below. The web UI runs every job against one fixed work
+        # dir, so its on-disk cache is shared across runs, not scoped to a tariff or a
+        # run - without this, switching tariff and re-running would silently reuse the
+        # previous tariff's cached rates under the same bare "rates_import_2025_07"-
+        # style key: same key, wrong tariff, no error.
+        self._import_cache_id = self._url_cache_id(self.import_url) if self.import_url else None
+        self._export_cache_id = self._url_cache_id(self.export_url) if self.export_url else None
         self.basic_import = config.get("rates_import")
         self.basic_export = config.get("rates_export")
         self.standing_charge_p_per_day = float(config.get("standing_charge_p_per_day", 0.0))
@@ -104,6 +113,19 @@ class AnnualTariff:
             return None
         extra_args = {"dno_region": dno_region} if dno_region else None
         return self.predbat.resolve_arg(name, url, indirect=False, extra_args=extra_args)
+
+    @staticmethod
+    def _url_cache_id(url):
+        """Return a short, stable identifier for a resolved tariff URL, for namespacing cache keys.
+
+        Two different tariffs - or two DNO regions of the same product, which resolve
+        to different URLs - must never share a cache entry, so this is mixed into every
+        cache key built below. A short hex digest of the fully resolved URL (region
+        already substituted in) is enough to make an accidental collision between two
+        genuinely different URLs practically impossible while keeping cache filenames
+        short and filesystem-safe.
+        """
+        return hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
 
     async def _default_fetch_json(self, url):
         """Download and decode one JSON document, returning None on any failure."""
@@ -245,6 +267,15 @@ class AnnualTariff:
         never lands on these exact slots, however many rows there are. Both must be
         refused the same way - as no usable fallback - rather than one silently pricing
         its gaps at zero while the other happens to fail closed by accident.
+
+        This proves *completeness*, not *coherence*: it confirms every slot has some
+        rate in it, not that all 48 came from one mutually consistent day's data. A
+        pattern built from rows spanning several different calendar days (or, in
+        principle, blended across more than one download) can pass this check while
+        having no single day it truly describes. That risk is accepted here rather than
+        solved - the current-rates fallback already deliberately projects "roughly now"
+        onto a historical month, so this is a difference of degree, not of kind, from
+        what the fallback already does by design.
         """
         return all(minute_of_day in pattern for minute_of_day in range(0, MINUTES_PER_DAY, 30))
 
@@ -263,6 +294,15 @@ class AnnualTariff:
         all - a bare request can legitimately answer with a partial trailing window,
         and a partial pattern would otherwise price its uncovered hours at zero, which
         is the exact failure mode this fallback exists to fix, not reproduce.
+
+        A download that genuinely fails (rather than genuinely finding nothing) still
+        ends up discarded the same way - there is no third state to fall back to - but
+        is logged distinctly, since "the tariff has no current rates" and "we could not
+        check because the download failed" are different facts and only one of them is
+        actually true here. Whichever it was, the result is cached for the rest of this
+        run like any other outcome (see the class docstring on ``fetch_month`` being
+        called up to twelve times), so a transient failure is not retried mid-run, but
+        it also is not misreported as a settled fact about the tariff.
         """
         cache_attr = "import" if side == "import" else "export"
         cached = self._current_pattern[cache_attr]
@@ -270,8 +310,11 @@ class AnnualTariff:
             return cached
         url = self.import_url if side == "import" else self.export_url
         if url:
+            cache_id = self._import_cache_id if side == "import" else self._export_cache_id
             expiry = datetime.now(pytz.utc) + timedelta(hours=CURRENT_PATTERN_CACHE_HOURS)
-            rows, _ = await self._download_rows(url, "current_pattern_{}".format(side), expiry=expiry)
+            rows, failed = await self._download_rows(url, "current_pattern_{}_{}".format(side, cache_id), expiry=expiry)
+            if failed:
+                self.log("Warn: Annual: the current-rates snapshot for {} could not be downloaded this run (a transient failure, not evidence the tariff has no current rates); no fallback is available for the rest of this run".format(side))
         else:
             rows = []
         pattern = self._rows_to_local_pattern(rows)
@@ -329,8 +372,9 @@ class AnnualTariff:
 
             import_rates = {}
             export_rates = {}
+            export_unpaid = False
             if self.import_url:
-                rows, failed = await self._download_octopus(self.import_url, start_utc, end_utc, "rates_import_{}_{:02d}".format(year, month))
+                rows, failed = await self._download_octopus(self.import_url, start_utc, end_utc, "rates_import_{}_{}_{:02d}".format(self._import_cache_id, year, month))
                 if rows:
                     import_rates = self._rows_to_stamped_rates(rows, start_utc, days)
                 elif failed:
@@ -348,12 +392,12 @@ class AnnualTariff:
                     else:
                         self.log("Warn: Annual: no import rates available for {}-{:02d}".format(year, month))
             if self.export_url:
-                rows, failed = await self._download_octopus(self.export_url, start_utc, end_utc, "rates_export_{}_{:02d}".format(year, month))
+                rows, failed = await self._download_octopus(self.export_url, start_utc, end_utc, "rates_export_{}_{}_{:02d}".format(self._export_cache_id, year, month))
                 if rows:
                     export_rates = self._rows_to_stamped_rates(rows, start_utc, days)
                 elif failed:
                     self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
-                    self.unpaid_export_months.add((year, month))
+                    export_unpaid = True
                 else:
                     pattern = await self._fetch_current_pattern("export")
                     if pattern:
@@ -362,7 +406,7 @@ class AnnualTariff:
                         self.log("Warn: Annual: no export rates available for {}-{:02d}; using today's rates repeated across the month instead".format(year, month))
                     else:
                         self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
-                        self.unpaid_export_months.add((year, month))
+                        export_unpaid = True
 
             # Only import failing makes the month unusable: rates_for's gate is
             # `self.import_url or self.export_url`, so an export-only configuration
@@ -370,6 +414,12 @@ class AnnualTariff:
             # `import_rates` is the empty dict it was initialised to above.
             if self.import_url and not import_rates:
                 return False
+            # Recorded only now that the month is confirmed available: a month excluded
+            # entirely because import failed contributes nothing to the results at all,
+            # so telling the user "export was priced at zero" about it would be reporting
+            # a fact about a month that was never billed in the first place.
+            if export_unpaid:
+                self.unpaid_export_months.add((year, month))
             self.import_rates[key] = import_rates
             self.export_rates[key] = export_rates
             self.available.add(key)

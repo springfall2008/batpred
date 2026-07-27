@@ -860,15 +860,25 @@ def test_web_annual_results(my_predbat):
     if "rates synthesised" not in synthesised_html.lower():
         print("  ERROR: expected a visible marker on the month row whose rates were synthesised")
         failed = True
-    if "jan" not in page._render_chart(synthesised_results).lower():
-        print("  ERROR: expected the chart's synthesised-rates note to name the affected month (Jan)")
+    plain_chart = page._render_chart(sample_run_results())
+    synthesised_chart = page._render_chart(synthesised_results)
+    # "jan" alone is not a valid probe here: month 1 is "ok" in sample_run_results() and
+    # so is always a chart category regardless of rates_synthesised, so a test that only
+    # checked for "jan" would stay green even with the whole synthesised-note block
+    # deleted. Assert the note's own wording instead, and that switching it on is what
+    # actually changes the chart output (the plain chart must not already contain it).
+    if "rates for jan were synthesised" not in synthesised_chart.lower():
+        print("  ERROR: expected the chart's synthesised-rates note to name the affected month by its own wording, got {!r}".format(synthesised_chart))
+        failed = True
+    if "rates for jan were synthesised" in plain_chart.lower():
+        print("  ERROR: the unmodified sample results must not already carry a synthesised-rates note (the positive assertion above would be vacuous otherwise)")
         failed = True
 
     print("Test: a month with no rates_synthesised entry (the normal case) shows no synthesised marker")
     if "rates synthesised" in page._render_month_table(sample_run_results()).lower():
         print("  ERROR: a month with real historical rates must not be marked as synthesised")
         failed = True
-    if "annual-note" in page._render_chart(sample_run_results()) and "synthesised" in page._render_chart(sample_run_results()).lower():
+    if "annual-note" in plain_chart and "synthesised" in plain_chart.lower():
         print("  ERROR: the chart must not show a synthesised-rates note when no month used the fallback")
         failed = True
 

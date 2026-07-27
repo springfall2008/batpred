@@ -128,6 +128,11 @@ def _validate_solar(raw):
         # existing config.
         normalised["azimuth"] = _require_number(array.get("azimuth", DEFAULT_AZIMUTH), "annual.solar[{}].azimuth".format(index), minimum=-360, maximum=360)
         normalised["efficiency"] = _require_number(array.get("efficiency", DEFAULT_EFFICIENCY), "annual.solar[{}].efficiency".format(index), minimum=0, exclusive_minimum=True, maximum=1)
+        # annual_weather.py reads this with `array.get("azimuth_zero_south", False)`; coerced
+        # here for the same reason as "debug"/"hybrid" below - a "false" string left
+        # unconverted from a submitted form or YAML file is truthy in plain Python, which
+        # would silently flip which azimuth convention every array's PV geometry uses.
+        normalised["azimuth_zero_south"] = _coerce_bool(array.get("azimuth_zero_south", False))
         arrays.append(normalised)
     return arrays
 
@@ -148,7 +153,7 @@ def _validate_battery(raw):
         "size_kwh": _require_number(raw["size_kwh"], "annual.battery.size_kwh", minimum=0, exclusive_minimum=True),
         "inverter_kw": inverter_kw,
         "export_limit_kw": _require_number(raw.get("export_limit_kw", inverter_kw), "annual.battery.export_limit_kw", minimum=0),
-        "hybrid": bool(raw.get("hybrid", DEFAULT_HYBRID)),
+        "hybrid": _coerce_bool(raw.get("hybrid", DEFAULT_HYBRID)),
         "charge_rate_kw": _require_number(raw.get("charge_rate_kw", inverter_kw), "annual.battery.charge_rate_kw", minimum=0, exclusive_minimum=True),
         "discharge_rate_kw": _require_number(raw.get("discharge_rate_kw", inverter_kw), "annual.battery.discharge_rate_kw", minimum=0, exclusive_minimum=True),
     }
@@ -1315,7 +1320,16 @@ class AnnualPredictor:
         every ``fetch_month`` call), not of any single sampled day, so this is called
         once after the month loop rather than from inside it. Returns an empty list
         when the tariff needed neither.
+
+        Both sets are filtered down to ``year`` first: December's spill fetch
+        (``fetch_month(year + 1, 1)``, done so the last sampled day's 48 hour plan has
+        rates to spill into) can itself hit either fallback, which would otherwise leak
+        a January-of-next-year entry into a caveat about this year's run - a document
+        for 2025 gaining a stray "2026-01" that names a month with no row anywhere in
+        it.
         """
+        fallback_months = {entry for entry in fallback_months if entry[0] == year}
+        unpaid_export_months = {entry for entry in unpaid_export_months if entry[0] == year}
         caveats = []
         if fallback_months:
             fallback_list = ", ".join("{}-{:02d} ({})".format(fb_year, fb_month, side) for fb_year, fb_month, side in sorted(fallback_months))

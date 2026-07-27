@@ -477,8 +477,13 @@ def test_annual_tariff(my_predbat):
     if not any(("export" in message) and ("unpaid" in message) for message in empty_pattern_logged):
         print("  ERROR: expected the existing 'treating export as unpaid' warning when export has no rates at all, got {}".format(empty_pattern_logged))
         failed = True
-    if (2025, 8) not in all_empty_tariff.unpaid_export_months:
-        print("  ERROR: a wholly-unpriced export month must be recorded in unpaid_export_months so the run can raise a caveat about it, got {}".format(all_empty_tariff.unpaid_export_months))
+    if (2025, 8) in all_empty_tariff.unpaid_export_months:
+        # Import also found nothing here, so the whole month is excluded from the
+        # results entirely (fetch_month returned False above) - it contributes no row,
+        # no cost, nothing. Surfacing "export was priced at zero" about a month that was
+        # never billed at all would describe a month that doesn't appear anywhere in the
+        # results document.
+        print("  ERROR: a month already unavailable because import failed must not also be recorded in unpaid_export_months, got {}".format(all_empty_tariff.unpaid_export_months))
         failed = True
 
     print("Test: an open-ended (valid_to: null) row - how Octopus publishes a flat product's current rate - fills every slot of the day, not just 30 minutes")
@@ -562,8 +567,12 @@ def test_annual_tariff(my_predbat):
     if partial_tariff.fallback_months:
         print("  ERROR: a partial-day pattern must not be recorded as a usable fallback, got {}".format(partial_tariff.fallback_months))
         failed = True
-    if (2025, 6) not in partial_tariff.unpaid_export_months:
-        print("  ERROR: export should be recorded as unpaid when its only candidate fallback pattern is a partial day, got {}".format(partial_tariff.unpaid_export_months))
+    if (2025, 6) in partial_tariff.unpaid_export_months:
+        # Import's only candidate pattern is the same partial-day payload, so import is
+        # unavailable too and the whole month is excluded (fetch_month returned False
+        # above) - it must not also show up as an "export priced at zero" month it was
+        # never billed for.
+        print("  ERROR: a month already unavailable because import failed must not also be recorded in unpaid_export_months, got {}".format(partial_tariff.unpaid_export_months))
         failed = True
     if not any("half-hour slot" in message.lower() for message in partial_logged):
         print("  ERROR: expected a warning explaining the pattern was refused for incomplete coverage, got {}".format(partial_logged))
@@ -586,6 +595,27 @@ def test_annual_tariff(my_predbat):
         failed = True
     if kathmandu_tariff.fallback_months:
         print("  ERROR: a +05:45 offset timezone must not record a fallback it cannot actually deliver, got {}".format(kathmandu_tariff.fallback_months))
+        failed = True
+
+    print("Test: export priced at zero IS surfaced as unpaid when the month is otherwise available (import succeeds, export finds nothing at all)")
+    # The mirror image of the two tests just above: there, suppressing unpaid_export_months
+    # was correct because the whole month was excluded anyway. Here import succeeds, so the
+    # month is billed and included in the results - which is exactly when a reader needs to
+    # be told export contributed nothing to it.
+    mixed_config = {"import_octopus_url": "https://example.com/import/", "export_octopus_url": "https://example.com/export/", "standing_charge_p_per_day": 0.0}
+
+    async def import_ok_export_empty_fetch(url):
+        """Serve real, paginated import data on every request but answer every export request (ranged and bare alike) with nothing at all."""
+        if "/import/" in url:
+            return {"results": build_agile_results(date(2025, 9, 1), 32, 20.0), "next": None}
+        return {"results": [], "next": None}
+
+    mixed_tariff = AnnualTariff(mixed_config, log=print, predbat=my_predbat, fetch_json=import_ok_export_empty_fetch, timezone="Europe/London")
+    if not asyncio.run(mixed_tariff.fetch_month(2025, 9)):
+        print("  ERROR: the month should be available - import succeeded even though export found nothing at all")
+        failed = True
+    if (2025, 9) not in mixed_tariff.unpaid_export_months:
+        print("  ERROR: export-priced-at-zero should be surfaced when the month IS otherwise available (import succeeded), got {}".format(mixed_tariff.unpaid_export_months))
         failed = True
 
     print("Test: a genuine download failure (not a genuinely empty result) does not trigger the current-rates fallback")
@@ -636,7 +666,8 @@ def test_annual_tariff(my_predbat):
     expiry_storage = FakeAnnualStorage()
     expiry_tariff = AnnualTariff(fallback_config, log=print, predbat=my_predbat, storage=expiry_storage, fetch_json=fallback_fetch, timezone="Europe/London")
     asyncio.run(expiry_tariff.fetch_month(2025, 11))
-    export_pattern_expiry = expiry_storage.expiries.get(("annual", "current_pattern_export"))
+    export_pattern_key = ("annual", "current_pattern_export_{}".format(AnnualTariff._url_cache_id(expiry_tariff.export_url)))
+    export_pattern_expiry = expiry_storage.expiries.get(export_pattern_key)
     if export_pattern_expiry is None:
         print("  ERROR: expected the current-rates pattern cache entry to carry a non-None expiry (a 'now' snapshot must not be cached forever), got {}".format(expiry_storage.expiries))
         failed = True
@@ -648,11 +679,99 @@ def test_annual_tariff(my_predbat):
     history_storage = FakeAnnualStorage()
     history_tariff = AnnualTariff(config, log=print, predbat=my_predbat, storage=history_storage, fetch_json=fake_fetch, timezone="Europe/London")
     asyncio.run(history_tariff.fetch_month(2025, 3))
-    if ("annual", "rates_export_2025_03") not in history_storage.expiries:
+    history_export_key = ("annual", "rates_export_{}_2025_03".format(AnnualTariff._url_cache_id(history_tariff.export_url)))
+    if history_export_key not in history_storage.expiries:
         print("  ERROR: expected the real historical download to have been cached at all, got {}".format(history_storage.store.keys()))
         failed = True
-    if history_storage.expiries.get(("annual", "rates_export_2025_03")) is not None:
-        print("  ERROR: a per-month historical download must still be cached with no expiry, got {}".format(history_storage.expiries.get(("annual", "rates_export_2025_03"))))
+    if history_storage.expiries.get(history_export_key) is not None:
+        print("  ERROR: a per-month historical download must still be cached with no expiry, got {}".format(history_storage.expiries.get(history_export_key)))
+        failed = True
+
+    print("Test: two tariffs with different URLs sharing one storage do not see each other's cached rates (the ranged, per-month path)")
+    # Reproduces the reviewer's scenario: the web UI runs every job against one fixed
+    # work dir, so its on-disk cache is shared across runs and tariffs, not scoped to
+    # either. Before the URL was mixed into the cache key, tariff B here would have been
+    # silently served tariff A's cached rows under the same bare "rates_import_2025_10"
+    # key - reported status "ok", no rates_synthesised marker, no caveat, wrong price.
+    shared_storage = FakeAnnualStorage()
+
+    async def tariff_a_fetch(url):
+        """Serve tariff A's own distinct rate shape (base rate 5.0p)."""
+        return {"results": build_agile_results(date(2025, 10, 1), 32, 5.0), "next": None}
+
+    async def tariff_b_fetch(url):
+        """Serve tariff B's own distinct rate shape (base rate 30.0p) - must never be shadowed by A's cache entry."""
+        return {"results": build_agile_results(date(2025, 10, 1), 32, 30.0), "next": None}
+
+    tariff_a_config = {"import_octopus_url": "https://example.com/tariff-a/import/", "standing_charge_p_per_day": 0.0}
+    tariff_b_config = {"import_octopus_url": "https://example.com/tariff-b/import/", "standing_charge_p_per_day": 0.0}
+
+    tariff_a = AnnualTariff(tariff_a_config, log=print, predbat=my_predbat, storage=shared_storage, fetch_json=tariff_a_fetch, timezone="Europe/London")
+    if not asyncio.run(tariff_a.fetch_month(2025, 10)):
+        print("  ERROR: tariff A should fetch successfully")
+        failed = True
+    tariff_b = AnnualTariff(tariff_b_config, log=print, predbat=my_predbat, storage=shared_storage, fetch_json=tariff_b_fetch, timezone="Europe/London")
+    if not asyncio.run(tariff_b.fetch_month(2025, 10)):
+        print("  ERROR: tariff B should fetch successfully")
+        failed = True
+
+    cache_midnight = pytz.utc.localize(datetime(2025, 10, 10))
+    a_import, _ = tariff_a.rates_for(cache_midnight, 60)
+    b_import, _ = tariff_b.rates_for(cache_midnight, 60)
+    # Minute 0 (00:00) is in the cheap overnight band: base_rate * 0.3
+    if abs(a_import[0] - 1.5) > 0.01:
+        print("  ERROR: tariff A's own rate expected 1.5 (5.0 * 0.3), got {}".format(a_import.get(0)))
+        failed = True
+    if abs(b_import[0] - 9.0) > 0.01:
+        print("  ERROR: tariff B's own rate expected 9.0 (30.0 * 0.3), got {} - if this is 1.5 instead, tariff B was served tariff A's cached rows".format(b_import.get(0)))
+        failed = True
+
+    print("Test: the same tariff URL across two instances still hits its own cache (this is what makes re-runs fast)")
+
+    async def must_not_be_called(url):
+        """Fail the test outright if called - a second instance of the same URL must be served entirely from cache."""
+        raise AssertionError("fetch_json must not be called; a second AnnualTariff for the same URL should be served from its own cached rows")
+
+    tariff_a_again = AnnualTariff(tariff_a_config, log=print, predbat=my_predbat, storage=shared_storage, fetch_json=must_not_be_called, timezone="Europe/London")
+    if not asyncio.run(tariff_a_again.fetch_month(2025, 10)):
+        print("  ERROR: a second instance of the same tariff URL should be served from cache and still succeed")
+        failed = True
+    a_again_import, _ = tariff_a_again.rates_for(cache_midnight, 60)
+    if abs(a_again_import[0] - 1.5) > 0.01:
+        print("  ERROR: the cached rate should still be tariff A's own 1.5, got {}".format(a_again_import.get(0)))
+        failed = True
+
+    print("Test: two tariffs with different URLs sharing one storage do not see each other's cached current-rates pattern (the bare-URL fallback path)")
+    pattern_storage = FakeAnnualStorage()
+
+    async def tariff_c_bare_fetch(url):
+        """Serve an empty ranged download and, for the bare URL, tariff C's own flat rate (5.0p)."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        return {"results": [{"value_inc_vat": 5.0, "valid_from": "2026-03-01T00:00:00Z", "valid_to": None}], "next": None}
+
+    async def tariff_d_bare_fetch(url):
+        """Serve an empty ranged download and, for the bare URL, tariff D's own flat rate (30.0p) - must never be shadowed by C's cache entry."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        return {"results": [{"value_inc_vat": 30.0, "valid_from": "2026-03-01T00:00:00Z", "valid_to": None}], "next": None}
+
+    tariff_c_config = {"export_octopus_url": "https://example.com/tariff-c/export/", "standing_charge_p_per_day": 0.0}
+    tariff_d_config = {"export_octopus_url": "https://example.com/tariff-d/export/", "standing_charge_p_per_day": 0.0}
+
+    tariff_c = AnnualTariff(tariff_c_config, log=print, predbat=my_predbat, storage=pattern_storage, fetch_json=tariff_c_bare_fetch, timezone="Europe/London")
+    asyncio.run(tariff_c.fetch_month(2025, 11))
+    tariff_d = AnnualTariff(tariff_d_config, log=print, predbat=my_predbat, storage=pattern_storage, fetch_json=tariff_d_bare_fetch, timezone="Europe/London")
+    asyncio.run(tariff_d.fetch_month(2025, 11))
+
+    cache_midnight_2 = pytz.utc.localize(datetime(2025, 11, 10))
+    _, c_export = tariff_c.rates_for(cache_midnight_2, 60)
+    _, d_export = tariff_d.rates_for(cache_midnight_2, 60)
+    if abs(c_export.get(0, -1) - 5.0) > 0.01:
+        print("  ERROR: tariff C's own export rate expected 5.0, got {}".format(c_export.get(0)))
+        failed = True
+    if abs(d_export.get(0, -1) - 30.0) > 0.01:
+        print("  ERROR: tariff D's own export rate expected 30.0, got {} - if this is 5.0 instead, tariff D was served tariff C's cached current-rates pattern".format(d_export.get(0)))
         failed = True
 
     return failed
