@@ -26,6 +26,7 @@ import yaml
 from aiohttp import web
 
 from annual import AnnualConfigError, validate_config
+from annual_costs import DEFAULT_COSTS
 from annual_job import AnnualJob
 from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
@@ -338,11 +339,23 @@ class AnnualPage:
 
         text += "<fieldset><legend>Solar</legend>\n"
         for index, array in enumerate(solar):
+            mode = "panels" if array.get("panels") else "kwp"
             text += '<div class="annual-array"><strong>Array {}</strong>\n'.format(index + 1)
+            text += '<div class="annual-field"><label for="solar_mode_{i}">Describe this array by</label><select id="solar_mode_{i}" name="solar_mode_{i}" onchange="annualSolarModeChanged({i})">\n'.format(i=index)
+            for mode_value, caption in [("kwp", "Peak power (kWp)"), ("panels", "Number of panels")]:
+                text += '<option value="{}" {}>{}</option>\n'.format(mode_value, "selected" if mode == mode_value else "", caption)
+            text += "</select></div>\n"
+            text += '<div id="solar-kwp-row-{i}" style="display:{d}">\n'.format(i=index, d="none" if mode == "panels" else "block")
             text += self._number_field("solar_kwp_{}".format(index), "Peak power", array.get("kwp"), suffix="kWp")
+            text += "</div>\n"
+            text += '<div id="solar-panels-row-{i}" style="display:{d}">\n'.format(i=index, d="block" if mode == "panels" else "none")
+            text += self._number_field("solar_panels_{}".format(index), "Number of panels", array.get("panels", 0), step="1")
+            text += self._number_field("solar_panel_watts_{}".format(index), "Watts per panel", array.get("panel_watts", 400), suffix="W")
+            text += "</div>\n"
             text += self._number_field("solar_declination_{}".format(index), "Pitch", array.get("declination", 35), suffix="degrees")
             text += self._number_field("solar_azimuth_{}".format(index), "Azimuth (180 = south)", array.get("azimuth", 180), suffix="degrees")
             text += "</div>\n"
+        text += '<p class="annual-note" id="annual-solar-total"></p>\n'
         text += "</fieldset>\n"
 
         text += "<fieldset><legend>Battery</legend>\n"
@@ -409,6 +422,17 @@ class AnnualPage:
         text += self._number_field("pv10_derate_fallback", "P10 fallback derate", config.get("pv10_derate_fallback", 0.7))
         for index, array in enumerate(solar):
             text += self._number_field("solar_efficiency_{}".format(index), "Array {} efficiency".format(index + 1), array.get("efficiency", 0.95))
+        costs_config = config.get("costs") or {}
+        for key, label in [
+            ("battery_install_gbp", "Battery install cost"),
+            ("battery_per_kwh_gbp", "Battery cost per kWh"),
+            ("pv_minimum_gbp", "Minimum PV install cost"),
+            ("pv_rate_small_gbp_per_kwp", "PV £/kWp for a small system (about 2 kWp)"),
+            ("pv_rate_medium_gbp_per_kwp", "PV £/kWp for a medium system (about 7 kWp)"),
+            ("pv_rate_large_gbp_per_kwp", "PV £/kWp for a large system (about 30 kWp)"),
+            ("predbat_annual_gbp", "Predbat cost per year"),
+        ]:
+            text += self._number_field("cost_{}".format(key), label, costs_config.get(key, DEFAULT_COSTS[key]), suffix="£")
         text += "</details>\n"
 
         # Marks THIS tab as the one that started the run, so only it navigates to the
@@ -470,15 +494,20 @@ class AnnualPage:
 
         arrays = []
         index = 0
-        while value("solar_kwp_{}".format(index)) is not None:
-            arrays.append(
-                {
-                    "kwp": numeric("solar_kwp_{}".format(index)),
-                    "declination": numeric("solar_declination_{}".format(index), 35),
-                    "azimuth": numeric("solar_azimuth_{}".format(index), 180),
-                    "efficiency": numeric("solar_efficiency_{}".format(index), 0.95),
-                }
-            )
+        while value("solar_kwp_{}".format(index)) is not None or value("solar_panels_{}".format(index)) is not None:
+            array = {
+                "declination": numeric("solar_declination_{}".format(index), 35),
+                "azimuth": numeric("solar_azimuth_{}".format(index), 180),
+                "efficiency": numeric("solar_efficiency_{}".format(index), 0.95),
+            }
+            # Only one of kwp/panels is ever sent - validate_config rejects an array
+            # carrying both, so the mode radio decides which single field goes out.
+            if value("solar_mode_{}".format(index)) == "panels":
+                array["panels"] = int(numeric("solar_panels_{}".format(index), 0) or 0)
+                array["panel_watts"] = numeric("solar_panel_watts_{}".format(index), 400)
+            else:
+                array["kwp"] = numeric("solar_kwp_{}".format(index))
+            arrays.append(array)
             index += 1
         if arrays:
             config["solar"] = arrays
@@ -523,6 +552,14 @@ class AnnualPage:
         # A checkbox absent from postdata means unchecked - matches how battery_hybrid
         # is read above; there is no "off" value to see, only "on" or nothing at all.
         config["debug"] = postdata.get("debug") is not None
+
+        costs = {}
+        for key in DEFAULT_COSTS:
+            submitted = numeric("cost_{}".format(key), None)
+            if submitted is not None:
+                costs[key] = submitted
+        if costs:
+            config["costs"] = costs
 
         return config
 
@@ -1018,6 +1055,39 @@ function annualTariffChanged() {
   document.getElementById('tariff_export_url').value = option.getAttribute('data-export') || '';
 }
 function annualCancel() { fetch('./annual_cancel', {method: 'POST'}); }
+function annualSolarModeChanged(index) {
+  var mode = document.getElementById('solar_mode_' + index).value;
+  document.getElementById('solar-kwp-row-' + index).style.display = (mode === 'panels') ? 'none' : 'block';
+  document.getElementById('solar-panels-row-' + index).style.display = (mode === 'panels') ? 'block' : 'none';
+  annualUpdateSolarTotal();
+}
+function annualUpdateSolarTotal() {
+  var totalKwp = 0, totalPanels = 0, allPanels = true, index = 0;
+  while (document.getElementById('solar_mode_' + index)) {
+    var mode = document.getElementById('solar_mode_' + index).value;
+    if (mode === 'panels') {
+      var count = parseFloat(document.getElementById('solar_panels_' + index).value) || 0;
+      var watts = parseFloat(document.getElementById('solar_panel_watts_' + index).value) || 0;
+      totalPanels += count;
+      totalKwp += count * watts / 1000;
+    } else {
+      allPanels = false;
+      totalKwp += parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+    }
+    index += 1;
+  }
+  var note = document.getElementById('annual-solar-total');
+  if (!note) { return; }
+  // The panel count is shown only when EVERY array was entered as panels. A partial
+  // count would read as the whole system's, which is worse than not showing one.
+  note.textContent = allPanels && totalPanels > 0
+    ? 'Total: ' + totalKwp.toFixed(2) + ' kWp across ' + totalPanels + ' panels'
+    : 'Total: ' + totalKwp.toFixed(2) + ' kWp';
+}
+document.addEventListener('input', function (event) {
+  if (event.target && /^solar_(kwp|panels|panel_watts)_/.test(event.target.id)) { annualUpdateSolarTotal(); }
+});
+annualUpdateSolarTotal();
 // sessionStorage is per-tab, which is exactly the scope wanted: the tab that pressed
 // Run remembers it across the POST re-render, and no other tab sees the flag.
 function annualMarkStarted() {

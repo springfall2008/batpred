@@ -574,6 +574,58 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: the built-in tariff should not stay selected once its URL no longer matches")
             failed = True
 
+        print("Test: each array offers a kWp/panels mode toggle and a panel count")
+        form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        for field in ['name="solar_mode_0"', 'name="solar_panels_0"', 'name="solar_panel_watts_0"']:
+            if field not in form:
+                print("  ERROR: the solar fieldset should offer {}".format(field))
+                failed = True
+
+        print("Test: a running total is shown under the roof aspects")
+        if 'id="annual-solar-total"' not in form:
+            print("  ERROR: the solar fieldset should show a running kWp/panel total")
+            failed = True
+
+        print("Test: submitting panels produces a panels config, not a kwp one")
+        postdata = valid_postdata()
+        postdata["solar_mode_0"] = "panels"
+        postdata["solar_panels_0"] = "13"
+        postdata["solar_panel_watts_0"] = "400"
+        config = make_page(my_predbat).config_from_post(postdata)
+        array = config["solar"][0]
+        if array.get("panels") != 13 or "kwp" in array:
+            print("  ERROR: panel mode should send panels and NOT kwp - validate_config rejects both together. Got {}".format(array))
+            failed = True
+        validate_config(config)
+
+        print("Test: submitting kWp produces a kwp config, not a panels one")
+        postdata = valid_postdata()
+        postdata["solar_mode_0"] = "kwp"
+        config = make_page(my_predbat).config_from_post(postdata)
+        array = config["solar"][0]
+        if "panels" in array or not array.get("kwp"):
+            print("  ERROR: kWp mode should send kwp and NOT panels. Got {}".format(array))
+            failed = True
+        validate_config(config)
+
+        print("Test: the cost settings appear and round-trip")
+        for key in ["cost_battery_install_gbp", "cost_battery_per_kwh_gbp", "cost_pv_minimum_gbp", "cost_predbat_annual_gbp"]:
+            if 'name="{}"'.format(key) not in form:
+                print("  ERROR: the form should offer {}".format(key))
+                failed = True
+        postdata = valid_postdata()
+        postdata["cost_battery_per_kwh_gbp"] = "250"
+        postdata["cost_predbat_annual_gbp"] = "100"
+        config = make_page(my_predbat).config_from_post(postdata)
+        if config.get("costs", {}).get("battery_per_kwh_gbp") != 250 or config.get("costs", {}).get("predbat_annual_gbp") != 100:
+            print("  ERROR: submitted cost settings should reach the config, got {}".format(config.get("costs")))
+            failed = True
+
+        print("Test: the Predbat annual cost defaults to zero")
+        if make_page(my_predbat).prefill_config().get("costs", {}).get("predbat_annual_gbp", 0) != 0:
+            print("  ERROR: predbat_annual_gbp must default to 0 - Predbat is free when self-hosted")
+            failed = True
+
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
