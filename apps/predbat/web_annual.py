@@ -36,10 +36,13 @@ from web_helper import get_plan_css, get_plan_renderer_js
 # Predbat's house chart trio (#2196F3/#FF9800/#4CAF50) FAILS here: green vs orange is
 # only deltaE 3.6 under protanopia, so roughly one man in twelve could not tell
 # "Without Predbat" from "With Predbat" - the exact comparison this chart exists to
-# make. Do not substitute without re-running the validator.
-SCENARIO_COLOURS = {"no_pvbat": "#0072B2", "without_predbat": "#D55E00", "with_predbat": "#009E73"}
-SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
-SCENARIO_ORDER = ["no_pvbat", "without_predbat", "with_predbat"]
+# make. #9439ef was chosen for pv_only by sweeping 216 candidates through the same
+# validator: the obvious Okabe-Ito picks (#E69F00, #56B4E9) fall outside the dark-mode
+# lightness band, and #CC79A7/#AA4499 only reach deltaE 7.6/6.4 against a neighbour.
+# Do not substitute without re-running the validator in both modes.
+SCENARIO_COLOURS = {"no_pvbat": "#0072B2", "pv_only": "#9439ef", "without_predbat": "#D55E00", "with_predbat": "#009E73"}
+SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "pv_only": "PV only", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
+SCENARIO_ORDER = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]
 
 # A plausible UK home, used for any field the live instance cannot supply. These
 # are an EXAMPLE, not a recommendation - the form says so, because a visitor
@@ -834,6 +837,7 @@ class AnnualPage:
             text += " Excluded: {}.".format(", ".join(calendar.month_abbr[month] for month in excluded))
         text += "</p>\n"
 
+        text += self._render_payback(results)
         text += self._render_chart(results)
         text += self._render_month_table(results)
         text += self._render_plan_viewer(results, selected_id)
@@ -853,6 +857,39 @@ class AnnualPage:
             label = html.escape(str(run.get("label", run["id"])), quote=True)
             text += '<option value="{}" {}>{} — {}</option>\n'.format(run_id, "selected" if run["id"] == selected_id else "", label, run_id)
         text += "</select></form>\n"
+        return text
+
+    def _render_payback(self, results):
+        """Return the install cost and payback table, or the reason there is none."""
+        annual = results.get("annual") or {}
+        costs = annual.get("costs") or {}
+        payback = annual.get("payback") or {}
+        if not costs:
+            return ""
+
+        text = "<h2>Cost and payback</h2>\n"
+        text += "<p class='annual-note'>Estimated install cost for a {} kWp array and a {} kWh battery: <strong>£{:,.0f}</strong> (PV £{:,.0f} at £{:,.0f}/kWp, battery £{:,.0f}).</p>\n".format(
+            costs.get("total_kwp", 0), costs.get("battery_kwh", 0), costs.get("total_gbp", 0), costs.get("pv_gbp", 0), costs.get("pv_rate_gbp_per_kwp", 0), costs.get("battery_gbp", 0)
+        )
+
+        if not payback.get("available"):
+            reason = html.escape(str(payback.get("reason", "Payback could not be calculated.")), quote=True)
+            text += "<p class='annual-unavailable'>{}</p>\n".format(reason)
+            return text
+
+        text += "<table class='comparison-table'>\n<tr><th>Option</th><th>Capital</th><th>Saving a year</th><th>Pays back in</th></tr>\n"
+        for key, label in [("pv_only", "PV only"), ("pv_battery", "PV + battery"), ("pv_battery_predbat", "With Predbat")]:
+            row = payback.get(key) or {}
+            if row.get("pays_back"):
+                years = "{:.1f} years".format(row.get("years", 0))
+            else:
+                years = "<span class='annual-unavailable'>does not pay back</span>"
+            saving = "£{:,.0f}".format(row.get("annual_saving_gbp", 0))
+            if row.get("predbat_annual_gbp"):
+                saving += " <span class='annual-note'>(after £{:,.0f}/year for Predbat)</span>".format(row["predbat_annual_gbp"])
+            text += "<tr><td>{}</td><td>£{:,.0f}</td><td>{}</td><td>{}</td></tr>\n".format(label, row.get("capital_gbp", 0), saving, years)
+        text += "</table>\n"
+        text += "<p class='annual-note'>Simple payback: capital divided by the modelled annual saving. It ignores panel degradation, price inflation, battery replacement and finance costs.</p>\n"
         return text
 
     def _render_chart(self, results):

@@ -1,11 +1,12 @@
 # Annual prediction
 
 The annual prediction tool projects a year of household electricity costs using the
-real Predbat planning engine. For each month it reports three scenarios:
+real Predbat planning engine. For each month it reports four scenarios:
 
 1. **No PV, no battery** — the counterfactual bill.
-2. **PV and battery, without Predbat** — a battery charging on a static cheap-rate timer.
-3. **PV and battery, with Predbat** — the optimiser's plan.
+2. **PV only** — solar with no battery to store or arbitrage it.
+3. **PV and battery, without Predbat** — a battery charging on a static cheap-rate timer.
+4. **PV and battery, with Predbat** — the optimiser's plan.
 
 It is a standalone command line tool; it does not need Home Assistant or any hardware,
 and it makes no changes to a running Predbat installation.
@@ -301,10 +302,60 @@ reads more flattering on Agile than the equivalent system would on a banded tari
 is a property of the comparator, not of Predbat performing differently; treat cross-tariff
 comparisons of this figure with that in mind.
 
+### Cost and payback
+
+The `annual.costs` block estimates what the modelled system would cost to install, and
+`annual.payback` turns that into how long it takes to earn back — both computed from
+published 2025/26 median install prices, not anything specific to your quotes.
+
+PV cost is size in kWp times a £/kWp rate, floored at a minimum install price
+(`pv_minimum_gbp`, default £2,500) so a token array is never costed at pennies. The rate
+itself interpolates between three published band medians — `pv_rate_small_gbp_per_kwp`
+(£1,780, anchored at 2 kWp), `pv_rate_medium_gbp_per_kwp` (£1,697, anchored at 7 kWp) and
+`pv_rate_large_gbp_per_kwp` (£1,262, anchored at 30 kWp) — rather than stepping between
+them, so cost stays monotonic across the size range instead of a 4.1 kWp system coming out
+cheaper than a 4.0 kWp one purely from crossing a band boundary. Battery cost is a flat
+`battery_install_gbp` (default £500) plus `battery_per_kwh_gbp` (default £300) times
+usable capacity. A system with no PV, or no battery, costs nothing for the part it does
+not have.
+
+All seven of these — the three PV band rates and their two anchoring costs,
+`battery_install_gbp`, `battery_per_kwh_gbp` and `predbat_annual_gbp` below — are editable
+under **Advanced** on the web form, or `annual.costs` in the config file, if your own
+quotes differ from the published medians.
+
+`predbat_annual_gbp` (default £0) is different from the other six: it is a **recurring**
+yearly cost, not a one-off capital cost, and it is not added to the install price. Predbat
+itself is free when self-hosted, which is what the default reflects; the hosted
+Predbat.com product is expected to charge around £100 a year, and setting this field
+subtracts it from the "with Predbat" scenario's annual saving before payback is worked
+out, so a subscription that ate the whole saving would correctly never pay back.
+
+`annual.payback` reports three simple payback periods, one per purchase you could
+actually make: `pv_only` (PV cost against the PV-only scenario's saving), `pv_battery`
+(the full system cost against the un-optimised battery's saving) and
+`pv_battery_predbat` (the full system cost against Predbat's saving, net of
+`predbat_annual_gbp`). Each row's `years` is capital divided by net annual saving; when
+the saving is zero or negative — `predbat_annual_gbp` outweighing the benefit, most
+plausibly — `pays_back` is `false` and `years` is `null` rather than a negative or
+enormous number, since neither would mean "pays back", they would mean "never does".
+
+Payback needs a full twelve months of modelled data: with even one month unavailable,
+every included month's saving is for a different twelve months than the one being priced,
+so `annual.payback.available` is `false` and `annual.payback.reason` says how many months
+were actually covered instead. This mirrors how the annual totals themselves refuse to
+extrapolate a partial year (see `months_included` above).
+
+Simple payback is a comparison aid, not a financial projection: capital divided by one
+year's saving, held constant. It ignores panel degradation, electricity price inflation,
+battery replacement, and finance costs (a loan or the opportunity cost of paying cash) —
+all of which would move the real number, in either direction, over a payback period that
+can run to a decade or more.
+
 The `caveats` list in the results document records anything that could affect how much
-to trust the numbers — a P10 fallback, a missing month's rate data, and the
-`export_credit_p_estimate` note above among them — and is worth
-reading before quoting the totals.
+to trust the numbers — a P10 fallback, a missing month's rate data, the
+`export_credit_p_estimate` note above, and a summary of the payback caveat too — and is
+worth reading before quoting the totals.
 
 ## Debugging a run
 
@@ -318,8 +369,9 @@ against the same PV and load series the cost came from. That is what makes it us
 cross-checking. A plan drawn against a different series would look plausible and prove
 nothing.
 
-Every scenario is kept, not just Predbat's — `no_pvbat` and `without_predbat` too, so you
-can see what the two baselines did rather than inferring it from their totals. When a car
+Every scenario is kept, not just Predbat's — `no_pvbat`, `pv_only` and `without_predbat`
+too, so you can see what all three baselines did rather than inferring it from their
+totals. When a car
 is configured each sampled day is planned twice, once with a charging session and once
 without, and the month's figures blend the two (see [How it works](#how-it-works)); both
 legs are kept and labelled, since a suspicious monthly figure may come from either.

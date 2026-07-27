@@ -882,7 +882,20 @@ def sample_run_results():
             {"month": 2, "status": "degraded", "days": 28, "failed_days": ["2025-02-14"], "standing_charge_p": 1680.0, "scenarios": scenarios},
             {"month": 3, "status": "unavailable", "reason": "no rate data available", "days": 31, "standing_charge_p": 1860.0},
         ],
-        "annual": {"scenarios": scenarios, "standing_charge_p": 3540.0, "savings": {"pv_battery_vs_none_p": 9000.0, "predbat_vs_baseline_p": 2400.0}, "months_included": 2, "months_excluded": [3]},
+        "annual": {
+            "scenarios": scenarios,
+            "standing_charge_p": 3540.0,
+            "savings": {"pv_battery_vs_none_p": 9000.0, "predbat_vs_baseline_p": 2400.0},
+            "months_included": 2,
+            "months_excluded": [3],
+            "costs": {"pv_gbp": 8900.0, "battery_gbp": 3350.0, "total_gbp": 12250.0, "pv_rate_gbp_per_kwp": 1589.29, "total_kwp": 5.6, "battery_kwh": 9.5},
+            "payback": {
+                "available": True,
+                "pv_only": {"capital_gbp": 8900.0, "gross_annual_saving_gbp": 500.0, "annual_saving_gbp": 500.0, "predbat_annual_gbp": 0.0, "pays_back": True, "years": 17.8},
+                "pv_battery": {"capital_gbp": 12250.0, "gross_annual_saving_gbp": 900.0, "annual_saving_gbp": 900.0, "predbat_annual_gbp": 0.0, "pays_back": True, "years": 13.61},
+                "pv_battery_predbat": {"capital_gbp": 12250.0, "gross_annual_saving_gbp": 1140.0, "annual_saving_gbp": 1040.0, "predbat_annual_gbp": 100.0, "pays_back": True, "years": 11.78},
+            },
+        },
         "caveats": ["An example caveat about the P10 fallback."],
     }
 
@@ -894,7 +907,8 @@ def test_web_annual_results(my_predbat):
 
     page = make_page(my_predbat)
     runs = [{"id": "20260726-101500", "label": "9.5kWh battery · 5.6kWp · Agile", "months_included": 12}, {"id": "20260725-090000", "label": "no battery · 5.6kWp · Agile", "months_included": 12}]
-    html = page.render_results(sample_run_results(), runs, "20260726-101500")
+    results = sample_run_results()
+    html = page.render_results(results, runs, "20260726-101500")
 
     print("Test: the annual savings figures are shown")
     if "90.00" not in html:
@@ -913,6 +927,36 @@ def test_web_annual_results(my_predbat):
         if banned in html:
             print("  ERROR: {} fails CVD separation for this chart and must not be used".format(banned))
             failed = True
+
+    print("Test: the PV-only scenario appears in the chart and the month table")
+    if "#9439ef" not in html:
+        print("  ERROR: the validated PV-only colour should be present")
+        failed = True
+    if "PV only" not in html:
+        print("  ERROR: the PV-only scenario should be labelled in the results")
+        failed = True
+
+    print("Test: the payback table shows all three purchase options")
+    for label in ["PV only", "PV + battery", "With Predbat"]:
+        if label not in html:
+            print("  ERROR: the payback table should include {}".format(label))
+            failed = True
+
+    print("Test: a non-paying-back option says so rather than showing a number")
+    no_payback = copy.deepcopy(results)
+    no_payback["annual"]["payback"]["pv_only"] = {"pays_back": False, "years": None, "capital_gbp": 8000.0, "annual_saving_gbp": -10.0, "gross_annual_saving_gbp": -10.0, "predbat_annual_gbp": 0.0}
+    text = page.render_results(no_payback, runs, runs[0]["id"])
+    if "does not pay back" not in text.lower():
+        print("  ERROR: an option that never pays back should say so")
+        failed = True
+
+    print("Test: an unavailable payback shows its reason instead of a blank table")
+    unavailable = copy.deepcopy(results)
+    unavailable["annual"]["payback"] = {"available": False, "reason": "Payback needs a full year, but only 11 of 12 months could be modelled."}
+    text = page.render_results(unavailable, runs, runs[0]["id"])
+    if "11 of 12" not in text:
+        print("  ERROR: the reason payback is unavailable should be shown")
+        failed = True
 
     print("Test: an unavailable month is marked, never drawn as zero")
     if "unavailable" not in html.lower():
