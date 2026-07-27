@@ -533,6 +533,61 @@ def test_annual_tariff(my_predbat):
         print("  ERROR: the more recent open-ended row (12.0) should win every slot over the older closed row (15.0), got values {}".format(set(precedence_export.values())))
         failed = True
 
+    print("Test: a partial-day bare-URL payload (a legitimate partial trailing window, not an error) is refused as a fallback rather than accepted with holes")
+    # Only 10 of 24 hours worth of half-hourly rows - exactly the shape a bare request
+    # can legitimately be answered with depending on when it is made. Accepting this as
+    # a pattern would leave 28 of the day's 48 slots unrated, which prices those hours
+    # at zero - the exact failure mode the current-rates fallback exists to fix.
+    partial_logged = []
+
+    def capture_partial_log(message):
+        """Capture log messages for assertion, while still printing them for visibility."""
+        partial_logged.append(message)
+        print(message)
+
+    async def partial_day_fetch(url):
+        """Serve an empty ranged download and, for the bare URL, only 10 hours of half-hourly rows."""
+        if "period_from" in url:
+            return {"results": [], "next": None}
+        return {"results": build_current_pattern_rows(days=1, base_rate=9.0, peak_rate=9.0)[:20], "next": None}
+
+    partial_config = {"import_octopus_url": "https://example.com/import/", "export_octopus_url": "https://example.com/export/", "standing_charge_p_per_day": 0.0}
+    partial_tariff = AnnualTariff(partial_config, log=capture_partial_log, predbat=my_predbat, fetch_json=partial_day_fetch, timezone="Europe/London")
+    if asyncio.run(partial_tariff.fetch_month(2025, 6)):
+        print("  ERROR: a partial-day current-rates pattern must not be accepted as a fallback; import should report the month unavailable")
+        failed = True
+    if partial_tariff.month_available(2025, 6):
+        print("  ERROR: June 2025 must not be available from a partial-day pattern")
+        failed = True
+    if partial_tariff.fallback_months:
+        print("  ERROR: a partial-day pattern must not be recorded as a usable fallback, got {}".format(partial_tariff.fallback_months))
+        failed = True
+    if (2025, 6) not in partial_tariff.unpaid_export_months:
+        print("  ERROR: export should be recorded as unpaid when its only candidate fallback pattern is a partial day, got {}".format(partial_tariff.unpaid_export_months))
+        failed = True
+    if not any("half-hour slot" in message.lower() for message in partial_logged):
+        print("  ERROR: expected a warning explaining the pattern was refused for incomplete coverage, got {}".format(partial_logged))
+        failed = True
+
+    print("Test: a timezone whose UTC offset is not a whole multiple of 30 minutes (Asia/Kathmandu, +05:45) fails closed rather than producing a pattern with holes")
+    # _stamped_rates_from_pattern looks up every real minute by flooring its local time
+    # onto the fixed 0, 30, 60, ... grid. Kathmandu's +05:45 offset is 345 minutes, and
+    # 345 % 30 == 15, so every half-hourly UTC row converts to a local time exactly 15
+    # minutes off that grid - :15 and :45 past the hour, never :00 or :30. No amount of
+    # half-hourly bare data can ever produce a pattern that lands on the standard grid
+    # under this offset, so this must fail closed by design (like the partial-day case
+    # above), not be quietly accepted with every lookup silently missing.
+    kathmandu_tariff = AnnualTariff(fallback_config, log=print, predbat=my_predbat, fetch_json=fallback_fetch, timezone="Asia/Kathmandu")
+    if asyncio.run(kathmandu_tariff.fetch_month(2025, 6)):
+        print("  ERROR: a +05:45 offset timezone cannot produce a half-hour-grid-aligned pattern and must fail closed, got the month reported available")
+        failed = True
+    if kathmandu_tariff.month_available(2025, 6):
+        print("  ERROR: a +05:45 offset timezone must not report the month available via a misaligned pattern")
+        failed = True
+    if kathmandu_tariff.fallback_months:
+        print("  ERROR: a +05:45 offset timezone must not record a fallback it cannot actually deliver, got {}".format(kathmandu_tariff.fallback_months))
+        failed = True
+
     print("Test: a genuine download failure (not a genuinely empty result) does not trigger the current-rates fallback")
     failure_bare_calls = []
 

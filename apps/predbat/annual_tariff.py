@@ -230,6 +230,24 @@ class AnnualTariff:
                 claim(minute_of_day, rate, valid_from)
         return pattern
 
+    @staticmethod
+    def _pattern_covers_full_day(pattern):
+        """Return True when a local-time daily pattern rates every one of the day's 48 standard half-hour slots.
+
+        ``_stamped_rates_from_pattern`` looks up each real minute by flooring its local
+        time onto the fixed ``0, 30, 60, ... 1410`` grid, so a pattern is only usable if
+        every one of those exact slots is present - not merely "48 rates somewhere in
+        the day". Two distinct ways a pattern can fall short of that both matter here:
+        a short-row (Agile-style) payload that only covers part of the day (for example
+        a bare request answered with a partial trailing window) leaves some grid slots
+        with no row at all; and a timezone whose UTC offset is not a whole multiple of
+        30 minutes (for example Nepal's +05:45) converts every row onto a grid that
+        never lands on these exact slots, however many rows there are. Both must be
+        refused the same way - as no usable fallback - rather than one silently pricing
+        its gaps at zero while the other happens to fail closed by accident.
+        """
+        return all(minute_of_day in pattern for minute_of_day in range(0, MINUTES_PER_DAY, 30))
+
     async def _fetch_current_pattern(self, side):
         """Download a tariff URL's current rates and reduce them to a repeating local-time daily pattern.
 
@@ -239,6 +257,12 @@ class AnnualTariff:
         typically because the tariff launched after that historical date. Cached on
         the instance so ``fetch_month``, which runs up to twelve times a year, only
         downloads this once per side.
+
+        A pattern that does not cover every slot of the local day (see
+        ``_pattern_covers_full_day``) is discarded here and treated as no pattern at
+        all - a bare request can legitimately answer with a partial trailing window,
+        and a partial pattern would otherwise price its uncovered hours at zero, which
+        is the exact failure mode this fallback exists to fix, not reproduce.
         """
         cache_attr = "import" if side == "import" else "export"
         cached = self._current_pattern[cache_attr]
@@ -251,6 +275,16 @@ class AnnualTariff:
         else:
             rows = []
         pattern = self._rows_to_local_pattern(rows)
+        if pattern and not self._pattern_covers_full_day(pattern):
+            # Reports how many of the *standard* grid slots were actually usable, not
+            # len(pattern) - a timezone offset that is not a multiple of 30 minutes can
+            # produce a pattern with a full 48 entries that still covers zero of the
+            # slots _stamped_rates_from_pattern will ever look up (see
+            # _pattern_covers_full_day), and "covers 48 of 48" would be a very
+            # confusing thing to log about a pattern that is about to be discarded.
+            covered = sum(1 for minute_of_day in range(0, MINUTES_PER_DAY, 30) if minute_of_day in pattern)
+            self.log("Warn: Annual: the current-rates pattern for {} covers only {} of {} half-hour slots of the local day; treating it as unavailable rather than pricing the gap at zero".format(side, covered, MINUTES_PER_DAY // 30))
+            pattern = {}
         self._current_pattern[cache_attr] = pattern
         return pattern
 
