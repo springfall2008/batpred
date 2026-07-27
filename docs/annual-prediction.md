@@ -188,8 +188,9 @@ run. Choosing **Custom** clears the URL fields for hand-entered rates.
 
 Every field the CLI's `annual.yaml` accepts has a form equivalent, including the
 manual-usage/Octopus-consumption choice under **Load** and the year, sample count and P10
-fallback derate under **Advanced**. **Save** stores the configuration without running it;
-**Run** validates, stores it and starts a run.
+fallback derate under **Advanced**. **Save settings** stores the configuration without
+running it, so you can park a half-adjusted setup and come back to it; **Run simulations**
+validates, stores it and starts a run.
 
 ### Running
 
@@ -202,11 +203,14 @@ later and the same run is still there, or already finished. Only one run is acti
 time: submitting **Run** again while one is already in progress does not queue a second
 run or interrupt the first, though any form edits you made are still saved.
 
-**Cancel** stops the running job. There is deliberately no automatic redirect or reload
-when a run finishes — an earlier version of the page did that and it would silently
-discard whatever you had typed into the form in the meantime. Instead, once a run
-completes the progress area shows a **view results** link, and polling stops; following
-the link (or just refreshing) shows the results below the form.
+**Cancel** stops the running job. When the run finishes, the tab you pressed **Run
+simulations** in goes straight to the results.
+
+Any other tab you have open only gets a **view results** link rather than being
+navigated. The progress poll runs in every open tab, so reloading them all would
+silently discard whatever had been typed into a form somewhere else — an earlier
+version of the page did exactly that. Only the tab that actually started the run
+follows the completion.
 
 ### Comparing runs
 

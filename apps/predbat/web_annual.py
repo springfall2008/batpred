@@ -384,10 +384,14 @@ class AnnualPage:
             text += self._number_field("solar_efficiency_{}".format(index), "Array {} efficiency".format(index + 1), array.get("efficiency", 0.95))
         text += "</details>\n"
 
-        text += '<button type="submit" id="annual-run-button">Run</button>\n'
+        # Marks THIS tab as the one that started the run, so only it navigates to the
+        # results when the run finishes (see annualPoll). The poll runs in every open
+        # tab, and a tab sitting on a half-filled form must not be reloaded out from
+        # under whoever is typing in it.
+        text += '<button type="submit" id="annual-run-button" onclick="annualMarkStarted()">Run simulations</button>\n'
         # A second submit button pointed at the plain POST /annual handler via
         # formaction - the same fields, saved without starting a run.
-        text += '<button type="submit" formaction="./annual" formmethod="post">Save</button>\n'
+        text += '<button type="submit" formaction="./annual" formmethod="post">Save settings</button>\n'
         text += "</form>\n</div>\n"
         return text
 
@@ -735,7 +739,7 @@ class AnnualPage:
         text += self._render_selector(runs, selected_id)
 
         if not results:
-            text += "<p>No results yet — fill in the form above and press Run.</p>\n</div>\n"
+            text += "<p>No results yet — fill in the form above and press Run simulations.</p>\n</div>\n"
             return text
 
         if not isinstance(results, dict):
@@ -981,6 +985,17 @@ function annualTariffChanged() {
   document.getElementById('tariff_export_url').value = option.getAttribute('data-export') || '';
 }
 function annualCancel() { fetch('./annual_cancel', {method: 'POST'}); }
+// sessionStorage is per-tab, which is exactly the scope wanted: the tab that pressed
+// Run remembers it across the POST re-render, and no other tab sees the flag.
+function annualMarkStarted() {
+  try { sessionStorage.setItem('annualRunStarted', '1'); } catch (error) { /* private mode - fall back to the link */ }
+}
+function annualStartedHere() {
+  try {
+    if (sessionStorage.getItem('annualRunStarted')) { sessionStorage.removeItem('annualRunStarted'); return true; }
+  } catch (error) { /* private mode - fall back to the link */ }
+  return false;
+}
 function annualPoll() {
   fetch('./annual_status').then(function (r) { return r.json(); }).then(function (s) {
     var box = document.getElementById('annual-progress');
@@ -994,16 +1009,30 @@ function annualPoll() {
     } else {
       if (button) { button.disabled = false; }
       if (s.state === 'complete') {
-        // Deliberately not navigating: this poll fires on every open tab, including
-        // ones mid-edit on the form for a run they never started, and a forced
-        // reload would silently drop whatever they had typed. The user chooses
-        // when to give up their own edits by following the link themselves.
         box.style.display = 'block';
+        // The tab that started the run goes straight to the results - ./annual with no
+        // run parameter selects the newest stored run, which is the one that just
+        // finished. Every OTHER tab only gets the link: this poll fires in all of them,
+        // including ones mid-edit on a form for a run they never started, and a forced
+        // reload there would silently drop whatever the user had typed.
+        //
+        // Navigating is safe from the redirect loop this once had because the server
+        // hands out 'complete' exactly once (_consume_terminal_state), so the reloaded
+        // page's own first poll sees idle rather than 'complete' again.
+        if (annualStartedHere()) {
+          document.getElementById('annual-progress-text').textContent = 'Run complete — loading results…';
+          window.location.href = './annual';
+          return;
+        }
         document.getElementById('annual-progress-text').innerHTML = 'Run complete — <a href="./annual">view results</a>';
         return;
       }
       if (s.state === 'failed' || s.state === 'cancelled') {
         box.style.display = 'block';
+        // Clear the started-here flag too: a run that failed has no results to show, and
+        // leaving it set would send this tab off to the results the next time ANY run
+        // completed, which it did not start.
+        annualStartedHere();
         document.getElementById('annual-progress-text').textContent = s.state + (s.error ? ': ' + s.error : '');
         return;
       }

@@ -360,6 +360,43 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: the annual kWh value should appear in the form")
             failed = True
 
+        print("Test: the two submit buttons say what they do, and only the run button marks the tab")
+        # "Save" next to results that save themselves reads as though it saves the run;
+        # it only ever saved the form. The labels have to distinguish the two actions.
+        form = page.render_form(page.prefill_config())
+        if "Run simulations" not in form or "Save settings" not in form:
+            print("  ERROR: expected 'Run simulations' and 'Save settings' buttons")
+            failed = True
+        if "annualMarkStarted()" not in form:
+            print("  ERROR: the run button must mark this tab as the one that started the run")
+            failed = True
+        # The save button must NOT mark the tab: it starts no run, so a later completion
+        # elsewhere must not drag this tab off its form.
+        save_button = re.search(r"<button[^>]*formaction[^>]*>Save settings</button>", form)
+        if not save_button or "annualMarkStarted" in save_button.group(0):
+            print("  ERROR: the save button must not mark the tab as having started a run")
+            failed = True
+
+        print("Test: only the tab that started a run auto-navigates to the results")
+        # This previously shipped as an unconditional redirect on every 'complete' poll,
+        # which turned every open tab into a reload loop. The guard is what keeps a tab
+        # that is mid-edit on the form from being reloaded out from under the user.
+        page_js = page.render_script()
+        # Assert on the guarded navigation as a single unit. Checking merely that
+        # "annualStartedHere()" appears somewhere would pass against an unconditional
+        # redirect, since the helper is also defined and called in the failure branch -
+        # verified by mutating the guard to `if (true)` and watching a looser version of
+        # this test still pass.
+        guarded_navigation = re.search(r"if \(annualStartedHere\(\)\) \{[^}]*window\.location\.href", page_js, re.S)
+        if not guarded_navigation:
+            print("  ERROR: navigation to the results must sit inside an annualStartedHere() guard, not fire unconditionally")
+            failed = True
+        # The failure branch must clear the flag, or a failed run leaves this tab primed
+        # to jump to results it did not produce the next time any run completes.
+        if not re.search(r"'failed'.*?annualStartedHere\(\)", page_js, re.S):
+            print("  ERROR: a failed or cancelled run must clear the started-here flag")
+            failed = True
+
         print("Test: the form offers a debug checkbox, defaulting off")
         form = page.render_form(page.prefill_config())
         if 'name="debug"' not in form:
