@@ -1,0 +1,87 @@
+// Vendored from Predictive-Cloud-Ltd/lattice-spec 0.3.0/topology-data-plane.proto
+// at commit 681e7f2. Keep this wire contract byte-compatible with the gateway.
+syntax = "proto3";
+package predbat.topology.dataplane.v0;
+
+message Telemetry {
+  uint32 doc_version = 1;
+  uint64 base_ts_ms = 2;
+  repeated Sample samples = 3;
+}
+
+message Sample {
+  uint32 cap_ref = 1;
+  uint32 group = 2;
+  uint32 ts_off_ms = 3;
+  oneof value {
+    sint64 i = 4;
+    double d = 5;
+    bool b = 6;
+  }
+}
+
+message Control {
+  string command_id = 1;
+  uint32 doc_version = 2;
+  uint32 cap_ref = 3;
+  oneof payload {
+    Scalar scalar = 4;
+    Schedule schedule = 5 [deprecated = true];
+    ScheduleIntent schedule_intent = 6;
+  }
+}
+
+message Scalar {
+  oneof value {
+    sint64 i = 1;
+    double d = 2;
+    bool b = 3;
+  }
+}
+
+message Schedule {
+  repeated Slot slots = 1;
+}
+
+message Slot {
+  uint32 start_hhmm = 1;
+  uint32 end_hhmm = 2;
+  sint64 value = 3;
+}
+
+message ScheduleIntent {
+  repeated ScheduleSlot slots = 1;
+  optional string default_mode = 2;
+}
+
+message ScheduleSlot {
+  uint32 start_hhmm = 1;
+  uint32 end_hhmm = 2;
+  string mode = 3;
+  optional double target_soc = 4;
+  optional double reserve_soc = 5;
+  optional double charge_power_limit = 6;
+  optional double discharge_power_limit = 7;
+  optional bool enable = 8;
+}
+
+message ControlAck {
+  string command_id = 1;
+  bool ok = 2;
+  string error = 3;
+  ControlResult result = 4;
+  Scalar applied_scalar = 5;
+  bool verified = 6;
+  uint64 completed_ts_ms = 7;
+}
+
+enum ControlResult {
+  CONTROL_RESULT_UNSPECIFIED = 0;
+  CONTROL_RESULT_APPLIED = 1;
+  CONTROL_RESULT_NOT_APPLIED = 2;
+  CONTROL_RESULT_UNKNOWN = 3;
+}
+
+message ControlResultRequest {
+  string command_id = 1;
+}

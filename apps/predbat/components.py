@@ -512,6 +512,8 @@ if HAS_GATEWAY:
             "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
             "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
             "lattice_projection_enable": {"required": False, "config": "lattice_projection_enable", "default": False},
+            "lattice_control_enable": {"required": False, "config": "lattice_control_enable", "default": False},
+            "lattice_charge_power_limit_enable": {"required": False, "config": "lattice_charge_power_limit_enable", "default": False},
         },
         "phase": 1,
         "can_restart": True,
