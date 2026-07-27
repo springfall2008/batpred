@@ -81,8 +81,8 @@ def test_annual_results(my_predbat):
     print("Test: _build_results with every month ok sums totals across all months")
     predictor = make_predictor()
     months = [
-        make_month_row(1, {"no_pvbat": 100.0, "without_predbat": 50.0, "with_predbat": 20.0}),
-        make_month_row(2, {"no_pvbat": 200.0, "without_predbat": 80.0, "with_predbat": 30.0}),
+        make_month_row(1, {"no_pvbat": 100.0, "pv_only": 75.0, "without_predbat": 50.0, "with_predbat": 20.0}),
+        make_month_row(2, {"no_pvbat": 200.0, "pv_only": 140.0, "without_predbat": 80.0, "with_predbat": 30.0}),
     ]
     result = predictor._build_results(months)
     if result["annual"]["scenarios"]["no_pvbat"]["cost_p"] != 300.0:
@@ -102,9 +102,9 @@ def test_annual_results(my_predbat):
     print("Test: _build_results with a mix of ok and unavailable months excludes the unavailable one")
     predictor = make_predictor()
     months = [
-        make_month_row(1, {"no_pvbat": 100.0, "without_predbat": 50.0, "with_predbat": 20.0}),
+        make_month_row(1, {"no_pvbat": 100.0, "pv_only": 75.0, "without_predbat": 50.0, "with_predbat": 20.0}),
         make_unavailable_row(2),
-        make_month_row(3, {"no_pvbat": 40.0, "without_predbat": 10.0, "with_predbat": 5.0}),
+        make_month_row(3, {"no_pvbat": 40.0, "pv_only": 25.0, "without_predbat": 10.0, "with_predbat": 5.0}),
     ]
     result = predictor._build_results(months)
     if result["annual"]["scenarios"]["no_pvbat"]["cost_p"] != 140.0:
@@ -116,7 +116,7 @@ def test_annual_results(my_predbat):
 
     print("Test: _build_results includes a 'degraded' month (partial-sample) in totals, not excluded")
     predictor = make_predictor()
-    months = [make_month_row(4, {"no_pvbat": 60.0, "without_predbat": 25.0, "with_predbat": 10.0}, status="degraded")]
+    months = [make_month_row(4, {"no_pvbat": 60.0, "pv_only": 42.5, "without_predbat": 25.0, "with_predbat": 10.0}, status="degraded")]
     result = predictor._build_results(months)
     if result["annual"]["months_included"] != 1 or result["annual"]["months_excluded"] != []:
         print("  ERROR: expected the degraded month to be included, not excluded, got included={} excluded={}".format(result["annual"]["months_included"], result["annual"]["months_excluded"]))

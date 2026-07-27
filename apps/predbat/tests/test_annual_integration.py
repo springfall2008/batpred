@@ -151,7 +151,7 @@ def test_annual_integration(my_predbat):
 
     print("Test: the three scenarios run and produce the expected keys")
     results = run_one(my_predbat, config, weather, day)
-    for key in ["no_pvbat", "without_predbat", "with_predbat"]:
+    for key in ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]:
         if key not in results:
             print("  ERROR: missing scenario '{}'".format(key))
             failed = True
@@ -179,6 +179,23 @@ def test_annual_integration(my_predbat):
         failed = True
     if results["no_pvbat"]["battery_throughput_kwh"] != 0.0:
         print("  ERROR: the no-system scenario should cycle no battery, got {}".format(results["no_pvbat"]["battery_throughput_kwh"]))
+        failed = True
+
+    print("Test: pv_only generates PV but stores none of it")
+    pv_only = results["pv_only"]
+    if pv_only["pv_generated_kwh"] <= 0:
+        print("  ERROR: the PV-only scenario should generate PV, got {}".format(pv_only["pv_generated_kwh"]))
+        failed = True
+    if pv_only["battery_throughput_kwh"] != 0:
+        print("  ERROR: the PV-only scenario must have no battery throughput, got {}".format(pv_only["battery_throughput_kwh"]))
+        failed = True
+
+    print("Test: pv_only sits between the no-system baseline and PV-plus-battery on cost")
+    # Not an arbitrary ordering check: PV alone must beat no system (it displaces import),
+    # and must not beat PV plus a battery (the battery can only add value). A violation
+    # means the scenario is not modelling what its name says.
+    if not (results["no_pvbat"]["cost_p"] > pv_only["cost_p"] > results["without_predbat"]["cost_p"]):
+        print("  ERROR: expected no_pvbat > pv_only > without_predbat on cost, got {} / {} / {}".format(results["no_pvbat"]["cost_p"], pv_only["cost_p"], results["without_predbat"]["cost_p"]))
         failed = True
 
     print("Test: Predbat is billed on actuals, not on the forecast it planned against")
@@ -221,7 +238,7 @@ def test_annual_integration(my_predbat):
     isolated = run_one(my_predbat, config, weather, day)
     _ = run_one(my_predbat, config, StubWeather(peak_kw=1.0), date(2025, 11, 20))
     after_other = run_one(my_predbat, config, weather, day)
-    for scenario in ["no_pvbat", "without_predbat", "with_predbat"]:
+    for scenario in ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]:
         for field in ["cost_p", "import_kwh", "export_kwh", "battery_throughput_kwh"]:
             first = isolated[scenario][field]
             second = after_other[scenario][field]

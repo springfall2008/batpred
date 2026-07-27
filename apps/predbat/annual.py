@@ -1109,6 +1109,27 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     if plans is not None:
         plans["no_pvbat"] = _capture_plan(predbat, zero_step, zero_step, load_step, load_step, DAY_MINUTES)
 
+    # Scenario 1b: PV but no battery. apply_hardware gives the array its real inverter
+    # and export limits - a PV-only system still has an inverter, and clipping matters -
+    # while soc_max=0 leaves it with nowhere to store surplus, so everything the house
+    # cannot use at the moment it is generated is exported. That difference is the whole
+    # point of this scenario: it is what makes PV-only payback different from a fixed
+    # fraction of the PV-plus-battery figure.
+    #
+    # Like scenarios 1 and 2 this is a single prediction with empty windows. It must NOT
+    # call calculate_plan(): the planner is what makes a run expensive, and there is
+    # nothing to plan without a battery.
+    apply_hardware(predbat, config["battery"], config["solar"])
+    predbat.soc_kw = 0
+    predbat.charge_limit_best = []
+    predbat.charge_window_best = []
+    predbat.export_window_best = []
+    predbat.export_limits_best = []
+    predbat.prediction = Prediction(predbat, actual_step, actual_step, load_step, load_step, soc_kw=0, soc_max=0)
+    results["pv_only"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    if plans is not None:
+        plans["pv_only"] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
+
     # Scenario 2: PV and battery on a dumb cheapest-rate timer, no export optimisation
     apply_hardware(predbat, config["battery"], config["solar"])
     predbat.soc_kw = START_SOC_KWH
@@ -1169,7 +1190,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     return results
 
 
-SCENARIO_KEYS = ["no_pvbat", "without_predbat", "with_predbat"]
+SCENARIO_KEYS = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]
 
 SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh"]
 

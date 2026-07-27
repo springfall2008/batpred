@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from annual import SCENARIO_KEYS, AnnualConfigError, AnnualPredictor  # noqa: E402
 from storage import StorageLocalFiles  # noqa: E402
 
-SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
+SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "pv_only": "PV Only", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
 
 
 def _format_pence(pence, currency):
