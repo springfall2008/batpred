@@ -591,6 +591,107 @@ def test_web_annual_results(my_predbat):
     return failed
 
 
+def _collect_stringy_numbers(node, path, failures):
+    """Recursively record every path in ``node`` whose value is a string that parses as a number.
+
+    After ``validate_config()`` every numeric-context field should have been coerced
+    through ``_require_number`` to an ``int``/``float``; a leftover string that still
+    parses cleanly as a number is exactly what a missed coercion looks like (a legitimate
+    string field - a postcode, a tariff URL, an API key, "flat"/"night"/"day" - never
+    happens to parse as a plain number). Walking the whole structure rather than
+    spot-checking a few known fields means a numeric field added later that forgets to
+    route through ``_require_number`` fails this test too, instead of only surfacing as a
+    crash deep in a live run.
+    """
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _collect_stringy_numbers(value, "{}.{}".format(path, key), failures)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            _collect_stringy_numbers(value, "{}[{}]".format(path, index), failures)
+    elif isinstance(node, str):
+        try:
+            float(node)
+        except ValueError:
+            return
+        failures.append((path, node))
+
+
+def test_web_annual_post_numeric_coercion(my_predbat):
+    """Verify every numeric field the web form posts as a string survives validate_config() as a number.
+
+    Drives the real seam between the browser and the engine, which nothing else
+    exercised end to end: aiohttp's ``request.post()`` always returns strings, so this
+    builds a postdata dict of strings exactly as a browser would submit, runs it through
+    ``AnnualPage.config_from_post()`` and then the real ``validate_config()``, and walks
+    the whole validated result asserting no numeric-context field was left as a string.
+    Before the fix this reproduced the reported crash's root cause: declination and
+    azimuth (and latitude/longitude) survived as strings all the way to ``solar_model.
+    convert_azimuth()``, which fails a ``str``/``int`` comparison minutes into a live run.
+    """
+    failed = False
+    print("**** Testing web_annual POST numeric coercion ****")
+
+    page = make_page(my_predbat)
+    postdata = {
+        "latitude": "51.5",
+        "longitude": "-0.1",
+        "solar_kwp_0": "5.6",
+        "solar_declination_0": "40",
+        "solar_azimuth_0": "170",
+        "solar_efficiency_0": "0.9",
+        "battery_size_kwh": "9.5",
+        "battery_inverter_kw": "5.0",
+        "battery_export_limit_kw": "5.0",
+        "battery_hybrid": "on",
+        "load_source": "manual",
+        "load_annual_kwh": "3800",
+        "load_shape": "flat",
+        "load_car_charging_kwh": "2500",
+        "load_car_rate_kw": "7.4",
+        "tariff_standing_charge": "60.0",
+        "year": "2025",
+        "samples_per_month": "3",
+        "pv10_derate_fallback": "0.6",
+    }
+
+    config = page.config_from_post(postdata)
+    try:
+        validated = validate_config(config)
+    except Exception as error:
+        print("  ERROR: a posted form built entirely of strings should validate cleanly, got {}".format(error))
+        return True
+
+    print("Test: no numeric-looking string survives anywhere in the validated config")
+    # 'raw' deliberately holds the original, unvalidated config exactly as posted (see
+    # validate_config()'s scrub_secrets(raw) call) so the CLI subprocess and any debug
+    # dump can reproduce what the user actually submitted - it is expected to still be
+    # full of strings and is excluded from this walk for that reason.
+    walked = copy.deepcopy(validated)
+    walked.pop("raw", None)
+    failures = []
+    _collect_stringy_numbers(walked, "config", failures)
+    if failures:
+        print("  ERROR: numeric-looking strings survived validate_config() at: {}".format(failures))
+        failed = True
+
+    print("Test: declination, azimuth, latitude and longitude specifically are numbers")
+    for path, value, expected in [
+        ("solar[0].declination", validated["solar"][0]["declination"], 40),
+        ("solar[0].azimuth", validated["solar"][0]["azimuth"], 170),
+        ("location.latitude", validated["location"]["latitude"], 51.5),
+        ("location.longitude", validated["location"]["longitude"], -0.1),
+    ]:
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            print("  ERROR: {} should be a number, got {!r}".format(path, value))
+            failed = True
+        elif abs(value - expected) > 1e-9:
+            print("  ERROR: {} should be {}, got {}".format(path, expected, value))
+            failed = True
+
+    return failed
+
+
 def test_web_annual_routes_registered(my_predbat):
     """Verify all six Annual routes are registered, so a typo'd path cannot ship green."""
     failed = False

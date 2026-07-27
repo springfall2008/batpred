@@ -107,8 +107,13 @@ def _validate_solar(raw):
             raise AnnualConfigError("annual.solar[{}] is missing kwp, the array's peak power in kW".format(index))
         normalised = dict(array)
         normalised["kwp"] = _require_number(array["kwp"], "annual.solar[{}].kwp".format(index), minimum=0, exclusive_minimum=True)
-        normalised["declination"] = array.get("declination", DEFAULT_DECLINATION)
-        normalised["azimuth"] = array.get("azimuth", DEFAULT_AZIMUTH)
+        # declination is a roof pitch in degrees: 0 (flat) to 90 (vertical) inclusive.
+        normalised["declination"] = _require_number(array.get("declination", DEFAULT_DECLINATION), "annual.solar[{}].declination".format(index), minimum=0, maximum=90)
+        # azimuth follows Predbat's convention (0 = north, 180 = south) and
+        # convert_azimuth() (solar_model.py) accepts negative values too, so the bound
+        # here is deliberately wide rather than tighter and risking rejecting a valid
+        # existing config.
+        normalised["azimuth"] = _require_number(array.get("azimuth", DEFAULT_AZIMUTH), "annual.solar[{}].azimuth".format(index), minimum=-360, maximum=360)
         normalised["efficiency"] = _require_number(array.get("efficiency", DEFAULT_EFFICIENCY), "annual.solar[{}].efficiency".format(index), minimum=0, exclusive_minimum=True, maximum=1)
         arrays.append(normalised)
     return arrays
@@ -207,6 +212,12 @@ def validate_config(config, today=None):
         raise AnnualConfigError("annual.location is required, with either a postcode or latitude and longitude")
     if not location.get("postcode") and not ("latitude" in location and "longitude" in location):
         raise AnnualConfigError("annual.location needs either a postcode or both latitude and longitude")
+
+    location = dict(location)
+    if "latitude" in location:
+        location["latitude"] = _require_number(location["latitude"], "annual.location.latitude", minimum=-90, maximum=90)
+    if "longitude" in location:
+        location["longitude"] = _require_number(location["longitude"], "annual.location.longitude", minimum=-180, maximum=180)
 
     solar = _validate_solar(raw.get("solar"))
     battery = _validate_battery(raw.get("battery"))

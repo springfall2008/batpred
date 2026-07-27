@@ -298,6 +298,64 @@ def test_annual_config(my_predbat):
             print("  ERROR: future year raised '{}', expected it to mention 'annual.year must be at most'".format(error))
             failed = True
 
+    print("Test: a string declination and azimuth (as the web form always sends) are coerced to numbers")
+    # The web form deliberately submits every field as a string (see web_annual.py's
+    # config_from_post()); validate_config() is the single place that coerces and range
+    # checks, so a string here must survive as a number, not crash deep inside
+    # convert_azimuth() (solar_model.py) minutes into a run.
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.6, "declination": "40", "azimuth": "170"}]
+    result = validate_config(config, today=date(2026, 7, 25))
+    declination = result["solar"][0]["declination"]
+    azimuth = result["solar"][0]["azimuth"]
+    if not isinstance(declination, (int, float)) or isinstance(declination, bool) or declination != 40:
+        print("  ERROR: a string declination should coerce to the number 40, got {!r}".format(declination))
+        failed = True
+    if not isinstance(azimuth, (int, float)) or isinstance(azimuth, bool) or azimuth != 170:
+        print("  ERROR: a string azimuth should coerce to the number 170, got {!r}".format(azimuth))
+        failed = True
+
+    print("Test: a negative azimuth within bounds validates (convert_azimuth's negative branch)")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.6, "azimuth": "-170"}]
+    result = validate_config(config, today=date(2026, 7, 25))
+    if result["solar"][0]["azimuth"] != -170:
+        print("  ERROR: a negative azimuth should survive validation, got {}".format(result["solar"][0]["azimuth"]))
+        failed = True
+
+    print("Test: a declination outside 0-90 degrees is rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.6, "declination": 95}]
+    failed = expect_error("declination out of range", config, "declination", failed)
+
+    print("Test: an azimuth outside -360 to 360 degrees is rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.6, "azimuth": 400}]
+    failed = expect_error("azimuth out of range", config, "azimuth", failed)
+
+    print("Test: string latitude and longitude (as the web form always sends) are coerced to numbers")
+    config = base_config()
+    config["annual"]["location"] = {"latitude": "51.5", "longitude": "-0.1"}
+    result = validate_config(config, today=date(2026, 7, 25))
+    latitude = result["location"]["latitude"]
+    longitude = result["location"]["longitude"]
+    if not isinstance(latitude, (int, float)) or isinstance(latitude, bool) or abs(latitude - 51.5) > 1e-9:
+        print("  ERROR: a string latitude should coerce to the number 51.5, got {!r}".format(latitude))
+        failed = True
+    if not isinstance(longitude, (int, float)) or isinstance(longitude, bool) or abs(longitude - (-0.1)) > 1e-9:
+        print("  ERROR: a string longitude should coerce to the number -0.1, got {!r}".format(longitude))
+        failed = True
+
+    print("Test: a latitude outside -90 to 90 degrees is rejected")
+    config = base_config()
+    config["annual"]["location"] = {"latitude": 95, "longitude": 0}
+    failed = expect_error("latitude out of range", config, "latitude", failed)
+
+    print("Test: a longitude outside -180 to 180 degrees is rejected")
+    config = base_config()
+    config["annual"]["location"] = {"latitude": 0, "longitude": 200}
+    failed = expect_error("longitude out of range", config, "longitude", failed)
+
     print("Test: scrub_secrets removes API keys without mutating the original")
     config = base_config()
     config["annual"]["load"]["octopus"] = {"api_key": "sk_live_secret", "account_id": "A-1"}
