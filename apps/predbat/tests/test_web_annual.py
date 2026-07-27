@@ -10,6 +10,8 @@
 """Tests for the Annual tab's prefill and configuration handling."""
 
 import builtins
+import copy
+import re
 from unittest.mock import patch
 
 from annual import validate_config
@@ -21,6 +23,12 @@ from web_annual import DEFAULT_CONFIG, AnnualPage
 def make_page(my_predbat):
     """Return an AnnualPage backed by a WebInterface over the test fixture."""
     return AnnualPage(WebInterface(my_predbat, web_port=5054))
+
+
+def option_tag(html_text, value):
+    """Return the ``<option>`` tag whose ``value`` attribute equals ``value``, or None."""
+    match = re.search(r'<option value="{}"[^>]*>'.format(re.escape(value)), html_text)
+    return match.group(0) if match else None
 
 
 def test_web_annual(my_predbat):
@@ -267,6 +275,48 @@ def test_web_annual_form(my_predbat):
             validate_config(rebuilt)
         except Exception as error:
             print("  ERROR: the Octopus form should rebuild into a valid config, got {}".format(error))
+            failed = True
+
+        print("Test: user-controlled values are HTML-escaped, not interpolated raw")
+        # A postcode is free text a visitor types in; a stray '"' or '<' must not be able
+        # to break out of the value="..." attribute and inject markup/JS into the page.
+        hostile = 'SW1A" onload="x'
+        hostile_config = copy.deepcopy(config)
+        hostile_config["location"]["postcode"] = hostile
+        hostile_html = page.render_form(hostile_config)
+        if hostile in hostile_html:
+            print("  ERROR: the raw, unescaped postcode must not appear in the rendered form")
+            failed = True
+        if "SW1A&quot; onload=&quot;x" not in hostile_html:
+            print("  ERROR: the postcode should appear HTML-escaped in the rendered form")
+            failed = True
+
+        print("Test: the tariff dropdown keeps the current selection across a re-render")
+        catalogue_entries = page.catalogue()
+        built_in = next(entry for entry in catalogue_entries if entry["id"] != CUSTOM_ID and entry.get("import_octopus_url"))
+
+        matched_config = copy.deepcopy(config)
+        matched_config["tariff"] = {"import_octopus_url": built_in["import_octopus_url"], "standing_charge_p_per_day": 60.0}
+        matched_html = page.render_form(matched_config)
+        matched_tag = option_tag(matched_html, built_in["id"])
+        if matched_tag is None or "selected" not in matched_tag:
+            print("  ERROR: the option matching the config's import URL should be selected, got {}".format(matched_tag))
+            failed = True
+        custom_tag_when_matched = option_tag(matched_html, CUSTOM_ID)
+        if custom_tag_when_matched is not None and "selected" in custom_tag_when_matched:
+            print("  ERROR: Custom should not be selected when a built-in tariff matches")
+            failed = True
+
+        custom_config = copy.deepcopy(config)
+        custom_config["tariff"] = {"import_octopus_url": "https://example.com/not-in-the-catalogue/", "standing_charge_p_per_day": 60.0}
+        custom_html = page.render_form(custom_config)
+        custom_tag = option_tag(custom_html, CUSTOM_ID)
+        if custom_tag is None or "selected" not in custom_tag:
+            print("  ERROR: a hand-entered URL with no catalogue match should select Custom, got {}".format(custom_tag))
+            failed = True
+        built_in_tag_when_custom = option_tag(custom_html, built_in["id"])
+        if built_in_tag_when_custom is not None and "selected" in built_in_tag_when_custom:
+            print("  ERROR: the built-in tariff should not stay selected once its URL no longer matches")
             failed = True
 
     finally:

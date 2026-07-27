@@ -14,11 +14,12 @@ the prospective-buyer path the tool exists to serve.
 """
 
 import copy
+import html
 import os
 
 import yaml
 
-from tariff_catalogue import merged_catalogue
+from tariff_catalogue import CUSTOM_ID, merged_catalogue
 
 # A plausible UK home, used for any field the live instance cannot supply. These
 # are an EXAMPLE, not a recommendation - the form says so, because a visitor
@@ -214,14 +215,24 @@ class AnnualPage:
             raise
 
     def _number_field(self, name, label, value, step="any", suffix=""):
-        """Return one labelled numeric input row."""
+        """Return one labelled numeric input row.
+
+        ``value`` is HTML-escaped before interpolation: although the caller usually
+        passes a plain number, several call sites pass a config value that ultimately
+        traces back to a posted form field (e.g. a re-render after a validation
+        error), so it must be treated as untrusted.
+        """
         return '<div class="annual-field"><label for="{name}">{label}</label><input type="number" step="{step}" id="{name}" name="{name}" value="{value}">{suffix}</div>\n'.format(
-            name=name, label=label, step=step, value=value if value is not None else "", suffix=" {}".format(suffix) if suffix else ""
+            name=name, label=label, step=step, value=html.escape(str(value), quote=True) if value is not None else "", suffix=" {}".format(suffix) if suffix else ""
         )
 
     def _text_field(self, name, label, value):
-        """Return one labelled text input row."""
-        return '<div class="annual-field"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(name=name, label=label, value=value if value is not None else "")
+        """Return one labelled text input row.
+
+        ``value`` is HTML-escaped before interpolation - it is user-controlled
+        (a postcode, an Octopus API key or account id, a tariff URL, a DNO region).
+        """
+        return '<div class="annual-field"><label for="{name}">{label}</label><input type="text" id="{name}" name="{name}" value="{value}"></div>\n'.format(name=name, label=label, value=html.escape(str(value), quote=True) if value is not None else "")
 
     def render_form(self, config, errors=None):
         """Return the configuration form as HTML, populated from ``config``.
@@ -239,7 +250,7 @@ class AnnualPage:
         text = '<div class="annual-form-wrap">\n'
 
         if errors:
-            text += '<div class="annual-error"><strong>Could not run:</strong> {}</div>\n'.format(errors)
+            text += '<div class="annual-error"><strong>Could not run:</strong> {}</div>\n'.format(html.escape(str(errors), quote=True))
 
         if not self.is_configured():
             text += '<div class="annual-banner">Predbat isn\'t configured yet — these are <strong>example values</strong>, edit them to match your home.</div>\n'
@@ -291,8 +302,25 @@ class AnnualPage:
 
         text += "<fieldset><legend>Tariff</legend>\n"
         text += '<div class="annual-field"><label for="tariff_id">Tariff</label><select id="tariff_id" name="tariff_id" onchange="annualTariffChanged()">\n'
-        for entry in self.catalogue():
-            text += '<option value="{}" data-import="{}" data-export="{}">{}</option>\n'.format(entry["id"], entry.get("import_octopus_url", ""), entry.get("export_octopus_url", ""), entry["name"])
+        catalogue = self.catalogue()
+        current_import_url = tariff.get("import_octopus_url")
+        # A hand-entered URL (no matching catalogue entry) is what Custom means, so it
+        # is the fallback selection rather than leaving the dropdown on its first entry.
+        selected_id = None
+        if current_import_url:
+            selected_id = CUSTOM_ID
+            for entry in catalogue:
+                if entry.get("import_octopus_url") == current_import_url:
+                    selected_id = entry["id"]
+                    break
+        for entry in catalogue:
+            text += '<option value="{}" data-import="{}" data-export="{}" {}>{}</option>\n'.format(
+                html.escape(entry["id"], quote=True),
+                html.escape(entry.get("import_octopus_url", ""), quote=True),
+                html.escape(entry.get("export_octopus_url", ""), quote=True),
+                "selected" if entry["id"] == selected_id else "",
+                html.escape(entry["name"], quote=True),
+            )
         text += "</select></div>\n"
         text += self._text_field("tariff_import_url", "Import rates URL", tariff.get("import_octopus_url", ""))
         text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""))
