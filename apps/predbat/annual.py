@@ -35,6 +35,9 @@ DEFAULT_AZIMUTH = 180
 DEFAULT_EFFICIENCY = 0.95
 DEFAULT_HYBRID = True
 
+# A typical domestic panel in 2026. Only used to turn a panel count into kWp.
+DEFAULT_PANEL_WATTS = 400.0
+
 # The Open-Meteo ERA5 archive, which the weather module draws on, starts in 1940.
 MINIMUM_YEAR = 1940
 
@@ -72,10 +75,15 @@ def _require_number(value, field, minimum=None, maximum=None, integer=False, exc
     outcome), converts with ``int()``/``float()`` inside a try/except so a malformed value
     never escapes as a bare ``ValueError``/``TypeError``, and enforces the optional bounds.
     ``minimum`` is inclusive unless ``exclusive_minimum`` is set, in which case the value
-    must be strictly greater than it. ``maximum`` is always inclusive.
+    must be strictly greater than it. ``maximum`` is always inclusive. When ``integer`` is
+    set, a fractional float (``2.5``) is rejected rather than silently truncated - plain
+    ``int()`` truncates without complaint, which would let a mistyped panel count or sample
+    rate through as a different, smaller whole number.
     """
     if isinstance(value, bool):
         raise AnnualConfigError("{} must be a number, not a boolean (got {})".format(field, value))
+    if integer and isinstance(value, float) and not value.is_integer():
+        raise AnnualConfigError("{} must be a whole number, got {}".format(field, value))
     try:
         number = int(value) if integer else float(value)
     except (TypeError, ValueError):
@@ -116,10 +124,25 @@ def _validate_solar(raw):
     for index, array in enumerate(raw):
         if not isinstance(array, dict):
             raise AnnualConfigError("annual.solar[{}] must be a mapping".format(index))
-        if "kwp" not in array:
-            raise AnnualConfigError("annual.solar[{}] is missing kwp, the array's peak power in kW".format(index))
+        has_kwp = "kwp" in array
+        has_panels = "panels" in array
+        if has_kwp and has_panels:
+            # Two figures that disagree are a mistake worth surfacing. Guessing which the
+            # user meant would silently model a different system than they described.
+            raise AnnualConfigError("annual.solar[{}] has both kwp and panels; give one or the other, not both".format(index))
+        if not has_kwp and not has_panels:
+            raise AnnualConfigError("annual.solar[{}] is missing kwp (the array's peak power in kW) or panels (how many panels it has)".format(index))
         normalised = dict(array)
-        normalised["kwp"] = _require_number(array["kwp"], "annual.solar[{}].kwp".format(index), minimum=0, exclusive_minimum=True)
+        if has_panels:
+            panels = _require_number(array["panels"], "annual.solar[{}].panels".format(index), minimum=0, exclusive_minimum=True, integer=True)
+            panel_watts = _require_number(array.get("panel_watts", DEFAULT_PANEL_WATTS), "annual.solar[{}].panel_watts".format(index), minimum=0, exclusive_minimum=True)
+            # Retained alongside the derived kwp so the web form can show back what the
+            # user actually typed rather than replacing it with a computed decimal.
+            normalised["panels"] = panels
+            normalised["panel_watts"] = panel_watts
+            normalised["kwp"] = panels * panel_watts / 1000.0
+        else:
+            normalised["kwp"] = _require_number(array["kwp"], "annual.solar[{}].kwp".format(index), minimum=0, exclusive_minimum=True)
         # declination is a roof pitch in degrees: 0 (flat) to 90 (vertical) inclusive.
         normalised["declination"] = _require_number(array.get("declination", DEFAULT_DECLINATION), "annual.solar[{}].declination".format(index), minimum=0, maximum=90)
         # azimuth follows Predbat's convention (0 = north, 180 = south) and

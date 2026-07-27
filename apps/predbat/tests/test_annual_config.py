@@ -209,6 +209,60 @@ def test_annual_config(my_predbat):
     config["annual"]["solar"] = [{"declination": 30}]
     failed = expect_error("array without kwp", config, "is missing kwp", failed)
 
+    print("Test: a panel count derives kwp at 400 W a panel")
+    config = base_config()
+    config["annual"]["solar"] = [{"panels": 13}]
+    validated = validate_config(config)
+    if abs(validated["solar"][0]["kwp"] - 5.2) > 0.001:
+        print("  ERROR: 13 panels at 400 W should be 5.2 kWp, got {}".format(validated["solar"][0]["kwp"]))
+        failed = True
+
+    print("Test: a custom panel wattage is honoured")
+    config = base_config()
+    config["annual"]["solar"] = [{"panels": 10, "panel_watts": 450}]
+    validated = validate_config(config)
+    if abs(validated["solar"][0]["kwp"] - 4.5) > 0.001:
+        print("  ERROR: 10 panels at 450 W should be 4.5 kWp, got {}".format(validated["solar"][0]["kwp"]))
+        failed = True
+
+    print("Test: the panel count and wattage survive validation for form round-tripping")
+    if validated["solar"][0].get("panels") != 10 or validated["solar"][0].get("panel_watts") != 450:
+        print("  ERROR: panels/panel_watts should be retained, got {}".format(validated["solar"][0]))
+        failed = True
+
+    print("Test: supplying both kwp and panels is rejected rather than silently preferring one")
+    config = base_config()
+    config["annual"]["solar"] = [{"kwp": 5.0, "panels": 13}]
+    try:
+        validate_config(config)
+        print("  ERROR: supplying both kwp and panels should be rejected")
+        failed = True
+    except AnnualConfigError as error:
+        if "panels" not in str(error) or "kwp" not in str(error):
+            print("  ERROR: the error should name both fields, got {}".format(error))
+            failed = True
+
+    print("Test: an array with neither kwp nor panels is rejected")
+    config = base_config()
+    config["annual"]["solar"] = [{"declination": 35}]
+    try:
+        validate_config(config)
+        print("  ERROR: an array with neither kwp nor panels should be rejected")
+        failed = True
+    except AnnualConfigError:
+        pass
+
+    print("Test: a fractional or zero panel count is rejected")
+    for bad in [0, 2.5, -3]:
+        config = base_config()
+        config["annual"]["solar"] = [{"panels": bad}]
+        try:
+            validate_config(config)
+            print("  ERROR: a panel count of {} should be rejected".format(bad))
+            failed = True
+        except AnnualConfigError:
+            pass
+
     print("Test: samples_per_month below 1 is rejected")
     config = base_config()
     config["annual"]["samples_per_month"] = 0
