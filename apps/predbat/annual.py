@@ -7,9 +7,9 @@
 """Annual prediction engine.
 
 Projects a year of household electricity costs using the real Predbat planning
-engine, reporting each month under three scenarios: no PV or battery, PV and
-battery without Predbat, and with Predbat. Performs no HTTP itself; the weather
-and tariff modules own all network access.
+engine, reporting each month under four scenarios: no PV or battery, PV only
+(no battery), PV and battery without Predbat, and PV and battery with Predbat.
+Performs no HTTP itself; the weather and tariff modules own all network access.
 """
 
 import calendar
@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 
 import pytz
 
+from annual_costs import build_costs, build_payback, resolve_costs
 from annual_load import build_load_forecast, OctopusConsumptionLoadProfile, SyntheticLoadProfile
 from annual_tariff import AnnualTariff
 from annual_weather import AnnualWeather, resolve_postcode
@@ -235,6 +236,19 @@ def _validate_tariff(raw):
     return tariff
 
 
+def _validated_costs(raw):
+    """Return the validated install-cost settings, as an AnnualConfigError on failure.
+
+    annual_costs.resolve_costs raises ValueError because it is a pure module with no
+    dependency on this one; translating here keeps every config problem a single
+    exception type for the CLI and web layer to catch.
+    """
+    try:
+        return resolve_costs(raw)
+    except ValueError as error:
+        raise AnnualConfigError(str(error))
+
+
 def validate_config(config, today=None):
     """Validate and normalise an annual prediction config, returning a fully defaulted copy.
 
@@ -284,6 +298,7 @@ def validate_config(config, today=None):
         "load": _validate_load(raw.get("load")),
         "tariff": _validate_tariff(raw.get("tariff")),
         "samples_per_month": samples_per_month,
+        "costs": _validated_costs(raw.get("costs")),
         "debug": _coerce_bool(raw.get("debug", False)),
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
@@ -1065,7 +1080,7 @@ def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_recor
 
 
 def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh, car_rate_kw, plans=None):
-    """Run all three scenarios against one sampled day at a fixed car charging energy.
+    """Run all four scenarios against one sampled day at a fixed car charging energy.
 
     ``car_kwh`` is the actual energy this leg charges - either a full weekly charging
     session or zero, never the smeared daily average an earlier version of this tool
@@ -1196,7 +1211,7 @@ SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "ba
 
 
 def _blend_results(with_car, without_car, fraction):
-    """Blend two full three-scenario result dicts field by field.
+    """Blend two full four-scenario result dicts field by field.
 
     ``fraction`` is the share of the week charging actually happens
     (``sessions_per_week / 7`` - see ``car_charging_schedule()``), so every field of
@@ -1209,7 +1224,7 @@ def _blend_results(with_car, without_car, fraction):
 
 
 def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, plans=None):
-    """Run all three scenarios against one sampled day and return their billed figures.
+    """Run all four scenarios against one sampled day and return their billed figures.
 
     A configured car charges in weekly sessions, not a daily smear (see
     ``car_charging_schedule()``), so the sampled day is planned TWICE when a car is
@@ -1266,7 +1281,7 @@ def average_rate(rates, minutes):
 
 
 class AnnualPredictor:
-    """Projects a year of electricity costs under three scenarios using the Predbat engine."""
+    """Projects a year of electricity costs under four scenarios using the Predbat engine."""
 
     def __init__(self, config, log=None, storage=None, work_dir="./annual_work"):
         """Validate the config and prepare the run."""
@@ -1553,6 +1568,17 @@ class AnnualPredictor:
             if no_result_message not in self.caveats:
                 self.caveats.append(no_result_message)
 
+        total_kwp = sum(float(array.get("kwp", 0) or 0) for array in self.config.get("solar") or [])
+        battery_kwh = float((self.config.get("battery") or {}).get("size_kwh", 0) or 0)
+        costs = build_costs(total_kwp, battery_kwh, self.config["costs"])
+        payback = build_payback(annual_scenarios, costs, len(included), self.config["costs"])
+        if not payback.get("available"):
+            self.caveats.append("Payback could not be calculated: {}".format(payback["reason"]))
+        else:
+            self.caveats.append(
+                "Payback is simple payback - capital divided by the modelled annual saving. It ignores panel degradation, electricity price inflation, battery replacement and finance costs, so treat it as a comparison aid rather than a financial projection."
+            )
+
         return {
             "year": self.config["year"],
             "config": self.config["raw"],
@@ -1563,6 +1589,8 @@ class AnnualPredictor:
                 "savings": savings,
                 "months_included": len(included),
                 "months_excluded": excluded,
+                "costs": costs,
+                "payback": payback,
             },
             "caveats": self.caveats,
         }

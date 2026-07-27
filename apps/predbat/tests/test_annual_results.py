@@ -245,6 +245,43 @@ def test_annual_results(my_predbat):
         print("  ERROR: expected the caveat to name 2025-12 but not the spill month 2026-01, got {!r}".format(caveats[0]))
         failed = True
 
+    print("Test: the annual block carries a cost breakdown")
+    predictor = make_predictor()
+    months = [make_month_row(month, {"no_pvbat": 1000.0, "pv_only": 700.0, "without_predbat": 600.0, "with_predbat": 400.0}) for month in range(1, 13)]
+    result = predictor._build_results(months)
+    costs = result["annual"]["costs"]
+    # base_config()'s solar is a single 5.0 kWp array and its battery is 10.0 kWh.
+    if abs(costs["total_kwp"] - 5.0) > 0.001 or abs(costs["battery_kwh"] - 10.0) > 0.001:
+        print("  ERROR: the cost block should reflect the configured system, got {}".format(costs))
+        failed = True
+    if abs(costs["battery_gbp"] - 3500.0) > 0.01:
+        print("  ERROR: a 10 kWh battery should cost 3500, got {}".format(costs["battery_gbp"]))
+        failed = True
+    if abs(costs["total_gbp"] - (costs["pv_gbp"] + costs["battery_gbp"])) > 0.01:
+        print("  ERROR: total should be pv plus battery, got {}".format(costs))
+        failed = True
+
+    print("Test: a full twelve months produces payback for all three options")
+    payback = result["annual"]["payback"]
+    if not payback.get("available"):
+        print("  ERROR: twelve months should produce payback, got {}".format(payback))
+        failed = True
+    for key in ["pv_only", "pv_battery", "pv_battery_predbat"]:
+        if key not in payback:
+            print("  ERROR: payback should include {}, got {}".format(key, list(payback)))
+            failed = True
+
+    print("Test: a partial year refuses payback rather than extrapolating")
+    partial_months = [make_month_row(month, {"no_pvbat": 1000.0, "pv_only": 700.0, "without_predbat": 600.0, "with_predbat": 400.0}) for month in range(1, 12)]
+    partial_months.append(make_unavailable_row(12))
+    partial = make_predictor()._build_results(partial_months)
+    if partial["annual"]["payback"].get("available") is not False:
+        print("  ERROR: eleven usable months should refuse payback, got {}".format(partial["annual"]["payback"]))
+        failed = True
+    if partial["annual"]["costs"]["total_gbp"] <= 0:
+        print("  ERROR: costs should still be reported even when payback cannot be")
+        failed = True
+
     if test_annual_debug_flag():
         failed = True
 
