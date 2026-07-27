@@ -41,7 +41,7 @@ def make_predictor():
 def make_month_row(month, costs, status="ok"):
     """Build a month row with the given status and per-scenario cost_p values.
 
-    Every other scenario field is fixed at 1.0 (or 0.5 for the two derived fields) so
+    Every other scenario field is fixed at 1.0 (or 0.5 for the derived export credit) so
     the totals in each test are easy to predict by hand.
     """
     scenarios = {}
@@ -49,8 +49,6 @@ def make_month_row(month, costs, status="ok"):
         entry = {field: 1.0 for field in SCENARIO_FIELDS}
         entry["cost_p"] = costs[key]
         entry["export_credit_p_estimate"] = 0.5
-        entry["self_consumed_kwh"] = 0.5
-        entry["self_consumed_kwh_meaningful"] = True
         scenarios[key] = entry
     row = {"month": month, "status": status, "days": 30, "standing_charge_p": 100.0, "scenarios": scenarios}
     if status == "degraded":

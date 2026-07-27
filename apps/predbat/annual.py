@@ -1147,9 +1147,6 @@ class AnnualPredictor:
         self.tariff = None
         self.load_source = None
         self.caveats = []
-        # month -> [scenario keys] where export exceeded generation, so self_consumed_kwh was
-        # clamped to zero rather than being genuinely negative (see run()'s post-loop caveat)
-        self.grid_arbitrage_scenarios = {}
 
     async def _resolve_location(self, weather_fetch):
         """Return (latitude, longitude) from the config, resolving a postcode if needed."""
@@ -1240,7 +1237,6 @@ class AnnualPredictor:
             self.caveats.append("Months {} had too few forecast/actual day pairs, so their P10 used the flat {} derate.".format(sorted(self.weather.fallback_months), self.config["pv10_derate_fallback"]))
         if has_solar:
             self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
-        self.caveats.append("self_consumed_kwh is approximate: when the battery exports grid-charged energy it is understated.")
         self.caveats.append("export_credit_p_estimate is money ALREADY included inside cost_p (which prices every export minute at its real rate); it is informational only - adding it to cost_p double-counts export income.")
         self.caveats.append(
             "The without_predbat baseline charges in the single cheapest contiguous band of each day, mirroring Predbat's own savings baseline. On a half-hourly tariff such as Agile the cheapest band is often one 30 minute slot, so the baseline is a more pessimistic comparator there than on a banded tariff (Economy 7, Cosy, Flux) where it covers the whole cheap period. Compare predbat_vs_baseline_p across tariffs with that in mind."
@@ -1325,14 +1321,7 @@ class AnnualPredictor:
                 # readable "how much of that came from export" figure. Adding it to cost_p
                 # double-counts the export income - see the results-document caveat below.
                 entry["export_credit_p_estimate"] = entry["export_kwh"] * export_rate
-                self_consumed = entry["pv_generated_kwh"] - entry["export_kwh"]
-                entry["self_consumed_kwh"] = max(0.0, self_consumed)
-                meaningful = self_consumed >= 0.0
-                rounded = {name: round(value, 3) for name, value in entry.items()}
-                rounded["self_consumed_kwh_meaningful"] = meaningful
-                scenarios[key] = rounded
-                if not meaningful:
-                    self.grid_arbitrage_scenarios.setdefault(month, []).append(key)
+                scenarios[key] = {name: round(value, 3) for name, value in entry.items()}
 
             months.append(
                 {
@@ -1346,12 +1335,6 @@ class AnnualPredictor:
                 }
             )
             completed += 1
-
-        if self.grid_arbitrage_scenarios:
-            arbitrage_count = sum(len(keys) for keys in self.grid_arbitrage_scenarios.values())
-            first_month = sorted(self.grid_arbitrage_scenarios)[0]
-            message = "self_consumed_kwh was clamped to zero rather than negative for {} scenario/month row(s) (from month {}): export exceeded generation there. See self_consumed_kwh_meaningful.".format(arbitrage_count, first_month)
-            self.caveats.append(message)
 
         if progress:
             progress(total_units, total_units, "Complete")
@@ -1377,7 +1360,7 @@ class AnnualPredictor:
         if included:
             annual_scenarios = {}
             for key in SCENARIO_KEYS:
-                annual_scenarios[key] = {field: round(sum(entry["scenarios"][key][field] for entry in included), 3) for field in SCENARIO_FIELDS + ["export_credit_p_estimate", "self_consumed_kwh"]}
+                annual_scenarios[key] = {field: round(sum(entry["scenarios"][key][field] for entry in included), 3) for field in SCENARIO_FIELDS + ["export_credit_p_estimate"]}
             standing_total = round(sum(entry["standing_charge_p"] for entry in included), 3)
             savings["pv_battery_vs_none_p"] = round(annual_scenarios["no_pvbat"]["cost_p"] - annual_scenarios["without_predbat"]["cost_p"], 3)
             savings["predbat_vs_baseline_p"] = round(annual_scenarios["without_predbat"]["cost_p"] - annual_scenarios["with_predbat"]["cost_p"], 3)

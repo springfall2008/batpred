@@ -756,21 +756,17 @@ class AnnualPage:
     def _render_month_table(self, results):
         """Return the per-month energy breakdown, marking degraded and unavailable months."""
         text = "<h2>By month</h2>\n<table class='comparison-table'>\n"
-        text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Self-consumed</th><th>Battery</th></tr>\n"
+        text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th></tr>\n"
         for entry in results.get("months", []):
             name = calendar.month_abbr[entry["month"]]
             if entry.get("status") not in ("ok", "degraded"):
                 reason = html.escape(str(entry.get("reason", "no result")), quote=True)
-                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='7'>unavailable — {}</td></tr>\n".format(name, reason)
+                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='6'>unavailable — {}</td></tr>\n".format(name, reason)
                 continue
             suffix = " (degraded — {} sampled day(s) failed)".format(len(entry.get("failed_days", []))) if entry.get("status") == "degraded" else ""
             for key in SCENARIO_ORDER:
                 scenario = entry.get("scenarios", {}).get(key, {})
-                if scenario.get("self_consumed_kwh_meaningful", True):
-                    self_consumed = "{} kWh".format(round(scenario.get("self_consumed_kwh", 0), 1))
-                else:
-                    self_consumed = "<span class='annual-unavailable' title='The battery exported more than the PV generated, so this figure is not meaningful'>not meaningful</span>"
-                text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{}</td><td>{} kWh</td></tr>\n".format(
+                text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(
                     name if key == SCENARIO_ORDER[0] else "",
                     suffix if key == SCENARIO_ORDER[0] else "",
                     SCENARIO_LABELS[key],
@@ -778,7 +774,6 @@ class AnnualPage:
                     round(scenario.get("import_kwh", 0), 1),
                     round(scenario.get("export_kwh", 0), 1),
                     round(scenario.get("pv_generated_kwh", 0), 1),
-                    self_consumed,
                     round(scenario.get("battery_throughput_kwh", 0), 1),
                 )
         text += "</table>\n"

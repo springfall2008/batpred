@@ -218,14 +218,10 @@ run can also be downloaded as its raw JSON results document.
 ### The results view
 
 The results view mirrors the CLI's output: an annual totals table, the chart below, a
-month-by-month breakdown and the run's caveats. Two things carry over unchanged from how
-the engine reports them, and matter for reading the numbers correctly:
-
-- A month with `status: unavailable` is left out of the chart and the totals — it is
-  never drawn as a zero-cost bar or counted as a free month.
-- Where `self_consumed_kwh_meaningful` is `false` for a scenario, the table shows "not
-  meaningful" instead of a number, rather than a self-consumption figure that looks
-  precise but is not.
+month-by-month breakdown and the run's caveats. One thing carries over unchanged from how
+the engine reports it, and matters for reading the numbers correctly: a month with
+`status: unavailable` is left out of the chart and the totals — it is never drawn as a
+zero-cost bar or counted as a free month.
 
 ## Running it
 
@@ -257,8 +253,7 @@ Each month in the results JSON has a `status`:
   Excluded from the annual totals entirely, rather than counted as zero.
 
 Within each included month, every scenario reports `cost_p`, `import_kwh`, `export_kwh`,
-`pv_generated_kwh`, `battery_throughput_kwh`, `export_credit_p_estimate` and
-`self_consumed_kwh` (plus `self_consumed_kwh_meaningful`, see below).
+`pv_generated_kwh`, `battery_throughput_kwh` and `export_credit_p_estimate`.
 
 `export_credit_p_estimate` is **not** extra money on top of `cost_p` — `cost_p` already
 prices every export minute at its real per-minute rate, so the export credit is already
@@ -267,11 +262,13 @@ inside it. `export_credit_p_estimate` is a cruder second estimate of that same i
 human-readable "how much of that came from export" figure. Adding it to `cost_p`
 double-counts export income.
 
-`self_consumed_kwh` is `pv_generated_kwh` minus `export_kwh` and is approximate: when the
-battery exports grid-charged energy (rather than genuine excess solar) it is understated.
-If export exceeds generation for a scenario, `self_consumed_kwh` is clamped to zero and
-`self_consumed_kwh_meaningful` is `False` for that scenario/month, flagging that the
-figure should not be trusted there.
+There is deliberately no self-consumption figure. It cannot be derived from these
+totals: `pv_generated_kwh − export_kwh` assumes all export comes from PV, which is false
+whenever the battery exports grid-charged energy — on an arbitrage tariff such as
+Intelligent Octopus Go, export routinely exceeds generation and the subtraction goes
+negative. Reporting a clamped zero there would look like a real measurement rather than
+a broken one, so the field was removed instead. Measuring it properly needs a
+per-minute PV-to-load accumulator inside the prediction engine.
 
 The top-level `annual` block sums the included months' scenarios and reports two savings
 figures: `pv_battery_vs_none_p` (PV and battery vs. no system) and
@@ -294,7 +291,7 @@ comparisons of this figure with that in mind.
 
 The `caveats` list in the results document records anything that could affect how much
 to trust the numbers — a P10 fallback, a missing month's rate data, and the
-`export_credit_p_estimate`/`self_consumed_kwh` notes above among them — and is worth
+`export_credit_p_estimate` note above among them — and is worth
 reading before quoting the totals.
 
 ## Limitations
@@ -302,7 +299,7 @@ reading before quoting the totals.
 - The Open-Meteo forecast archive only reaches back to about 2021. For earlier years the
   tool plans against actuals instead and P10 uses the flat fallback derate, which it
   states in the results' caveats — savings are likely overstated for those years.
-- `self_consumed_kwh` is approximate, as described above.
+- Self-consumption is not reported, for the reason described above.
 - The forecast-versus-ERA5 gap includes systematic model bias as well as genuine
   forecast error, so measured solar uncertainty is slightly overstated.
 - A month with no rate data, no usable weather days, or where every sampled day failed to
