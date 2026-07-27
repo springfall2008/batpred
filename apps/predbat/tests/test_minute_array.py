@@ -128,7 +128,7 @@ def test_minute_array(my_predbat):
     # Test 11: pad=False sizing — max(dict.keys()) + 2 captures all accumulated keys
     print("Test 11: pad=False size derived from max(dict.keys()) + 2")
     # Simulate two-entity accumulation: entity A adds keys 0..4, entity B adds keys 0..2
-    # Final dict has keys 0..4 but age_days would reflect entity B (2 days → 2*1440 keys)
+    # Final dict has keys 0..4 but age_days would reflect entity B (2 days -> 2*1440 keys)
     big_dict = {i: float(i) for i in range(5)}
     size = max(big_dict.keys()) + 2  # 4 + 2 = 6
     ma11 = MinuteArray(big_dict, size)

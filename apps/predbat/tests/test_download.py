@@ -95,13 +95,13 @@ def test_download(my_predbat):
         try:
             test_result = test_func(my_predbat)
             if test_result:
-                print(f"✗ FAILED: {test_name}")
+                print(f"FAIL: FAILED: {test_name}")
                 failed += 1
             else:
-                print(f"✓ PASSED: {test_name}")
+                print(f"PASS: PASSED: {test_name}")
                 passed += 1
         except Exception as e:
-            print(f"✗ EXCEPTION in {test_name}: {e}")
+            print(f"FAIL: EXCEPTION in {test_name}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -258,8 +258,8 @@ def _test_compute_file_sha1(my_predbat):
     Test Git blob SHA1 hash computation (matches GitHub's SHA)
     """
     # Create a temporary file with known content
-    with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-        f.write("test content\n")
+    with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
+        f.write(b"test content\n")
         temp_path = f.name
 
     try:

@@ -29,9 +29,9 @@ async def test_octopus_misc(my_predbat):
     failed += await test_octopus_run(my_predbat)
 
     if failed == 0:
-        print("\n**** ✅ All Octopus Misc API tests PASSED ****")
+        print("\n**** PASS: All Octopus Misc API tests PASSED ****")
     else:
-        print(f"\n**** ❌ Octopus Misc API tests FAILED ({failed} test(s) failed) ****")
+        print(f"\n**** ERROR: Octopus Misc API tests FAILED ({failed} test(s) failed) ****")
 
     return failed
 
@@ -273,10 +273,10 @@ async def test_octopus_set_intelligent_schedule(my_predbat):
         print("PASS: returns_data=False parameter set correctly")
 
     if failed:
-        print("\n**** ❌ Octopus async_set_intelligent_target_schedule tests FAILED ****")
+        print("\n**** ERROR: Octopus async_set_intelligent_target_schedule tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus async_set_intelligent_target_schedule tests PASSED ****")
+        print("\n**** PASS: Octopus async_set_intelligent_target_schedule tests PASSED ****")
         return 0
 
 
@@ -442,10 +442,10 @@ async def test_octopus_join_saving_session(my_predbat):
             print("PASS: Multiple events can be joined sequentially")
 
     if failed:
-        print("\n**** ❌ Octopus async_join_saving_session_events tests FAILED ****")
+        print("\n**** ERROR: Octopus async_join_saving_session_events tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus async_join_saving_session_events tests PASSED ****")
+        print("\n**** PASS: Octopus async_join_saving_session_events tests PASSED ****")
         return 0
 
 
@@ -613,10 +613,10 @@ async def test_octopus_get_saving_sessions(my_predbat):
         print("PASS: Returns correct savingSessions structure")
 
     if failed:
-        print("\n**** ❌ Octopus async_get_saving_sessions tests FAILED ****")
+        print("\n**** ERROR: Octopus async_get_saving_sessions tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus async_get_saving_sessions tests PASSED ****")
+        print("\n**** PASS: Octopus async_get_saving_sessions tests PASSED ****")
         return 0
 
 
@@ -858,8 +858,8 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: All dashboard_item calls use app='octopus'")
 
-    # Test 7: Product info returns day/night links → async_get_day_night_rates is used
-    print("\n*** Test 7: Product info with day_unit_rates links → routes to async_get_day_night_rates ***")
+    # Test 7: Product info returns day/night links -> async_get_day_night_rates is used
+    print("\n*** Test 7: Product info with day_unit_rates links -> routes to async_get_day_night_rates ***")
     api7 = OctopusAPI(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=False)
 
     iog_tariff_code = "E-1R-IOG-SMB-TOU-25-12-12-H"
@@ -926,8 +926,8 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: Day/night rate data stored correctly in tariff")
 
-    # Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback
-    print("\n*** Test 8: INTELLI-FLUX-EXPORT 404s → fetches FLUX-IMPORT as fallback ***")
+    # Test 8: INTELLI-FLUX-EXPORT 404s -> fetches FLUX-IMPORT as fallback
+    print("\n*** Test 8: INTELLI-FLUX-EXPORT 404s -> fetches FLUX-IMPORT as fallback ***")
     api8 = OctopusAPI(my_predbat, key="test-api-key-8", account_id="test-account-8", automatic=False)
 
     flux_export_product = "INTELLI-FLUX-EXPORT-23-07-14"
@@ -981,8 +981,8 @@ async def test_octopus_fetch_tariffs(my_predbat):
     else:
         print("PASS: FLUX-IMPORT URL constructed correctly with correct product and tariff codes")
 
-    # Test 9: INTELLI-FLUX-EXPORT 404s, FLUX-IMPORT also 404s → falls back to current import data
-    print("\n*** Test 9: FLUX-EXPORT and FLUX-IMPORT both fail → falls back to current import data ***")
+    # Test 9: INTELLI-FLUX-EXPORT 404s, FLUX-IMPORT also 404s -> falls back to current import data
+    print("\n*** Test 9: FLUX-EXPORT and FLUX-IMPORT both fail -> falls back to current import data ***")
     api9 = OctopusAPI(my_predbat, key="test-api-key-9", account_id="test-account-9", automatic=False)
 
     fix_import_rates = [{"valid_from": "2025-01-01T00:00:00Z", "valid_to": "2025-01-01T00:30:00Z", "value_inc_vat": 28.14}]
@@ -1012,10 +1012,10 @@ async def test_octopus_fetch_tariffs(my_predbat):
         print("PASS: Current import rates used as final fallback when FLUX-IMPORT also unavailable")
 
     if failed:
-        print("\n**** ❌ Octopus fetch_tariffs tests FAILED ****")
+        print("\n**** ERROR: Octopus fetch_tariffs tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus fetch_tariffs tests PASSED ****")
+        print("\n**** PASS: Octopus fetch_tariffs tests PASSED ****")
         return 0
 
 
@@ -1245,10 +1245,10 @@ def test_octopus_get_octopus_rates_direct(my_predbat):
         print(f"PASS: Result covers minutes {min_minute} to {max_minute}")
 
     if failed:
-        print("\n**** ❌ Octopus get_octopus_rates_direct tests FAILED ****")
+        print("\n**** ERROR: Octopus get_octopus_rates_direct tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus get_octopus_rates_direct tests PASSED ****")
+        print("\n**** PASS: Octopus get_octopus_rates_direct tests PASSED ****")
         return 0
 
 
@@ -1397,10 +1397,10 @@ def test_octopus_get_intelligent_target_soc(my_predbat):
         print("PASS: Returns None when weekend_target_soc missing")
 
     if failed:
-        print("\n**** ❌ Octopus get_intelligent_target_soc tests FAILED ****")
+        print("\n**** ERROR: Octopus get_intelligent_target_soc tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus get_intelligent_target_soc tests PASSED ****")
+        print("\n**** PASS: Octopus get_intelligent_target_soc tests PASSED ****")
         return 0
 
 
@@ -1547,10 +1547,10 @@ def test_octopus_get_intelligent_target_time(my_predbat):
         print("PASS: Returns None when weekend_target_time missing")
 
     if failed:
-        print("\n**** ❌ Octopus get_intelligent_target_time tests FAILED ****")
+        print("\n**** ERROR: Octopus get_intelligent_target_time tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus get_intelligent_target_time tests PASSED ****")
+        print("\n**** PASS: Octopus get_intelligent_target_time tests PASSED ****")
         return 0
 
 
@@ -1649,10 +1649,10 @@ def test_octopus_get_intelligent_battery_size(my_predbat):
         print("PASS: Float battery size retrieved correctly")
 
     if failed:
-        print("\n**** ❌ Octopus get_intelligent_battery_size tests FAILED ****")
+        print("\n**** ERROR: Octopus get_intelligent_battery_size tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus get_intelligent_battery_size tests PASSED ****")
+        print("\n**** PASS: Octopus get_intelligent_battery_size tests PASSED ****")
         return 0
 
 
@@ -1845,10 +1845,10 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
         print("PASS: Returns empty dict when device has no vehicle fields")
 
     if failed:
-        print("\n**** ❌ Octopus get_intelligent_vehicle tests FAILED ****")
+        print("\n**** ERROR: Octopus get_intelligent_vehicle tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus get_intelligent_vehicle tests PASSED ****")
+        print("\n**** PASS: Octopus get_intelligent_vehicle tests PASSED ****")
         return 0
 
 
@@ -1888,7 +1888,7 @@ async def test_octopus_run(my_predbat):
     # Test 1: First run with no cache — all methods should be called
     print("\n*** Test 1: First run calls all expected methods ***")
     api = _mock_run_api(my_predbat, key="test-api-key", account_id="test-account")
-    # tariff_fetched_at and device_fetched_at are None → _data_age_minutes returns 9999
+    # tariff_fetched_at and device_fetched_at are None -> _data_age_minutes returns 9999
 
     result = await api.run(seconds=0, first=True)
 
@@ -2095,8 +2095,8 @@ async def test_octopus_run(my_predbat):
         print("PASS: Automatic config called on first run when automatic=True")
 
     if failed:
-        print("\n**** ❌ Octopus run method tests FAILED ****")
+        print("\n**** ERROR: Octopus run method tests FAILED ****")
         return 1
     else:
-        print("\n**** ✅ Octopus run method tests PASSED ****")
+        print("\n**** PASS: Octopus run method tests PASSED ****")
         return 0

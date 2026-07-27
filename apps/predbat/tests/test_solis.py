@@ -1944,7 +1944,7 @@ async def test_write_time_windows_v2_stale_slot_clearing():
 
     # Pass 1 should clear slot 2 charge (enable + time) even though slot 1 is also processed.
     # Slot 1 charge is active so Pass 1 skips it; slot 1 discharge is already clear.
-    # Slot 2 charge is disabled AND stale → 2 clear writes expected.
+    # Slot 2 charge is disabled AND stale -> 2 clear writes expected.
     slot2_enable_clear = next((c for c in calls if c["cid"] == SOLIS_CID_CHARGE_ENABLE_BASE + 1 and c["value"] == "0"), None)
     assert slot2_enable_clear is not None, "Pass 1 must clear stale slot 2 charge enable"
 
@@ -2364,7 +2364,7 @@ async def test_write_time_windows_v1_local_time_not_utc():
     outside_mode = api.set_storage_mode_calls[-1]["mode"]
     assert outside_mode == "Self-Use - No Timed Charge/Discharge", f"With UTC time 20:43 (outside window) expected 'Self-Use - No Timed Charge/Discharge', got '{outside_mode}'"
 
-    # The fix ensures now_utc_exact (local time) is used, so 21:43 local → Self-Use (in slot)
+    # The fix ensures now_utc_exact (local time) is used, so 21:43 local -> Self-Use (in slot)
     # If UTC were used (20:43), result would be Self-Use - No Timed Charge/Discharge (outside slot)
     print("PASSED: V1 mode uses local time for slot detection (regression: UTC offset no longer causes missed discharge windows)")
     return False
@@ -3468,14 +3468,14 @@ async def test_number_event_power_controls():
     # Test max_export_power: HA sends watts, inverter expects 100W units (÷100)
     api.read_and_write_cid_calls = []
     entity_id = f"number.predbat_solis_{inverter_sn}_max_export_power"
-    await api.number_event(entity_id, 5000)  # 5000 W → 50 (100W units)
+    await api.number_event(entity_id, 5000)  # 5000 W -> 50 (100W units)
 
     assert len(api.read_and_write_cid_calls) == 1, "Should call read_and_write_cid once for max_export_power"
     call = api.read_and_write_cid_calls[0]
     assert call["cid"] == SOLIS_CID_MAX_EXPORT_POWER, f"Expected CID {SOLIS_CID_MAX_EXPORT_POWER}, got {call['cid']}"
     assert call["value"] == "50", f"Expected '50' (5000÷100), got {call['value']}"
 
-    # Test with a value that truncates (e.g. 550W → 5 in 100W units, not 5.5)
+    # Test with a value that truncates (e.g. 550W -> 5 in 100W units, not 5.5)
     api.read_and_write_cid_calls = []
     await api.number_event(entity_id, 550)
     call = api.read_and_write_cid_calls[0]

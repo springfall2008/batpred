@@ -1120,7 +1120,7 @@ def test_forecast_solar_rate_limit_suppresses_fetch(my_predbat):
             }
         ]
 
-        # Step 1: first call gets a 429 → rate limit should be stored
+        # Step 1: first call gets a 429 -> rate limit should be stored
         test_api.set_mock_response("forecast.solar", {"error": "rate limit"}, 429)
 
         def create_mock_session(*args, **kwargs):
@@ -2345,7 +2345,7 @@ def test_pv_calibration_power_conversion(my_predbat):
 
         base.minute_data_import_export = mock_minute_data_import_export
 
-        # No forecast history → enabled_calibration will be False (< 3 days), but power
+        # No forecast history -> enabled_calibration will be False (< 3 days), but power
         # conversion and capped_data paths still execute.
         solar.get_history_wrapper = lambda entity_id, days, required=False: []
 
@@ -2477,7 +2477,7 @@ def test_pv_calibration_partial_history(my_predbat):
         """
         Build HA-format h0 forecast history (kW sensor) spanning days_back days.
         Returns 1.0 kW forecast during 10:00-11:00 UTC for each past day so that
-        the oldest timestamp is days_back days ago → pv_forecast_hist_days = days_back.
+        the oldest timestamp is days_back days ago -> pv_forecast_hist_days = days_back.
         """
         entries = []
         for day in range(days_back, 0, -1):
@@ -2543,7 +2543,7 @@ def test_pv_calibration_partial_history(my_predbat):
             total = solar.pv_calibration_total_adjustment
 
             if not expect_enabled:
-                # 2-day history → calibration disabled → hard-coded defaults must be used
+                # 2-day history -> calibration disabled -> hard-coded defaults must be used
                 if abs(worst - 0.7) > 0.001:
                     print("ERROR: {}-day history (disabled): worst_scaling should be 0.7, got {}".format(days_back, worst))
                     failed = True
@@ -2554,8 +2554,8 @@ def test_pv_calibration_partial_history(my_predbat):
                     print("ERROR: {}-day history (disabled): total_adjustment should be 1.0, got {}".format(days_back, total))
                     failed = True
             else:
-                # 5-day history → calibration enabled → must NOT produce the disabled-default values
-                # (actual 0.5 kWh/day < forecast 1.0 kWh/day → worst and best both < 1.0, not 0.7/1.3)
+                # 5-day history -> calibration enabled -> must NOT produce the disabled-default values
+                # (actual 0.5 kWh/day < forecast 1.0 kWh/day -> worst and best both < 1.0, not 0.7/1.3)
                 if abs(worst - 0.7) < 0.001:
                     print("ERROR: {}-day history (enabled): worst_scaling is 0.7 (disabled default) – calibration appears disabled".format(days_back))
                     failed = True
@@ -2665,7 +2665,7 @@ def test_pv_calibration_no_history_not_zeroed(my_predbat):
         base = test_api.mock_base
         plan_interval = base.plan_interval_minutes  # 5
 
-        # No historical actual production and no forecast history at all → no valid days,
+        # No historical actual production and no forecast history at all -> no valid days,
         # so max_pv_power_hist = max_pv_power_forecast = 0 and calibration is disabled.
         def mock_minute_data_import_export(max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
             return {}
@@ -2720,7 +2720,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
       - average_day_scaling ≈ 0.5
       - worst / best day scaling = 1.0 (no day-to-day variance)
       - calibrated gen-slot minute ≈ 0.5 × input
-      - pv_estimate10 / pv_estimate90 ≈ pv_estimateCL (worst=best=1.0 → no spread)
+      - pv_estimate10 / pv_estimate90 ≈ pv_estimateCL (worst=best=1.0 -> no spread)
 
     Sub-case B – variable performance (3 days: actual = 0.5, 1.0, 1.5 kWh each, forecast=1.0):
       - average_day_scaling ≈ 0.963  (weighted: (0.5×1.0 + 1.0×0.9 + 1.5×0.8) / 2.7 ≈ 0.963)
@@ -2794,7 +2794,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
         hist = build_pv_today_hist(actual_per_day)
 
         # Build pv_forecast minute dict directly (bypass full h0 pipeline).
-        # pv_calibration maps minute N → minute_absolute = minutes_now - N.
+        # pv_calibration maps minute N -> minute_absolute = minutes_now - N.
         # For day D's gen window (GEN_START..GEN_END-1 min-of-day):
         #   minute_ago = D*1440 + (minutes_now - m_of_day)
         # We provide FORECAST_KW kW at each gen-window minute for all past days.
@@ -2866,8 +2866,8 @@ def test_pv_calibration_synthetic_values(my_predbat):
             print("ERROR [A]: adj_minute[630] / raw = {:.4f}, expected ~{:.4f} (total_adj ± 15%)".format(ratio, r["total_adj"]))
             failed = True
 
-    # pv_estimate10 should use worst scaling (=1.0) → equal to pv_estimateCL.
-    # pv_estimate90 should use best scaling (=1.0) → equal to pv_estimateCL too (no spread).
+    # pv_estimate10 should use worst scaling (=1.0) -> equal to pv_estimateCL.
+    # pv_estimate90 should use best scaling (=1.0) -> equal to pv_estimateCL too (no spread).
     for entry in r["adj_data"]:
         cl = entry.get("pv_estimateCL")
         e10 = entry.get("pv_estimate10")
@@ -2882,7 +2882,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
                 failed = True
                 break
 
-    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x → weighted avg=0.963, worst=0.519, best=1.558 ---
+    # --- Sub-case B: 3 days at 0.5x, 1.0x, 1.5x -> weighted avg=0.963, worst=0.519, best=1.558 ---
     r = run_scenario([0.5, 1.0, 1.5])
 
     if abs(r["total_adj"] - 0.963) > TOL:
@@ -3172,7 +3172,7 @@ def test_pv_calibration_60min_period(my_predbat):
     base = test_api.mock_base
     base.plan_interval_minutes = PLAN_INTERVAL
 
-    # Flat historical production matching the forecast → calibration ratio ~1.0
+    # Flat historical production matching the forecast -> calibration ratio ~1.0
     # so the calibrated values should be very close to the raw forecast values.
     hist = {}
     days = 5
@@ -3300,7 +3300,7 @@ def test_pv_calibration_15min_period(my_predbat):
     base = test_api.mock_base
     base.plan_interval_minutes = PLAN_INTERVAL
 
-    # Flat historical production matching the forecast → calibration ratio ~1.0
+    # Flat historical production matching the forecast -> calibration ratio ~1.0
     hist = {}
     days = 5
     minutes_now = base.minutes_now  # 720 (noon)
@@ -3444,7 +3444,7 @@ def test_download_forecast_solar_data_azimuth_zero_south(my_predbat):
         test_api.cleanup()
 
     # --- Case 2: azimuth_zero_south=False (default), azimuth=0 (North in Predbat convention) ---
-    # convert_azimuth(0) → 180; URL path should contain /180/
+    # convert_azimuth(0) -> 180; URL path should contain /180/
     test_api = create_test_solar_api()
     try:
         test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0, "efficiency": 1.0}]
@@ -3473,8 +3473,8 @@ def test_pv_calibration_skips_system_down_days(my_predbat):
     drag the average downward, causing the forecast to be under-estimated.
 
     Scenario: 5 days of history.
-      - Days 2-5: actual = forecast = 1.0 kWh  → scaling factor = 1.0 each
-      - Day 1 (yesterday): actual = 0.03 kWh, forecast = 1.0 kWh (3% → should be skipped)
+      - Days 2-5: actual = forecast = 1.0 kWh  -> scaling factor = 1.0 each
+      - Day 1 (yesterday): actual = 0.03 kWh, forecast = 1.0 kWh (3% -> should be skipped)
 
     Expected outcome:
       - average_day_scaling ≈ 1.0 (only the 4 good days are used)

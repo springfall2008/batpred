@@ -39,7 +39,7 @@ def test_get_curve_value_with_int_keys(my_predbat):
     assert get_curve_value(curve, 98) == 0.23
     assert get_curve_value(curve, 97) == 0.3
     assert get_curve_value(curve, 96) == 1.0  # default value
-    print("✓ Integer keys test passed")
+    print("PASS: Integer keys test passed")
 
 
 def test_get_curve_value_with_string_keys(my_predbat):
@@ -52,7 +52,7 @@ def test_get_curve_value_with_string_keys(my_predbat):
     assert get_curve_value(curve, 98) == 0.23
     assert get_curve_value(curve, 97) == 0.3
     assert get_curve_value(curve, 96) == 1.0  # default value
-    print("✓ String keys test passed")
+    print("PASS: String keys test passed")
 
 
 def test_get_curve_value_with_mixed_keys(my_predbat):
@@ -63,7 +63,7 @@ def test_get_curve_value_with_mixed_keys(my_predbat):
 
     assert get_curve_value(curve, 100) == 0.15  # int key found
     assert get_curve_value(curve, 99) == 0.20  # string key found
-    print("✓ Mixed keys test passed")
+    print("PASS: Mixed keys test passed")
 
 
 def test_get_curve_value_custom_default(my_predbat):
@@ -74,7 +74,7 @@ def test_get_curve_value_custom_default(my_predbat):
     assert get_curve_value(curve, 100) == 0.15
     assert get_curve_value(curve, 99, default=0.5) == 0.5
     assert get_curve_value(curve, 98, default=0.0) == 0.0
-    print("✓ Custom default test passed")
+    print("PASS: Custom default test passed")
 
 
 def test_validate_config_auto_curve(my_predbat):
@@ -91,7 +91,7 @@ def test_validate_config_auto_curve(my_predbat):
         my_predbat.args["battery_discharge_power_curve"] = "auto"
         errors_with_auto = my_predbat.validate_config()
         assert errors_with_auto == baseline_errors, f"Setting curves to 'auto' introduced extra validation errors: baseline={baseline_errors}, with_auto={errors_with_auto}"
-        print("✓ Auto curve validation test passed")
+        print("PASS: Auto curve validation test passed")
     finally:
         my_predbat.args = original_args
 

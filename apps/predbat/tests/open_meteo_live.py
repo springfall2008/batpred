@@ -159,7 +159,7 @@ def print_comparison_table(label: str, sources: dict, day_str: str, tz_name: str
     """Print a side-by-side comparison table for one day.
 
     sources is an ordered dict of {source_name: hourly_dict} where each hourly_dict
-    maps 'YYYY-MM-DDTHH' → (kwh_p50, kwh_p10) as returned by _aggregate_to_hourly().
+    maps 'YYYY-MM-DDTHH' -> (kwh_p50, kwh_p10) as returned by _aggregate_to_hourly().
     Hours are shown in local time (tz_name).
     """
     source_names = list(sources.keys())
@@ -211,8 +211,8 @@ def print_comparison_table(label: str, sources: dict, day_str: str, tz_name: str
 async def run(fs_api_key: str = None, solcast_api_key: str = None, solcast_host: str = None) -> None:
     """Fetch live data via fetch_pv_forecast() for each source and print comparison.
 
-    Runs the full Predbat PV fetch pipeline (download → minute_data → pv_calibration
-    → publish_pv_stats) for each enabled source, then reads the detailedForecast that
+    Runs the full Predbat PV fetch pipeline (download -> minute_data -> pv_calibration
+    -> publish_pv_stats) for each enabled source, then reads the detailedForecast that
     Predbat would store in sensor.predbat_pv_today.
     """
     now_local = datetime.now(tz=LOCAL_TZ)
@@ -228,10 +228,10 @@ async def run(fs_api_key: str = None, solcast_api_key: str = None, solcast_host:
     _tmp = SolarAPI.__new__(SolarAPI)
     for i, a in enumerate(ARRAYS, 1):
         az_api = SolarAPI.convert_azimuth(_tmp, a["azimuth"])
-        print(f"  [{i}] postcode={a['postcode']}  kwp={a['kwp']}  declination={a['declination']}°  azimuth={a['azimuth']}° (→API: {az_api:.0f}°)  efficiency={a.get('efficiency', 1.0):.0%}")
+        print(f"  [{i}] postcode={a['postcode']}  kwp={a['kwp']}  declination={a['declination']}°  azimuth={a['azimuth']}° (->API: {az_api:.0f}°)  efficiency={a.get('efficiency', 1.0):.0%}")
     print(f"  cache: {_CACHE_ROOT}/cache/")
 
-    # results maps source_name → {"today": hourly_dict, "tomorrow": hourly_dict}
+    # results maps source_name -> {"today": hourly_dict, "tomorrow": hourly_dict}
     results: dict = {}
 
     # ── Open-Meteo ────────────────────────────────────────────────────────────

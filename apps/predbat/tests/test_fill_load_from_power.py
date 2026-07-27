@@ -82,7 +82,7 @@ def test_fill_load_from_power_basic():
     total_consumption = result[0] - result[59]
     assert abs(total_consumption - 3.0) < 0.2, f"Total consumption should be near 3.0 kWh, got {dp4(total_consumption)} kWh"
 
-    print(f"✓ Two 30-minute periods (0-59): {dp4(result[0])} -> {dp4(result[59])}, consumption: {dp4(total_consumption)} kWh")
+    print(f"PASS: Two 30-minute periods (0-59): {dp4(result[0])} -> {dp4(result[59])}, consumption: {dp4(total_consumption)} kWh")
     print("Test 1 PASSED")
 
 
@@ -119,7 +119,7 @@ def test_fill_load_from_power_no_power_data():
     # Check warning was logged
     assert any("No power data" in msg for msg in fetch.log_messages), "Should log warning about no power data"
 
-    print(f"✓ Original data returned: {dp4(result[0])}, {dp4(result[4])}")
+    print(f"PASS: Original data returned: {dp4(result[0])}, {dp4(result[4])}")
     print("Test 2 PASSED")
 
 
@@ -162,7 +162,7 @@ def test_fill_load_from_power_partial_power_data():
     total_consumption = result[0] - result[59]
     assert abs(total_consumption - 4.0) < 0.2, f"Total consumption should be near 4.0 kWh, got {dp4(total_consumption)} kWh"
 
-    print(f"✓ Two 30-minute periods: Power in first period, distributed in second")
+    print(f"PASS: Two 30-minute periods: Power in first period, distributed in second")
     print(f"  {dp4(result[0])} -> {dp4(result[29])} -> {dp4(result[59])}")
     print("Test 3 PASSED")
 
@@ -197,7 +197,7 @@ def test_fill_load_from_power_single_minute_period():
     # Last value should be around 4.0
     assert abs(result[9] - 4.0) < 0.1, f"Minute 9: expected ~4.0, got {result[9]}"
 
-    print(f"✓ Short span handled: {dp4(result[0])} -> {dp4(result[9])}")
+    print(f"PASS: Short span handled: {dp4(result[0])} -> {dp4(result[9])}")
     print("Test 4 PASSED")
 
 
@@ -225,7 +225,7 @@ def test_fill_load_from_power_zero_load():
     for minute in range(0, 30):
         assert result[minute] == 0.0, f"Minute {minute} should be 0.0, got {result[minute]}"
 
-    print("✓ Zero load values preserved")
+    print("PASS: Zero load values preserved")
     print("Test 5 PASSED")
 
 
@@ -301,9 +301,9 @@ def test_fill_load_from_power_backwards_time():
     first_hour_consumption = result[0] - result[59]
     assert abs(first_hour_consumption - 1.5) < 0.5, f"First hour should have ~1.5 kWh consumption, got {dp4(first_hour_consumption)}"
 
-    print(f"✓ Backwards time: minute 0 (now) = {dp4(result[0])} kWh")
-    print(f"✓ Backwards time: minute 60 (1h ago) = {dp4(result[60])} kWh")
-    print(f"✓ Backwards time: minute 120 (2h ago) = {dp4(result[120])} kWh")
+    print(f"PASS: Backwards time: minute 0 (now) = {dp4(result[0])} kWh")
+    print(f"PASS: Backwards time: minute 60 (1h ago) = {dp4(result[60])} kWh")
+    print(f"PASS: Backwards time: minute 120 (2h ago) = {dp4(result[120])} kWh")
     print("Test 6 PASSED")
 
 
@@ -346,7 +346,7 @@ def test_fill_load_from_power_data_extends_beyond_load():
     # They may not exist in the result dict at all, which is the correct behaviour.
     assert 1440 not in result or result[1440] == 0, "Minute 1440 should not be populated from power-only range"
 
-    print("✓ No spurious zero-load warning when power data extends past load data range")
+    print("PASS: No spurious zero-load warning when power data extends past load data range")
     print("Test 7 PASSED")
 
 
@@ -378,7 +378,7 @@ def test_fill_load_from_power_negative_power_corrupts_load_total():
     for minute in range(0, 31):
         load_minutes[minute] = 10.0
     for minute in range(31, 61):
-        load_minutes[minute] = 10.0 - (minute - 30) * (2.0 / 30)  # 9.933 → 8.0
+        load_minutes[minute] = 10.0 - (minute - 30) * (2.0 / 30)  # 9.933 -> 8.0
 
     expected_total = load_minutes[0] - load_minutes[60]  # 10.0 - 8.0 = 2.0 kWh
 
@@ -425,17 +425,17 @@ def run_all_tests(my_predbat=None):
         test_fill_load_from_power_negative_power_corrupts_load_total()
 
         print("\n" + "=" * 60)
-        print("✅ ALL TESTS PASSED")
+        print("PASS: ALL TESTS PASSED")
         print("=" * 60)
         return 0  # Return 0 for success
     except AssertionError as e:
         print("\n" + "=" * 60)
-        print(f"❌ TEST FAILED: {e}")
+        print(f"ERROR: TEST FAILED: {e}")
         print("=" * 60)
         return 1  # Return 1 for failure
     except Exception as e:
         print("\n" + "=" * 60)
-        print(f"❌ ERROR: {e}")
+        print(f"ERROR: ERROR: {e}")
         import traceback
 
         traceback.print_exc()

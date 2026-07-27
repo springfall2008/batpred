@@ -111,11 +111,11 @@ def test_fetch_pv_forecast_with_relative_time():
 
     # With the corrected formula (target = stored_minute - offset), a +120 min offset
     # (relative_time is 2 hours before midnight_utc) shifts data BACK by 120 minutes:
-    # forecast minute 0   (= relative_time + 0   = midnight - 2h) → output minute -120
-    # forecast minute 60  (= midnight - 1h)                        → output minute  -60
-    # forecast minute 120 (= midnight exactly)                     → output minute    0
-    # forecast minute 180 (= 1h after midnight)                    → output minute   60
-    # forecast minute 240 (= 2h after midnight)                    → output minute  120
+    # forecast minute 0   (= relative_time + 0   = midnight - 2h) -> output minute -120
+    # forecast minute 60  (= midnight - 1h)                        -> output minute  -60
+    # forecast minute 120 (= midnight exactly)                     -> output minute    0
+    # forecast minute 180 (= 1h after midnight)                    -> output minute   60
+    # forecast minute 240 (= 2h after midnight)                    -> output minute  120
 
     # Verify the offset is correctly applied
     assert pv_forecast_minute[0] == 1.0, f"Expected minute 0 to be 1.0, got {pv_forecast_minute.get(0)}"
@@ -127,9 +127,9 @@ def test_fetch_pv_forecast_with_relative_time():
     assert pv_forecast_minute10[60] == 1.2, f"Expected forecast10 minute 60 to be 1.2, got {pv_forecast_minute10.get(60)}"
     assert pv_forecast_minute10[120] == 1.6, f"Expected forecast10 minute 120 to be 1.6, got {pv_forecast_minute10.get(120)}"
 
-    print(f"✓ Forecast data correctly shifted back by 120 minutes (stored_minute - offset)")
-    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
-    print(f"✓ pv_forecast_minute10[0]={pv_forecast_minute10[0]}, [60]={pv_forecast_minute10[60]}, [120]={pv_forecast_minute10[120]}")
+    print(f"PASS: Forecast data correctly shifted back by 120 minutes (stored_minute - offset)")
+    print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
+    print(f"PASS: pv_forecast_minute10[0]={pv_forecast_minute10[0]}, [60]={pv_forecast_minute10[60]}, [120]={pv_forecast_minute10[120]}")
     print("Test 1 PASSED")
 
 
@@ -185,8 +185,8 @@ def test_fetch_pv_forecast_no_relative_time():
     assert pv_forecast_minute10[120] == 0.8, f"Expected forecast10 minute 120 to be 0.8, got {pv_forecast_minute10[120]}"
     assert pv_forecast_minute10[180] == 1.2, f"Expected forecast10 minute 180 to be 1.2, got {pv_forecast_minute10[180]}"
 
-    print(f"✓ Forecast data used with no offset (relative_time missing)")
-    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
+    print(f"PASS: Forecast data used with no offset (relative_time missing)")
+    print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 2 PASSED")
 
 
@@ -234,8 +234,8 @@ def test_fetch_pv_forecast_invalid_relative_time():
     assert pv_forecast_minute[60] == 0.5, f"Expected minute 60 to be 0.5, got {pv_forecast_minute[60]}"
     assert pv_forecast_minute[120] == 1.0, f"Expected minute 120 to be 1.0, got {pv_forecast_minute[120]}"
 
-    print(f"✓ Forecast data used with no offset (invalid relative_time)")
-    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
+    print(f"PASS: Forecast data used with no offset (invalid relative_time)")
+    print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 3 PASSED")
 
 
@@ -287,8 +287,8 @@ def test_fetch_pv_forecast_relative_time_same_as_midnight():
     assert pv_forecast_minute[120] == 1.0, f"Expected minute 120 to be 1.0, got {pv_forecast_minute[120]}"
     assert pv_forecast_minute[180] == 1.5, f"Expected minute 180 to be 1.5, got {pv_forecast_minute[180]}"
 
-    print(f"✓ Forecast data maps directly when relative_time = midnight_utc")
-    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
+    print(f"PASS: Forecast data maps directly when relative_time = midnight_utc")
+    print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 4 PASSED")
 
 
@@ -343,12 +343,12 @@ def test_fetch_pv_forecast_previous_day():
 
     # With the corrected formula (target = stored_minute - offset), a +1440 min offset
     # maps yesterday's stored minutes to today-relative minutes:
-    # forecast minute 0    (yesterday midnight)  → output minute -1440  (past, before today midnight)
-    # forecast minute 360  (yesterday 6am)       → output minute -1080  (past)
-    # forecast minute 720  (yesterday noon)      → output minute  -720  (past)
-    # forecast minute 1080 (yesterday 6pm)       → output minute  -360  (past)
-    # forecast minute 1440 (today midnight)      → output minute     0  ← first visible today slot
-    # forecast minute 1500 (today 1am)           → output minute    60
+    # forecast minute 0    (yesterday midnight)  -> output minute -1440  (past, before today midnight)
+    # forecast minute 360  (yesterday 6am)       -> output minute -1080  (past)
+    # forecast minute 720  (yesterday noon)      -> output minute  -720  (past)
+    # forecast minute 1080 (yesterday 6pm)       -> output minute  -360  (past)
+    # forecast minute 1440 (today midnight)      -> output minute     0  <- first visible today slot
+    # forecast minute 1500 (today 1am)           -> output minute    60
 
     # Verify the offset is correctly applied
     # Today midnight (forecast minute 1440) should appear at output minute 0
@@ -360,8 +360,8 @@ def test_fetch_pv_forecast_previous_day():
     assert pv_forecast_minute10[0] == 1.6, f"Expected forecast10 minute 0 to be 1.6, got {pv_forecast_minute10.get(0)}"
     assert pv_forecast_minute10[60] == 2.0, f"Expected forecast10 minute 60 to be 2.0, got {pv_forecast_minute10.get(60)}"
 
-    print(f"✓ Forecast data correctly shifted back by 1440 minutes (stored_minute - offset)")
-    print(f"✓ pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}")
+    print(f"PASS: Forecast data correctly shifted back by 1440 minutes (stored_minute - offset)")
+    print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}")
     print("Test 5 PASSED")
 
 
@@ -412,10 +412,10 @@ def test_fetch_pv_forecast_negative_offset():
 
     # With the corrected formula (target = stored_minute - offset), a -60 min offset
     # (relative_time is 1 hour AFTER midnight_utc) shifts data FORWARD by 60 minutes:
-    # forecast minute 60  (= relative_time + 1h = 2h after midnight) → output minute 120
-    # forecast minute 120 (= 3h after midnight)                      → output minute 180
-    # forecast minute 180 (= 4h after midnight)                      → output minute 240
-    # forecast minute 240 (= 5h after midnight)                      → output minute 300
+    # forecast minute 60  (= relative_time + 1h = 2h after midnight) -> output minute 120
+    # forecast minute 120 (= 3h after midnight)                      -> output minute 180
+    # forecast minute 180 (= 4h after midnight)                      -> output minute 240
+    # forecast minute 240 (= 5h after midnight)                      -> output minute 300
 
     # Check that data is mapped correctly with negative offset
     assert pv_forecast_minute[120] == 0.0, f"Expected minute 120 to be 0.0, got {pv_forecast_minute.get(120)}"
@@ -429,8 +429,8 @@ def test_fetch_pv_forecast_negative_offset():
     assert pv_forecast_minute10[240] == 0.8, f"Expected forecast10 minute 240 to be 0.8, got {pv_forecast_minute10.get(240)}"
     assert pv_forecast_minute10[300] == 1.2, f"Expected forecast10 minute 300 to be 1.2, got {pv_forecast_minute10.get(300)}"
 
-    print(f"✓ Forecast data correctly shifted forward by 60 minutes (stored_minute - (-60))")
-    print(f"✓ pv_forecast_minute[120]={pv_forecast_minute[120]}, [180]={pv_forecast_minute[180]}, [240]={pv_forecast_minute[240]}")
+    print(f"PASS: Forecast data correctly shifted forward by 60 minutes (stored_minute - (-60))")
+    print(f"PASS: pv_forecast_minute[120]={pv_forecast_minute[120]}, [180]={pv_forecast_minute[180]}, [240]={pv_forecast_minute[240]}")
     print("Test 6 PASSED")
 
 
