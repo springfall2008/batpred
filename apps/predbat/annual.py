@@ -873,7 +873,7 @@ def _baseline_charge_window(predbat):
     return windows, [predbat.soc_max for _ in windows]
 
 
-def _billed_result(predbat, end_record, pv_step):
+def _billed_result(predbat, end_record, pv_step, save=None):
     """Run one scenario to completion and return its billed figures.
 
     The battery-value correction (metric_end minus metric_start) values whatever
@@ -890,9 +890,20 @@ def _billed_result(predbat, end_record, pv_step):
     would inflate ``cost_p`` for any scenario whose plan happens to accrue it —
     typically the battery scenarios, never the no-battery baseline — for a reason
     that has nothing to do with money actually billed.
+
+    ``save``, when set to ``"best"``, makes ``run_prediction()`` also copy
+    ``predict_soc_best``/``predict_clipped_best``/``predict_iboost_best``/
+    ``predict_carbon_best``/``predict_metric_best`` onto ``predbat`` (see
+    ``plan.py``'s ``run_prediction()``) - the attributes ``publish_html_plan()``
+    unconditionally reads. Those are otherwise never populated on the annual engine's
+    headless path, since neither this call nor ``calculate_plan(publish=False)``
+    passes ``save`` by default. This must be the SAME run the billed figures come
+    from, not a second one: a second run would double the planning cost per scenario
+    and - because ``run_prediction()`` is not required to be side-effect-free between
+    calls - is not guaranteed to reproduce identical figures.
     """
     cost, import_kwh_battery, import_kwh_house, export_kwh, _, final_soc, _, battery_cycle, _, final_iboost, _ = predbat.run_prediction(
-        predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record
+        predbat.charge_limit_best, predbat.charge_window_best, predbat.export_window_best, predbat.export_limits_best, False, end_record=end_record, save=save
     )
     metric_start, _ = predbat.compute_metric(end_record, predbat.soc_kw, predbat.soc_kw, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     metric_end, _ = predbat.compute_metric(end_record, final_soc, final_soc, cost, cost, final_iboost, final_iboost, 0, 0, 0, 0, 0, 0)
@@ -1011,7 +1022,12 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     scenario key, each holding that scenario's plan captured against the same PV and load
     series it was billed against - a plan drawn from a different series would defeat the
     point of the feature, which is cross-checking the billed numbers. Leaving it ``None``
-    (the default) skips every capture, so a non-debug run pays no extra cost.
+    (the default) skips every capture, so a non-debug run pays no extra cost. Capturing
+    also asks each ``_billed_result()`` call to run its (single) prediction with
+    ``save="best"`` instead of running a second one: ``save`` only gates copying,
+    logging and dashboard writes that happen after the billed figures are already
+    computed, so it must never change ``cost_p``/``import_kwh``/etc - see
+    ``test_annual_debug_capture()`` for the regression guard on that.
     """
     prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh)
 
@@ -1035,7 +1051,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.export_window_best = []
     predbat.export_limits_best = []
     predbat.prediction = Prediction(predbat, zero_step, zero_step, load_step, load_step, soc_kw=0, soc_max=0)
-    results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step)
+    results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step, save="best" if plans is not None else None)
     if plans is not None:
         plans["no_pvbat"] = _capture_plan(predbat, zero_step, zero_step, load_step, load_step, DAY_MINUTES)
 
@@ -1048,7 +1064,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.export_window_best = []
     predbat.export_limits_best = []
     predbat.prediction = Prediction(predbat, actual_step, actual_step, load_step, load_step, soc_kw=START_SOC_KWH)
-    results["without_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    results["without_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step, save="best" if plans is not None else None)
     if plans is not None:
         plans["without_predbat"] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
 
@@ -1092,7 +1108,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     # grid, identical regardless of which PV series build_step_data() was called with.
     predbat_load_step, _, _ = build_step_data(predbat, forecast_pv, p10_pv)
     predbat.prediction = Prediction(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, soc_kw=START_SOC_KWH)
-    results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step, save="best" if plans is not None else None)
     if plans is not None:
         plans["with_predbat"] = _capture_plan(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, DAY_MINUTES)
 

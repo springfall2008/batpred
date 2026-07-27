@@ -19,7 +19,7 @@ exercise this same code from the top.
 import inspect
 from datetime import date
 
-from annual import SCENARIO_FIELDS, SCENARIO_KEYS, AnnualPredictor, _capture_plan, _run_scenarios, average_rate, run_day, validate_config
+from annual import SCENARIO_FIELDS, SCENARIO_KEYS, AnnualPredictor, _billed_result, _capture_plan, _run_scenarios, average_rate, run_day, validate_config
 from prediction import Prediction
 from tests.test_infra import reset_inverter
 
@@ -230,10 +230,17 @@ def test_annual_debug_capture(my_predbat):
     """Verify ``_capture_plan()`` returns the structure the web plan renderer requires.
 
     ``_run_scenarios()`` needs a full weather/tariff/load-source rig to drive from a unit
-    test (see ``test_annual_integration.py``, registered as slow), so this exercises the
-    capture helper it calls directly instead, against the same kind of minimal plan state
-    ``test_plan_json_rate_adjust.py`` builds - empty charge/export windows, no search, just
-    enough state for ``publish_html_plan()`` to walk the plan grid and return real rows.
+    test (see ``test_annual_integration.py``, registered as slow, which also carries the
+    regression guards that need that rig: identical billed figures with and without
+    capture, and that a capturing run never leaves ``predbat.debug_enable`` on). This
+    exercises the capture helper directly instead, against the same kind of minimal plan
+    state ``test_plan_json_rate_adjust.py`` builds - empty charge/export windows, no
+    search - but drives it through ``_billed_result(save=...)``, the SAME call
+    ``_run_scenarios()`` makes, rather than calling ``predbat.run_prediction()`` by hand.
+    An earlier version of this test called ``run_prediction(save="best")`` directly, which
+    happened to populate ``predict_*_best`` too, but masked a real bug: production's
+    ``_billed_result()`` never passed ``save`` at all, so ``_capture_plan()`` raised
+    ``AttributeError`` on the actual annual-engine path every time debug was switched on.
     """
     failed = False
     print("Test: _capture_plan returns a renderer-ready plan with non-empty rows")
@@ -254,19 +261,18 @@ def test_annual_debug_capture(my_predbat):
         load_step[minute] = 0.5 / (60 / 5)
     my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, soc_kw=my_predbat.soc_kw, soc_max=my_predbat.soc_max)
 
-    # Empty windows/limits, exactly as _run_scenarios() passes for its "no system" scenario -
-    # this drives a real run_prediction(save="best") so publish_html_plan()'s unconditional
-    # predict_*_best reads (populated only by a save="best" run) do not raise, without pulling
-    # in the search machinery _run_scenarios() itself needs.
-    charge_limit_best = []
-    charge_window_best = []
-    export_window_best = []
-    export_limits_best = []
-    my_predbat.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=my_predbat.end_record, save="best")
-    my_predbat.charge_limit_best = charge_limit_best
-    my_predbat.charge_window_best = charge_window_best
-    my_predbat.export_window_best = export_window_best
-    my_predbat.export_limits_best = export_limits_best
+    # Empty windows/limits, exactly as _run_scenarios() passes for its "no system" scenario.
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+
+    # The production call sequence: _run_scenarios() calls _billed_result(..., save="best"
+    # if plans is not None else None) and THEN _capture_plan() reads the predict_*_best
+    # attributes that call's save="best" just populated. Calling run_prediction() directly
+    # here (as an earlier version of this test did) would not have caught the bug where
+    # _billed_result() stopped threading save through.
+    _billed_result(my_predbat, my_predbat.end_record, pv_step, save="best")
 
     plan = _capture_plan(my_predbat, pv_step, pv_step, load_step, load_step, my_predbat.end_record)
     if not plan.get("rows"):
@@ -277,6 +283,11 @@ def test_annual_debug_capture(my_predbat):
         failed = True
     if "end_record" not in plan:
         print("  ERROR: expected 'end_record' in the captured plan")
+        failed = True
+
+    print("Test: capturing plans does not leak predbat.debug_enable on")
+    if my_predbat.debug_enable is not False:
+        print("  ERROR: predbat.debug_enable should still be False after a capturing run, got {!r}".format(my_predbat.debug_enable))
         failed = True
 
     print("Test: plans=None leaves the non-debug path untouched")

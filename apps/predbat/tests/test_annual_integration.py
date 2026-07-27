@@ -16,7 +16,7 @@ from datetime import date, datetime
 
 import pytz
 
-from annual import DAY_MINUTES, MAX_SESSIONS_PER_WEEK, PLAN_MINUTES, SCENARIO_FIELDS, SCENARIO_KEYS, _run_scenarios, car_charging_schedule, run_day, validate_config
+from annual import DAY_MINUTES, DEFAULT_CAR_RATE_KW, MAX_SESSIONS_PER_WEEK, PLAN_MINUTES, SCENARIO_FIELDS, SCENARIO_KEYS, _run_scenarios, car_charging_schedule, run_day, validate_config
 from annual_load import SyntheticLoadProfile
 from tests.test_infra import reset_inverter
 
@@ -290,5 +290,49 @@ def test_annual_integration(my_predbat):
             if abs(expected_value - actual_value) > 1e-6:
                 print("  ERROR: blended {}.{} = {}, expected f * with_car_leg + (1 - f) * standalone_no_car_leg = {}".format(key, field, actual_value, expected_value))
                 failed = True
+
+    print("Test: capturing plans does not change the billed figures (save leaking into the numbers)")
+    # _billed_result() threads save="best" into the SAME run_prediction() call the annual
+    # engine already makes when a scenario's plan is captured, rather than running a second
+    # prediction. save only gates copying predict_*_best onto predbat, logging and dashboard
+    # writes - all of which happen AFTER the billed tuple has already been computed and
+    # returned - so it must never change the figures a scenario is billed for. This proves
+    # that by running the identical scenario twice back to back and diffing every field,
+    # rather than assuming save is side-effect-free on the numbers.
+    reset_inverter(my_predbat)
+    capture_midnight = pytz.utc.localize(datetime(day.year, day.month, day.day))
+    capture_load_source = SyntheticLoadProfile(annual_kwh=config["load"]["annual_kwh"], shape=config["load"]["shape"], year=config["year"])
+    without_capture = _run_scenarios(my_predbat, config, weather, StubTariff(), capture_load_source, day, capture_midnight, car_kwh=0.0, car_rate_kw=DEFAULT_CAR_RATE_KW)
+    reset_inverter(my_predbat)
+    plans = {}
+    with_capture = _run_scenarios(my_predbat, config, weather, StubTariff(), capture_load_source, day, capture_midnight, car_kwh=0.0, car_rate_kw=DEFAULT_CAR_RATE_KW, plans=plans)
+    for key in SCENARIO_KEYS:
+        for field in SCENARIO_FIELDS:
+            if without_capture[key][field] != with_capture[key][field]:
+                print("  ERROR: {}.{} = {} without capture but {} with capture - save is leaking into the billed numbers".format(key, field, without_capture[key][field], with_capture[key][field]))
+                failed = True
+
+    print("Test: capturing plans does not leak predbat.debug_enable on")
+    # The annual "debug" flag means "save the plan info", nothing more - it must never be
+    # wired to Predbat's own debug_enable, which kernel_supported() requires False to use
+    # the fast C++ prediction kernel. Leaving debug_enable True on the shared fixture has
+    # already caused one apparent hang (an 8x slowdown from every later plan falling back
+    # to pure Python), so this pins it off after a capturing run.
+    if my_predbat.debug_enable is not False:
+        print("  ERROR: predbat.debug_enable should still be False after a capturing run, got {!r}".format(my_predbat.debug_enable))
+        failed = True
+
+    print("Test: a scenario's captured plan reflects ITS OWN state, not stale state from another scenario")
+    # no_pvbat runs with soc_max=0 (see _run_scenarios()), so every row of ITS captured plan
+    # must show 0% SoC. If capture were reading leftover state from a battery scenario -
+    # for example because predbat.prediction or the *_best arrays were not refreshed before
+    # the capture - this would be non-zero, which is what makes the check discriminating.
+    if any(row.get("soc_percent", 0) != 0 for row in plans["no_pvbat"]["rows"]):
+        print("  ERROR: no_pvbat's captured rows should all show 0% SoC (soc_max=0), got at least one non-zero soc_percent")
+        failed = True
+    for key in SCENARIO_KEYS:
+        if not plans[key]["rows"]:
+            print("  ERROR: {}'s captured plan has no rows - the viewer would render 'No plan data available'".format(key))
+            failed = True
 
     return failed
