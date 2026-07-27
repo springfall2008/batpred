@@ -16,11 +16,17 @@ from lattice_autoconfig import (
     CompileStatus,
     LatticeAutoConfigCompiler,
     MaterializationReadiness,
+    ProjectionCardinality,
+    ProjectionRouting,
+    ProjectionValueKind,
+    ProviderConfigProjection,
     ProviderAlias,
     ProviderHealth,
     ProviderIdentityAlias,
+    ProviderProjectionValue,
     ProviderRoleAssignment,
     ProviderSnapshot,
+    UserConfigOverride,
     compile_auto_config,
 )
 
@@ -73,6 +79,118 @@ def snapshot(
         identity_aliases,
         role_assignments,
     )
+
+
+def multi_fragment(provider, node_ids):
+    """Build a provider fragment containing ordered independent inverter nodes."""
+    nodes = []
+    for index, node_id in enumerate(node_ids):
+        access_path = "{}-{}-path".format(provider, node_id)
+        nodes.append(
+            {
+                "id": node_id,
+                "kind": "inverter",
+                "deviceType": "hybrid",
+                "accessPaths": [
+                    {
+                        "id": access_path,
+                        "provider": provider,
+                        "preference": 10,
+                    }
+                ],
+                "capabilities": [
+                    {
+                        "capability": "battery.target_soc",
+                        "accessPath": access_path,
+                        "ref": index + 1,
+                        "shape": "setpoint",
+                        "control": {"protocol": "mqtt"},
+                    }
+                ],
+            }
+        )
+    return {
+        "topologyVersion": "0.3.0",
+        "scope": "fragment",
+        "docVersion": 1,
+        "producer": {
+            "name": provider,
+            "provider": provider,
+            "authority": 10,
+        },
+        "nodes": nodes,
+    }
+
+
+def projection_snapshot(
+    provider,
+    node_ids,
+    role_assignments,
+    config_projections,
+    identity_aliases=(),
+    generation=1,
+):
+    """Build a provider snapshot carrying indexed roles and config projections."""
+    return ProviderSnapshot(
+        provider_id=provider,
+        generation=generation,
+        health=ProviderHealth.HEALTHY,
+        topology_fragment=multi_fragment(provider, node_ids),
+        identity_aliases=identity_aliases,
+        role_assignments=role_assignments,
+        config_projections=config_projections,
+    )
+
+
+def projection_value(
+    node_id,
+    kind,
+    value=None,
+    capability=None,
+    identity=None,
+    access_path_id=None,
+):
+    """Build one compact provider projection value for tests."""
+    identity_kind, identity_value = identity or (None, None)
+    if kind is ProjectionValueKind.ENTITY and capability is None:
+        capability = "battery.target_soc"
+    return ProviderProjectionValue(
+        node_id=node_id,
+        kind=kind,
+        value=value,
+        capability=capability,
+        identity_kind=identity_kind,
+        identity_value=identity_value,
+        access_path_id=access_path_id,
+    )
+
+
+def config_projection(
+    argument,
+    values,
+    role=AliasRole.PRIMARY,
+    group="inverters",
+    routing=ProjectionRouting.LEAF,
+    cardinality=ProjectionCardinality.PER_INDEX,
+    required=True,
+    transforms=(),
+):
+    """Build one generic provider projection declaration for tests."""
+    return ProviderConfigProjection(
+        argument=argument,
+        role=role,
+        group=group,
+        routing=routing,
+        cardinality=cardinality,
+        values=values,
+        required=required,
+        transforms=transforms,
+    )
+
+
+def indexed_roles(node_ids):
+    """Select each node as both an indexed primary and control target."""
+    return tuple(ProviderRoleAssignment(role, "inverters", index, node_id) for index, node_id in enumerate(node_ids) for role in (AliasRole.PRIMARY, AliasRole.CONTROL))
 
 
 def ready_plan():
@@ -401,6 +519,658 @@ class TestPlanCompilation(unittest.TestCase):
         )
         self.assertIsNone(plan.primary_target)
         self.assertIsNone(plan.control_target)
+
+
+class TestConfigProjectionCompilation(unittest.TestCase):
+    """Provider contracts project selected indexed capabilities into config."""
+
+    def test_gateway_multi_aio_projects_ordered_leaf_arrays(self):
+        """Two Gateway-like AIO nodes produce deterministic per-index arrays."""
+        nodes = ("AIO1", "AIO2")
+        gateway = projection_snapshot(
+            "gateway",
+            nodes,
+            indexed_roles(nodes),
+            (
+                config_projection(
+                    "battery_power",
+                    tuple(
+                        projection_value(
+                            node,
+                            ProjectionValueKind.ENTITY,
+                            "sensor.gateway_{}_battery_power".format(node.lower()),
+                        )
+                        for node in nodes
+                    ),
+                ),
+                config_projection(
+                    "inverter_type",
+                    tuple(
+                        projection_value(
+                            node,
+                            ProjectionValueKind.CONSTANT,
+                            "GEC",
+                        )
+                        for node in nodes
+                    ),
+                ),
+                config_projection(
+                    "num_inverters",
+                    (
+                        projection_value(
+                            nodes[0],
+                            ProjectionValueKind.CONSTANT,
+                            2,
+                        ),
+                    ),
+                    cardinality=ProjectionCardinality.SCALAR,
+                ),
+            ),
+        )
+
+        plan = compile_auto_config((gateway,))
+
+        self.assertEqual(
+            dict(plan.projected_config),
+            {
+                "battery_power": (
+                    "sensor.gateway_aio1_battery_power",
+                    "sensor.gateway_aio2_battery_power",
+                ),
+                "inverter_type": ("GEC", "GEC"),
+                "num_inverters": 2,
+            },
+        )
+        self.assertEqual(
+            [argument.name for argument in plan.config_arguments],
+            ["battery_power", "inverter_type", "num_inverters"],
+        )
+        self.assertEqual(
+            {field.name for field in plan.fields if field.name.startswith("config.")},
+            {
+                "config.battery_power",
+                "config.inverter_type",
+                "config.num_inverters",
+            },
+        )
+        self.assertEqual(
+            plan.materialization_readiness.blockers,
+            ("atomic_materializer_missing",),
+        )
+        self.assertFalse(plan.materialization_readiness.ready)
+        requests = []
+        run = LatticeAutoConfigCompiler(
+            {"gateway": MutableReader(gateway)},
+            requests.append,
+        ).drain()
+        self.assertEqual(run.materializations, 0)
+        self.assertEqual(requests, [])
+
+    def test_ge_ems_coordinator_fans_out_entities_and_zero_constants(self):
+        """One selected EMS coordinator can publish an ordered fan-out array."""
+        role_assignments = (
+            ProviderRoleAssignment(
+                AliasRole.PRIMARY,
+                "inverters",
+                0,
+                "BAT1",
+            ),
+            ProviderRoleAssignment(
+                AliasRole.PRIMARY,
+                "inverters",
+                1,
+                "BAT2",
+            ),
+            ProviderRoleAssignment(
+                AliasRole.CONTROL,
+                "inverters",
+                0,
+                "EMS",
+            ),
+            ProviderRoleAssignment(
+                AliasRole.CONTROL,
+                "inverters",
+                1,
+                "EMS",
+            ),
+        )
+        ems = projection_snapshot(
+            "gecloud",
+            ("EMS", "BAT1", "BAT2"),
+            role_assignments,
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "EMS",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.gecloud_ems_battery_power",
+                        ),
+                        projection_value(
+                            "EMS",
+                            ProjectionValueKind.CONSTANT,
+                            0,
+                        ),
+                    ),
+                    role=AliasRole.CONTROL,
+                    routing=ProjectionRouting.COORDINATOR,
+                ),
+                config_projection(
+                    "charge_start_time",
+                    (
+                        projection_value(
+                            "EMS",
+                            ProjectionValueKind.ENTITY,
+                            "select.gecloud_ems_charge_start",
+                        ),
+                        projection_value(
+                            "EMS",
+                            ProjectionValueKind.ENTITY,
+                            "select.gecloud_ems_charge_start",
+                        ),
+                    ),
+                    role=AliasRole.CONTROL,
+                    routing=ProjectionRouting.COORDINATOR,
+                ),
+            ),
+        )
+
+        plan = compile_auto_config((ems,))
+
+        self.assertEqual(
+            plan.projected_config["battery_power"],
+            ("sensor.gecloud_ems_battery_power", 0),
+        )
+        self.assertEqual(
+            plan.projected_config["charge_start_time"],
+            (
+                "select.gecloud_ems_charge_start",
+                "select.gecloud_ems_charge_start",
+            ),
+        )
+        battery_argument = next(argument for argument in plan.config_arguments if argument.name == "battery_power")
+        self.assertEqual(
+            battery_argument.candidates[0].routing,
+            ProjectionRouting.COORDINATOR.value,
+        )
+
+    def test_fox_projection_carries_transform_and_constant_flags(self):
+        """Fox-like power entities retain transform metadata and invert flags."""
+        fox = projection_snapshot(
+            "fox",
+            ("FOX1",),
+            indexed_roles(("FOX1",)),
+            (
+                config_projection(
+                    "grid_power",
+                    (
+                        projection_value(
+                            "FOX1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.fox_fox1_grid_power",
+                        ),
+                    ),
+                    transforms=("invert", "watts"),
+                ),
+                config_projection(
+                    "grid_power_invert",
+                    (
+                        projection_value(
+                            "FOX1",
+                            ProjectionValueKind.CONSTANT,
+                            True,
+                        ),
+                    ),
+                ),
+                config_projection(
+                    "inverter_type",
+                    (
+                        projection_value(
+                            "FOX1",
+                            ProjectionValueKind.CONSTANT,
+                            "FoxCloud",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        plan = compile_auto_config((fox,))
+        grid_argument = next(argument for argument in plan.config_arguments if argument.name == "grid_power")
+
+        self.assertEqual(grid_argument.transforms, ("invert", "watts"))
+        self.assertEqual(plan.projected_config["grid_power_invert"], (True,))
+        self.assertEqual(plan.projected_config["inverter_type"], ("FoxCloud",))
+
+    def test_solis_optional_projection_preserves_none_and_absence(self):
+        """Solis-like optional args distinguish explicit None from no binding."""
+        solis = projection_snapshot(
+            "solis",
+            ("SOLIS1",),
+            indexed_roles(("SOLIS1",)),
+            (
+                config_projection(
+                    "givtcp_rest",
+                    (
+                        projection_value(
+                            "SOLIS1",
+                            ProjectionValueKind.NONE,
+                        ),
+                    ),
+                    cardinality=ProjectionCardinality.SCALAR,
+                    required=False,
+                ),
+                config_projection(
+                    "pause_mode",
+                    (
+                        projection_value(
+                            "SOLIS1",
+                            ProjectionValueKind.NONE,
+                        ),
+                    ),
+                    required=False,
+                ),
+                config_projection(
+                    "inverter_type",
+                    (
+                        projection_value(
+                            "SOLIS1",
+                            ProjectionValueKind.CONSTANT,
+                            "SolisCloud",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        plan = compile_auto_config((solis,))
+
+        self.assertIsNone(plan.projected_config["givtcp_rest"])
+        self.assertEqual(plan.projected_config["pause_mode"], (None,))
+        self.assertNotIn("idle_start_time", plan.projected_config)
+
+    def test_cross_provider_identity_and_access_path_select_one_value(self):
+        """An explicit correlated access path beats a generic provider value."""
+        gateway = projection_snapshot(
+            "gateway",
+            ("GW1",),
+            indexed_roles(("GW1",)),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "GW1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.gateway_battery_power",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(ProviderIdentityAlias("serial", "SER123", "GW1"),),
+        )
+        cloud = projection_snapshot(
+            "cloud",
+            ("CLOUD1",),
+            (),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "CLOUD1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.cloud_battery_power",
+                            identity=("serial", "SER123"),
+                            access_path_id="cloud-CLOUD1-path",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(
+                ProviderIdentityAlias(
+                    "serial",
+                    "SER123",
+                    "CLOUD1",
+                ),
+            ),
+        )
+
+        plan = compile_auto_config((gateway, cloud))
+        argument = plan.config_arguments[0]
+
+        self.assertEqual(
+            plan.projected_config["battery_power"],
+            ("sensor.cloud_battery_power",),
+        )
+        self.assertEqual(
+            {candidate.provider_id for candidate in argument.candidates},
+            {"gateway", "cloud"},
+        )
+        cloud_candidate = next(candidate for candidate in argument.candidates if candidate.provider_id == "cloud")
+        self.assertEqual(
+            cloud_candidate.capabilities,
+            ("battery.target_soc",),
+        )
+        self.assertEqual(
+            cloud_candidate.identity_selectors,
+            (("serial", "SER123"),),
+        )
+        self.assertEqual(
+            cloud_candidate.access_path_ids,
+            ("cloud-CLOUD1-path",),
+        )
+        self.assertEqual(
+            {source.provider_id for source in argument.candidate_provenance},
+            {"gateway", "cloud"},
+        )
+
+    def test_user_override_wins_and_retains_provider_candidates(self):
+        """An explicit override resolves values without erasing candidates."""
+        identity = "SER-OVERRIDE"
+        gateway = projection_snapshot(
+            "gateway",
+            ("GW1",),
+            indexed_roles(("GW1",)),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "GW1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.gateway_candidate",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(ProviderIdentityAlias("serial", identity, "GW1"),),
+        )
+        cloud = projection_snapshot(
+            "cloud",
+            ("CLOUD1",),
+            (),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "CLOUD1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.cloud_candidate",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(ProviderIdentityAlias("serial", identity, "CLOUD1"),),
+        )
+        override = UserConfigOverride(
+            "battery_power",
+            ["sensor.user_selected"],
+            "/apps.yaml/battery_power",
+        )
+
+        plan = compile_auto_config(
+            (gateway, cloud),
+            user_overrides=(override,),
+        )
+        argument = plan.config_arguments[0]
+
+        self.assertEqual(
+            plan.projected_config["battery_power"],
+            ("sensor.user_selected",),
+        )
+        self.assertEqual(argument.override_source, "/apps.yaml/battery_power")
+        self.assertEqual(
+            {source.provider_id for source in argument.candidate_provenance},
+            {"gateway", "cloud"},
+        )
+        self.assertEqual(
+            [source.provider_id for source in argument.provenance],
+            ["user_override"],
+        )
+
+    def test_projection_order_and_outputs_are_deterministic_and_immutable(self):
+        """Provider and declaration order cannot alter or mutate the plan."""
+        projections = (
+            config_projection(
+                "inverter_type",
+                (
+                    projection_value(
+                        "INV1",
+                        ProjectionValueKind.CONSTANT,
+                        "GEC",
+                    ),
+                ),
+            ),
+            config_projection(
+                "battery_power",
+                (
+                    projection_value(
+                        "INV1",
+                        ProjectionValueKind.ENTITY,
+                        "sensor.inv1_battery_power",
+                    ),
+                ),
+            ),
+        )
+        left_snapshot = projection_snapshot(
+            "gateway",
+            ("INV1",),
+            indexed_roles(("INV1",)),
+            projections,
+        )
+        right_snapshot = projection_snapshot(
+            "gateway",
+            ("INV1",),
+            indexed_roles(("INV1",)),
+            tuple(reversed(projections)),
+        )
+
+        left = compile_auto_config((left_snapshot,))
+        right = compile_auto_config((right_snapshot,))
+
+        self.assertEqual(left.digest, right.digest)
+        self.assertEqual(
+            [argument.name for argument in left.config_arguments],
+            ["battery_power", "inverter_type"],
+        )
+        with self.assertRaises(TypeError):
+            left.projected_config["battery_power"] = ("changed",)
+        with self.assertRaises(TypeError):
+            left.projected_config["battery_power"][0] = "changed"
+
+    def test_projection_invalidation_recompiles_a_new_provider_generation(self):
+        """Any provider can invalidate and replace its projection generation."""
+
+        def projected(generation, entity_id):
+            """Build one generation of the provider's projected entity."""
+            return projection_snapshot(
+                "gateway",
+                ("INV1",),
+                indexed_roles(("INV1",)),
+                (
+                    config_projection(
+                        "battery_power",
+                        (
+                            projection_value(
+                                "INV1",
+                                ProjectionValueKind.ENTITY,
+                                entity_id,
+                            ),
+                        ),
+                    ),
+                ),
+                generation=generation,
+            )
+
+        reader = MutableReader(projected(1, "sensor.gateway_battery_power_v1"))
+        compiler = LatticeAutoConfigCompiler({"gateway": reader})
+        first = compiler.drain()
+
+        reader.value = projected(2, "sensor.gateway_battery_power_v2")
+        self.assertTrue(
+            compiler.invalidate(
+                "gateway",
+                2,
+                "projection binding changed",
+            )
+        )
+        second = compiler.drain()
+
+        self.assertNotEqual(first.plan.digest, second.plan.digest)
+        self.assertEqual(
+            second.plan.projected_config["battery_power"],
+            ("sensor.gateway_battery_power_v2",),
+        )
+        self.assertEqual(
+            dict(second.plan.provider_generations),
+            {"gateway": 2},
+        )
+
+    def test_projection_gaps_types_conflicts_and_unrelated_nodes_fail_closed(self):
+        """Unsafe required gaps, shapes, sources, and assertions are rejected."""
+        roles = indexed_roles(("INV1", "INV2"))
+        required_gap = projection_snapshot(
+            "gateway",
+            ("INV1", "INV2"),
+            roles,
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "INV1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.inv1",
+                        ),
+                        projection_value(
+                            "INV2",
+                            ProjectionValueKind.NONE,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(
+            AutoConfigCompileError,
+            "required slot",
+        ):
+            compile_auto_config((required_gap,))
+
+        wrong_cardinality = projection_snapshot(
+            "gateway",
+            ("INV1", "INV2"),
+            roles,
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "INV1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.inv1",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(
+            AutoConfigCompileError,
+            "cardinality mismatch",
+        ):
+            compile_auto_config((wrong_cardinality,))
+
+        unrelated = projection_snapshot(
+            "gateway",
+            ("INV1", "OTHER"),
+            indexed_roles(("INV1",)),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "OTHER",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.other",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        with self.assertRaisesRegex(
+            AutoConfigCompileError,
+            "unrelated",
+        ):
+            compile_auto_config((unrelated,))
+
+        identity = "SER-CONFLICT"
+        gateway = projection_snapshot(
+            "gateway",
+            ("GW1",),
+            indexed_roles(("GW1",)),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "GW1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.gateway",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(ProviderIdentityAlias("serial", identity, "GW1"),),
+        )
+        cloud = projection_snapshot(
+            "cloud",
+            ("CLOUD1",),
+            (),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "CLOUD1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.cloud",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(ProviderIdentityAlias("serial", identity, "CLOUD1"),),
+        )
+        with self.assertRaisesRegex(
+            AutoConfigCompileError,
+            "ambiguous multi-provider",
+        ):
+            compile_auto_config((gateway, cloud))
+
+        cloud_constant = projection_snapshot(
+            "cloud",
+            ("CLOUD1",),
+            (),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "CLOUD1",
+                            ProjectionValueKind.CONSTANT,
+                            0,
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(ProviderIdentityAlias("serial", identity, "CLOUD1"),),
+        )
+        with self.assertRaisesRegex(
+            AutoConfigCompileError,
+            "type mismatch",
+        ):
+            compile_auto_config((gateway, cloud_constant))
 
 
 class TestInvalidationStateMachine(unittest.TestCase):
