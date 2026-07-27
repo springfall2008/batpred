@@ -160,6 +160,8 @@ FLOMASTA
 fontsize
 fontweight
 Forestfire
+formaction
+formmethod
 foxess
 foxesscloud
 freephase

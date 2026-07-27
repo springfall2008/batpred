@@ -70,7 +70,14 @@ from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
-from tests.test_web_annual import test_web_annual, test_web_annual_form, test_web_annual_routes
+from tests.test_web_annual import (
+    test_web_annual,
+    test_web_annual_error_isolation,
+    test_web_annual_form,
+    test_web_annual_routes,
+    test_web_annual_routes_registered,
+    test_web_annual_terminal_state,
+)
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
@@ -301,6 +308,9 @@ def main():
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
         ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),
         ("web_annual_routes", test_web_annual_routes, "Annual web tab route tests", False),
+        ("web_annual_terminal_state", test_web_annual_terminal_state, "Annual web tab terminal-state claim/no-redirect-loop tests", False),
+        ("web_annual_error_isolation", test_web_annual_error_isolation, "Annual web tab per-request error isolation tests", False),
+        ("web_annual_routes_registered", test_web_annual_routes_registered, "Annual web tab route registration test", False),
         ("web_history_table", run_web_history_table_tests, "Web /entity history table bucketing tests", False),
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),
         ("web_chart_grouping", run_web_chart_grouping_tests, "Web /entity chart numeric vs timeline grouping tests", False),

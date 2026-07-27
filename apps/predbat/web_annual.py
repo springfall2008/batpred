@@ -51,7 +51,10 @@ class AnnualPage:
         self.base = web_interface.base
         self.log = web_interface.log
         self.job = AnnualJob(log=self.log)
-        self.last_error = None
+        # Deliberately NOT storing a "last validation error" on self: this page object
+        # is shared by every request from every visitor, so an attribute here would
+        # leak one person's failed validation onto everyone else's later, unrelated
+        # page load (see html_annual's `error` parameter instead).
 
     def _arg(self, name, default=None, indirect=True, combine=False):
         """Read one configuration value from the in-memory args dictionary.
@@ -345,6 +348,9 @@ class AnnualPage:
         text += "</details>\n"
 
         text += '<button type="submit" id="annual-run-button">Run</button>\n'
+        # A second submit button pointed at the plain POST /annual handler via
+        # formaction - the same fields, saved without starting a run.
+        text += '<button type="submit" formaction="./annual" formmethod="post">Save</button>\n'
         text += "</form>\n</div>\n"
         return text
 
@@ -451,29 +457,70 @@ class AnnualPage:
         components = getattr(self.base, "components", None)
         return components.get_component("storage") if components else None
 
-    async def status_payload(self):
-        """Return the polling payload: job state plus the stored run list."""
-        payload = self.job.status()
-        payload["runs"] = await list_runs(self._storage())
-        return payload
+    async def _consume_terminal_state(self):
+        """Return a just-finished job's status once, atomically returning the job to idle.
 
-    async def _store_completed_run(self, config):
-        """Save a finished run into the ring, once."""
-        if self.job.state != "complete" or self.job.results is None:
-            return
-        run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        await save_run(self._storage(), self.job.results, config, run_id)
+        ``self.job.status()`` and the write back to ``self.job.state = "idle"`` happen
+        with no ``await`` between them, so this coroutine either claims a terminal
+        state entirely or finds none - never a partial claim that a concurrent poll
+        could also observe. That is what stops two overlapping ``/annual_status``
+        polls from both saving the same finished run (they would otherwise both see
+        "complete" and both call save_run with different second-resolution ids), and
+        what stops a "complete"/"failed"/"cancelled" state from being reported to
+        every poll forever: a fresh page load - this tab after a refresh, or any
+        other open tab - sees "idle" the moment someone has already claimed it.
+
+        Returns None when the job is not currently in a terminal state, so callers
+        fall back to a plain, side-effect-free ``self.job.status()``.
+        """
+        status = self.job.status()
+        if status["state"] not in ("complete", "failed", "cancelled"):
+            return None
+        results = self.job.results
         self.job.results = None
+        self.job.state = "idle"
+        self.job.error = None
+        if status["state"] == "complete" and results is not None:
+            config = getattr(self, "_running_config", None) or self.load_config()
+            await self._store_completed_run(config, results)
+        return status
 
-    async def html_annual(self, request):
-        """Render the Annual tab: the form, then the selected run's results."""
+    async def _store_completed_run(self, config, results):
+        """Save a finished run's results into the ring.
+
+        ``results`` arrives already claimed by the caller (see
+        _consume_terminal_state): by the time this coroutine's first ``await`` runs,
+        nothing else can still be holding the same results to save a second time.
+        """
+        run_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        await save_run(self._storage(), results, config, run_id)
+
+    async def status_payload(self):
+        """Return the polling payload: job state plus the stored run list.
+
+        The state reported here is either live progress or a one-shot "just
+        finished" snapshot claimed by _consume_terminal_state - never a stale
+        terminal state repeated on every subsequent poll.
+        """
+        status = await self._consume_terminal_state() or self.job.status()
+        status["runs"] = await list_runs(self._storage())
+        return status
+
+    async def html_annual(self, request, error=None):
+        """Render the Annual tab: the form, then the selected run's results.
+
+        ``error`` is a validation message threaded through from a POST handler in
+        the same request-response cycle, not read off ``self`` - the page object is
+        shared by every visitor, so storing it as instance state would leak one
+        person's failed validation onto everyone else's later, unrelated page load.
+        """
         self.web.default_page = "./annual"
         config = self.load_config()
 
         text = self.web.get_header("Predbat Annual")
         text += "<body>\n"
         text += self.render_css()
-        text += self.render_form(config, errors=self.last_error)
+        text += self.render_form(config, errors=error)
         text += self.render_progress()
 
         storage = self._storage()
@@ -489,30 +536,28 @@ class AnnualPage:
         """Save the configuration without running."""
         postdata = await request.post()
         config = self.config_from_post(postdata)
-        self.last_error = self.validation_error(config)
-        if not self.last_error:
+        error = self.validation_error(config)
+        if not error:
             self.save_config(config)
-        return await self.html_annual(request)
+        return await self.html_annual(request, error=error)
 
     async def html_annual_run(self, request):
         """Validate, save, and spawn the run."""
         postdata = await request.post()
         config = self.config_from_post(postdata)
-        self.last_error = self.validation_error(config)
-        if self.last_error:
-            return await self.html_annual(request)
+        error = self.validation_error(config)
+        if error:
+            return await self.html_annual(request, error=error)
 
         self.save_config(config)
         self._running_config = config
         started = await self.job.start(self.cli_command(self._config_path()))
         if not started and self.job.state != "running":
-            self.last_error = self.job.status().get("error") or "The run could not be started"
-        return await self.html_annual(request)
+            error = self.job.status().get("error") or "The run could not be started"
+        return await self.html_annual(request, error=error)
 
     async def html_annual_status(self, request):
         """Return the job status as JSON for the page to poll."""
-        if self.job.state == "complete" and self.job.results is not None:
-            await self._store_completed_run(getattr(self, "_running_config", self.load_config()))
         return web.json_response(await self.status_payload())
 
     async def html_annual_cancel(self, request):
@@ -582,7 +627,15 @@ function annualPoll() {
       document.getElementById('annual-progress-text').textContent = s.message + ' — ' + pct + '% (' + s.elapsed + 's)';
     } else {
       if (button) { button.disabled = false; }
-      if (s.state === 'complete') { window.location = './annual'; return; }
+      if (s.state === 'complete') {
+        // Deliberately not navigating: this poll fires on every open tab, including
+        // ones mid-edit on the form for a run they never started, and a forced
+        // reload would silently drop whatever they had typed. The user chooses
+        // when to give up their own edits by following the link themselves.
+        box.style.display = 'block';
+        document.getElementById('annual-progress-text').innerHTML = 'Run complete — <a href="./annual">view results</a>';
+        return;
+      }
       if (s.state === 'failed' || s.state === 'cancelled') {
         box.style.display = 'block';
         document.getElementById('annual-progress-text').textContent = s.state + (s.error ? ': ' + s.error : '');

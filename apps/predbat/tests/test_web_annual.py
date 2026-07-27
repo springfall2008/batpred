@@ -9,15 +9,55 @@
 
 """Tests for the Annual tab's prefill and configuration handling."""
 
+import asyncio
 import builtins
 import copy
 import re
 from unittest.mock import patch
 
+from aiohttp import web as aiohttp_web
+
 from annual import validate_config
 from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage
+
+
+class FakeRequest:
+    """A minimal aiohttp-request stand-in exposing only what the handlers read."""
+
+    def __init__(self, postdata=None, query=None):
+        """Store the posted fields and query string a handler will read."""
+        self._postdata = postdata or {}
+        self.query = query or {}
+
+    async def post(self):
+        """Return the posted fields, mimicking aiohttp's async ``Request.post()``."""
+        return self._postdata
+
+
+class RaceStorage:
+    """A Storage stand-in whose ``save()`` yields once, forcing concurrent callers to interleave.
+
+    A fake with no yield point at all would hide a race that only manifests once two
+    callers are genuinely interleaved by the event loop - real storage backends do
+    real I/O and therefore always yield somewhere.
+    """
+
+    def __init__(self):
+        """Start with nothing stored and no calls recorded."""
+        self.store = {}
+        self.save_calls = []
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record the call, yield control once, then write."""
+        self.save_calls.append((module, filename))
+        await asyncio.sleep(0)
+        self.store[(module, filename)] = data
+
+    async def load(self, module, filename):
+        """Return a stored value, or None."""
+        return self.store.get((module, filename))
 
 
 def make_page(my_predbat):
@@ -371,5 +411,110 @@ def test_web_annual_form(my_predbat):
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_web_annual_terminal_state(my_predbat):
+    """Verify a finished job is claimed exactly once and never re-reports as complete.
+
+    Covers two review findings against the first cut of the routes: (1) a completed
+    job stuck reporting "complete" forever, which drove the page's poll into
+    redirecting on every subsequent load; (3) two overlapping polls both saving the
+    same finished run because the results were read, then awaited on, then only
+    cleared afterwards - leaving a window where a second poll could still see them.
+    """
+    failed = False
+    print("**** Testing web_annual terminal-state handling ****")
+
+    page = make_page(my_predbat)
+    storage = RaceStorage()
+    page._storage = lambda: storage
+    page.job.state = "complete"
+    page.job.results = {"year": 2025, "annual": {"months_included": 12}}
+    page._running_config = page.prefill_config()
+
+    async def poll_twice_concurrently():
+        """Run two status_payload() polls concurrently on the same event loop."""
+        return await asyncio.gather(page.status_payload(), page.status_payload())
+
+    print("Test: two concurrent polls save the finished run exactly once")
+    first, second = asyncio.run(poll_twice_concurrently())
+    run_saves = [call for call in storage.save_calls if call[1].startswith("run_")]
+    if len(run_saves) != 1:
+        print("  ERROR: two concurrent polls should save the finished run exactly once, got {} save() calls: {}".format(len(run_saves), storage.save_calls))
+        failed = True
+
+    print("Test: exactly one of the two concurrent polls is told the run is 'complete'")
+    states = sorted([first["state"], second["state"]])
+    if states != ["complete", "idle"]:
+        print("  ERROR: expected one 'complete' and one 'idle' from the two concurrent polls, got {}".format(states))
+        failed = True
+
+    print("Test: a later poll never re-reports 'complete', so the page cannot loop on it")
+    third = asyncio.run(page.status_payload())
+    if third["state"] == "complete":
+        print("  ERROR: a subsequent poll must not still report 'complete', got {}".format(third))
+        failed = True
+    if page.job.state == "complete":
+        print("  ERROR: the job itself must not remain 'complete' once claimed, got {}".format(page.job.state))
+        failed = True
+
+    return failed
+
+
+def test_web_annual_error_isolation(my_predbat):
+    """Verify a validation error from one POST does not leak into a later, unrelated GET.
+
+    ``AnnualPage`` is one long-lived object shared by every request from every
+    visitor; storing the error as an instance attribute would let one person's
+    failed validation show up on someone else's later, unrelated page load.
+    """
+    failed = False
+    print("**** Testing web_annual error isolation ****")
+
+    page = make_page(my_predbat)
+
+    print("Test: an invalid POST (no location) renders its own validation error")
+    bad_postdata = {"battery_size_kwh": "9.5", "battery_inverter_kw": "5.0", "battery_export_limit_kw": "5.0"}
+    response = asyncio.run(page.html_annual_post(FakeRequest(bad_postdata)))
+    if "Could not run" not in response.text:
+        print("  ERROR: an invalid POST should render its own validation error, got no banner in the response")
+        failed = True
+
+    print("Test: a later, unrelated GET does not show the previous request's error")
+    later = asyncio.run(page.html_annual(FakeRequest()))
+    if "Could not run" in later.text:
+        print("  ERROR: a later GET must not show a previous request's validation error")
+        failed = True
+
+    return failed
+
+
+def test_web_annual_routes_registered(my_predbat):
+    """Verify all six Annual routes are registered, so a typo'd path cannot ship green."""
+    failed = False
+    print("**** Testing web_annual route registration ****")
+
+    web_interface = WebInterface(my_predbat, web_port=5056)
+    app = aiohttp_web.Application()
+    web_interface._register_annual_routes(app)
+
+    registered = set()
+    for route in app.router.routes():
+        registered.add((route.method, route.resource.canonical))
+
+    expected = {
+        ("GET", "/annual"),
+        ("POST", "/annual"),
+        ("POST", "/annual_run"),
+        ("GET", "/annual_status"),
+        ("POST", "/annual_cancel"),
+        ("GET", "/annual_download"),
+    }
+    missing = expected - registered
+    if missing:
+        print("  ERROR: missing route registrations: {}".format(missing))
+        failed = True
 
     return failed
