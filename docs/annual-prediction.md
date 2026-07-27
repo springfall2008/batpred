@@ -68,6 +68,7 @@ annual:
     standing_charge_p_per_day: 60.0
 
   samples_per_month: 2
+  debug: false                   # keep each sampled day's plan, see Debugging a run
 ```
 
 At least one of `solar` or `battery` must be given — with neither there is nothing to
@@ -293,6 +294,38 @@ The `caveats` list in the results document records anything that could affect ho
 to trust the numbers — a P10 fallback, a missing month's rate data, and the
 `export_credit_p_estimate` note above among them — and is worth
 reading before quoting the totals.
+
+## Debugging a run
+
+When a figure looks wrong, a normal run gives you no way to see why: you get the monthly
+totals and nothing about the plans that produced them. Ticking **Save plans for
+debugging** on the Annual tab — or setting `debug: true` in the config file — keeps the
+plan for every sampled day and makes it viewable.
+
+What is kept is the plan as it was actually billed: the same charge and export windows,
+against the same PV and load series the cost came from. That is what makes it usable for
+cross-checking. A plan drawn against a different series would look plausible and prove
+nothing.
+
+Every scenario is kept, not just Predbat's — `no_pvbat` and `without_predbat` too, so you
+can see what the two baselines did rather than inferring it from their totals. When a car
+is configured each sampled day is planned twice, once with a charging session and once
+without, and the month's figures blend the two (see [How it works](#how-it-works)); both
+legs are kept and labelled, since a suspicious monthly figure may come from either.
+
+The results page then offers a plan viewer below the monthly table, with a day and
+scenario selector. It renders with exactly the same code as the live
+[plan page](predbat-plan-card.md) — same columns, same colours, same debug-column toggle —
+so anything you already know about reading a Predbat plan applies unchanged.
+
+Two things to know before turning it on:
+
+- **The saved run gets much larger.** A year at the default two samples per month keeps
+  72 plans (144 with a car configured). Runs are stored through the same five-run
+  rotation as any other, so a debug run displaces older runs at the same rate.
+- **It does not change the numbers.** The flag only retains plan data that the engine
+  already computes; it does not enable Predbat's own `debug_enable`, which would disable
+  the prediction kernel and slow every plan down substantially.
 
 ## Limitations
 
