@@ -243,6 +243,7 @@ def validate_config(config, today=None):
         "load": _validate_load(raw.get("load")),
         "tariff": _validate_tariff(raw.get("tariff")),
         "samples_per_month": samples_per_month,
+        "debug": bool(raw.get("debug", False)),
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
@@ -986,13 +987,31 @@ def _plan_smart_car(predbat, day, car_kwh):
     return slots
 
 
-def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh, car_rate_kw):
+def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_record):
+    """Return the current scenario's plan as the JSON structure the web plan renderer consumes.
+
+    This is the same ``raw_plan`` the live ``/plan`` page renders from - ``publish_html_plan()``
+    builds it from ``charge_limit_best``/``charge_window_best``/``export_*_best`` and the step
+    data, exactly as they stand for the scenario just costed. ``publish=False`` keeps it from
+    touching Home Assistant, so this is safe in a headless run: it only reads state and returns.
+    """
+    _, raw_plan = predbat.publish_html_plan(pv_step, pv_step10, load_step, load_step10, end_record, publish=False, prediction=predbat.prediction)
+    return raw_plan
+
+
+def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh, car_rate_kw, plans=None):
     """Run all three scenarios against one sampled day at a fixed car charging energy.
 
     ``car_kwh`` is the actual energy this leg charges - either a full weekly charging
     session or zero, never the smeared daily average an earlier version of this tool
     used (see ``car_charging_schedule()``). ``run_day()`` calls this once when no car is
     configured, or twice (once per leg) and blends the two sets of results when one is.
+
+    ``plans``, when supplied, is a dict this function fills in place with one entry per
+    scenario key, each holding that scenario's plan captured against the same PV and load
+    series it was billed against - a plan drawn from a different series would defeat the
+    point of the feature, which is cross-checking the billed numbers. Leaving it ``None``
+    (the default) skips every capture, so a non-debug run pays no extra cost.
     """
     prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh)
 
@@ -1017,6 +1036,8 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.export_limits_best = []
     predbat.prediction = Prediction(predbat, zero_step, zero_step, load_step, load_step, soc_kw=0, soc_max=0)
     results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step)
+    if plans is not None:
+        plans["no_pvbat"] = _capture_plan(predbat, zero_step, zero_step, load_step, load_step, DAY_MINUTES)
 
     # Scenario 2: PV and battery on a dumb cheapest-rate timer, no export optimisation
     apply_hardware(predbat, config["battery"], config["solar"])
@@ -1028,6 +1049,8 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.export_limits_best = []
     predbat.prediction = Prediction(predbat, actual_step, actual_step, load_step, load_step, soc_kw=START_SOC_KWH)
     results["without_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    if plans is not None:
+        plans["without_predbat"] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
 
     # Scenario 3: Predbat plans on the FORECAST, then is costed against the ACTUALS.
     # Skipping the Prediction swap below would hand Predbat perfect foresight.
@@ -1070,6 +1093,8 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat_load_step, _, _ = build_step_data(predbat, forecast_pv, p10_pv)
     predbat.prediction = Prediction(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, soc_kw=START_SOC_KWH)
     results["with_predbat"] = _billed_result(predbat, DAY_MINUTES, actual_step)
+    if plans is not None:
+        plans["with_predbat"] = _capture_plan(predbat, actual_step, actual_step, predbat_load_step, predbat_load_step, DAY_MINUTES)
 
     return results
 
@@ -1092,7 +1117,7 @@ def _blend_results(with_car, without_car, fraction):
     return {key: {field: fraction * with_car[key][field] + (1 - fraction) * without_car[key][field] for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
 
 
-def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
+def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, plans=None):
     """Run all three scenarios against one sampled day and return their billed figures.
 
     A configured car charges in weekly sessions, not a daily smear (see
@@ -1103,12 +1128,21 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
     irradiance-percentile stratification of the sampled days intact instead of
     confounding solar percentile with charging state. A config with no car runs a
     single leg, exactly as before this blending was introduced.
+
+    ``plans``, when supplied, is a list this function appends one entry per leg to, each
+    ``{"leg": ..., "scenarios": {...}}``: ``"single"`` for the no-car path, or
+    ``"with_car"`` followed by ``"without_car"`` for the blended path. Leaving it ``None``
+    (the default) appends nothing, so a non-debug run captures no plans.
     """
     car_charging_kwh = config["load"].get("car_charging_kwh", 0.0)
     car_rate_kw = config["load"].get("car_rate_kw", DEFAULT_CAR_RATE_KW)
 
     if car_charging_kwh <= 0:
-        return _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw)
+        leg_plans = {} if plans is not None else None
+        result = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=leg_plans)
+        if plans is not None:
+            plans.append({"leg": "single", "scenarios": leg_plans})
+        return result
 
     # The "sessions running long" overflow warning is a static property of the config
     # (car_charging_kwh, car_rate_kw), not of this particular day, so it is emitted once
@@ -1116,8 +1150,15 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc):
     # here, where it would otherwise repeat once per sampled day.
     sessions_per_week, session_kwh = car_charging_schedule(car_charging_kwh, car_rate_kw)
 
-    with_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=session_kwh, car_rate_kw=car_rate_kw)
-    without_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw)
+    with_car_plans = {} if plans is not None else None
+    with_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=session_kwh, car_rate_kw=car_rate_kw, plans=with_car_plans)
+    if plans is not None:
+        plans.append({"leg": "with_car", "scenarios": with_car_plans})
+
+    without_car_plans = {} if plans is not None else None
+    without_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=without_car_plans)
+    if plans is not None:
+        plans.append({"leg": "without_car", "scenarios": without_car_plans})
 
     # sessions_per_week / 7, not / 52: this is a fraction of a WEEK (how many of its 7 days
     # actually carry a session), independent of car_charging_schedule()'s own 52-weeks-per-year
@@ -1287,16 +1328,20 @@ class AnnualPredictor:
             surviving_samples = []
             day_results = []
             failed_days = []
+            month_plans = []
             for day, weight in samples:
                 midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
+                day_plans = [] if self.config["debug"] else None
                 try:
-                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc)
+                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans)
                 except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
                     self.log("Warn: Annual: {} in month {} failed to plan/cost ({}: {}); excluding it from this month's total".format(day.isoformat(), month, type(exc).__name__, exc))
                     failed_days.append(day.isoformat())
                     continue
                 surviving_samples.append((day, weight))
                 day_results.append(result)
+                if day_plans is not None:
+                    month_plans.extend(dict(entry, day=day.isoformat()) for entry in day_plans)
 
             if not day_results:
                 months.append({"month": month, "status": "unavailable", "reason": "every sampled day failed to plan", "days": days_in_month, "standing_charge_p": standing_charge_p, "failed_days": failed_days})
@@ -1323,17 +1368,18 @@ class AnnualPredictor:
                 entry["export_credit_p_estimate"] = entry["export_kwh"] * export_rate
                 scenarios[key] = {name: round(value, 3) for name, value in entry.items()}
 
-            months.append(
-                {
-                    "month": month,
-                    "status": "ok" if not failed_days else "degraded",
-                    "days": days_in_month,
-                    "sampled_days": [day.isoformat() for day, _ in surviving_samples],
-                    "failed_days": failed_days,
-                    "standing_charge_p": round(standing_charge_p, 3),
-                    "scenarios": scenarios,
-                }
-            )
+            row = {
+                "month": month,
+                "status": "ok" if not failed_days else "degraded",
+                "days": days_in_month,
+                "sampled_days": [day.isoformat() for day, _ in surviving_samples],
+                "failed_days": failed_days,
+                "standing_charge_p": round(standing_charge_p, 3),
+                "scenarios": scenarios,
+            }
+            if self.config["debug"]:
+                row["plans"] = month_plans
+            months.append(row)
             completed += 1
 
         if progress:

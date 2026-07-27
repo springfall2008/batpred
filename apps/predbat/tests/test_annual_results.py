@@ -16,9 +16,29 @@ non-slow test - unlike ``test_annual_integration``, which needs a real day run t
 exercise this same code from the top.
 """
 
+import inspect
 from datetime import date
 
-from annual import SCENARIO_FIELDS, SCENARIO_KEYS, AnnualPredictor, average_rate
+from annual import SCENARIO_FIELDS, SCENARIO_KEYS, AnnualPredictor, _capture_plan, _run_scenarios, average_rate, run_day, validate_config
+from prediction import Prediction
+from tests.test_infra import reset_inverter
+
+
+def base_config():
+    """Return the same minimal valid annual config literal ``make_predictor()`` uses.
+
+    Kept as a standalone helper (rather than only living inside ``make_predictor()``) so
+    tests that need the raw dict itself - for example to pass through ``validate_config()``
+    directly - do not have to invent their own values.
+    """
+    return {
+        "location": {"latitude": 51.5, "longitude": -0.1},
+        "solar": [{"kwp": 5.0}],
+        "battery": {"size_kwh": 10.0, "inverter_kw": 5.0},
+        "load": {"annual_kwh": 3800, "shape": "flat"},
+        "tariff": {"rates_import": [{"rate": 28.0}]},
+        "year": 2025,
+    }
 
 
 def make_predictor():
@@ -27,15 +47,7 @@ def make_predictor():
     ``AnnualPredictor.__init__`` validates the config itself and touches no network or
     Predbat state, so this is safe to call directly in a unit test.
     """
-    raw = {
-        "location": {"latitude": 51.5, "longitude": -0.1},
-        "solar": [{"kwp": 5.0}],
-        "battery": {"size_kwh": 10.0, "inverter_kw": 5.0},
-        "load": {"annual_kwh": 3800, "shape": "flat"},
-        "tariff": {"rates_import": [{"rate": 28.0}]},
-        "year": 2025,
-    }
-    return AnnualPredictor(raw)
+    return AnnualPredictor(base_config())
 
 
 def make_month_row(month, costs, status="ok"):
@@ -179,6 +191,106 @@ def test_annual_results(my_predbat):
         failed = True
     if average_rate({}, 10) != 0.0:
         print("  ERROR: expected average_rate of an empty dict to be 0.0 rather than raising, got {}".format(average_rate({}, 10)))
+        failed = True
+
+    if test_annual_debug_flag():
+        failed = True
+
+    if test_annual_debug_capture(my_predbat):
+        failed = True
+
+    return failed
+
+
+def test_annual_debug_flag():
+    """Verify the debug flag defaults off and is coerced to a bool when set."""
+    failed = False
+    print("Test: debug defaults to False")
+    config = validate_config(base_config())
+    if config["debug"] is not False:
+        print("  ERROR: debug should default to False, got {!r}".format(config["debug"]))
+        failed = True
+
+    print("Test: debug is coerced to a bool, so a form's 'on' string does not become a truthy string")
+    raw = base_config()
+    raw["debug"] = "on"
+    config = validate_config(raw)
+    if config["debug"] is not True:
+        print("  ERROR: debug should coerce to True, got {!r}".format(config["debug"]))
+        failed = True
+
+    print("Test: debug is not echoed into the scrubbed raw config as a secret")
+    if config["raw"].get("debug") != "on":
+        print("  ERROR: raw config should retain the submitted value")
+        failed = True
+    return failed
+
+
+def test_annual_debug_capture(my_predbat):
+    """Verify ``_capture_plan()`` returns the structure the web plan renderer requires.
+
+    ``_run_scenarios()`` needs a full weather/tariff/load-source rig to drive from a unit
+    test (see ``test_annual_integration.py``, registered as slow), so this exercises the
+    capture helper it calls directly instead, against the same kind of minimal plan state
+    ``test_plan_json_rate_adjust.py`` builds - empty charge/export windows, no search, just
+    enough state for ``publish_html_plan()`` to walk the plan grid and return real rows.
+    """
+    failed = False
+    print("Test: _capture_plan returns a renderer-ready plan with non-empty rows")
+
+    reset_inverter(my_predbat)
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.end_record = 24 * 60
+    my_predbat.debug_enable = False
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 5.0
+    my_predbat.num_inverters = 1
+    my_predbat.reserve = 0.5
+
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = 0
+        load_step[minute] = 0.5 / (60 / 5)
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step, soc_kw=my_predbat.soc_kw, soc_max=my_predbat.soc_max)
+
+    # Empty windows/limits, exactly as _run_scenarios() passes for its "no system" scenario -
+    # this drives a real run_prediction(save="best") so publish_html_plan()'s unconditional
+    # predict_*_best reads (populated only by a save="best" run) do not raise, without pulling
+    # in the search machinery _run_scenarios() itself needs.
+    charge_limit_best = []
+    charge_window_best = []
+    export_window_best = []
+    export_limits_best = []
+    my_predbat.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limits_best, False, end_record=my_predbat.end_record, save="best")
+    my_predbat.charge_limit_best = charge_limit_best
+    my_predbat.charge_window_best = charge_window_best
+    my_predbat.export_window_best = export_window_best
+    my_predbat.export_limits_best = export_limits_best
+
+    plan = _capture_plan(my_predbat, pv_step, pv_step, load_step, load_step, my_predbat.end_record)
+    if not plan.get("rows"):
+        print("  ERROR: expected a non-empty 'rows' list, got {!r}".format(plan.get("rows")))
+        failed = True
+    if "soc_max" not in plan:
+        print("  ERROR: expected 'soc_max' in the captured plan")
+        failed = True
+    if "end_record" not in plan:
+        print("  ERROR: expected 'end_record' in the captured plan")
+        failed = True
+
+    print("Test: plans=None leaves the non-debug path untouched")
+    # _run_scenarios() needs a full weather/tariff/load-source rig to drive directly (see
+    # test_annual_integration.py, registered as slow), so this checks the contract that
+    # actually keeps a non-debug run untouched: plans defaults to None on both functions
+    # that thread it through, so a caller that never opts in triggers no capture at all.
+    scenarios_signature = inspect.signature(_run_scenarios)
+    if scenarios_signature.parameters["plans"].default is not None:
+        print("  ERROR: _run_scenarios' plans parameter should default to None, got {!r}".format(scenarios_signature.parameters["plans"].default))
+        failed = True
+    day_signature = inspect.signature(run_day)
+    if day_signature.parameters["plans"].default is not None:
+        print("  ERROR: run_day's plans parameter should default to None, got {!r}".format(day_signature.parameters["plans"].default))
         failed = True
 
     return failed
