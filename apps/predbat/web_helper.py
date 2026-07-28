@@ -6685,6 +6685,34 @@ def get_plan_renderer_js():
         return html;
     }
 
+    // Escape text for safe use inside an HTML attribute (e.g. title="...")
+    function escapeAttr(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML.replace(/"/g, '&quot;');
+    }
+
+    // Render a row's "reasons" (list of {code, params}) into a single sentence, filling in
+    // each entry's template (looked up from the shared reason_templates table, published once
+    // per response rather than duplicating the rendered sentence on every row) with its params.
+    function renderReasonText(reasons, templates) {
+        if (!reasons || !templates) {
+            return '';
+        }
+        return reasons
+            .map(function (entry) {
+                const template = templates[entry.code];
+                if (!template) {
+                    return '';
+                }
+                return template.replace(/\{(\w+)\}/g, function (match, key) {
+                    return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
+                });
+            })
+            .filter(Boolean)
+            .join(' ');
+    }
+
     // Render state cell without dropdown (dropdown moved to time column)
     function renderStateCell(row, timeDisplay, overrides) {
         const cellStyle = 'style="padding: 4px;"';
@@ -6714,14 +6742,18 @@ def get_plan_renderer_js():
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
         const colspanAttr = row.split ? '' : ' colspan=2';
+        const reasonText = renderReasonText(row.reasons, window.planData && window.planData.reason_templates);
+        const titleAttr = reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
 
-        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}">`;
+        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}"${titleAttr}>`;
         html += row.state_text || '';
         html += '</td>';
 
-        // Second state cell if split
+        // Second state cell if split - same combined reason text as the first half, since
+        // row.reasons is a single list covering both halves of a split (e.g. charging and
+        // freeze-exporting in the same slot), not two separately-attributed sentences.
         if (row.split && row.state2_text) {
-            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${titleAttr}>${row.state2_text}</td>`;
         }
 
         return html;
