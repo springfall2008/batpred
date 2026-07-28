@@ -607,8 +607,48 @@ def test_teslemetry_build_tariff_periods_partition_each_day():
     tariff = api.build_tariff((1020, 1080), now_min=600)
     for tou_periods in (tariff["seasons"]["AllYear"]["tou_periods"], tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]):
         for day in range(7):
-            day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] == day]} for tier, block in tou_periods.items()}
+            # fromDayOfWeek/toDayOfWeek may now span a range (days sharing an identical pattern are
+            # consolidated, see _day_runs), so membership is a range check, not exact equality.
+            day_periods = {tier: {"periods": [p for p in block["periods"] if p["fromDayOfWeek"] <= day <= p["toDayOfWeek"]]} for tier, block in tou_periods.items()}
             _assert_tou_periods_partition_day(day_periods)
+
+
+def test_teslemetry_build_tariff_consolidates_replicated_days():
+    """Days sharing tomorrow's replicated pattern (issue #4346) collapse into ranged periods, not one
+    per individual day - 6 near-identical days should render as at most 2 contiguous-day periods per
+    tier/time, not 6, and every day must still resolve to exactly one period per tier via range lookup."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_tariff(None)
+    for tou_periods in (tariff["seasons"]["AllYear"]["tou_periods"], tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]):
+        for tier, block in tou_periods.items():
+            for period in block["periods"]:
+                assert period["fromDayOfWeek"] <= period["toDayOfWeek"], "period {} for tier {} should not wrap".format(period, tier)
+            # Today's own day and the 6 replicated days can span at most 2 runs each (removing one day
+            # from a linear 0-6 range leaves at most 2 contiguous remainders) plus today's own entry -
+            # so no single tier should ever need more than 3 period entries for a flat rate.
+            assert len(block["periods"]) <= 3, "tier {} has {} period entries, expected consolidated ranges (<=3): {}".format(tier, len(block["periods"]), block["periods"])
+
+
+def test_teslemetry_day_runs_groups_replicated_days():
+    """_day_runs() itself: 6 identical days plus 1 different day collapse to 2 runs, not 7 singletons."""
+    api = MockTeslemetryAPI()
+    same = [(0, 1440, "SUPER_OFF_PEAK")]
+    different = [(0, 600, "SUPER_OFF_PEAK"), (600, 1440, "MID_PEAK")]
+    layout = {day: list(same) for day in range(7)}
+    layout[3] = list(different)  # Wednesday differs from every other day
+    runs = api._day_runs(layout)
+    # Day 3 isolated -> its own run; days 0-2 and 4-6 are the two remaining contiguous blocks
+    assert sorted(runs) == sorted([(0, 2, tuple(same)), (3, 3, tuple(different)), (4, 6, tuple(same))])
+
+
+def test_teslemetry_day_runs_all_identical_single_run():
+    """_day_runs() with every day identical (no boost, flat week) collapses to exactly one run."""
+    api = MockTeslemetryAPI()
+    same = [(0, 1440, "SUPER_OFF_PEAK")]
+    layout = {day: list(same) for day in range(7)}
+    runs = api._day_runs(layout)
+    assert runs == [(0, 6, tuple(same))]
 
 
 def test_teslemetry_set_tariff_posts_tou_settings():
@@ -1790,6 +1830,9 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_fallback_flat_when_no_rates()
     test_teslemetry_build_tariff_boost_clamps_above_high_rates()
     test_teslemetry_build_tariff_periods_partition_each_day()
+    test_teslemetry_build_tariff_consolidates_replicated_days()
+    test_teslemetry_day_runs_groups_replicated_days()
+    test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()
     test_teslemetry_sync_tariff_dedupes_unchanged()
     test_teslemetry_sync_tariff_pushes_on_window_change()

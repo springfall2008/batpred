@@ -918,18 +918,45 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return layout
 
     @staticmethod
+    def _day_runs(layout):
+        """Group days 0-6 sharing an identical interval list into maximal contiguous day-of-week runs.
+
+        _side_layout replicates tomorrow's shape onto every day except today, so 6 of the 7 entries
+        are typically byte-identical - grouping first means callers emit one ranged period per run
+        instead of one period per individual day. Returns [(from_day, to_day, intervals), ...],
+        sorted; runs never wrap past day 6 back to day 0, since a run only ever extends forward.
+        """
+        by_signature = {}
+        for day in range(7):
+            by_signature.setdefault(tuple(layout.get(day, [])), []).append(day)
+
+        runs = []
+        for intervals, days in by_signature.items():
+            days = sorted(days)
+            run_start = run_end = days[0]
+            for day in days[1:]:
+                if day == run_end + 1:
+                    run_end = day
+                else:
+                    runs.append((run_start, run_end, intervals))
+                    run_start = run_end = day
+            runs.append((run_start, run_end, intervals))
+        runs.sort()
+        return runs
+
+    @staticmethod
     def _render_side(layout, tier_prices):
         """Render a per-day interval layout into (energy_charges_side, tou_periods), matched tier sets only."""
         periods = {}
         used = set()
-        for day, intervals in layout.items():
+        for from_day, to_day, intervals in TeslemetryAPI._day_runs(layout):
             for frm, to, tier in intervals:
                 from_hour, from_minute = frm // 60, frm % 60
                 if to >= 1440:
                     to_hour, to_minute = 0, 0
                 else:
                     to_hour, to_minute = to // 60, to % 60
-                periods.setdefault(tier, {"periods": []})["periods"].append({"fromDayOfWeek": day, "toDayOfWeek": day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute})
+                periods.setdefault(tier, {"periods": []})["periods"].append({"fromDayOfWeek": from_day, "toDayOfWeek": to_day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute})
                 used.add(tier)
         rates = {tier: price for tier, price in tier_prices.items() if tier in used}
         energy_charges_side = {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
