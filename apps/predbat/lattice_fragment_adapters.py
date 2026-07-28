@@ -20,6 +20,7 @@ one immutable ``ProviderSnapshot``.  The registry only discovers the common
 import hashlib
 import threading
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import Optional, Protocol
 
@@ -108,6 +109,43 @@ class FragmentAdapterState:
         if self.semantic_fingerprint != expected:
             raise ValueError("semantic_fingerprint does not match the immutable snapshot")
         object.__setattr__(self, "provider_id", provider_id)
+
+
+def _compiler_fragment_snapshot(adapter):
+    """Fresh-read one compiler input, translating only durable removals."""
+    state = adapter.read_state()
+    if not isinstance(state, FragmentAdapterState):
+        raise FragmentAdapterReadError("adapter read_state must return FragmentAdapterState")
+    try:
+        state.__post_init__()
+    except ValueError as exc:
+        raise FragmentAdapterReadError(str(exc)) from exc
+    provider_id = _validate_provider_id(getattr(adapter, "provider_id", None))
+    if state.provider_id != provider_id:
+        raise FragmentAdapterReadError("adapter state belongs to provider {}".format(state.provider_id))
+    if not state.removed:
+        return state.snapshot
+    return ProviderSnapshot(
+        provider_id=state.provider_id,
+        generation=state.generation,
+        health=ProviderHealth.HEALTHY,
+        topology_fragment={
+            "topologyVersion": "0.3.0",
+            "scope": "fragment",
+            "docVersion": state.generation,
+            "producer": {
+                "name": "PredBat fragment tombstone",
+                "provider": state.provider_id,
+                "authority": 0,
+            },
+            "nodes": [],
+            "relationships": [],
+        },
+        aliases=(),
+        identity_aliases=(),
+        role_assignments=(),
+        config_projections=(),
+    )
 
 
 class FragmentAdapterStateStore:
@@ -484,7 +522,13 @@ class FragmentAdapterRegistry:
                 raise RuntimeError("cannot create a compiler without fragment adapters")
             for adapter in self._adapters.values():
                 self._validate_adapter(adapter)
-            readers = {provider_id: adapter.read_snapshot for provider_id, adapter in self._adapters.items()}
+            readers = {
+                provider_id: partial(
+                    _compiler_fragment_snapshot,
+                    adapter,
+                )
+                for provider_id, adapter in self._adapters.items()
+            }
             compiler = CompiledLatticeCompiler(
                 readers,
                 state_store=state_store,

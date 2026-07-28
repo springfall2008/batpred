@@ -398,7 +398,13 @@ class TestSolisFragmentPublisher(unittest.TestCase):
         self.assertTrue(offline.pending)
         self.assertTrue(adapter.remove())
         removed = compiler.drain()
-        self.assertEqual(removed.status, CompileStatus.STALE)
+        self.assertEqual(removed.status, CompileStatus.FRESH)
+        self.assertFalse(removed.pending)
+        self.assertEqual(removed.plan.topology["nodes"], ())
+        self.assertEqual(
+            dict(removed.publication.provider_generations),
+            {"solis": 5},
+        )
 
         self.assertEqual(
             tuple(item[:3] for item in invalidations),

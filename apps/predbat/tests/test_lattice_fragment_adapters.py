@@ -401,8 +401,8 @@ class TestFragmentAdapterRegistry(unittest.TestCase):
             {issue.code for issue in run.issues},
         )
 
-    def test_removal_invalidates_and_preserves_last_known_good(self):
-        """A durable removal triggers a bounded fail-closed recompile."""
+    def test_removal_invalidates_and_clears_prior_provider_contribution(self):
+        """A durable removal compiles as an acknowledged empty fragment."""
         adapter, _store, _initial = publisher("gateway")
         _registry, compiler, _compiled_store, _ids = compiled_registry(adapter)
         first = compiler.drain()
@@ -411,13 +411,16 @@ class TestFragmentAdapterRegistry(unittest.TestCase):
         run = compiler.drain()
 
         self.assertEqual(run.attempts, 1)
-        self.assertEqual(run.status, CompileStatus.STALE)
-        self.assertTrue(run.pending)
-        self.assertIs(run.publication, first.publication)
-        self.assertIn(
-            "provider_read_failed",
-            {issue.code for issue in run.issues},
+        self.assertEqual(run.status, CompileStatus.FRESH)
+        self.assertFalse(run.pending)
+        self.assertTrue(run.published)
+        self.assertEqual(run.publication.lattice_version, 2)
+        self.assertEqual(
+            dict(run.publication.provider_generations),
+            {"gateway": 2},
         )
+        self.assertEqual(run.plan.topology["nodes"], ())
+        self.assertNotEqual(run.publication, first.publication)
 
     def test_restart_restores_adapter_and_compiler_cursor_protection(self):
         """Both durable layers reject reuse after a complete process restart."""
@@ -482,7 +485,8 @@ class TestFragmentAdapterRegistry(unittest.TestCase):
         adapter, _store, initial = publisher("gateway")
         registry = FragmentAdapterRegistry(enabled=True)
         registry.register(adapter)
-        original_reader = adapter.read_snapshot
+        compiler = registry.create_compiler(InMemoryCompiledLatticeStateStore())
+        original_reader = adapter.read_state
         fired = [False]
 
         def invalidating_reader():
@@ -496,8 +500,7 @@ class TestFragmentAdapterRegistry(unittest.TestCase):
                 )
             return value
 
-        adapter.read_snapshot = invalidating_reader
-        compiler = registry.create_compiler(InMemoryCompiledLatticeStateStore())
+        adapter.read_state = invalidating_reader
         run = compiler.drain()
 
         self.assertEqual(run.attempts, 2)
