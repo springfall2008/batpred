@@ -1038,13 +1038,17 @@ def _build_deye(mock_base, args):  # pragma: no cover
         "inverter_sn": args.serial,
         "automatic": True,
     }
-    if args.token_hash:
+    if args.key or args.token_hash:
         # Predbat.com SaaS: token injected/refreshed via OAuthMixin (Supabase edge function).
         if args.supabase_url:
             os.environ["SUPABASE_URL"] = args.supabase_url
         if args.supabase_key:
             os.environ["SUPABASE_KEY"] = args.supabase_key
-        arg_dict.update({"auth_method": "oauth", "token_hash": args.token_hash, "token_expires_at": args.token_expires})
+        # --key is the injected ACCESS TOKEN, the same value Predbat.com supplies as
+        # deye_key. Without it the tool starts with an empty bearer, so the first call is
+        # rejected and only the refresh rescues it — which does not exercise the path
+        # production actually takes.
+        arg_dict.update({"auth_method": "oauth", "key": args.key or "", "token_hash": args.token_hash or "", "token_expires_at": args.token_expires})
     else:
         # Self-hosted add-on: developer app (app_id/app_secret) + DeyeCloud account (username/password).
         arg_dict.update({"auth_method": "app_credentials", "app_id": args.app_id, "app_secret": args.app_secret, "username": args.username, "password": args.password})
@@ -1101,7 +1105,8 @@ def main():  # pragma: no cover
     parser.add_argument("--username", default=None, help="DeyeCloud account email/username")
     parser.add_argument("--password", default=None, help="DeyeCloud account password (sent SHA-256 hashed)")
     # Predbat.com SaaS auth: injected token.
-    parser.add_argument("--token-hash", default=None, help="Injected OAuth token hash (Predbat.com SaaS mode)")
+    parser.add_argument("--key", default=None, help="Injected OAuth access token (Predbat.com SaaS mode, the deye_key value)")
+    parser.add_argument("--token-hash", default=None, help="Injected OAuth token hash, the refresh dedup handle (Predbat.com SaaS mode)")
     parser.add_argument("--token-expires", default=None, help="OAuth token expiry timestamp")
     parser.add_argument("--supabase-url", default=None, help="Supabase URL for OAuth token refresh")
     parser.add_argument("--supabase-key", default=None, help="Supabase anon key for OAuth token refresh")
@@ -1111,8 +1116,8 @@ def main():  # pragma: no cover
     args = parser.parse_args()
 
     has_app_creds = all([args.app_id, args.app_secret, args.username, args.password])
-    if not args.token_hash and not has_app_creds:
-        parser.error("provide either --token-hash (SaaS) or all of --app-id/--app-secret/--username/--password (add-on)")
+    if not args.key and not args.token_hash and not has_app_creds:
+        parser.error("provide either --key (SaaS, optionally with --token-hash) or all of --app-id/--app-secret/--username/--password (add-on)")
 
     asyncio.run(test_deye_api(args))
 
