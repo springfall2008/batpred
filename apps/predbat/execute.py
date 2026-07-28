@@ -20,6 +20,7 @@ from const import MINUTE_WATT
 from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate
 from predbat_metrics import metrics
 from inverter import Inverter
+from lattice_schedule_integration import lattice_balance_writer, lattice_plan_writer
 import time
 
 """
@@ -35,6 +36,7 @@ class Execute:
     adjustment, and multi-inverter balancing.
     """
 
+    @lattice_plan_writer
     def execute_plan(self):
         status_extra = ""  # extra status text added to Predbat notifications
         status_hold_car = ""  # car hold status text
@@ -945,6 +947,7 @@ class Execute:
             },
         )
 
+    @lattice_balance_writer
     def balance_inverters(self, test_mode=False):
         """
         Attempt to balance multiple inverters

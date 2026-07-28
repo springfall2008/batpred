@@ -52,6 +52,7 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "_lattice_schedule_coordinator",
 ]
 
 
