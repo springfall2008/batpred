@@ -1580,8 +1580,8 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
-    - sensor.sigen_plant_ess_max_charging_limit
-    - sensor.sigen_plant_ess_max_discharging_limit
+    - number.sigen_plant_ess_max_charging_limit
+    - number.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_max_active_power
 
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
