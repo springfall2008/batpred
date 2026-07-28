@@ -351,6 +351,127 @@ def test_run_clears_pending_order_and_count_on_success():
     assert not failed, "test_run_clears_pending_order_and_count_on_success"
 
 
+def _schedule():
+    """Return a minimal schedule shape for a control write."""
+    return {"reserve": 10, "charge": {"enable": True, "soc": 100, "power": 3000, "start": "01:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+
+
+def test_control_write_deferred_while_an_order_is_in_flight():
+    """DEYE runs one order per device, so a write is deferred rather than sent and rejected.
+
+    Live log: apply_schedule submitted an order at 20:09:39 and apply_reserve_live posted
+    another 5ms later, which DEYE refused with 2104004 "command concurrent running". Five
+    of twelve commands in that run were rejected this way.
+    """
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    d.pending_orders["INV1"] = 832017929888709
+    posted = []
+
+    async def fake_post(endpoint_key, body):
+        """Record any control POST that gets through."""
+        posted.append(endpoint_key)
+        return {"success": True, "orderId": 1}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        wrote = run_async_local(d.apply_dynamic_control("INV1", _schedule(), 50, force=True))
+
+    if wrote:
+        print("ERROR: a write must not be attempted while an order is in flight")
+        failed = True
+    if posted:
+        print(f"ERROR: nothing should have been POSTed, got {posted}")
+        failed = True
+    if not any("still in flight" in m for m in d.log_messages):
+        print(f"ERROR: expected a deferral log line: {d.log_messages}")
+        failed = True
+    # applied_payload must be left alone so the next cycle still sees the difference
+    if "INV1" in d.applied_payload:
+        print("ERROR: a deferred write must not record an applied payload")
+        failed = True
+    assert not failed, "test_control_write_deferred_while_an_order_is_in_flight"
+
+
+def test_control_write_proceeds_once_the_order_clears():
+    """With no order outstanding the same write goes through."""
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    posted = []
+
+    async def fake_post(endpoint_key, body):
+        """Accept the control POST."""
+        posted.append(endpoint_key)
+        return {"success": True, "orderId": 99}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        wrote = run_async_local(d.apply_dynamic_control("INV1", _schedule(), 50, force=True))
+
+    if not wrote or posted != ["dynamic_control"]:
+        print(f"ERROR: expected the write to proceed, wrote={wrote} posted={posted}")
+        failed = True
+    if d.pending_orders.get("INV1") != 99:
+        print(f"ERROR: the new order should be tracked: {d.pending_orders}")
+        failed = True
+    assert not failed, "test_control_write_proceeds_once_the_order_clears"
+
+
+def test_busy_response_detection():
+    """A busy rejection is recognised by code or message, and nothing else is."""
+    failed = False
+    d = MockDeye()
+    busy = [
+        {"success": False, "code": "2104004", "msg": "command concurrent running"},
+        {"success": False, "code": "", "msg": "Command Concurrent Running"},
+        {"success": False, "code": "2104004", "msg": ""},
+    ]
+    for body in busy:
+        if not d.is_busy_response(body):
+            print(f"ERROR: expected busy for {body}")
+            failed = True
+    other = [
+        {"success": True, "code": "2104004"},
+        {"success": False, "msg": "device offline"},
+        {"success": False, "code": "2106001", "msg": "config point not supported"},
+        {},
+        None,
+    ]
+    for body in other:
+        if d.is_busy_response(body):
+            print(f"ERROR: did not expect busy for {body}")
+            failed = True
+    assert not failed, "test_busy_response_detection"
+
+
+def test_busy_rejection_is_not_logged_as_a_failure():
+    """A busy rejection is back-pressure, so it must not be reported as a control failure."""
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: the device is already running an order."""
+        return {"success": False, "code": "2104004", "msg": "command concurrent running"}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        wrote = run_async_local(d.apply_dynamic_control("INV1", _schedule(), 50, force=True))
+
+    if wrote:
+        print("ERROR: a busy rejection is not a successful write")
+        failed = True
+    if any("dynamic control failed" in m for m in d.log_messages):
+        print(f"ERROR: busy must not be logged as a failure: {d.log_messages}")
+        failed = True
+    if not any("busy running a control order" in m for m in d.log_messages):
+        print(f"ERROR: expected a busy log line: {d.log_messages}")
+        failed = True
+    if "INV1" in d.applied_payload:
+        print("ERROR: a rejected write must not record an applied payload")
+        failed = True
+    assert not failed, "test_busy_rejection_is_not_logged_as_a_failure"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -367,6 +488,10 @@ def run_deye_control_tests(my_predbat):
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
         ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
+        ("control_deferred_in_flight", test_control_write_deferred_while_an_order_is_in_flight),
+        ("control_proceeds_when_clear", test_control_write_proceeds_once_the_order_clears),
+        ("busy_response_detection", test_busy_response_detection),
+        ("busy_not_a_failure", test_busy_rejection_is_not_logged_as_a_failure),
     ]:
         try:
             if fn():

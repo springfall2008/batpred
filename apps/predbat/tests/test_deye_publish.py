@@ -424,6 +424,118 @@ def test_apply_reserve_live_forces_write_despite_noop():
     assert not failed, "test_apply_reserve_live_forces_write_despite_noop"
 
 
+def test_control_entity_writes_are_republished():
+    """Every control entity must be republished with the value Predbat wrote.
+
+    Regression: the event handlers discarded the incoming value and re-read the entity
+    instead, so nothing ever changed the published state. Predbat writes with
+    number/set_value, select/select_option or switch/turn_*, then reads the entity back to
+    confirm (inverter.write_and_poll_value / write_and_poll_switch), so every write was
+    reported failed: "Trying to write 9472 to charge_rate didn't complete got 0.0".
+    """
+    failed = False
+    import tests.test_infra as ti
+
+    cases = [
+        ("number", "battery_schedule_charge_power", 9472, 9472, ti.run_async, "number"),
+        ("number", "battery_schedule_charge_soc", 100, 100, ti.run_async, "number"),
+        ("number", "battery_schedule_export_power", 3000, 3000, ti.run_async, "number"),
+        ("number", "battery_schedule_export_soc", 20, 20, ti.run_async, "number"),
+        ("select", "battery_schedule_charge_start_time", "01:30", "01:30", ti.run_async, "select"),
+        ("select", "battery_schedule_charge_end_time", "05:00", "05:00", ti.run_async, "select"),
+        ("select", "battery_schedule_export_start_time", "16:00", "16:00", ti.run_async, "select"),
+    ]
+    for domain, leaf, written, expected, runner, kind in cases:
+        d = RecordingDeye()
+        d.device_list = ["INV1"]
+        entity = f"{domain}.predbat_deye_inv1_{leaf}"
+        if kind == "number":
+            runner(d.number_event(entity, written))
+        else:
+            runner(d.select_event(entity, written))
+        got = d.published.get(entity)
+        if got != expected:
+            print(f"ERROR: {leaf} published as {got!r}, expected {expected!r}")
+            failed = True
+
+    # Switch enable, written by write_and_poll_switch as turn_on / turn_off
+    for service, expected_state in (("turn_on", "on"), ("turn_off", "off")):
+        d = RecordingDeye()
+        d.device_list = ["INV1"]
+        entity = "switch.predbat_deye_inv1_battery_schedule_charge_enable"
+        ti.run_async(d.switch_event(entity, service))
+        if d.published.get(entity) != expected_state:
+            print(f"ERROR: enable {service} published as {d.published.get(entity)!r}, expected {expected_state!r}")
+            failed = True
+    assert not failed, "test_control_entity_writes_are_republished"
+
+
+def test_write_button_applies_and_is_not_stored_as_schedule():
+    """The write button is momentary: it applies the schedule and stores no state.
+
+    Its entity id contains "_charge_", so it must be handled before the direction matching
+    in update_local_schedule or it would be mistaken for a schedule field.
+    """
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    applied = []
+
+    async def fake_apply(sn, force=False):
+        """Record an apply_schedule call."""
+        applied.append((sn, force))
+
+    import tests.test_infra as ti
+
+    with patch.object(d, "apply_schedule", side_effect=fake_apply):
+        ti.run_async(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+    if applied != [("INV1", True)]:
+        print(f"ERROR: expected a forced apply, got {applied}")
+        failed = True
+    if d.local_schedule.get("INV1", {}).get("charge", {}):
+        print(f"ERROR: the write button must not be stored as schedule state: {d.local_schedule}")
+        failed = True
+    assert not failed, "test_write_button_applies_and_is_not_stored_as_schedule"
+
+
+def test_reserve_write_is_republished():
+    """A reserve change is pushed to the inverter and republished for the read-back."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    import tests.test_infra as ti
+
+    async def fake_apply(sn, schedule, current_soc, force=False):
+        """Stand in for the live control write."""
+        return True
+
+    entity = "number.predbat_deye_inv1_battery_schedule_reserve"
+    with patch.object(d, "apply_dynamic_control", side_effect=fake_apply):
+        ti.run_async(d.number_event(entity, 14))
+    if d.published.get(entity) != 14:
+        print(f"ERROR: reserve published as {d.published.get(entity)!r}, expected 14")
+        failed = True
+    if d.local_schedule.get("INV1", {}).get("reserve") != 14:
+        print(f"ERROR: reserve not stored: {d.local_schedule}")
+        failed = True
+    assert not failed, "test_reserve_write_is_republished"
+
+
+def test_unrelated_entity_does_not_corrupt_schedule():
+    """An entity that matches no schedule field falls back to a plain state refresh."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    if d.update_local_schedule("INV1", "number.predbat_deye_inv1_something_else", 5):
+        print("ERROR: an unknown entity must not be applied")
+        failed = True
+    if d.update_local_schedule("INV1", "number.predbat_deye_inv1_battery_schedule_charge_mystery", 5):
+        print("ERROR: an unknown charge field must not be applied")
+        failed = True
+    assert not failed, "test_unrelated_entity_does_not_corrupt_schedule"
+
+
 def run_deye_publish_tests(my_predbat):
     """Run all DEYE publish/config tests."""
     failed = False
@@ -444,6 +556,10 @@ def run_deye_publish_tests(my_predbat):
         ("automatic_config_energy", test_automatic_config_maps_energy_counters),
         ("automatic_config_energy_missing", test_automatic_config_skips_missing_energy_counters),
         ("apply_reserve_live_force", test_apply_reserve_live_forces_write_despite_noop),
+        ("control_writes_republished", test_control_entity_writes_are_republished),
+        ("write_button_not_stored", test_write_button_applies_and_is_not_stored_as_schedule),
+        ("reserve_republished", test_reserve_write_is_republished),
+        ("unknown_entity_ignored", test_unrelated_entity_does_not_corrupt_schedule),
     ]:
         try:
             if fn():

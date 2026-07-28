@@ -39,6 +39,8 @@ from deye_const import (
     TOU_SLOT_COUNT,
     TOU_FILLER_TIMES,
     DEYE_ORDER_MAX_POLLS,
+    DEYE_BUSY_CODES,
+    DEYE_BUSY_MARKERS,
     CONFIG_BATTERY_KEYS,
     DEYE_AUTH_ERROR_MARKERS,
     DEYE_DEBUG_MAX_CHARS,
@@ -663,15 +665,41 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return {}
         return {}
 
+    @staticmethod
+    def is_busy_response(data):
+        """Return True when DEYE refused a command because one is already running.
+
+        This is back-pressure, not a failure: DEYE runs a single control order per device
+        and rejects anything sent while one is in flight.
+        """
+        if not isinstance(data, dict) or data.get("success", True):
+            return False
+        if str(data.get("code", "")) in DEYE_BUSY_CODES:
+            return True
+        msg = str(data.get("msg", "")).lower()
+        return any(marker in msg for marker in DEYE_BUSY_MARKERS)
+
     async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
         """Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written."""
         desired = self.build_dynamic_payload(sn, schedule, current_soc)
         if not force and self.payloads_equal(desired, self.applied_payload.get(sn)):
             self.log(f"Info: DEYE {sn} control unchanged, skipping write")
             return False
+        # DEYE executes one order at a time per device, so a write sent while the previous
+        # one is still running is rejected outright. Defer instead of burning the call:
+        # applied_payload is left untouched, so the next cycle sees the same difference and
+        # re-applies once the order has drained. force does not bypass this — the API would
+        # reject it just the same.
+        pending = self.pending_orders.get(sn)
+        if pending:
+            self.log(f"Info: DEYE {sn} order {pending} still in flight, deferring this control write")
+            return False
         resp = await self._post("dynamic_control", desired)
         if not resp.get("success", True):
-            self.log(f"Warn: DEYE dynamic control failed for {sn}: {resp.get('msg', 'unknown')}")
+            if self.is_busy_response(resp):
+                self.log(f"Info: DEYE {sn} is busy running a control order, will re-apply next cycle")
+            else:
+                self.log(f"Warn: DEYE dynamic control failed for {sn}: {resp.get('msg', 'unknown')}")
             return False
         self.applied_payload[sn] = desired
         order_id = resp.get("orderId")
@@ -827,31 +855,88 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.control_active.add(sn)  # Predbat is now actively controlling this inverter
         return await self.apply_dynamic_control(sn, schedule, current_soc, force=force)
 
-    async def select_event(self, entity_id, value):
-        """Handle a select (time) change from Home Assistant: refresh local schedule state."""
+    @staticmethod
+    def _to_bool(value, current=False):
+        """Coerce an HA switch service name or entity state into a boolean."""
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text == "toggle":
+            return not current
+        return text in ("on", "turn_on", "true", "1", "enable", "enabled")
+
+    def update_local_schedule(self, sn, entity_id, value):
+        """Apply a control entity change into local_schedule. Returns True if it was applied.
+
+        This is what makes a write stick. Predbat writes these entities with
+        number/set_value, select/select_option or switch/turn_*, then reads the entity back
+        to confirm (see inverter.write_and_poll_value / write_and_poll_switch). Nothing else
+        republishes them, so if the incoming value is not applied here and the entity
+        re-emitted, the read-back returns the old value and every write is reported failed.
+        Mirrors fox.write_battery_schedule_event.
+        """
+        schedule = self.local_schedule.setdefault(sn, {})
+        if entity_id.endswith("battery_schedule_reserve"):
+            schedule["reserve"] = int(self._as_float(value, 0))
+            return True
+        direction = "charge" if "_charge_" in entity_id else ("export" if "_export_" in entity_id else None)
+        if not direction:
+            return False
+        window = schedule.setdefault(direction, {})
+        if entity_id.endswith("_start_time"):
+            window["start"] = str(value)
+        elif entity_id.endswith("_end_time"):
+            window["end"] = str(value)
+        elif entity_id.endswith("_soc"):
+            window["soc"] = int(self._as_float(value, 0))
+        elif entity_id.endswith("_power"):
+            window["power"] = int(self._as_float(value, 0))
+        elif entity_id.endswith("_enable"):
+            window["enable"] = self._to_bool(value, current=window.get("enable", False))
+        else:
+            return False
+        return True
+
+    async def _handle_control_event(self, entity_id, value):
+        """Apply an entity change and republish it, so Predbat's read-back confirms the write."""
         sn = self._sn_from_entity(entity_id)
-        if sn:
+        if not sn:
+            return
+        if self.update_local_schedule(sn, entity_id, value):
+            await self.publish_schedule_settings_ha(sn)
+        else:
             await self.get_schedule_settings_ha(sn)
 
+    async def select_event(self, entity_id, value):
+        """Handle a select (time) change from Home Assistant."""
+        await self._handle_control_event(entity_id, value)
+
     async def number_event(self, entity_id, value):
-        """Handle a number change from Home Assistant: the reserve is written live, others just refresh local state."""
+        """Handle a number change from Home Assistant; the reserve is additionally written live."""
         sn = self._sn_from_entity(entity_id)
         if not sn:
             return
         if entity_id.endswith("battery_schedule_reserve"):
-            await self.apply_reserve_live(sn, int(float(value)))
-        else:
-            await self.get_schedule_settings_ha(sn)
+            # Reserve goes to the inverter immediately (freeze-charge depends on it taking
+            # effect at once), and is republished so Predbat's read-back sees the new value
+            # whether or not the inverter write itself succeeded.
+            await self.apply_reserve_live(sn, int(self._as_float(value, 0)))
+            await self.publish_schedule_settings_ha(sn)
+            return
+        await self._handle_control_event(entity_id, value)
 
     async def switch_event(self, entity_id, service):
-        """Handle a switch change from Home Assistant: the write button applies the schedule, others just refresh local state."""
+        """Handle a switch change from Home Assistant: the write button applies the schedule."""
         sn = self._sn_from_entity(entity_id)
         if not sn:
             return
-        if entity_id.endswith("_write") and service in ("turn_on", "on"):
-            await self.apply_schedule(sn, force=True)
-        else:
-            await self.get_schedule_settings_ha(sn)
+        if entity_id.endswith("_write"):
+            # A momentary button, not schedule state: it has nothing to store, and must not
+            # fall through to update_local_schedule where "_charge_" would match a direction.
+            if service in ("turn_on", "on", "toggle"):
+                await self.apply_schedule(sn, force=True)
+            return
+        await self._handle_control_event(entity_id, service)
 
     async def automatic_config(self):
         """Register every discovered inverter as a DeyeCloud Predbat inverter."""
