@@ -12,7 +12,8 @@
 import asyncio
 import datetime
 
-from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, backfill_summaries, build_label, build_summary, list_runs, load_run, save_run
+from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, list_runs, load_plan, load_run, save_run
+from tests.test_infra import run_async
 
 
 class FakeStorage:
@@ -307,6 +308,73 @@ def test_annual_store(my_predbat):
     asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
     if len(storage.save_calls) != writes_before:
         print("  ERROR: a compare page that changes nothing must not write storage, got {} writes".format(len(storage.save_calls) - writes_before))
+        failed = True
+
+    print("Test: save_run strips the plans out of the stored document and keys them per leg")
+    storage = FakeStorage()
+    debug_results = {
+        "annual": {"scenarios": {"no_pvbat": {"cost_p": 10.0}, "with_predbat": {"cost_p": 5.0}}, "months_included": 12},
+        "months": [
+            {
+                "month": 1,
+                "status": "ok",
+                "plans": [
+                    {"day": "2025-01-08", "leg": "with_car", "scenarios": {"with_predbat": {"rows": [1]}}},
+                    {"day": "2025-01-08", "leg": "without_car", "scenarios": {"with_predbat": {"rows": [2]}}},
+                ],
+            },
+            {"month": 2, "status": "ok", "plans": [{"day": "2025-02-10", "leg": "single", "scenarios": {"pv_only": {"rows": [3]}}}]},
+        ],
+    }
+    run_async(save_run(storage, debug_results, {}, "20260728-091000"))
+    stored = run_async(load_run(storage, "20260728-091000"))
+    if any("plans" in month for month in stored["months"]):
+        print("  ERROR: the stored document must not carry the plans, got {}".format(stored["months"]))
+        failed = True
+    index = run_async(list_runs(storage))
+    if len(index[0].get("plan_keys") or []) != 3:
+        print("  ERROR: three legs should produce three plan keys, got {}".format(index[0].get("plan_keys")))
+        failed = True
+
+    print("Test: load_plan returns the right scenario from its own key")
+    plan = run_async(load_plan(storage, "20260728-091000", 1, 1, "with_predbat"))
+    if plan != {"rows": [2]}:
+        print("  ERROR: expected the without_car leg's plan, got {}".format(plan))
+        failed = True
+
+    print("Test: a non-debug run writes no plan keys at all")
+    storage = FakeStorage()
+    run_async(save_run(storage, {"annual": {"months_included": 12}, "months": [{"month": 1, "status": "ok"}]}, {}, "20260728-091100"))
+    if run_async(list_runs(storage))[0].get("plan_keys"):
+        print("  ERROR: a run with no plans should record no plan keys")
+        failed = True
+
+    print("Test: load_plan falls back to a document that still has its plans embedded")
+    # A run stored before this split. It must stay viewable rather than silently losing
+    # its plans.
+    storage = FakeStorage()
+    run_async(storage.save(STORAGE_MODULE, "run_legacy", {"months": [{"month": 3, "plans": [{"leg": "single", "scenarios": {"pv_only": {"rows": [9]}}}]}]}, format="json"))
+    if run_async(load_plan(storage, "legacy", 3, 0, "pv_only")) != {"rows": [9]}:
+        print("  ERROR: a legacy embedded-plans run should still resolve")
+        failed = True
+
+    print("Test: load_plan returns None rather than raising for anything it cannot resolve")
+    for args in [("20260728-091000", 99, 0, "with_predbat"), ("20260728-091000", 1, 99, "with_predbat"), ("20260728-091000", 1, 0, "nope"), ("nosuchrun", 1, 0, "with_predbat")]:
+        try:
+            if run_async(load_plan(storage, *args)) is not None:
+                print("  ERROR: {} should resolve to None".format(args))
+                failed = True
+        except Exception as error:
+            print("  ERROR: {} raised {} instead of returning None".format(args, type(error).__name__))
+            failed = True
+
+    print("Test: discarding an evicted run expires its plan keys, not just its document")
+    storage = FakeStorage()
+    run_async(save_run(storage, debug_results, {}, "20260728-091200"))
+    keys_before = [key for key in storage.store if "plans" in str(key)]
+    run_async(_discard_run(storage, "20260728-091200", run_async(list_runs(storage))[0].get("plan_keys")))
+    if any(storage.store.get(key) is not None for key in keys_before):
+        print("  ERROR: an evicted run's plan keys should be discarded too")
         failed = True
 
     return failed

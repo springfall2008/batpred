@@ -28,7 +28,7 @@ from aiohttp import web
 from annual import AnnualConfigError, validate_config
 from annual_costs import DEFAULT_COSTS
 from annual_job import AnnualJob
-from annual_store import list_runs, load_run, save_run
+from annual_store import list_runs, load_plan, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
 from web_helper import get_plan_css, get_plan_renderer_js
 
@@ -753,7 +753,12 @@ class AnnualPage:
         return web.json_response(self.job.status())
 
     async def html_annual_download(self, request):
-        """Return one stored run's raw results document as a JSON download."""
+        """Return one stored run's raw results document as a JSON download.
+
+        The document is exactly as stored: a debug run's captured plans are held
+        separately under their own storage keys (see ``annual_store.save_run``) and
+        are not included here.
+        """
         run_id = request.query.get("run")
         results = await load_run(self._storage(), run_id)
         if results is None:
@@ -763,54 +768,14 @@ class AnnualPage:
     async def html_annual_plan(self, request):
         """Return one captured plan as JSON, for the results page's plan viewer to render.
 
-        Only present at all under a debug run (see ``"plans"`` in Task 1's month-row
-        addition); a non-debug run's stored results carry no ``"plans"`` key on any
-        month, so ``_find_plan`` falls through to None and this 404s, same as any
-        other query it cannot resolve.
+        Only present at all under a debug run; a non-debug run wrote no plan keys, so
+        ``load_plan`` falls through to None and this 404s, same as any other query it
+        cannot resolve.
         """
-        run_id = request.query.get("run", "")
-        results = await load_run(self._storage(), run_id) if run_id else None
-        if not results:
-            return web.json_response({"error": "run not found"}, status=404)
-        plan = self._find_plan(results, request.query.get("month"), request.query.get("index"), request.query.get("scenario"))
+        plan = await load_plan(self._storage(), request.query.get("run", ""), request.query.get("month"), request.query.get("index"), request.query.get("scenario"))
         if plan is None:
             return web.json_response({"error": "plan not found"}, status=404)
         return web.json_response(plan)
-
-    @staticmethod
-    def _find_plan(results, month, index, scenario):
-        """Return one captured plan's raw_plan dict, or None when it cannot be resolved.
-
-        ``month``, ``index`` and ``scenario`` arrive straight off the query string,
-        which is attacker-controlled - this must coerce defensively and never raise
-        out of the handler above; any failure to resolve simply becomes a None the
-        handler turns into a 404, not a 500.
-        """
-        if not isinstance(results, dict) or not scenario:
-            return None
-        try:
-            month = int(month)
-            index = int(index)
-        except (TypeError, ValueError):
-            return None
-        for entry in results.get("months", []) or []:
-            if not isinstance(entry, dict) or entry.get("month") != month:
-                continue
-            plans = entry.get("plans")
-            # A corrupt stored run could have "plans" as anything at all (a dict, a
-            # string, ...) - indexing a non-list with an int would raise KeyError or
-            # TypeError instead of the None this method's docstring promises never to
-            # let escape, so a non-list is treated the same as no plans at all.
-            if not isinstance(plans, list) or index < 0 or index >= len(plans):
-                return None
-            plan_entry = plans[index]
-            if not isinstance(plan_entry, dict):
-                return None
-            scenarios = plan_entry.get("scenarios")
-            if not isinstance(scenarios, dict):
-                return None
-            return scenarios.get(scenario)
-        return None
 
     @staticmethod
     def _describe_tariff_side(tariff, url_key, rates_key):

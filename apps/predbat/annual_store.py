@@ -11,6 +11,7 @@ Keeps the most recent runs so a user can flip between "with a 5 kWh battery" and
 Storage abstraction rather than the filesystem, because there may not be one.
 """
 
+import copy
 import datetime
 
 MAX_RUNS = 20
@@ -21,6 +22,11 @@ INDEX_NAME = "runs_index"
 def _run_key(run_id):
     """Return the storage filename holding one run's results document."""
     return "run_{}".format(run_id)
+
+
+def _plan_key(run_id, month, index):
+    """Return the storage filename holding one leg's captured plans."""
+    return "run_{}_plans_{:02d}_{}".format(run_id, int(month), int(index))
 
 
 def _describe_tariff(tariff):
@@ -128,31 +134,58 @@ async def load_run(storage, run_id):
     return await storage.load(STORAGE_MODULE, _run_key(run_id))
 
 
-async def _discard_run(storage, run_id):
-    """Remove an evicted run's stored document so the ring does not leak documents.
+async def _discard_run(storage, run_id, plan_keys=None):
+    """Remove an evicted run's stored document and plan keys so the ring does not leak them.
 
     The real Storage component has no ``delete`` method, so the primary path is
-    to overwrite the document with ``None`` and set an expiry in the past, which
+    to overwrite each document with ``None`` and set an expiry in the past, which
     lets ``storage.cleanup()`` reclaim it later. A ``delete`` method is still
     preferred when a backend (or the test's fake) provides one.
     """
+    keys = [_run_key(run_id)] + list(plan_keys or [])
     if hasattr(storage, "delete"):
-        await storage.delete(STORAGE_MODULE, _run_key(run_id))
+        for key in keys:
+            await storage.delete(STORAGE_MODULE, key)
         return
     expired = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=1)
-    await storage.save(STORAGE_MODULE, _run_key(run_id), None, format="json", expiry=expired)
+    for key in keys:
+        await storage.save(STORAGE_MODULE, key, None, format="json", expiry=expired)
 
 
 async def save_run(storage, results, config, run_id):
     """Save a completed run and prune the ring to MAX_RUNS. Returns the run id.
 
-    The evicted run's document is discarded as well as its index entry, so the
-    ring cannot leak documents that nothing references.
+    Captured plans (present only on a debug run) are stripped out of the results
+    document and written under their own key per leg, one leg per sampled day, so
+    the results document - read to render totals that ignore the plans - stays
+    small, and each plan can be fetched on its own rather than re-reading a
+    several-megabyte document on every click of the plan viewer.
+
+    ``results`` is deep-copied before anything is stripped from it, so the
+    caller's own dict (the web layer still holds it after this returns) is left
+    untouched.
+
+    The evicted run's document and plan keys are discarded as well as its index
+    entry, so the ring cannot leak documents that nothing references.
     """
     if not storage:
         return run_id
 
-    await storage.save(STORAGE_MODULE, _run_key(run_id), results, format="json")
+    stored = copy.deepcopy(results) if isinstance(results, dict) else results
+    plan_keys = []
+    if isinstance(stored, dict):
+        for month in stored.get("months") or []:
+            if not isinstance(month, dict):
+                continue
+            plans = month.pop("plans", None)
+            if not isinstance(plans, list):
+                continue
+            for index, leg in enumerate(plans):
+                key = _plan_key(run_id, month.get("month", 0), index)
+                await storage.save(STORAGE_MODULE, key, leg, format="json")
+                plan_keys.append(key)
+
+    await storage.save(STORAGE_MODULE, _run_key(run_id), stored, format="json")
 
     annual = results.get("annual", {}) if isinstance(results, dict) else {}
     entry = {
@@ -162,6 +195,7 @@ async def save_run(storage, results, config, run_id):
         "months_included": annual.get("months_included", 0),
         "status": "ok" if annual.get("months_included") else "empty",
         "summary": build_summary(results, config),
+        "plan_keys": plan_keys,
     }
 
     index = await list_runs(storage)
@@ -169,11 +203,56 @@ async def save_run(storage, results, config, run_id):
     index.insert(0, entry)
 
     for dropped in index[MAX_RUNS:]:
-        await _discard_run(storage, dropped["id"])
+        await _discard_run(storage, dropped["id"], dropped.get("plan_keys"))
     index = index[:MAX_RUNS]
 
     await storage.save(STORAGE_MODULE, INDEX_NAME, index, format="json")
     return run_id
+
+
+async def load_plan(storage, run_id, month, index, scenario):
+    """Return one captured plan, or None when it cannot be resolved.
+
+    Reads the single leg's own key - about 177 KB - rather than the whole results
+    document, which for a debug run is several megabytes and would be re-read on every
+    click of the plan viewer's day and scenario selectors.
+
+    Falls back to a document that still carries its plans inline, so a run stored before
+    they were split out stays viewable instead of silently losing them.
+
+    Never raises: month, index and scenario arrive off an attacker-controlled query
+    string, and every failure to resolve is a None the caller turns into a 404.
+    """
+    if not storage or not run_id or not scenario:
+        return None
+    try:
+        month = int(month)
+        index = int(index)
+    except (TypeError, ValueError):
+        return None
+    if index < 0:
+        return None
+
+    leg = await storage.load(STORAGE_MODULE, _plan_key(run_id, month, index))
+    if isinstance(leg, dict):
+        scenarios = leg.get("scenarios")
+        return scenarios.get(scenario) if isinstance(scenarios, dict) else None
+
+    results = await load_run(storage, run_id)
+    if not isinstance(results, dict):
+        return None
+    for entry in results.get("months") or []:
+        if not isinstance(entry, dict) or entry.get("month") != month:
+            continue
+        plans = entry.get("plans")
+        if not isinstance(plans, list) or index >= len(plans):
+            return None
+        candidate = plans[index]
+        if not isinstance(candidate, dict):
+            return None
+        scenarios = candidate.get("scenarios")
+        return scenarios.get(scenario) if isinstance(scenarios, dict) else None
+    return None
 
 
 async def backfill_summaries(storage, runs):

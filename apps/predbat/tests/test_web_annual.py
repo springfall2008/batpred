@@ -1452,9 +1452,11 @@ def test_web_annual_routes_registered(my_predbat):
 def test_web_annual_plan_route(my_predbat):
     """Verify the plan viewer's route: resolves a captured plan, and 404s (never 500s) otherwise.
 
-    ``./annual_plan``'s query string is attacker-controlled, so ``_find_plan`` must
-    coerce defensively rather than let a malformed ``month``/``index`` raise out of
-    the handler - a 500 here would be a defect, per the plan doc's own caution.
+    ``./annual_plan``'s query string is attacker-controlled, so the route's underlying
+    ``annual_store.load_plan`` must coerce defensively rather than let a malformed
+    ``month``/``index`` raise out of the handler - a 500 here would be a defect, per the
+    plan doc's own caution. ``load_plan`` itself is covered directly in
+    ``test_annual_store.py``; this test covers the route that sits on top of it.
     """
     failed = False
     print("**** Testing web_annual plan route ****")
@@ -1470,30 +1472,30 @@ def test_web_annual_plan_route(my_predbat):
     ]
     asyncio.run(save_run(storage, debug_results, page.config_from_post(valid_postdata()), "20250108-plans"))
 
-    print("Test: _find_plan resolves a valid month/index/scenario to its raw_plan dict")
-    plan = page._find_plan(debug_results, "1", "1", "with_predbat")
-    if plan != {"rows": [], "soc_max": 9.5}:
-        print("  ERROR: expected the second plan's with_predbat scenario, got {!r}".format(plan))
+    print("Test: the route resolves a valid month/index/scenario to its captured plan")
+    response = asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "20250108-plans", "month": "1", "index": "1", "scenario": "with_predbat"})))
+    if response.status != 200 or json.loads(response.body) != {"rows": [], "soc_max": 9.5}:
+        print("  ERROR: expected the second plan's with_predbat scenario, got status={} body={!r}".format(response.status, response.body))
         failed = True
 
-    print("Test: _find_plan returns None rather than raising on a non-numeric month/index")
+    print("Test: the route 404s rather than raising on a non-numeric month/index")
     for month, index in [("not-a-number", "0"), ("1", "also-not-a-number"), (None, "0"), ("1", None)]:
         try:
-            result = page._find_plan(debug_results, month, index, "with_predbat")
+            result = asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "20250108-plans", "month": month, "index": index, "scenario": "with_predbat"})))
         except Exception as error:  # noqa: BLE001 - the point of this test is that nothing escapes
-            print("  ERROR: _find_plan must never raise, got {} for month={!r} index={!r}".format(error, month, index))
+            print("  ERROR: the route must never raise, got {} for month={!r} index={!r}".format(error, month, index))
             failed = True
             continue
-        if result is not None:
-            print("  ERROR: a malformed query should resolve to None, got {!r}".format(result))
+        if result.status != 404:
+            print("  ERROR: a malformed query should 404, got {!r}".format(result.status))
             failed = True
 
-    print("Test: _find_plan returns None for an out-of-range index and an unknown scenario")
-    if page._find_plan(debug_results, "1", "99", "with_predbat") is not None:
-        print("  ERROR: an out-of-range index should resolve to None")
+    print("Test: the route 404s for an out-of-range index and an unknown scenario")
+    if asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "20250108-plans", "month": "1", "index": "99", "scenario": "with_predbat"}))).status != 404:
+        print("  ERROR: an out-of-range index should 404")
         failed = True
-    if page._find_plan(debug_results, "1", "0", "not_a_scenario") is not None:
-        print("  ERROR: an unknown scenario should resolve to None")
+    if asyncio.run(page.html_annual_plan(FakeRequest(query={"run": "20250108-plans", "month": "1", "index": "0", "scenario": "not_a_scenario"}))).status != 404:
+        print("  ERROR: an unknown scenario should 404")
         failed = True
 
     print("Test: the route returns the plan JSON for a valid query")
@@ -1519,35 +1521,5 @@ def test_web_annual_plan_route(my_predbat):
     if response.status != 404:
         print("  ERROR: an absent run parameter should 404, got {}".format(response.status))
         failed = True
-
-    print("Test: a corrupt stored 'plans' structure (not a list) resolves to None rather than raising")
-    # A dict would previously reach `plans[index]`, which raises KeyError for an int key
-    # that is not present - escaping the None-on-any-failure contract the docstring
-    # promises. Every shape here must resolve to None without raising.
-    corrupt_results = copy.deepcopy(sample_run_results())
-    for corrupt_plans in [{"0": "not a list"}, "also not a list", 42, None]:
-        corrupt_results["months"][0]["plans"] = corrupt_plans
-        try:
-            result = page._find_plan(corrupt_results, "1", "0", "with_predbat")
-        except Exception as error:  # noqa: BLE001 - the point of this test is that nothing escapes
-            print("  ERROR: _find_plan must never raise on a corrupt 'plans' structure, got {} for plans={!r}".format(error, corrupt_plans))
-            failed = True
-            continue
-        if result is not None:
-            print("  ERROR: a corrupt 'plans' structure should resolve to None, got {!r} for plans={!r}".format(result, corrupt_plans))
-            failed = True
-
-    print("Test: a corrupt 'scenarios' entry (not a dict) inside an otherwise-valid plan resolves to None rather than raising")
-    corrupt_results = copy.deepcopy(sample_run_results())
-    corrupt_results["months"][0]["plans"] = [{"day": "2025-01-08", "leg": "single", "scenarios": ["not", "a", "dict"]}]
-    try:
-        result = page._find_plan(corrupt_results, "1", "0", "with_predbat")
-    except Exception as error:  # noqa: BLE001
-        print("  ERROR: _find_plan must never raise on a corrupt 'scenarios' entry, got {}".format(error))
-        failed = True
-    else:
-        if result is not None:
-            print("  ERROR: a corrupt 'scenarios' entry should resolve to None, got {!r}".format(result))
-            failed = True
 
     return failed
