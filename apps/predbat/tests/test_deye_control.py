@@ -273,6 +273,10 @@ async def _fake_run_step():
 
 def _patched_run(d, poll_status):
     """Run one DEYE run() cycle with per-inverter I/O stubbed and poll_order fixed to poll_status."""
+    # These tests are about draining control orders on a component that has already
+    # discovered its inverters, so the static tier starts fresh; without this run() would
+    # re-run discovery over the network before ever reaching the drain loop.
+    d.mark_refreshed("static")
 
     async def fake_poll_order(sn):
         """Return the fixed status for every call, mirroring the real poll_order's pop-on-success side effect."""

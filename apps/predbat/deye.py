@@ -18,6 +18,7 @@ token) auth.
 
 import hashlib
 import asyncio
+import time
 import aiohttp
 import argparse
 import json
@@ -49,6 +50,15 @@ from deye_const import (
     DEYE_RATED_POWER_KEY,
     LIFEPO4_CHARGE_VOLTS_PER_CELL,
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
+    DEYE_STORAGE_MODULE,
+    DEYE_TTL_STATIC,
+    DEYE_TTL_CONFIG,
+    DEYE_TTL_LIVE,
+    DEYE_RESTORE_MAX_CONTROL,
+    DEYE_CACHE_STATIC,
+    DEYE_CACHE_CONFIG,
+    DEYE_CACHE_RATINGS,
+    DEYE_CACHE_CONTROL,
 )
 
 
@@ -112,6 +122,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.applied_payload = {}
         self.control_active = set()
         self.cached_values = {}
+        # tier name -> wall-clock time of last successful refresh; seeded from storage.age()
+        # at startup so the refresh cadence survives a restart instead of restarting with it.
+        self._tier_refreshed = {}
+        self._cache_restored = False
+        self._saved_ratings = None  # signature of the ratings last written, to skip no-op saves
         self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, 0.0)
         # auth_method defaults to app_credentials, but an injected access token with no
         # developer app credentials can only be oauth — and in app_credentials mode
@@ -663,6 +678,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if order_id:
             self.pending_orders[sn] = order_id
             self.log(f"Info: DEYE {sn} control submitted, orderId={order_id}")
+        # Persist immediately rather than at the end of the cycle: a restart between the
+        # write and the next tick would otherwise lose track of the in-flight order and
+        # re-write a payload the inverter already holds.
+        await self.save_control()
         return True
 
     async def poll_order(self, sn):
@@ -889,8 +908,219 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
         self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
+    @staticmethod
+    def _age_text(age):
+        """Render a cache age in minutes for logging, tolerating an unknown age."""
+        return f"{age:.1f} minutes" if age is not None else "unknown"
+
+    def tier_expired(self, tier, ttl_minutes):
+        """Return True when a tier has never refreshed or its TTL has elapsed."""
+        last = self._tier_refreshed.get(tier)
+        if last is None:
+            return True
+        return (time.time() - last) / 60.0 >= ttl_minutes
+
+    def mark_refreshed(self, tier, age_minutes=0.0):
+        """Start (or seed) a tier's TTL clock.
+
+        age_minutes lets a restored cache backdate the clock, so a tier cached 2 minutes
+        before a restart still has 13 of its 15 minutes left rather than a fresh 15.
+        """
+        self._tier_refreshed[tier] = time.time() - (age_minutes or 0.0) * 60.0
+
+    async def load_cache(self, name):
+        """Return (data, age_minutes) for one cache file, or (None, None).
+
+        A cache must never break a run, so storage being absent, unreadable or corrupt is
+        reported and treated as a miss — the tier then simply refreshes.
+        """
+        storage = self.storage
+        if not storage:
+            return None, None
+        try:
+            data = await storage.load(DEYE_STORAGE_MODULE, name)
+            if data is None:
+                return None, None
+            age = await storage.age(DEYE_STORAGE_MODULE, name)
+        except Exception as e:
+            self.log(f"Warn: DEYE could not read the {name} cache: {e}")
+            return None, None
+        return data, age
+
+    async def save_cache(self, name, data):
+        """Persist one cache file. No-ops when storage is unavailable."""
+        storage = self.storage
+        if not storage:
+            return False
+        try:
+            return await storage.save(DEYE_STORAGE_MODULE, name, data, format="json", expiry=None)
+        except Exception as e:
+            self.log(f"Warn: DEYE could not write the {name} cache: {e}")
+            return False
+
+    async def save_static(self):
+        """Cache discovery results."""
+        return await self.save_cache(DEYE_CACHE_STATIC, {"station_ids": self.station_ids, "device_list": self.device_list})
+
+    async def save_config(self):
+        """Cache the per-device config/battery responses."""
+        return await self.save_cache(DEYE_CACHE_CONFIG, self.device_battery_config)
+
+    def _ratings_payload(self):
+        """Return the static per-device ratings in their cached shape."""
+        return {"capacity": self.device_capacity, "pack_voltage": self.device_pack_voltage, "rated_power": self.device_rated_power}
+
+    async def save_ratings(self):
+        """Cache the ratings, but only when they have actually changed.
+
+        These are written by the once-a-minute live poll yet are static per install, so an
+        unconditional save would rewrite an identical file 1440 times a day. Compared by
+        serialised value rather than identity because the dicts are mutated in place.
+        """
+        payload = self._ratings_payload()
+        signature = json.dumps(payload, sort_keys=True, default=str)
+        if signature == getattr(self, "_saved_ratings", None):
+            return False
+        if await self.save_cache(DEYE_CACHE_RATINGS, payload):
+            self._saved_ratings = signature
+            return True
+        return False
+
+    async def save_control(self):
+        """Cache control state: what was last written, and any order still in flight."""
+        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count})
+
+    async def restore_state(self):
+        """Restore cached state at startup and seed each tier's refresh clock.
+
+        Seeding the clocks from storage.age() rather than from process start is what makes
+        the cadence survive a restart: a tier cached two minutes ago keeps the rest of its
+        TTL, one cached nine hours ago re-polls immediately.
+        """
+        static, age = await self.load_cache(DEYE_CACHE_STATIC)
+        if isinstance(static, dict):
+            station_ids = static.get("station_ids")
+            device_list = static.get("device_list")
+            # An empty device_list is never restored as valid: caching an empty discovery
+            # (an outage during the previous run) would otherwise pin the component dead
+            # for the whole 8 hour TTL.
+            if isinstance(device_list, list) and device_list:
+                self.device_list = device_list
+                self.station_ids = station_ids if isinstance(station_ids, list) else []
+                self.mark_refreshed("static", age)
+                self.log(f"Info: DEYE restored {len(device_list)} inverter(s) from cache (age {self._age_text(age)})")
+
+        config, age = await self.load_cache(DEYE_CACHE_CONFIG)
+        if isinstance(config, dict) and config:
+            self.device_battery_config = config
+            self.mark_refreshed("config", age)
+
+        # Ratings are static per install and carry no TTL of their own — device/latest
+        # rewrites them on every live refresh. Restoring them unconditionally is the main
+        # win: automatic_config() can map soc_max/battery_rate_max/inverter_limit at
+        # startup without waiting for a poll to complete.
+        ratings, _ = await self.load_cache(DEYE_CACHE_RATINGS)
+        if isinstance(ratings, dict):
+            self.device_capacity = ratings.get("capacity") or {}
+            self.device_pack_voltage = ratings.get("pack_voltage") or {}
+            self.device_rated_power = ratings.get("rated_power") or {}
+            # Record what is already on disk so the first poll does not rewrite an
+            # identical file.
+            self._saved_ratings = json.dumps(self._ratings_payload(), sort_keys=True, default=str)
+
+        # Telemetry is deliberately not restored: the live tier polls every minute anyway,
+        # and HA keeps the last published value of each entity, so there is nothing to gain
+        # from caching it 1440 times a day. The live clock therefore starts unset and the
+        # first tick polls immediately.
+
+        control, age = await self.load_cache(DEYE_CACHE_CONTROL)
+        if isinstance(control, dict):
+            orders = control.get("pending_orders")
+            counts = control.get("order_poll_count")
+            # Orders restore unconditionally: an unpolled order is orphaned, and
+            # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
+            if isinstance(orders, dict):
+                self.pending_orders = orders
+                if orders:
+                    self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
+            if isinstance(counts, dict):
+                self.order_poll_count = counts
+            applied = control.get("applied_payload")
+            if isinstance(applied, dict) and applied:
+                if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
+                    self.applied_payload = applied
+                else:
+                    # Deliberately discarded. This cache asserts the inverter still holds
+                    # what Predbat last wrote; after a long gap that may be false, and a
+                    # wrongly SKIPPED write leaves the battery diverging from the plan. A
+                    # redundant write is the cheaper mistake.
+                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(age)}), the next apply will re-write to the inverter")
+
+    async def refresh_static(self):
+        """Re-run discovery and the per-model capability reads, then cache them."""
+        # get_device_list() clears device_list when discovery comes back empty. That was
+        # harmless when discovery only ran at startup, but this tier re-runs every 8 hours
+        # in a long-lived process, and one transient failure must not take a working
+        # component down until the next success. Absence of a result is not a result.
+        previous_devices, previous_stations = self.device_list, self.station_ids
+        await self.get_device_list()
+        if not self.device_list:
+            if previous_devices:
+                self.device_list, self.station_ids = previous_devices, previous_stations
+                self.log(f"Warn: DEYE discovery returned no inverters, keeping the {len(previous_devices)} already known")
+                return False
+            # Neither marked nor saved: an empty discovery must be retried on the next
+            # tick, not cached and left for 8 hours.
+            return False
+        for station_id in self.station_ids:
+            try:
+                await self.fetch_station_latest(station_id)
+            except Exception as e:
+                self.log(f"Warn: DEYE station/latest failed for {station_id}: {e}")
+        for sn in self.device_list:
+            try:
+                await self.fetch_measure_points(sn)
+            except Exception as e:
+                self.log(f"Warn: DEYE device/measurePoints failed for {sn}: {e}")
+        self.mark_refreshed("static")
+        await self.save_static()
+        return True
+
+    async def refresh_config(self):
+        """Re-read config/battery for every device and cache it when anything came back."""
+        got_any = False
+        for sn in self.device_list:
+            try:
+                if await self.fetch_battery_config(sn):
+                    got_any = True
+            except Exception as e:
+                self.log(f"Warn: DEYE config/battery failed for {sn}: {e}")
+        # The clock is started either way so a model that rejects this config point
+        # entirely retries on the tier cadence rather than on every single tick, but the
+        # cache is only written when there is something worth keeping.
+        self.mark_refreshed("config")
+        if got_any:
+            await self.save_config()
+        return got_any
+
+    async def refresh_live(self):
+        """Poll device/latest for every device, then cache ratings (telemetry is not persisted)."""
+        got_any = False
+        for sn in self.device_list:
+            try:
+                if await self.fetch_device_data(sn):
+                    got_any = True
+            except Exception as e:
+                self.log(f"Warn: DEYE device/latest failed for {sn}: {e}")
+        if got_any:
+            self.mark_refreshed("live")
+            # Only the ratings are cached, and only when they change — the telemetry itself
+            # is not persisted (see DEYE_CACHE_* in deye_const.py).
+            await self.save_ratings()
+        return got_any
+
     async def run(self, seconds, first):
-        """Main component loop: auth, discover, poll, publish, configure."""
+        """Main component loop: auth, restore, tiered refresh, publish, configure."""
         if self.auth_method == "app_credentials" and not getattr(self, "access_token", None):
             if not await self.fetch_token():
                 self.log("Warn: DEYE token unavailable, skipping run")
@@ -899,33 +1129,34 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             self.log("Warn: DEYE OAuth token invalid, skipping run")
             return False
 
-        if first or not self.device_list:
-            await self.get_device_list()
+        if first and not self._cache_restored:
+            # Once per process. Restoring before any polling is what lets the TTL checks
+            # below skip work a previous run already did.
+            self._cache_restored = True
+            await self.restore_state()
+
+        # Discovery also refreshes whenever there are no devices to work with: without
+        # that guard a failed discovery would be retried only once the 8 hour TTL expired.
+        if self.tier_expired("static", DEYE_TTL_STATIC) or not self.device_list:
+            await self.refresh_static()
         if not self.device_list:
             self.log("Error: DEYE no inverters found")
             return False
 
-        if first:
-            # Read-only discovery, once per start: these responses are the reference for
-            # what this model actually exposes, and are traced by the API debug logging.
-            for station_id in self.station_ids:
-                try:
-                    await self.fetch_station_latest(station_id)
-                except Exception as e:
-                    self.log(f"Warn: DEYE station/latest failed for {station_id}: {e}")
-            for sn in self.device_list:
-                try:
-                    await self.fetch_measure_points(sn)
-                except Exception as e:
-                    self.log(f"Warn: DEYE device/measurePoints failed for {sn}: {e}")
+        if self.tier_expired("config", DEYE_TTL_CONFIG):
+            await self.refresh_config()
 
+        live_ok = True
+        if self.tier_expired("live", DEYE_TTL_LIVE):
+            live_ok = await self.refresh_live()
+
+        # Free: reads the HA control entities rather than the API, so it runs every tick
+        # regardless of tier.
         for sn in self.device_list:
             try:
-                await self.fetch_battery_config(sn)
-                await self.fetch_device_data(sn)
                 await self.get_schedule_settings_ha(sn)
             except Exception as e:
-                self.log(f"Warn: DEYE poll failed for {sn}: {e}")
+                self.log(f"Warn: DEYE schedule read failed for {sn}: {e}")
 
         await self.publish_data()
         for sn in self.device_list:
@@ -934,6 +1165,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         # Drain any control orders left pending by apply_dynamic_control() every cycle (not
         # just on first run) so a write that is HTTP-accepted but then fails to apply on the
         # device doesn't stay masked forever behind the applied-payload change-detection cache.
+        orders_changed = bool(self.pending_orders)
         for sn in list(self.pending_orders.keys()):
             try:
                 status = await self.poll_order(sn)
@@ -949,8 +1181,21 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                     self.pending_orders.pop(sn, None)
                     self.order_poll_count.pop(sn, None)
                     self.applied_payload.pop(sn, None)  # invalidate cache -> next apply re-writes
+        if orders_changed:
+            # Only when orders were actually drained, so an idle cycle does not rewrite the
+            # cache and needlessly reset the applied-payload age used on restore.
+            await self.save_control()
 
         await self._reconcile_control()
+
+        if first and not live_ok:
+            # Startup has not really succeeded without telemetry: automatic_config() would
+            # map only the args backed by cached ratings and permanently skip the rest,
+            # because it runs on the first cycle alone. Returning False leaves first set,
+            # so ComponentBase retries the whole startup path on its backoff (60s doubling
+            # to 128 minutes) until a poll comes back.
+            self.log("Warn: DEYE first poll returned no telemetry, deferring startup; it will be retried after a backoff")
+            return False
 
         if first and self.automatic:
             await self.automatic_config()

@@ -37,6 +37,42 @@ TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3
 
+# Storage module name for every persisted DEYE cache file.
+DEYE_STORAGE_MODULE = "deye"
+
+# Refresh cadence per class of state, in minutes. ComponentBase ticks run() every 60
+# seconds, so DEYE_TTL_LIVE of 1 means "every tick". These are the maximum ages a cached
+# tier may reach before it is re-polled; the clocks are seeded from storage.age() at
+# startup so the cadence survives a process restart rather than restarting with it.
+DEYE_TTL_STATIC = 8 * 60  # station/device discovery, measure points — changes when hardware does
+DEYE_TTL_CONFIG = 15  # config/battery — installer settings, effectively static
+DEYE_TTL_LIVE = 1  # device/latest — telemetry and energy counters
+
+# Restore bound in minutes for applied_payload: this is a change-detection cache with no
+# API read-back, so restoring it
+# asserts the inverter still holds what Predbat last wrote. If it was changed externally
+# while Predbat was down that assertion is false, the next write is wrongly SKIPPED and the
+# battery silently diverges from the plan. A redundant write is cheap; a skipped one is
+# not. Bounded so quick restarts keep the benefit and any longer outage forces a rewrite.
+DEYE_RESTORE_MAX_CONTROL = 15
+
+# Cache file names under DEYE_STORAGE_MODULE. One file per tier so storage.age() gives each
+# an independent clock; a single blob would need hand-rolled per-section timestamps, and
+# rewriting it every minute for live data would reset the static tier's age to zero.
+DEYE_CACHE_STATIC = "static"  # station_ids, device_list
+DEYE_CACHE_CONFIG = "config"  # device_battery_config
+DEYE_CACHE_RATINGS = "ratings"  # device_capacity, device_pack_voltage, device_rated_power
+DEYE_CACHE_CONTROL = "control"  # applied_payload, pending_orders, order_poll_count
+
+# Telemetry and the energy counters are deliberately NOT cached. The live tier polls every
+# minute, so a cache would be written 1440 times a day to save at most one tick's gap at
+# startup — a poor trade against that much file or network IO. Home Assistant already
+# retains the last published value of every entity, and publish_data() only writes a
+# sensor when it has a value, so a failed poll leaves the previous reading in place rather
+# than overwriting it. Ratings are written by the same poll but ARE cached, because they
+# are static and are what lets automatic_config() map soc_max/battery_rate_max/
+# inverter_limit at startup; they are saved only when they actually change.
+
 # DEYE does NOT answer an expired/invalid bearer token with HTTP 401 — it returns
 # HTTP 200 carrying a body-level failure, e.g. {"success": false, "msg": "auth invalid
 # token"}. Status-code-only handling therefore never triggers a refresh and the
