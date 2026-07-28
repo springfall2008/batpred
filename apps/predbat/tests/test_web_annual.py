@@ -450,6 +450,40 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a failed or cancelled run must clear the started-here flag")
             failed = True
 
+        print("Test: a saved config with no octopus block still shows the live credentials")
+        # The reported bug: prefill_config() only runs on a FIRST visit, because
+        # load_config() returns the saved annual.yaml once one exists. A user who had
+        # saved a config on the manual source - which stores no octopus block at all -
+        # saw both boxes permanently empty despite having Octopus configured.
+        my_predbat.args["octopus_api_key"] = "sk_live_savedCase"
+        my_predbat.args["octopus_api_account"] = "A-SAVED01"
+        saved_manual = {
+            "location": {"postcode": "SW1A 1AA"},
+            "solar": [{"kwp": 5.0}],
+            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0},
+            "load": {"annual_kwh": 3800, "shape": "night", "car_charging_kwh": 3000, "car_rate_kw": 7.4},
+            "tariff": {"rates_import": [{"rate": 24.86}], "standing_charge_p_per_day": 60.0},
+        }
+        saved_form = make_page(my_predbat).render_form(saved_manual)
+        if "sk_live_savedCase" not in saved_form or "A-SAVED01" not in saved_form:
+            print("  ERROR: the live Octopus credentials should fill the boxes even when the saved config has no octopus block")
+            failed = True
+        # ...but the saved config's own source choice is the user's, and is left alone.
+        if re.search(r'value="octopus"[^>]*checked', saved_form):
+            print("  ERROR: falling back to the live credentials must not switch the saved manual source to Octopus")
+            failed = True
+        if not re.search(r'value="manual"[^>]*checked', saved_form):
+            print("  ERROR: the saved manual source should stay selected")
+            failed = True
+
+        print("Test: an incomplete credential pair does not half-fill the boxes")
+        my_predbat.args.pop("octopus_api_account", None)
+        partial_form = make_page(my_predbat).render_form(saved_manual)
+        if "sk_live_savedCase" in partial_form:
+            print("  ERROR: a key with no account cannot download anything, so it must not be offered")
+            failed = True
+        my_predbat.args.pop("octopus_api_key", None)
+
         print("Test: the form offers a debug checkbox, defaulting off")
         form = page.render_form(page.prefill_config())
         if 'name="debug"' not in form:

@@ -231,12 +231,7 @@ class AnnualPage:
         if dno_region:
             config["tariff"]["dno_region"] = dno_region
 
-        # indirect=False for the same reason as the URLs above: an Octopus API key is a
-        # dotted string ("sk_live_..." keys are not, but account ids and keys are free
-        # text and must not be resolved as entity ids), so leaving indirect at its True
-        # default risks silently returning None instead of the configured value.
-        api_key = self._arg("octopus_api_key", None, indirect=False)
-        account_id = self._arg("octopus_api_account", None, indirect=False)
+        api_key, account_id = self._octopus_from_args()
         if api_key and account_id:
             # Both are needed to download consumption - a key without an account (or the
             # reverse) cannot fetch anything, so only a complete pair is worth offering.
@@ -253,6 +248,17 @@ class AnnualPage:
             config["load"] = {"octopus": {"api_key": str(api_key), "account_id": str(account_id)}, "shape": config["load"].get("shape", "flat")}
 
         return config
+
+    def _octopus_from_args(self):
+        """Return the live instance's (api_key, account_id), or (None, None) if either is unset.
+
+        ``indirect=False`` because an API key and an account id are free text that can
+        contain a literal dot. Left at ``get_arg``'s ``indirect=True`` default,
+        ``resolve_arg`` (``userinterface.py``) would treat a dotted value as a Home
+        Assistant entity id, fail to find one, and silently return the default instead
+        of the real credential.
+        """
+        return self._arg("octopus_api_key", None, indirect=False), self._arg("octopus_api_account", None, indirect=False)
 
     def catalogue(self):
         """Return the tariff dropdown entries: built-ins merged with the user's own."""
@@ -383,8 +389,22 @@ class AnnualPage:
         text += "</div>\n"
         text += '<div class="annual-field"><label><input type="radio" name="load_source" value="octopus" {}> Import from Octopus</label></div>\n'.format("checked" if using_octopus else "")
         text += '<div class="annual-subgroup" id="load-octopus">\n'
-        text += self._text_field("load_octopus_api_key", "Octopus API key", (load.get("octopus") or {}).get("api_key", ""), wide=True)
-        text += self._text_field("load_octopus_account_id", "Account ID", (load.get("octopus") or {}).get("account_id", ""), wide=True)
+        # Fall back to the live instance's credentials when the config being rendered
+        # carries none. prefill_config() only runs on a FIRST visit - load_config()
+        # returns the saved annual.yaml once one exists - so without this, a user who
+        # saved a config before this prefill was added (or who saved one while on the
+        # manual source, which stores no octopus block at all) would see these two boxes
+        # permanently empty despite having Octopus configured, and would have to paste
+        # their key in by hand every time.
+        #
+        # Only the FIELD VALUES fall back, never the selected source: the saved config's
+        # manual/Octopus choice is the user's and is left alone. Injecting the octopus
+        # block into a saved manual config instead would make it invalid outright, since
+        # _validate_load treats the two as mutually exclusive.
+        saved_octopus = load.get("octopus") or {}
+        args_key, args_account = self._octopus_from_args()
+        text += self._text_field("load_octopus_api_key", "Octopus API key", saved_octopus.get("api_key") or (args_key if args_key and args_account else "") or "", wide=True)
+        text += self._text_field("load_octopus_account_id", "Account ID", saved_octopus.get("account_id") or (args_account if args_key and args_account else "") or "", wide=True)
         text += '<p class="annual-note">Your meter readings already include any car charging, so the figures above are not used with this option.</p>\n'
         text += "</div>\n"
         text += "</fieldset>\n"
