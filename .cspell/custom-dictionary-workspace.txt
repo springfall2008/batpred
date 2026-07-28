@@ -241,6 +241,7 @@ labelcolor
 labelnames
 larr
 libc
+LIFEPO
 linebreak
 linestyle
 loadml

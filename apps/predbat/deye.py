@@ -25,13 +25,59 @@ import os
 from datetime import datetime
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS, CONFIG_BATTERY_KEYS
+from deye_const import (
+    DEYE_BASE_URLS,
+    DEYE_ENDPOINTS,
+    DEYE_TIMEOUT,
+    DEYE_RETRIES,
+    DEYE_TELEMETRY_KEYS,
+    DEYE_LATEST_BODY_KEY,
+    DEYE_WORKMODE,
+    FREEZE_EXPORT_SOC,
+    TOU_FIELD,
+    TOU_SLOT_COUNT,
+    TOU_FILLER_TIMES,
+    DEYE_ORDER_MAX_POLLS,
+    CONFIG_BATTERY_KEYS,
+    DEYE_AUTH_ERROR_MARKERS,
+    DEYE_DEBUG_MAX_CHARS,
+    DEYE_DEBUG_REDACT_KEYS,
+    DEYE_TELEMETRY_NEGATE,
+    DEYE_TELEMETRY_REQUIRED,
+    DEYE_CAPACITY_KEYS,
+    DEYE_ENERGY_KEYS,
+    DEYE_RATED_POWER_KEY,
+    LIFEPO4_CHARGE_VOLTS_PER_CELL,
+    LIFEPO4_NOMINAL_VOLTS_PER_CELL,
+)
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
     """DEYE Cloud API component."""
 
-    def initialize(self, app_id="", app_secret="", username="", password="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs):
+    # Trace every API request/response while the DEYE integration beds in; flip to
+    # False once it is stable. A class attribute so it is always readable even when a
+    # caller (tests, the CLI tool) builds the object without going through initialize().
+    api_debug = True
+
+    def initialize(
+        self,
+        app_id="",
+        app_secret="",
+        username="",
+        password="",
+        key="",
+        data_center="eu",
+        company_id="",
+        auth_method="app_credentials",
+        token_expires_at=None,
+        token_hash="",
+        inverter_sn=None,
+        automatic=False,
+        automatic_ignore_pv=False,
+        battery_nominal_voltage=None,
+        **kwargs,
+    ):
         """Initialise the DEYE component from its resolved config args.
 
         ComponentBase.__init__ calls initialize(**kwargs); the Components
@@ -53,17 +99,35 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.automatic_ignore_pv = automatic_ignore_pv
         self.inverter_sn_filter = inverter_sn if isinstance(inverter_sn, list) else ([inverter_sn] if inverter_sn else [])
         self.device_list = []
+        self.station_ids = []
         self.device_values = {}
         self.device_battery_config = {}
+        self.device_capacity = {}
+        self.device_pack_voltage = {}
+        self.device_energy = {}
+        self.device_rated_power = {}
         self.local_schedule = {}
         self.pending_orders = {}
         self.order_poll_count = {}
         self.applied_payload = {}
         self.control_active = set()
         self.cached_values = {}
+        self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, 0.0)
+        # auth_method defaults to app_credentials, but an injected access token with no
+        # developer app credentials can only be oauth — and in app_credentials mode
+        # _init_oauth() throws the key away, so a host that forgets deye_auth_method gets a
+        # component that authenticates with nothing. Infer the mode from what was supplied.
+        if key and not app_id and auth_method != "oauth":
+            self.log("Info: DEYE inferring auth_method 'oauth' - an access token was injected without app credentials")
+            auth_method = "oauth"
+        # _init_oauth() assigns key straight to self.access_token in oauth mode, so it must
+        # be the injected ACCESS TOKEN (deye_key) — NOT token_hash, which is only the dedup
+        # handle echoed back to oauth-refresh. Passing the hash made DEYE reject every call
+        # with "auth invalid token", and a token_expires_at far in the future meant the
+        # refresh that would have replaced it never ran.
         self._init_oauth(
             auth_method=auth_method,
-            key=app_secret or token_hash,
+            key=key or app_secret,
             token_expires_at=token_expires_at,
             provider_name="deye",
         )
@@ -92,13 +156,52 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """Return JSON + Bearer auth headers for a DEYE request."""
         return {"Content-Type": "application/json", "Authorization": f"Bearer {self.access_token}"}
 
+    @staticmethod
+    def redact(payload):
+        """Return payload with credential-bearing keys masked, for safe logging."""
+        if isinstance(payload, dict):
+            return {k: ("***" if k in DEYE_DEBUG_REDACT_KEYS else DeyeAPI.redact(v)) for k, v in payload.items()}
+        if isinstance(payload, list):
+            return [DeyeAPI.redact(v) for v in payload]
+        return payload
+
+    def debug_api(self, direction, what, payload=None):
+        """Log one side of a DEYE API exchange when api_debug is on.
+
+        On by default while the integration beds in — DEYE's error bodies (bad
+        token, unsupported config point) are the only way to tell what the cloud
+        actually rejected. Bodies are truncated and credentials redacted.
+        """
+        if not self.api_debug:
+            return
+        if payload is None:
+            self.log(f"Debug: DEYE API {direction} {what}")
+            return
+        try:
+            text = json.dumps(self.redact(payload), default=str)
+        except (TypeError, ValueError):
+            text = str(payload)
+        if len(text) > DEYE_DEBUG_MAX_CHARS:
+            text = f"{text[:DEYE_DEBUG_MAX_CHARS]}... [truncated, {len(text)} chars]"
+        self.log(f"Debug: DEYE API {direction} {what}: {text}")
+
     async def fetch_token(self):
         """Fetch an access token using app credentials (app_credentials mode)."""
+        # Every app_credentials arg is optional in COMPONENT_LIST (the component also
+        # accepts the SaaS token path), so a misconfigured instance can reach here with
+        # them unset. Fail soft: both callers already treat False as "skip this run",
+        # whereas hashing a None password raises AttributeError out of run() and buries
+        # the real problem under a traceback on every cycle.
+        missing = [name for name in ("app_id", "app_secret", "username", "password") if not getattr(self, name, None)]
+        if missing:
+            self.log(f"Warn: DEYE app_credentials login is missing {', '.join(missing)} - set deye_auth_method to 'oauth' if this is a Predbat.com instance")
+            return False
         url = f"{self.base_url}{DEYE_ENDPOINTS['token']}?appId={self.app_id}"
         body = {"appSecret": self.app_secret, "password": self._sha256(self.password), **self._login_payload(self.username)}
         if self.company_id:
             body["companyId"] = str(self.company_id)
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
+        self.debug_api("POST", url, body)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(url, json=body) as resp:
@@ -107,32 +210,67 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: DEYE token fetch failed: {e}")
             return False
+        self.debug_api("RESP", url, data)
         if not data.get("success"):
             self.log(f"Warn: DEYE token rejected: {data.get('msg', 'unknown')}")
             return False
         self.access_token = data.get("accessToken")
         return True
 
+    @staticmethod
+    def is_auth_error_body(data):
+        """Return True if an HTTP 200 DEYE body is really an expired/invalid-token failure.
+
+        DEYE answers a bad bearer token with 200 + {"success": false, "msg": "auth
+        invalid token"} instead of a 401, so the body has to be inspected or no
+        refresh is ever attempted (see DEYE_AUTH_ERROR_MARKERS).
+        """
+        if not isinstance(data, dict) or data.get("success", True):
+            return False
+        # Separators are normalised to spaces so a code in the RFC 6749 style
+        # ("invalid_token") matches the same marker as the prose msg text.
+        text = f"{data.get('msg', '')} {data.get('code', '')}".lower().replace("_", " ").replace("-", " ")
+        return any(marker in text for marker in DEYE_AUTH_ERROR_MARKERS)
+
+    async def reauthenticate(self, context):
+        """Obtain a fresh access token after an auth failure. Returns True if the call is worth retrying."""
+        if await self.handle_oauth_401():
+            return True
+        if self.auth_method == "app_credentials":
+            self.access_token = None
+            if await self.fetch_token():
+                return True
+        self.log(f"Warn: DEYE re-authentication failed on {context}")
+        return False
+
     async def _post(self, endpoint_key, body):
-        """POST to a DEYE endpoint with retry and 401-refresh. Returns parsed JSON or raises."""
+        """POST to a DEYE endpoint with retry and token refresh. Returns parsed JSON or raises."""
         url = f"{self.base_url}{DEYE_ENDPOINTS[endpoint_key]}"
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
         last_err = None
+        refreshed = False
         for attempt in range(DEYE_RETRIES):
             try:
+                self.debug_api("POST", url, body)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.post(url, headers=self._auth_headers(), json=body) as resp:
                         if resp.status in (401, 403):
                             self.log(f"Warn: DEYE 401/403 on {endpoint_key}, attempt {attempt + 1}")
-                            if await self.handle_oauth_401():
+                            if await self.reauthenticate(endpoint_key):
                                 continue
-                            if self.auth_method == "app_credentials":
-                                self.access_token = None
-                                if await self.fetch_token():
-                                    continue
                             raise RuntimeError(f"DEYE auth failed on {endpoint_key}")
                         resp.raise_for_status()
-                        return await resp.json()
+                        data = await resp.json()
+                        self.debug_api("RESP", f"{url} status={resp.status}", data)
+                # A 200 whose body reports an invalid/expired token means the same thing as a
+                # 401 here: refresh once and retry. Bounded to a single refresh per call so a
+                # server that keeps rejecting the new token cannot spin the loop.
+                if not refreshed and self.is_auth_error_body(data):
+                    refreshed = True
+                    self.log(f"Warn: DEYE token rejected in response body on {endpoint_key}: {data.get('msg', 'unknown')}, refreshing")
+                    if await self.reauthenticate(endpoint_key):
+                        continue
+                return data
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 last_err = e
                 self.log(f"Warn: DEYE network error on {endpoint_key} attempt {attempt + 1}: {e}")
@@ -146,7 +284,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             self.log(f"Warn: DEYE station/list failed: {data.get('msg', 'unknown')}")
             return []
         stations = data.get("stationList") or []
-        return [s.get("id") or s.get("stationId") for s in stations if s.get("id") or s.get("stationId")]
+        self.station_ids = [s.get("id") or s.get("stationId") for s in stations if s.get("id") or s.get("stationId")]
+        return self.station_ids
 
     async def get_device_list(self):
         """Discover battery inverter serials across the account's stations."""
@@ -203,17 +342,135 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not rows:
             return {}
         flat = self._datalist_to_dict(rows[0].get("dataList"))
-        result = {name: self._as_float(flat.get(key)) for name, key in DEYE_TELEMETRY_KEYS.items()}
+        result = {}
+        for name, key in DEYE_TELEMETRY_KEYS.items():
+            value = self._as_float(flat.get(key))
+            # DEYE's grid sign is the opposite of Predbat's (see DEYE_TELEMETRY_NEGATE).
+            result[name] = -value if name in DEYE_TELEMETRY_NEGATE else value
+        self.device_energy[sn] = {name: self._as_float(flat.get(key)) for name, key in DEYE_ENERGY_KEYS.items() if key in flat}
+        # Only record when actually present. An unconditional write would coerce an absent
+        # key to 0.0 and clobber a rating captured on an earlier cycle, which then stops
+        # publishing the inverter_limit sensor and stops automatic_config mapping it —
+        # the same reason the energy counters above and derive_battery_capacity() below
+        # both leave their caches alone when the source key is missing.
+        if DEYE_RATED_POWER_KEY in flat:
+            self.device_rated_power[sn] = self._as_float(flat[DEYE_RATED_POWER_KEY])
+        self.derive_battery_capacity(sn, flat)
+        missing = [DEYE_TELEMETRY_KEYS[name] for name in DEYE_TELEMETRY_REQUIRED if DEYE_TELEMETRY_KEYS[name] not in flat]
+        if missing:
+            # A missing key silently reads 0.0, which previously hid a wholly wrong key
+            # map, so say so loudly and name what the device did return.
+            self.log(f"Warn: DEYE {sn} device/latest missing expected keys {missing} - telemetry will read zero. Available keys: {sorted(flat)}")
         self.device_values[sn] = result
         return result
+
+    def nominal_pack_voltage(self, bms_charge_voltage):
+        """Infer the LiFePO4 pack's nominal voltage from its BMS charge target.
+
+        The cell count is what actually matters: a 57.6 V charge target is 16 cells, which
+        is a 51.2 V nominal pack. Deriving it this way rather than assuming 48 V means
+        DEYE's high-voltage stacks scale correctly with no configuration.
+
+        The RESTING pack voltage must never be used for this — it climbs with SOC, so the
+        same 16S pack reads ~53.8 V at 94% but ~58 V at 100%, which rounds to 18 cells and
+        overstates capacity by 12.5%. An explicit deye_battery_nominal_voltage wins over
+        everything; otherwise there is no safe inference and 0 is returned.
+        """
+        if self.battery_nominal_voltage > 0:
+            return self.battery_nominal_voltage
+        if bms_charge_voltage > 0:
+            cells = round(bms_charge_voltage / LIFEPO4_CHARGE_VOLTS_PER_CELL)
+            if cells > 0:
+                return cells * LIFEPO4_NOMINAL_VOLTS_PER_CELL
+        # Deliberately NO default. Guessing (say 51.2 V for a 48 V hybrid) would be right
+        # for the common LV pack and several-fold wrong for an HV stack, and a wrong
+        # soc_max is worse than none: it becomes nominal_capacity, which sets the
+        # 0.65-1.20 plausibility band that filters find_battery_size(), so a bad value
+        # also rejects every correct sample from Predbat's own estimator. Returning 0
+        # leaves that band disabled and lets the estimator work from the soc_percent and
+        # battery_power history instead.
+        return 0.0
+
+    def derive_battery_capacity(self, sn, flat):
+        """Derive pack capacity in kWh from device/latest, caching it as a soc_max source.
+
+        config/battery answers "config point not supported" on some models (code 2106001),
+        leaving Predbat with no soc_max at all. device/latest does carry the pack's rated
+        Ah and the BMS charge voltage on those same models, and Ah x nominal volts is the
+        pack's kWh.
+        """
+        rated_ah = self._as_float(flat.get(DEYE_CAPACITY_KEYS["rated_capacity_ah"]))
+        if rated_ah <= 0:
+            return 0.0
+        volts = self.nominal_pack_voltage(self._as_float(flat.get(DEYE_CAPACITY_KEYS["bms_charge_voltage"])))
+        if volts <= 0:
+            measured = self._as_float(flat.get(DEYE_CAPACITY_KEYS["battery_voltage"]))
+            self.log(f"Warn: DEYE {sn} reports a {rated_ah}Ah pack but no BMS charge voltage, so kWh cannot be derived (pack currently reads {measured}V, which varies with SOC and cannot be used). Set deye_battery_nominal_voltage, or soc_max in apps.yaml")
+            return 0.0
+        self.device_pack_voltage[sn] = volts
+        capacity = round(rated_ah * volts / 1000.0, 2)
+        if self.device_capacity.get(sn) != capacity:
+            self.log(f"Info: DEYE {sn} battery capacity derived as {capacity}kWh ({rated_ah}Ah at {volts}V nominal)")
+        self.device_capacity[sn] = capacity
+        return capacity
+
+    def battery_capacity(self, sn):
+        """Return the best available pack capacity in kWh: config/battery first, else derived.
+
+        config/battery reports battCapacity in Ah (confirmed live: 1200, matching
+        device/latest BatteryRatedCapacity 1200 Ah), so it is scaled by the nominal pack
+        voltage exactly like the derived value — publishing it raw would claim a 1200 kWh
+        battery.
+        """
+        volts = self.device_pack_voltage.get(sn, 0.0)
+        if sn in self.device_battery_config and volts > 0:
+            configured_ah = self._battery_config_value(sn, "capacity")
+            if configured_ah > 0:
+                return round(configured_ah * volts / 1000.0, 2)
+        return self.device_capacity.get(sn, 0.0)
+
+    def battery_rate_max(self, sn):
+        """Return the battery's maximum charge rate in W, for Predbat's battery_rate_max.
+
+        config/battery reports maxChargeCurrent in amps (185 live), so it is scaled by the
+        nominal pack voltage. This is the DC battery-side limit and can legitimately exceed
+        the inverter's AC RatedPower — inverter_limit constrains the AC side separately.
+        """
+        volts = self.device_pack_voltage.get(sn, 0.0)
+        if volts <= 0 or sn not in self.device_battery_config:
+            return 0.0
+        amps = self._battery_config_value(sn, "max_charge_current")
+        return round(amps * volts) if amps > 0 else 0.0
 
     async def fetch_battery_config(self, sn):
         """Fetch and cache battery capability config for one inverter."""
         data = await self._post("config_battery", {"deviceSn": sn})
         if not data.get("success", True):
-            self.log(f"Warn: DEYE config/battery failed for {sn}: {data.get('msg', 'unknown')}")
+            # Not fatal: some models reject this config point entirely, and battery
+            # capacity is then derived from device/latest instead.
+            self.log(f"Warn: DEYE config/battery failed for {sn}: {data.get('msg', 'unknown')} - battery capacity will be derived from device/latest")
             return {}
         self.device_battery_config[sn] = data
+        return data
+
+    async def fetch_measure_points(self, sn):
+        """Log the device's measure-point metadata (read-only, first cycle only).
+
+        Names every metric the model can report, which is the reference for the
+        device/latest key spellings and for any capability config not exposed elsewhere.
+        """
+        data = await self._post("device_measure_points", {"deviceSn": sn})
+        if not data.get("success", True):
+            self.log(f"Warn: DEYE device/measurePoints failed for {sn}: {data.get('msg', 'unknown')}")
+            return {}
+        return data
+
+    async def fetch_station_latest(self, station_id):
+        """Log a station's latest snapshot (read-only, first cycle only)."""
+        data = await self._post("station_latest", {"stationId": station_id})
+        if not data.get("success", True):
+            self.log(f"Warn: DEYE station/latest failed for {station_id}: {data.get('msg', 'unknown')}")
+            return {}
         return data
 
     def _battery_config_value(self, sn, key, default=0.0):
@@ -367,18 +624,29 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=self._auth_headers()) as resp:
-                    if resp.status in (401, 403):
-                        if await self.handle_oauth_401():
-                            async with session.get(url, headers=self._auth_headers()) as resp2:
-                                resp2.raise_for_status()
-                                return await resp2.json()
+                # Two passes at most: the original call, then one retry after a refresh.
+                for attempt in range(2):
+                    self.debug_api("GET", url)
+                    async with session.get(url, headers=self._auth_headers()) as resp:
+                        if resp.status in (401, 403):
+                            data = None
+                        else:
+                            resp.raise_for_status()
+                            data = await resp.json()
+                            self.debug_api("RESP", f"{url} status={resp.status}", data)
+                    # A 401/403 and a 200 body reporting an invalid token both mean the
+                    # token needs refreshing before the call can succeed.
+                    if attempt == 0 and (data is None or self.is_auth_error_body(data)):
+                        if data is not None:
+                            self.log(f"Warn: DEYE token rejected in response body on GET {path}: {data.get('msg', 'unknown')}, refreshing")
+                        if await self.reauthenticate(f"GET {path}"):
+                            continue
                         return {}
-                    resp.raise_for_status()
-                    return await resp.json()
+                    return data if data is not None else {}
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: DEYE GET {path} failed: {e}")
             return {}
+        return {}
 
     async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
         """Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written."""
@@ -428,8 +696,33 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 if leaf in values:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
 
+            # Capacity is published whenever ANY source has it — config/battery when the
+            # model serves it, otherwise the value derived from device/latest. Without
+            # this, models that reject config/battery publish no soc_max sensor at all
+            # while automatic_config still points Predbat at it.
+            capacity = self.battery_capacity(sn)
+            if capacity > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_capacity"), state=capacity, attributes={"unit_of_measurement": "kWh", "friendly_name": f"DEYE {sn} Battery Capacity"}, app="deye")
+
+            # Inverter/battery ratings, used by Predbat to model clipping and charge curves.
+            rate_max = self.battery_rate_max(sn)
+            if rate_max > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_rate_max"), state=rate_max, attributes={"unit_of_measurement": "W", "friendly_name": f"DEYE {sn} Battery Rate Max"}, app="deye")
+            rated_power = self.device_rated_power.get(sn, 0.0)
+            if rated_power > 0:
+                self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"DEYE {sn} Inverter Limit"}, app="deye")
+
+            # Lifetime energy counters feed Predbat's load/import/export history learning.
+            for leaf, value in self.device_energy.get(sn, {}).items():
+                self.dashboard_item(
+                    self._sensor_name(sn, leaf),
+                    state=value,
+                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
+                    app="deye",
+                )
+
             if sn in self.device_battery_config:
-                capability_units = {"battery_capacity": ("capacity", "kWh"), "battery_reserve_min": ("reserve_min", "%"), "max_charge_current": ("max_charge_current", "A"), "max_discharge_current": ("max_discharge_current", "A")}
+                capability_units = {"battery_reserve_min": ("reserve_min", "%"), "max_charge_current": ("max_charge_current", "A"), "max_discharge_current": ("max_discharge_current", "A")}
                 for leaf, (key, unit) in capability_units.items():
                     value = self._battery_config_value(sn, key)
                     self.dashboard_item(self._sensor_name(sn, leaf), state=value, attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
@@ -557,8 +850,32 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not self.automatic_ignore_pv:
             self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
         self.set_arg("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
-        self.set_arg("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
-        self.set_arg("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
+        # Energy counters are only mapped when every inverter actually reports them, so a
+        # model that omits one does not leave Predbat reading a sensor that is never published.
+        for leaf in DEYE_ENERGY_KEYS:
+            if leaf == "pv_today" and self.automatic_ignore_pv:
+                continue
+            if all(leaf in self.device_energy.get(sn, {}) for sn in self.device_list):
+                self.set_arg(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+            else:
+                self.log(f"Warn: DEYE not every inverter reports {leaf}, it must be set manually in apps.yaml")
+        # Only point Predbat at capability sensors that are actually published: config/battery
+        # is unsupported on some models, and an arg aimed at a non-existent sensor is worse
+        # than an absent arg (which the user can fill in via apps.yaml).
+        if all(self.battery_capacity(sn) > 0 for sn in self.device_list):
+            self.set_arg("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
+        else:
+            self.log("Warn: DEYE no battery capacity available for every inverter, soc_max must be set manually in apps.yaml")
+        if all(sn in self.device_battery_config for sn in self.device_list):
+            self.set_arg("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
+        if all(self.battery_rate_max(sn) > 0 for sn in self.device_list):
+            self.set_arg("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
+        else:
+            self.log("Warn: DEYE no battery charge-current limit available, battery_rate_max must be set manually in apps.yaml")
+        if all(self.device_rated_power.get(sn, 0.0) > 0 for sn in self.device_list):
+            self.set_arg("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
+        else:
+            self.log("Warn: DEYE no RatedPower reported, inverter_limit must be set manually in apps.yaml")
         self.set_arg("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
         self.set_arg("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
         self.set_arg("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
@@ -587,6 +904,20 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not self.device_list:
             self.log("Error: DEYE no inverters found")
             return False
+
+        if first:
+            # Read-only discovery, once per start: these responses are the reference for
+            # what this model actually exposes, and are traced by the API debug logging.
+            for station_id in self.station_ids:
+                try:
+                    await self.fetch_station_latest(station_id)
+                except Exception as e:
+                    self.log(f"Warn: DEYE station/latest failed for {station_id}: {e}")
+            for sn in self.device_list:
+                try:
+                    await self.fetch_measure_points(sn)
+                except Exception as e:
+                    self.log(f"Warn: DEYE device/measurePoints failed for {sn}: {e}")
 
         for sn in self.device_list:
             try:
@@ -689,8 +1020,18 @@ class MockBase:  # pragma: no cover
         return default
 
     def set_arg(self, key, value):
-        """Print an inverter arg that automatic_config would set."""
-        print(f"Set arg {key} = {value}")
+        state = None
+        if isinstance(value, str) and "." in value:
+            state = self.get_state_wrapper(value, default=None)
+        elif isinstance(value, list):
+            state = "n/a []"
+            for v in value:
+                if isinstance(v, str) and "." in v:
+                    state = self.get_state_wrapper(v, default=None)
+                    break
+        else:
+            state = "n/a"
+        print(f"Set arg {key} = {value} (state={state})")
 
 
 def _build_deye(mock_base, args):  # pragma: no cover
@@ -703,13 +1044,17 @@ def _build_deye(mock_base, args):  # pragma: no cover
         "inverter_sn": args.serial,
         "automatic": True,
     }
-    if args.token_hash:
+    if args.key or args.token_hash:
         # Predbat.com SaaS: token injected/refreshed via OAuthMixin (Supabase edge function).
         if args.supabase_url:
             os.environ["SUPABASE_URL"] = args.supabase_url
         if args.supabase_key:
             os.environ["SUPABASE_KEY"] = args.supabase_key
-        arg_dict.update({"auth_method": "oauth", "token_hash": args.token_hash, "token_expires_at": args.token_expires})
+        # --key is the injected ACCESS TOKEN, the same value Predbat.com supplies as
+        # deye_key. Without it the tool starts with an empty bearer, so the first call is
+        # rejected and only the refresh rescues it — which does not exercise the path
+        # production actually takes.
+        arg_dict.update({"auth_method": "oauth", "key": args.key or "", "token_hash": args.token_hash or "", "token_expires_at": args.token_expires})
     else:
         # Self-hosted add-on: developer app (app_id/app_secret) + DeyeCloud account (username/password).
         arg_dict.update({"auth_method": "app_credentials", "app_id": args.app_id, "app_secret": args.app_secret, "username": args.username, "password": args.password})
@@ -766,7 +1111,8 @@ def main():  # pragma: no cover
     parser.add_argument("--username", default=None, help="DeyeCloud account email/username")
     parser.add_argument("--password", default=None, help="DeyeCloud account password (sent SHA-256 hashed)")
     # Predbat.com SaaS auth: injected token.
-    parser.add_argument("--token-hash", default=None, help="Injected OAuth token hash (Predbat.com SaaS mode)")
+    parser.add_argument("--key", default=None, help="Injected OAuth access token (Predbat.com SaaS mode, the deye_key value)")
+    parser.add_argument("--token-hash", default=None, help="Injected OAuth token hash, the refresh dedup handle (Predbat.com SaaS mode)")
     parser.add_argument("--token-expires", default=None, help="OAuth token expiry timestamp")
     parser.add_argument("--supabase-url", default=None, help="Supabase URL for OAuth token refresh")
     parser.add_argument("--supabase-key", default=None, help="Supabase anon key for OAuth token refresh")
@@ -776,8 +1122,8 @@ def main():  # pragma: no cover
     args = parser.parse_args()
 
     has_app_creds = all([args.app_id, args.app_secret, args.username, args.password])
-    if not args.token_hash and not has_app_creds:
-        parser.error("provide either --token-hash (SaaS) or all of --app-id/--app-secret/--username/--password (add-on)")
+    if not args.key and not args.token_hash and not has_app_creds:
+        parser.error("provide either --key (SaaS, optionally with --token-hash) or all of --app-id/--app-secret/--username/--password (add-on)")
 
     asyncio.run(test_deye_api(args))
 

@@ -54,11 +54,13 @@ def test_publish_data_publishes_battery_capacity():
     failed = False
     d = RecordingDeye()
     d.device_list = ["INV1"]
-    d.device_battery_config = {"INV1": {"battCapacity": 10.0, "battLowCapacity": 10, "maxChargeCurrent": 50, "maxDischargeCurrent": 50}}
+    # battCapacity is Ah: 200Ah on a 51.2V nominal pack is 10.24 kWh
+    d.device_battery_config = {"INV1": {"battCapacity": 200, "battLowCapacity": 10, "maxChargeCurrent": 50, "maxDischargeCurrent": 50}}
+    d.device_pack_voltage = {"INV1": 51.2}
     import tests.test_infra as ti
 
     ti.run_async(d.publish_data())
-    if d.published.get("sensor.predbat_deye_inv1_battery_capacity") != 10.0:
+    if d.published.get("sensor.predbat_deye_inv1_battery_capacity") != 10.24:
         print(f"ERROR: battery_capacity not published correctly; got {d.published.get('sensor.predbat_deye_inv1_battery_capacity')!r}")
         failed = True
     if d.published.get("sensor.predbat_deye_inv1_battery_reserve_min") != 10.0:
@@ -205,6 +207,9 @@ def test_automatic_config_maps_all_inverters():
     failed = False
     d = RecordingDeye()
     d.device_list = ["INVA", "INVB"]
+    # Both capability sensors have a source, so both args are mapped
+    d.device_capacity = {"INVA": 61.44, "INVB": 61.44}
+    d.device_battery_config = {"INVA": {}, "INVB": {}}
     d.set_args = {}
     d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
     import tests.test_infra as ti
@@ -232,6 +237,161 @@ def test_automatic_config_maps_all_inverters():
         print("ERROR: DEYE must not set inverter_mode (mode-less)")
         failed = True
     assert not failed, "test_automatic_config_maps_all_inverters"
+
+
+def test_automatic_config_skips_unavailable_capability_args():
+    """With no capacity source, soc_max/battery_min_soc are left unset rather than aimed at missing sensors."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INVA"]
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+
+    ti.run_async(d.automatic_config())
+    if "soc_max" in d.set_args:
+        print(f"ERROR: soc_max should be unset without a capacity source, got {d.set_args['soc_max']}")
+        failed = True
+    if "battery_min_soc" in d.set_args:
+        print(f"ERROR: battery_min_soc should be unset without config/battery, got {d.set_args['battery_min_soc']}")
+        failed = True
+    if not any("soc_max must be set manually" in m for m in d.log_messages):
+        print(f"ERROR: expected a warning telling the user to set soc_max, got {d.log_messages}")
+        failed = True
+    # The rest of the mapping still happens - one missing capability must not block control
+    if d.set_args.get("num_inverters") != 1:
+        print(f"ERROR: num_inverters {d.set_args.get('num_inverters')}")
+        failed = True
+    if not d.set_args.get("charge_start_time"):
+        print("ERROR: control args should still be mapped")
+        failed = True
+    assert not failed, "test_automatic_config_skips_unavailable_capability_args"
+
+
+def test_automatic_config_maps_ratings():
+    """battery_rate_max and inverter_limit are published in watts and mapped."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 100.0}}
+    d.device_pack_voltage = {"INV1": 51.2}
+    d.device_battery_config = {"INV1": {"maxChargeCurrent": 185, "maxDischargeCurrent": 185, "battCapacity": 1200, "battLowCapacity": 14}}
+    d.device_rated_power = {"INV1": 8000.0}
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    ti.run_async(d.automatic_config())
+
+    if d.published.get("sensor.predbat_deye_inv1_battery_rate_max") != 9472:
+        print(f"ERROR: battery_rate_max published as {d.published.get('sensor.predbat_deye_inv1_battery_rate_max')}, expected 9472")
+        failed = True
+    if d.published.get("sensor.predbat_deye_inv1_inverter_limit") != 8000.0:
+        print(f"ERROR: inverter_limit published as {d.published.get('sensor.predbat_deye_inv1_inverter_limit')}, expected 8000.0")
+        failed = True
+    if d.set_args.get("battery_rate_max") != ["sensor.predbat_deye_inv1_battery_rate_max"]:
+        print(f"ERROR: battery_rate_max arg {d.set_args.get('battery_rate_max')}")
+        failed = True
+    if d.set_args.get("inverter_limit") != ["sensor.predbat_deye_inv1_inverter_limit"]:
+        print(f"ERROR: inverter_limit arg {d.set_args.get('inverter_limit')}")
+        failed = True
+    assert not failed, "test_automatic_config_maps_ratings"
+
+
+def test_automatic_config_skips_missing_ratings():
+    """Without a rating source the args are left unset rather than aimed at missing sensors."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    ti.run_async(d.automatic_config())
+
+    for leaf in ("battery_rate_max", "inverter_limit"):
+        if leaf in d.set_args:
+            print(f"ERROR: {leaf} should be unset, got {d.set_args[leaf]}")
+            failed = True
+        if f"sensor.predbat_deye_inv1_{leaf}" in d.published:
+            print(f"ERROR: {leaf} sensor should not be published without a source")
+            failed = True
+    if not any("battery_rate_max must be set manually" in m for m in d.log_messages):
+        print(f"ERROR: expected a battery_rate_max warning, got {d.log_messages}")
+        failed = True
+    if not any("inverter_limit must be set manually" in m for m in d.log_messages):
+        print(f"ERROR: expected an inverter_limit warning, got {d.log_messages}")
+        failed = True
+    assert not failed, "test_automatic_config_skips_missing_ratings"
+
+
+def test_automatic_config_maps_energy_counters():
+    """The lifetime energy counters are published and mapped to Predbat's history args."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 100.0}}
+    d.device_energy = {"INV1": {"import_today": 13579.1, "export_today": 11.7, "pv_today": 2198.1, "load_today": 14326.4}}
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    ti.run_async(d.automatic_config())
+
+    for leaf, value in (("import_today", 13579.1), ("export_today", 11.7), ("pv_today", 2198.1), ("load_today", 14326.4)):
+        entity = f"sensor.predbat_deye_inv1_{leaf}"
+        if d.published.get(entity) != value:
+            print(f"ERROR: {entity} published as {d.published.get(entity)}, expected {value}")
+            failed = True
+        if d.set_args.get(leaf) != [entity]:
+            print(f"ERROR: {leaf} arg mapped to {d.set_args.get(leaf)}")
+            failed = True
+    assert not failed, "test_automatic_config_maps_energy_counters"
+
+
+def test_automatic_config_skips_missing_energy_counters():
+    """An inverter that reports no energy counters leaves those args unset."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_energy = {"INV1": {"import_today": 100.0}}
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+
+    ti.run_async(d.automatic_config())
+    if d.set_args.get("import_today") != ["sensor.predbat_deye_inv1_import_today"]:
+        print(f"ERROR: import_today should still be mapped, got {d.set_args.get('import_today')}")
+        failed = True
+    for leaf in ("export_today", "pv_today", "load_today"):
+        if leaf in d.set_args:
+            print(f"ERROR: {leaf} has no source and must not be mapped, got {d.set_args[leaf]}")
+            failed = True
+    assert not failed, "test_automatic_config_skips_missing_energy_counters"
+
+
+def test_publish_data_publishes_derived_capacity():
+    """The derived capacity is published as the battery_capacity sensor without config/battery."""
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 94.0}}
+    d.device_capacity = {"INV1": 61.44}
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    published = d.published
+    capacity = published.get("sensor.predbat_deye_inv1_battery_capacity")
+    if capacity != 61.44:
+        print(f"ERROR: expected 61.44 kWh published, got {capacity}")
+        failed = True
+    if "sensor.predbat_deye_inv1_battery_reserve_min" in published:
+        print("ERROR: reserve_min has no source and must not be published")
+        failed = True
+    assert not failed, "test_publish_data_publishes_derived_capacity"
 
 
 def test_apply_reserve_live_forces_write_despite_noop():
@@ -277,6 +437,12 @@ def run_deye_publish_tests(my_predbat):
         ("write_button", test_write_button_applies_schedule),
         ("sn_from_entity", test_sn_from_entity_disambiguates_prefix_colliding_serials),
         ("automatic_config", test_automatic_config_maps_all_inverters),
+        ("automatic_config_skips_capability", test_automatic_config_skips_unavailable_capability_args),
+        ("publish_derived_capacity", test_publish_data_publishes_derived_capacity),
+        ("automatic_config_ratings", test_automatic_config_maps_ratings),
+        ("automatic_config_ratings_missing", test_automatic_config_skips_missing_ratings),
+        ("automatic_config_energy", test_automatic_config_maps_energy_counters),
+        ("automatic_config_energy_missing", test_automatic_config_skips_missing_energy_counters),
         ("apply_reserve_live_force", test_apply_reserve_live_forces_write_despite_noop),
     ]:
         try:
