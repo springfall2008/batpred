@@ -1744,6 +1744,55 @@ class TestAutomaticConfig:
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial=None)
         assert gw.gateway_inverter_serial == []
 
+    def test_serial_filter_blank_strings_become_empty_list(self):
+        """Empty and whitespace-only serials are treated as an unset filter."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        for value in ("", " ", "   ", "\t\r\n"):
+            gw = GatewayMQTT.__new__(GatewayMQTT)
+            gw.base = MagicMock()
+            gw.args = {}
+            gw.initialize(
+                gateway_device_id="pbgw_test",
+                mqtt_host="mqtt.example.com",
+                mqtt_token="tok",
+                gateway_inverter_serial=value,
+            )
+            assert gw.gateway_inverter_serial == []
+
+    def test_serial_filter_list_drops_blanks_and_trims_values(self):
+        """Blank list entries are discarded while valid serials are trimmed."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial=["", None, "  ", " CE000000AA1 ", "\t"],
+        )
+        assert gw.gateway_inverter_serial == ["CE000000AA1"]
+
+    def test_serial_filter_json_array_drops_blanks_and_trims_values(self):
+        """JSON-encoded lists receive the same blank filtering and trimming."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial=' [ "", "  ", " CE000000AA1 " ] ',
+        )
+        assert gw.gateway_inverter_serial == ["CE000000AA1"]
+
     def test_serial_filter_json_array_string_expanded_to_list(self):
         """A JSON-encoded array string is parsed and expanded into a list of serials."""
         from gateway import GatewayMQTT
