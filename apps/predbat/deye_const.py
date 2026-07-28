@@ -37,6 +37,34 @@ TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3
 
+# DEYE does NOT answer an expired/invalid bearer token with HTTP 401 — it returns
+# HTTP 200 carrying a body-level failure, e.g. {"success": false, "msg": "auth invalid
+# token"}. Status-code-only handling therefore never triggers a refresh and the
+# component stays broken until a restart, so the transport matches these lower-cased
+# substrings against the body's msg/code to decide a token refresh is needed. Keep the
+# markers narrow enough that a genuine non-auth failure is never retried as one.
+DEYE_AUTH_ERROR_MARKERS = (
+    "auth invalid token",
+    "invalid token",
+    "token invalid",
+    "invalid access token",
+    "token expired",
+    "token is expired",
+    "expired token",
+    "token has expired",
+    "auth failed",
+    "unauthorized",
+    "unauthorised",
+)
+
+# Maximum characters of a request/response body written to the log when API debug
+# tracing is on — device/latest bodies run to tens of KB and would swamp the log.
+DEYE_DEBUG_MAX_CHARS = 20000
+
+# Body keys redacted from debug traces: these carry credentials or bearer tokens
+# and the logs are routinely pasted into issue reports.
+DEYE_DEBUG_REDACT_KEYS = ("accessToken", "refreshToken", "appSecret", "password", "token", "tokenHash")
+
 # Endpoint paths CONFIRMED against DeyeCloudDevelopers/deye-openapi-client-sample-code.
 DEYE_ENDPOINTS = {
     "token": "/account/token",
@@ -48,7 +76,34 @@ DEYE_ENDPOINTS = {
     "tou_update": "/order/sys/tou/update",
     "dynamic_control": "/strategy/dynamicControl",  # camelCase — confirmed in sample code
     "order_result": "/order/",  # GET {base}/order/{orderId} — confirmed
+    # Read-only discovery endpoints, confirmed in the official sample code
+    # (device/obtain_device_measure_points.py, station/obtain_station_latest.py). Polled
+    # once on the first cycle only: they are the remaining candidates for the battery
+    # capability data that config/battery refuses to serve on some models.
+    "device_measure_points": "/device/measurePoints",
+    "station_latest": "/station/latest",
 }
+
+# Battery-size derivation from device/latest, used when config/battery answers
+# "config point not supported" (code 2106001) and there is otherwise no soc_max source.
+DEYE_CAPACITY_KEYS = {
+    "rated_capacity_ah": "BatteryRatedCapacity",
+    "bms_charge_voltage": "BMSChargeVoltage",
+    "battery_voltage": "BatteryVoltage",
+}
+
+# The inverter's rated AC output in W, straight from device/latest (8000.00 live). This is
+# exactly what Predbat's inverter_limit wants, so it needs no conversion.
+DEYE_RATED_POWER_KEY = "RatedPower"
+
+# LiFePO4 per-cell voltages used to turn the BMS charge target into a nominal pack
+# voltage, so an Ah rating becomes kWh. A 57.6 V charge target is 16 cells at 3.6 V,
+# giving a 51.2 V nominal pack: 1200 Ah x 51.2 V = 61.4 kWh.
+LIFEPO4_CHARGE_VOLTS_PER_CELL = 3.6
+LIFEPO4_NOMINAL_VOLTS_PER_CELL = 3.2
+# Resting volts/cell, used only to infer the cell count when the BMS charge voltage is
+# absent; a resting pack sits near 3.3 V/cell across most of its SOC range.
+LIFEPO4_RESTING_VOLTS_PER_CELL = 3.3
 
 # device/latest batches serials on this body key (max 10 per call).  # CONFIRMED
 DEYE_LATEST_BODY_KEY = "deviceList"
@@ -59,17 +114,47 @@ DEYE_WORKMODE = {
     "zero_export_ct": "ZERO_EXPORT_TO_CT",
 }
 
-# device/latest dataList[].key spellings — the one item to confirm from a live
-# response (request body/shape is confirmed; exact value keys are not in the
-# sample).  # VERIFY@SPIKE (values only)
+# device/latest dataList[].key spellings — CONFIRMED against a live 3-phase hybrid
+# (productId 0_5411_1) response. DEYE uses PascalCase display names, not the camelCase
+# these were originally guessed as, and two carry literal spaces/hyphens
+# ("Temperature- Battery"). A wrong key here is silent: the lookup misses and the
+# metric publishes as 0.0, so DEYE_TELEMETRY_REQUIRED below makes a miss visible.
 DEYE_TELEMETRY_KEYS = {
-    "soc": "batterySOC",
-    "battery_power": "batteryPower",
-    "grid_power": "gridPower",
-    "pv_power": "pvPower",
-    "load_power": "loadPower",
-    "temperature": "batteryTemperature",
+    "soc": "SOC",
+    "battery_power": "BatteryPower",
+    "grid_power": "TotalGridPower",
+    "pv_power": "TotalSolarPower",
+    "load_power": "TotalConsumptionPower",
+    "temperature": "Temperature- Battery",
 }
+
+# Metrics whose sign must be flipped to reach Predbat's convention. DEYE reports grid
+# power positive when IMPORTING (confirmed live: TotalGridPower +25 W with
+# DailyGridFeedIn 0.00 kWh), whereas Predbat wants negative for import / positive for
+# export. Battery power needs no flip — DEYE already reports negative while charging,
+# matching Predbat's positive-for-discharge convention.
+DEYE_TELEMETRY_NEGATE = ("grid_power",)
+
+# Cumulative energy counters Predbat needs for its history-based load/rate learning, from
+# the same device/latest dataList. The lifetime "Total*" counters are used rather than the
+# "Daily*" ones because Predbat requires an incrementing series and the daily counters
+# reset at midnight, which would read as a large negative delta every night.
+#
+# The mapping is confirmed by DEYE's own daily figures balancing exactly:
+#   DailyConsumption 12.80 = DailyActiveProduction 4.50 + DailyEnergyPurchased 7.00
+#                            + (DailyDischargingEnergy 4.10 - DailyChargingEnergy 2.80)
+# which only holds if ActiveProduction is PV generation alone, excluding battery discharge.
+DEYE_ENERGY_KEYS = {
+    "import_today": "TotalEnergyBuy",
+    "export_today": "TotalEnergySell",
+    "pv_today": "TotalActiveProduction",
+    "load_today": "TotalConsumption",
+}
+
+# Metrics that must be present in every device/latest response. A key missing here means
+# the model uses different spellings and every dependent Predbat calculation would run on
+# a silent 0.0, so absence is logged rather than swallowed.
+DEYE_TELEMETRY_REQUIRED = ("soc", "battery_power", "pv_power", "load_power")
 
 # TimeUseSettingItem per-slot fields — CONFIRMED from official sample
 # clientcode/commission/sys_tou_update.py and the strategy/* samples.
@@ -81,8 +166,13 @@ TOU_FIELD = {
     "generate": "enableGeneration",
 }
 
-# config/battery response field names — best-known defaults, not yet seen against a live
-# response.  # VERIFY@SPIKE (field names AND units — esp. whether battCapacity is kWh or Ah)
+# config/battery response field names — CONFIRMED live:
+#   {"maxChargeCurrent": 185, "maxDischargeCurrent": 185, "battLowCapacity": 14,
+#    "battShutDownCapacity": 9, "battCapacity": 1200}
+# battCapacity is Ah, NOT kWh: it reports 1200 for the same pack device/latest reports as
+# BatteryRatedCapacity 1200 Ah. Publishing it directly as soc_max would tell Predbat the
+# battery is 1200 kWh, so it must be scaled by the nominal pack voltage like the derived
+# value. battLowCapacity is a percentage.
 CONFIG_BATTERY_KEYS = {
     "capacity": "battCapacity",
     "reserve_min": "battLowCapacity",

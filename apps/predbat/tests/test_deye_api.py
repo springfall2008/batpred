@@ -13,7 +13,7 @@ import pytz
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 from deye import DeyeAPI
-from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS
+from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS
 from tests.test_infra import run_async as run_async_local
 
 
@@ -34,8 +34,13 @@ class MockDeye(DeyeAPI):
         self.token_hash = ""
         self.inverter_sn_filter = inverter_sn or []
         self.device_list = []
+        self.station_ids = []
         self.device_values = {}
         self.device_battery_config = {}
+        self.device_capacity = {}
+        self.device_pack_voltage = {}
+        self.device_energy = {}
+        self.device_rated_power = {}
         self.local_schedule = {}
         self.pending_orders = {}
         self.order_poll_count = {}
@@ -119,13 +124,266 @@ def test_fetch_device_data_maps_keys():
     if out.get("soc") != 57.0:
         print(f"ERROR: soc {out.get('soc')}")
         failed = True
-    if out.get("grid_power") != -1200.0:
+    # grid_power is negated into Predbat's convention on the way through
+    if out.get("grid_power") != 1200.0:
         print(f"ERROR: grid_power {out.get('grid_power')}")
         failed = True
     if d.device_values.get("INV1", {}).get("soc") != 57.0:
         print("ERROR: not cached")
         failed = True
     assert not failed, "test_fetch_device_data_maps_keys"
+
+
+# Trimmed verbatim from a live device/latest response (3-phase hybrid, productId
+# 0_5411_1). Built from the real keys, NOT from DEYE_TELEMETRY_KEYS, so it fails if the
+# key table drifts back to guessed spellings — the earlier map missed every one of these
+# and published 0.0 across the board.
+LIVE_DATA_LIST = [
+    {"key": "RatedPower", "value": "8000.00", "unit": "W"},
+    {"key": "TotalSolarPower", "value": "1584.00", "unit": "W"},
+    {"key": "TotalGridPower", "value": "25", "unit": "W"},
+    {"key": "TotalConsumptionPower", "value": "820", "unit": "W"},
+    {"key": "TotalEnergyBuy", "value": "13579.10", "unit": "kWh"},
+    {"key": "TotalEnergySell", "value": "11.70", "unit": "kWh"},
+    {"key": "TotalActiveProduction", "value": "2198.10", "unit": "kWh"},
+    {"key": "TotalConsumption", "value": "14326.40", "unit": "kWh"},
+    {"key": "DailyActiveProduction", "value": "4.50", "unit": "kWh"},
+    {"key": "DailyEnergyPurchased", "value": "7.00", "unit": "kWh"},
+    {"key": "DailyGridFeedIn", "value": "0.00", "unit": "kWh"},
+    {"key": "DailyConsumption", "value": "12.80", "unit": "kWh"},
+    {"key": "DailyChargingEnergy", "value": "2.80", "unit": "kWh"},
+    {"key": "DailyDischargingEnergy", "value": "4.10", "unit": "kWh"},
+    {"key": "BatteryVoltage", "value": "53.83", "unit": "V"},
+    {"key": "BatteryPower", "value": "-603", "unit": "W"},
+    {"key": "SOC", "value": "94", "unit": "%"},
+    {"key": "BatteryRatedCapacity", "value": "1200", "unit": "Ah"},
+    {"key": "BMSChargeVoltage", "value": "57.60", "unit": "V"},
+    {"key": "Temperature- Battery", "value": "27.90", "unit": "℃"},
+    {"key": "AC Temperature", "value": "51.60", "unit": "℃"},
+]
+
+
+def test_fetch_device_data_against_live_payload():
+    """Every telemetry metric resolves against a real DEYE response, in Predbat's sign convention."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return the captured live device/latest payload."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        out = run_async_local(d.fetch_device_data("INV1"))
+
+    expected = {
+        "soc": 94.0,
+        "battery_power": -603.0,  # DEYE negative while charging == Predbat negative for charge
+        "grid_power": -25.0,  # DEYE +25 importing negated to Predbat's negative-for-import
+        "pv_power": 1584.0,
+        "load_power": 820.0,
+        "temperature": 27.9,
+    }
+    for name, want in expected.items():
+        if abs(out.get(name, 0.0) - want) > 0.001:
+            print(f"ERROR: {name} expected {want}, got {out.get(name)}")
+            failed = True
+    if any("missing expected keys" in m for m in d.log_messages):
+        print(f"ERROR: unexpected missing-key warning: {d.log_messages}")
+        failed = True
+    assert not failed, "test_fetch_device_data_against_live_payload"
+
+
+def test_derive_battery_capacity_from_live_payload():
+    """Battery capacity is derived from the Ah rating and BMS charge voltage."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return the captured live device/latest payload."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async_local(d.fetch_device_data("INV1"))
+
+    # 1200 Ah, BMS charge 57.6 V -> 16 cells -> 51.2 V nominal -> 61.44 kWh
+    if abs(d.device_capacity.get("INV1", 0) - 61.44) > 0.01:
+        print(f"ERROR: expected 61.44 kWh, got {d.device_capacity.get('INV1')}")
+        failed = True
+    if abs(d.battery_capacity("INV1") - 61.44) > 0.01:
+        print(f"ERROR: battery_capacity returned {d.battery_capacity('INV1')}")
+        failed = True
+    assert not failed, "test_derive_battery_capacity_from_live_payload"
+
+
+def test_nominal_pack_voltage_variants():
+    """Cell count comes from the BMS charge target, falling back to resting pack voltage."""
+    failed = False
+    d = MockDeye()
+    cases = [
+        ((57.6, 53.83), 51.2, "16S from BMS charge voltage"),
+        ((28.8, 26.9), 25.6, "8S from BMS charge voltage"),
+        ((403.2, 380.0), 358.4, "112S HV pack"),
+        ((0.0, 53.83), 51.2, "falls back to resting voltage"),
+        ((0.0, 0.0), 0.0, "no voltage available"),
+    ]
+    for (bms, resting), want, label in cases:
+        got = d.nominal_pack_voltage(bms, resting)
+        if abs(got - want) > 0.01:
+            print(f"ERROR: {label}: expected {want}, got {got}")
+            failed = True
+    assert not failed, "test_nominal_pack_voltage_variants"
+
+
+def test_battery_capacity_scales_config_battery_amp_hours():
+    """config/battery reports battCapacity in Ah and must be scaled, not published as kWh.
+
+    Regression: the live response is {"battCapacity": 1200} for the same pack device/latest
+    reports as BatteryRatedCapacity 1200 Ah. Returning it raw told Predbat the battery was
+    1200 kWh.
+    """
+    failed = False
+    d = MockDeye()
+    d.device_capacity["INV1"] = 61.44
+    d.device_pack_voltage["INV1"] = 51.2
+    d.device_battery_config["INV1"] = {CONFIG_BATTERY_KEYS["capacity"]: 1200}
+    got = d.battery_capacity("INV1")
+    if abs(got - 61.44) > 0.01:
+        print(f"ERROR: expected 1200Ah scaled to 61.44 kWh, got {got}")
+        failed = True
+    # A config response that carries no usable capacity falls back to the derived value
+    d.device_battery_config["INV1"] = {}
+    if abs(d.battery_capacity("INV1") - 61.44) > 0.01:
+        print(f"ERROR: expected the derived 61.44, got {d.battery_capacity('INV1')}")
+        failed = True
+    # Without a known pack voltage there is nothing to scale by, so use the derived value
+    d.device_battery_config["INV1"] = {CONFIG_BATTERY_KEYS["capacity"]: 1200}
+    d.device_pack_voltage["INV1"] = 0.0
+    if abs(d.battery_capacity("INV1") - 61.44) > 0.01:
+        print(f"ERROR: expected the derived value without a pack voltage, got {d.battery_capacity('INV1')}")
+        failed = True
+    assert not failed, "test_battery_capacity_scales_config_battery_amp_hours"
+
+
+def test_battery_rate_max_from_charge_current():
+    """battery_rate_max is maxChargeCurrent scaled to watts by the nominal pack voltage."""
+    failed = False
+    d = MockDeye()
+    d.device_pack_voltage["INV1"] = 51.2
+    d.device_battery_config["INV1"] = {CONFIG_BATTERY_KEYS["max_charge_current"]: 185}
+    # 185 A at 51.2 V nominal = 9472 W. Higher than the 8000 W AC rating on purpose: this
+    # is the DC battery-side limit, and inverter_limit constrains the AC side separately.
+    if d.battery_rate_max("INV1") != 9472:
+        print(f"ERROR: expected 9472 W, got {d.battery_rate_max('INV1')}")
+        failed = True
+    # No pack voltage means nothing to scale by
+    d.device_pack_voltage["INV1"] = 0.0
+    if d.battery_rate_max("INV1") != 0.0:
+        print(f"ERROR: expected 0.0 without a pack voltage, got {d.battery_rate_max('INV1')}")
+        failed = True
+    # No config/battery response at all
+    d.device_pack_voltage["INV1"] = 51.2
+    d.device_battery_config.pop("INV1")
+    if d.battery_rate_max("INV1") != 0.0:
+        print(f"ERROR: expected 0.0 without config/battery, got {d.battery_rate_max('INV1')}")
+        failed = True
+    assert not failed, "test_battery_rate_max_from_charge_current"
+
+
+def test_rated_power_captured_for_inverter_limit():
+    """RatedPower is captured from device/latest for Predbat's inverter_limit, in watts."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return the captured live device/latest payload."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async_local(d.fetch_device_data("INV1"))
+
+    if d.device_rated_power.get("INV1") != 8000.0:
+        print(f"ERROR: expected 8000.0 W, got {d.device_rated_power.get('INV1')}")
+        failed = True
+    assert not failed, "test_rated_power_captured_for_inverter_limit"
+
+
+def test_fetch_device_data_captures_energy_counters():
+    """The lifetime energy counters are captured from device/latest for Predbat's history."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return the captured live device/latest payload."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async_local(d.fetch_device_data("INV1"))
+
+    energy = d.device_energy.get("INV1", {})
+    expected = {"import_today": 13579.1, "export_today": 11.7, "pv_today": 2198.1, "load_today": 14326.4}
+    for name, want in expected.items():
+        if abs(energy.get(name, 0.0) - want) > 0.01:
+            print(f"ERROR: {name} expected {want}, got {energy.get(name)}")
+            failed = True
+    assert not failed, "test_fetch_device_data_captures_energy_counters"
+
+
+def test_energy_counters_absent_are_not_invented():
+    """A device that reports no energy counters records none, rather than zeros."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: a payload with telemetry but no energy counters."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": [{"key": "SOC", "value": "50"}]}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async_local(d.fetch_device_data("INV1"))
+
+    if d.device_energy.get("INV1"):
+        print(f"ERROR: expected no energy counters, got {d.device_energy.get('INV1')}")
+        failed = True
+    assert not failed, "test_energy_counters_absent_are_not_invented"
+
+
+def test_derive_battery_capacity_without_rating():
+    """No Ah rating means no derived capacity, and no bogus zero-capacity sensor."""
+    failed = False
+    d = MockDeye()
+    if d.derive_battery_capacity("INV1", {"BatteryVoltage": "53.83"}) != 0.0:
+        print("ERROR: expected 0.0 without a rated capacity")
+        failed = True
+    if "INV1" in d.device_capacity:
+        print("ERROR: should not cache a capacity that could not be derived")
+        failed = True
+    if d.battery_capacity("INV1") != 0.0:
+        print(f"ERROR: expected 0.0, got {d.battery_capacity('INV1')}")
+        failed = True
+    assert not failed, "test_derive_battery_capacity_without_rating"
+
+
+def test_fetch_device_data_warns_on_missing_keys():
+    """A response without the expected keys warns instead of silently publishing zeros."""
+    failed = False
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return a payload using the old, wrong key spellings."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": [{"key": "batterySOC", "value": "57"}]}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        out = run_async_local(d.fetch_device_data("INV1"))
+    if out.get("soc") != 0.0:
+        print(f"ERROR: expected 0.0 for an unmatched key, got {out.get('soc')}")
+        failed = True
+    warning = [m for m in d.log_messages if "missing expected keys" in m]
+    if not warning:
+        print(f"ERROR: expected a missing-key warning, got {d.log_messages}")
+        failed = True
+    elif "batterySOC" not in warning[0]:
+        print(f"ERROR: warning should name the keys the device did return: {warning[0]}")
+        failed = True
+    assert not failed, "test_fetch_device_data_warns_on_missing_keys"
 
 
 def test_fetch_battery_config_caches_on_success():
@@ -236,6 +494,16 @@ def run_deye_api_tests(my_predbat):
         ("base_url", test_deye_base_url),
         ("device_list_filter", test_get_device_list_filters_inverters),
         ("fetch_device_data", test_fetch_device_data_maps_keys),
+        ("fetch_device_data_live_payload", test_fetch_device_data_against_live_payload),
+        ("fetch_device_data_missing_keys", test_fetch_device_data_warns_on_missing_keys),
+        ("derive_battery_capacity", test_derive_battery_capacity_from_live_payload),
+        ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
+        ("battery_capacity_amp_hours", test_battery_capacity_scales_config_battery_amp_hours),
+        ("battery_rate_max", test_battery_rate_max_from_charge_current),
+        ("rated_power_captured", test_rated_power_captured_for_inverter_limit),
+        ("energy_counters_captured", test_fetch_device_data_captures_energy_counters),
+        ("energy_counters_absent", test_energy_counters_absent_are_not_invented),
+        ("derive_capacity_no_rating", test_derive_battery_capacity_without_rating),
         ("fetch_battery_config_success", test_fetch_battery_config_caches_on_success),
         ("fetch_battery_config_failure", test_fetch_battery_config_failure_returns_empty),
         ("run_first_cycle", test_run_first_cycle_publishes_and_configures),
