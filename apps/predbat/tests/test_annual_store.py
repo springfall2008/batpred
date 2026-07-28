@@ -12,7 +12,7 @@
 import asyncio
 import datetime
 
-from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, build_label, list_runs, load_run, save_run
+from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, backfill_summaries, build_label, build_summary, list_runs, load_run, save_run
 
 
 class FakeStorage:
@@ -26,10 +26,12 @@ class FakeStorage:
         """Start with nothing stored."""
         self.store = {}
         self.deleted = []
+        self.save_calls = []
 
     async def save(self, module, filename, data, format="yaml", expiry=None):
-        """Record a saved value."""
+        """Record a saved value and remember that a save happened."""
         self.store[(module, filename)] = data
+        self.save_calls.append((module, filename))
 
     async def load(self, module, filename):
         """Return a stored value, or None."""
@@ -190,6 +192,83 @@ def test_annual_store(my_predbat):
     storage.store[(STORAGE_MODULE, INDEX_NAME)] = "not a list"
     if asyncio.run(list_runs(storage)) != []:
         print("  ERROR: a corrupt index should read as empty rather than raising")
+        failed = True
+
+    print("Test: build_summary lifts the headline figures off a results document")
+    results = {
+        "annual": {
+            "scenarios": {"no_pvbat": {"cost_p": 180000.0}, "with_predbat": {"cost_p": 66000.0}},
+            "months_included": 12,
+            "costs": {"total_kwp": 5.6, "battery_kwh": 9.5},
+            "payback": {
+                "available": True,
+                "pv_only": {"pays_back": True, "years": 17.8},
+                "pv_battery": {"pays_back": True, "years": 13.61},
+                "pv_battery_predbat": {"pays_back": False, "years": None},
+            },
+        }
+    }
+    config = {"tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/x/"}}
+    summary = build_summary(results, config)
+    if summary["total_kwp"] != 5.6 or summary["battery_kwh"] != 9.5:
+        print("  ERROR: the summary should carry the system size, got {}".format(summary))
+        failed = True
+    if summary["cost_with_predbat_p"] != 66000.0:
+        print("  ERROR: expected the with_predbat cost, got {}".format(summary))
+        failed = True
+    if summary["saving_vs_none_p"] != 114000.0:
+        print("  ERROR: saving should be no_pvbat minus with_predbat, got {}".format(summary))
+        failed = True
+    if summary["payback_years"]["pv_battery"] != 13.61:
+        print("  ERROR: expected the pv_battery payback, got {}".format(summary))
+        failed = True
+    if summary["payback_years"]["pv_battery_predbat"] is not None:
+        print("  ERROR: a row that does not pay back must carry None, not a number, got {}".format(summary))
+        failed = True
+
+    print("Test: a run with no usable month summarises as unknown rather than zero")
+    empty = build_summary({"annual": {"scenarios": None, "months_included": 0}}, {})
+    if empty["cost_with_predbat_p"] is not None or empty["saving_vs_none_p"] is not None:
+        print("  ERROR: no usable month means unknown, not zero, got {}".format(empty))
+        failed = True
+
+    print("Test: an unavailable payback keeps its reason for the compare table to show")
+    unavailable = build_summary(
+        {"annual": {"scenarios": {"no_pvbat": {"cost_p": 10.0}, "with_predbat": {"cost_p": 5.0}}, "months_included": 11, "payback": {"available": False, "reason": "Payback needs a full year, but only 11 of 12 months could be modelled."}}}, {}
+    )
+    if unavailable["payback_years"] != {} or "11 of 12" not in (unavailable.get("payback_reason") or ""):
+        print("  ERROR: an unavailable payback should carry its reason, got {}".format(unavailable))
+        failed = True
+
+    print("Test: save_run records the summary on the index entry")
+    storage = FakeStorage()
+    asyncio.run(save_run(storage, results, config, "20260728-090000"))
+    index = asyncio.run(list_runs(storage))
+    if not index or not index[0].get("summary"):
+        print("  ERROR: save_run should record a summary, got {}".format(index))
+        failed = True
+
+    print("Test: backfill fills a summary-less entry from its document and writes the index back once")
+    storage = FakeStorage()
+    asyncio.run(save_run(storage, results, config, "20260728-090100"))
+    # Simulate a run stored before summaries existed.
+    stale = asyncio.run(list_runs(storage))
+    stale[0].pop("summary", None)
+    asyncio.run(storage.save(STORAGE_MODULE, INDEX_NAME, stale, format="json"))
+    writes_before = len(storage.save_calls)
+    filled = asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
+    if not filled[0].get("summary"):
+        print("  ERROR: backfill should fill the missing summary, got {}".format(filled))
+        failed = True
+    if len(storage.save_calls) != writes_before + 1:
+        print("  ERROR: backfill should write the index exactly once, got {} writes".format(len(storage.save_calls) - writes_before))
+        failed = True
+
+    print("Test: backfill writes nothing when every entry already has a summary")
+    writes_before = len(storage.save_calls)
+    asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
+    if len(storage.save_calls) != writes_before:
+        print("  ERROR: a compare page that changes nothing must not write storage, got {} writes".format(len(storage.save_calls) - writes_before))
         failed = True
 
     return failed

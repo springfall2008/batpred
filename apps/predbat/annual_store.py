@@ -62,6 +62,45 @@ def build_label(config):
     return " · ".join(parts)
 
 
+def build_summary(results, config):
+    """Return the headline figures the compare table shows for one run.
+
+    Read once at save time and cached on the index entry, so comparing twenty runs
+    reads one small index rather than twenty results documents - a debug run's
+    document is several megabytes.
+
+    Every figure is None when it could not be computed, never zero: the compare table
+    renders None as "-" and a zero as a real cost, and confusing "we do not know" with
+    "it costs nothing" is exactly the failure this tool avoids elsewhere.
+    """
+    annual = (results or {}).get("annual") or {}
+    scenarios = annual.get("scenarios") or {}
+    costs = annual.get("costs") or {}
+    payback = annual.get("payback") or {}
+
+    baseline = (scenarios.get("no_pvbat") or {}).get("cost_p")
+    predbat = (scenarios.get("with_predbat") or {}).get("cost_p")
+
+    payback_years = {}
+    if payback.get("available"):
+        for key in ["pv_only", "pv_battery", "pv_battery_predbat"]:
+            row = payback.get(key) or {}
+            # None for a row that does not pay back, so the table can say so rather
+            # than print a number that does not exist.
+            payback_years[key] = row.get("years") if row.get("pays_back") else None
+
+    return {
+        "total_kwp": costs.get("total_kwp"),
+        "battery_kwh": costs.get("battery_kwh"),
+        "tariff": _describe_tariff((config or {}).get("tariff") or {}),
+        "cost_with_predbat_p": predbat,
+        "saving_vs_none_p": (baseline - predbat) if (baseline is not None and predbat is not None) else None,
+        "payback_years": payback_years,
+        "payback_reason": None if payback.get("available") else payback.get("reason"),
+        "months_included": annual.get("months_included", 0),
+    }
+
+
 async def list_runs(storage):
     """Return the stored runs newest-first, or an empty list when there are none.
 
@@ -116,6 +155,7 @@ async def save_run(storage, results, config, run_id):
         "label": build_label(config),
         "months_included": annual.get("months_included", 0),
         "status": "ok" if annual.get("months_included") else "empty",
+        "summary": build_summary(results, config),
     }
 
     index = await list_runs(storage)
@@ -128,3 +168,31 @@ async def save_run(storage, results, config, run_id):
 
     await storage.save(STORAGE_MODULE, INDEX_NAME, index, format="json")
     return run_id
+
+
+async def backfill_summaries(storage, runs):
+    """Return ``runs`` with any missing summary filled in, writing the index back once.
+
+    A run stored before summaries existed has none. Rather than re-reading its document
+    on every visit to the compare page - several megabytes for a debug run - its summary
+    is computed once and persisted, so every later visit is index-only.
+
+    The index is written at most once per call, and only when something was actually
+    filled in: a compare page that changes nothing must not write storage at all.
+    """
+    if not storage or not runs:
+        return runs or []
+
+    filled = False
+    for entry in runs:
+        if entry.get("summary") or not entry.get("id"):
+            continue
+        results = await load_run(storage, entry["id"])
+        if not isinstance(results, dict):
+            continue
+        entry["summary"] = build_summary(results, results.get("config") or {})
+        filled = True
+
+    if filled:
+        await storage.save(STORAGE_MODULE, INDEX_NAME, runs, format="json")
+    return runs
