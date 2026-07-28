@@ -232,6 +232,16 @@ def test_annual_store(my_predbat):
         print("  ERROR: no usable month means unknown, not zero, got {}".format(empty))
         failed = True
 
+    print("Test: a non-numeric or missing cost_p summarises as unknown rather than raising")
+    malformed = build_summary({"annual": {"scenarios": {"no_pvbat": {"cost_p": 180000.0}, "with_predbat": {"cost_p": "66000"}}, "months_included": 12}}, {})
+    if malformed["cost_with_predbat_p"] is not None or malformed["saving_vs_none_p"] is not None:
+        print("  ERROR: a string cost_p should summarise as unknown, not a number, got {}".format(malformed))
+        failed = True
+    none_baseline = build_summary({"annual": {"scenarios": {"no_pvbat": {"cost_p": None}, "with_predbat": {"cost_p": 66000.0}}, "months_included": 12}}, {})
+    if none_baseline["saving_vs_none_p"] is not None:
+        print("  ERROR: a missing baseline cost_p should summarise as unknown, got {}".format(none_baseline))
+        failed = True
+
     print("Test: an unavailable payback keeps its reason for the compare table to show")
     unavailable = build_summary(
         {"annual": {"scenarios": {"no_pvbat": {"cost_p": 10.0}, "with_predbat": {"cost_p": 5.0}}, "months_included": 11, "payback": {"available": False, "reason": "Payback needs a full year, but only 11 of 12 months could be modelled."}}}, {}
@@ -248,23 +258,51 @@ def test_annual_store(my_predbat):
         print("  ERROR: save_run should record a summary, got {}".format(index))
         failed = True
 
-    print("Test: backfill fills a summary-less entry from its document and writes the index back once")
+    print("Test: backfill fills every summary-less entry from its document and writes the index back exactly once")
     storage = FakeStorage()
     asyncio.run(save_run(storage, results, config, "20260728-090100"))
-    # Simulate a run stored before summaries existed.
+    asyncio.run(save_run(storage, results, config, "20260728-090101"))
+    # Simulate two runs stored before summaries existed - with only one stale entry, "wrote
+    # once" cannot be told apart from "wrote once per entry", so this uses two.
     stale = asyncio.run(list_runs(storage))
-    stale[0].pop("summary", None)
+    for entry in stale:
+        entry.pop("summary", None)
     asyncio.run(storage.save(STORAGE_MODULE, INDEX_NAME, stale, format="json"))
     writes_before = len(storage.save_calls)
     filled = asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
-    if not filled[0].get("summary"):
-        print("  ERROR: backfill should fill the missing summary, got {}".format(filled))
+    if not all(entry.get("summary") for entry in filled):
+        print("  ERROR: backfill should fill every missing summary, got {}".format(filled))
         failed = True
     if len(storage.save_calls) != writes_before + 1:
-        print("  ERROR: backfill should write the index exactly once, got {} writes".format(len(storage.save_calls) - writes_before))
+        print("  ERROR: backfill should write the index exactly once regardless of how many entries were filled, got {} writes".format(len(storage.save_calls) - writes_before))
+        failed = True
+
+    print("Test: backfill survives one corrupt document and still fills and saves the others")
+    storage = FakeStorage()
+    asyncio.run(save_run(storage, results, config, "20260728-090200"))
+    asyncio.run(save_run(storage, results, config, "20260728-090201"))
+    stale = asyncio.run(list_runs(storage))
+    for entry in stale:
+        entry.pop("summary", None)
+    # One run's stored document is corrupt in a way build_summary's own guards cannot catch -
+    # a scenario that is a string rather than a dict - so it must be skipped, not abort the loop.
+    corrupt_id = stale[-1]["id"]
+    asyncio.run(storage.save(STORAGE_MODULE, "run_{}".format(corrupt_id), {"annual": {"scenarios": {"no_pvbat": "not-a-dict"}, "months_included": 12}}, format="json"))
+    asyncio.run(storage.save(STORAGE_MODULE, INDEX_NAME, stale, format="json"))
+    writes_before = len(storage.save_calls)
+    filled = asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
+    good_entries = [entry for entry in filled if entry["id"] != corrupt_id]
+    if not good_entries or not good_entries[0].get("summary"):
+        print("  ERROR: backfill should still fill the good entry despite the corrupt one, got {}".format(filled))
+        failed = True
+    if len(storage.save_calls) != writes_before + 1:
+        print("  ERROR: backfill should still write the index exactly once despite the corrupt entry, got {} writes".format(len(storage.save_calls) - writes_before))
         failed = True
 
     print("Test: backfill writes nothing when every entry already has a summary")
+    storage = FakeStorage()
+    asyncio.run(save_run(storage, results, config, "20260728-090400"))
+    asyncio.run(save_run(storage, results, config, "20260728-090401"))
     writes_before = len(storage.save_calls)
     asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
     if len(storage.save_calls) != writes_before:

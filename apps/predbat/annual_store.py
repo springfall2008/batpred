@@ -78,8 +78,14 @@ def build_summary(results, config):
     costs = annual.get("costs") or {}
     payback = annual.get("payback") or {}
 
-    baseline = (scenarios.get("no_pvbat") or {}).get("cost_p")
-    predbat = (scenarios.get("with_predbat") or {}).get("cost_p")
+    # Matches the isinstance guard in annual_costs.py's payback calculation: a missing
+    # or malformed cost_p is a different situation to a zero saving, and must not be
+    # silently treated as one, whether the field is absent or simply not a number
+    # (as a partially-written or otherwise corrupt document might contain).
+    raw_baseline = (scenarios.get("no_pvbat") or {}).get("cost_p")
+    raw_predbat = (scenarios.get("with_predbat") or {}).get("cost_p")
+    baseline = raw_baseline if isinstance(raw_baseline, (int, float)) else None
+    predbat = raw_predbat if isinstance(raw_predbat, (int, float)) else None
 
     payback_years = {}
     if payback.get("available"):
@@ -190,7 +196,14 @@ async def backfill_summaries(storage, runs):
         results = await load_run(storage, entry["id"])
         if not isinstance(results, dict):
             continue
-        entry["summary"] = build_summary(results, results.get("config") or {})
+        # build_summary() already guards against a missing or non-numeric cost_p, but this
+        # loop reads arbitrary previously-stored documents, so one entry that is corrupt in
+        # some other way must not abandon the runs already filled - and, critically, must
+        # not skip the index write below that persists them.
+        try:
+            entry["summary"] = build_summary(results, results.get("config") or {})
+        except (TypeError, ValueError, AttributeError, KeyError):
+            continue
         filled = True
 
     if filled:
