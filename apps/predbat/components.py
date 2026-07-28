@@ -264,6 +264,9 @@ COMPONENT_LIST = {
             "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "deye_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+            # config/battery reports capacity in Ah; the default suits 48 V low-voltage
+            # hybrids. High-voltage stacks must override this or soc_max is several-fold out.
+            "battery_nominal_voltage": {"required": False, "config": "deye_battery_nominal_voltage"},
         },
         # Gate activation on having at least one auth path — app credentials (app_id,
         # self-hosted add-on) OR an injected SaaS access token (key). Without this the

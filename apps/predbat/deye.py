@@ -48,7 +48,22 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     """DEYE Cloud API component."""
 
     def initialize(
-        self, app_id="", app_secret="", username="", password="", key="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs
+        self,
+        app_id="",
+        app_secret="",
+        username="",
+        password="",
+        key="",
+        data_center="eu",
+        company_id="",
+        auth_method="app_credentials",
+        token_expires_at=None,
+        token_hash="",
+        inverter_sn=None,
+        automatic=False,
+        automatic_ignore_pv=False,
+        battery_nominal_voltage=None,
+        **kwargs,
     ):
         """Initialise the DEYE component from its resolved config args.
 
@@ -79,8 +94,19 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.applied_payload = {}
         self.control_active = set()
         self.cached_values = {}
+        self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, DEYE_NOMINAL_BATTERY_VOLTAGE) or DEYE_NOMINAL_BATTERY_VOLTAGE
         self._telemetry_keys_reported = set()
         self._battery_config_reported = set()
+        self._nominal_voltage_warned = set()
+        self._energy_keys_seen = {}
+        # auth_method defaults to app_credentials, but an injected access token with no
+        # developer app credentials can only be oauth — and in app_credentials mode
+        # _init_oauth() throws the key away, so a host that forgets deye_auth_method gets
+        # a component that authenticates with nothing. Infer the mode from what was
+        # actually supplied rather than trusting the default.
+        if key and not app_id and auth_method != "oauth":
+            self.log("Info: DEYE inferring auth_method 'oauth' - an access token was injected without app credentials")
+            auth_method = "oauth"
         # _init_oauth() assigns key to self.access_token in oauth mode, so key must be the
         # injected access token (deye_key) — NOT token_hash, which is only the dedup handle
         # echoed back to oauth-refresh. Passing the hash here made every DEYE call fail with
@@ -246,6 +272,28 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self._telemetry_keys_reported.add(sn)
         self.log(f"Warn: DEYE device/latest for {sn} returned none of {missing} - correct DEYE_TELEMETRY_KEYS to the keys actually present: {sorted(flat.keys())}")
 
+    def _daily_energy(self, sn, flat):
+        """Return today's cumulative energy counters, resolving an absent key correctly.
+
+        Absence means two different things. A model that has never reported a
+        counter should not publish that sensor at all - Predbat must not be wired
+        to a permanently missing entity. But a counter that HAS been seen and then
+        disappears is the midnight rollover, where the true value is zero; leaving
+        the sensor at its last state would feed yesterday's total back to Predbat
+        as today's load until DEYE starts reporting again.
+        """
+        if not hasattr(self, "_energy_keys_seen"):
+            self._energy_keys_seen = {}
+        seen = self._energy_keys_seen.setdefault(sn, set())
+        values = {}
+        for name, key in DEYE_ENERGY_KEYS.items():
+            if key in flat:
+                seen.add(name)
+                values[name] = self._as_float(flat[key])
+            elif name in seen:
+                values[name] = 0.0
+        return values
+
     async def fetch_device_data(self, sn):
         """Fetch and normalise the latest telemetry for one inverter."""
         data = await self._post("device_latest", {DEYE_LATEST_BODY_KEY: [sn]})
@@ -258,10 +306,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         flat = self._datalist_to_dict(rows[0].get("dataList"))
         self._report_unmatched_telemetry(sn, flat)
         result = {name: self._as_float(flat.get(key)) for name, key in DEYE_TELEMETRY_KEYS.items()}
-        # Daily counters are only present once the inverter has reported today, so
-        # omit rather than zero them - a spurious 0.0 load_today would look like a
-        # real reading and skew the load model.
-        result.update({name: self._as_float(flat[key]) for name, key in DEYE_ENERGY_KEYS.items() if key in flat})
+        result.update(self._daily_energy(sn, flat))
         self.device_values[sn] = result
         return result
 
@@ -294,8 +339,24 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         entry BatteryRatedCapacity, unit "Ah"), but Predbat's soc_max is kWh --
         publishing the raw figure advertised a 1200 kWh battery. Convert against
         the nominal pack voltage, never the resting voltage, which rises with SOC.
+
+        The default suits low-voltage 48 V hybrids, which is the only hardware this
+        has been confirmed against. DEYE also ship high-voltage stacks where that
+        default would understate capacity several-fold, so warn when the measured
+        pack voltage is inconsistent with it and let deye_battery_nominal_voltage
+        override rather than silently publishing a wrong soc_max.
         """
-        return round(self._battery_config_value(sn, "capacity") * DEYE_NOMINAL_BATTERY_VOLTAGE / 1000.0, 2)
+        capacity_ah = self._battery_config_value(sn, "capacity")
+        if not capacity_ah:
+            return 0.0
+        nominal = getattr(self, "battery_nominal_voltage", None) or DEYE_NOMINAL_BATTERY_VOLTAGE
+        if not hasattr(self, "_nominal_voltage_warned"):
+            self._nominal_voltage_warned = set()
+        measured = self._as_float(getattr(self, "device_values", {}).get(sn, {}).get("battery_voltage"))
+        if measured and not 0.8 * nominal <= measured <= 1.3 * nominal and sn not in self._nominal_voltage_warned:
+            self._nominal_voltage_warned.add(sn)
+            self.log(f"Warn: DEYE {sn} pack reads {measured} V but capacity is being converted at {nominal} V nominal - set deye_battery_nominal_voltage or soc_max will be wrong")
+        return round(capacity_ah * nominal / 1000.0, 2)
 
     def derive_control_state(self, schedule, current_soc):
         """Map Predbat's schedule intent to a DEYE control state (see design spec table)."""
@@ -499,7 +560,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """Publish monitoring sensors for each inverter."""
         for sn in self.device_list:
             values = self.device_values.get(sn, {})
-            units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C"}
+            units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C", "battery_voltage": "V"}
             units.update({leaf: "kWh" for leaf in DEYE_ENERGY_KEYS})
             for leaf, unit in units.items():
                 if leaf in values:

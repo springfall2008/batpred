@@ -72,6 +72,9 @@ DEYE_TELEMETRY_KEYS = {
     "pv_power": "TotalSolarPower",
     "load_power": "TotalConsumptionPower",
     "temperature": "Temperature- Battery",
+    # Resting pack voltage — used only to sanity-check the assumed nominal voltage
+    # behind the Ah→kWh capacity conversion, never as the nominal itself.
+    "battery_voltage": "BatteryVoltage",
 }
 
 # Cumulative daily energy counters (kWh), same device/latest dataList.  # CONFIRMED

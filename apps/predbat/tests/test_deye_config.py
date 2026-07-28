@@ -116,6 +116,7 @@ def test_telemetry_and_energy_keys_match_live_response():
         "pv_power": "TotalSolarPower",
         "load_power": "TotalConsumptionPower",
         "temperature": "Temperature- Battery",
+        "battery_voltage": "BatteryVoltage",
     }
     expect_energy = {
         "load_today": "DailyConsumption",
@@ -147,6 +148,92 @@ def test_battery_capacity_converts_amp_hours_to_kwh():
         print(f"ERROR: 1200 Ah at ~51.2 V should be ~61 kWh, got {kwh}")
         failed = True
     assert not failed, "test_battery_capacity_converts_amp_hours_to_kwh"
+
+
+def test_injected_key_without_app_credentials_infers_oauth():
+    """A host that injects deye_key but forgets deye_auth_method must still authenticate.
+
+    auth_method defaults to app_credentials, and in that mode _init_oauth() discards
+    the key entirely -- so trusting the default leaves the component with no
+    credential at all and every DEYE call rejected.
+    """
+    failed = False
+    d = DeyeAPI.__new__(DeyeAPI)
+    d.log_messages = []
+    d.log = lambda message: d.log_messages.append(message)
+    d.initialize(key="injected-token", token_hash="hash")  # no auth_method, no app_id
+    if d.auth_method != "oauth":
+        print(f"ERROR: auth_method should be inferred as oauth, got {d.auth_method!r}")
+        failed = True
+    if d.access_token != "injected-token":
+        print(f"ERROR: injected token discarded, access_token={d.access_token!r}")
+        failed = True
+    # A genuine self-hosted add-on config must NOT be hijacked into oauth.
+    e = DeyeAPI.__new__(DeyeAPI)
+    e.log_messages = []
+    e.log = lambda message: e.log_messages.append(message)
+    e.initialize(app_id="id", app_secret="sec", username="u@e.com", password="pw")
+    if e.auth_method != "app_credentials":
+        print(f"ERROR: app_credentials config was hijacked to {e.auth_method!r}")
+        failed = True
+    assert not failed, "test_injected_key_without_app_credentials_infers_oauth"
+
+
+def test_daily_energy_resets_to_zero_after_rollover():
+    """A counter that vanishes after being seen is midnight, not 'keep yesterday's total'."""
+    failed = False
+    d = DeyeAPI.__new__(DeyeAPI)
+    d.log_messages = []
+    d.log = lambda message: d.log_messages.append(message)
+    d.initialize(key="tok", auth_method="oauth")
+    # Never-seen counters are omitted, so no sensor is published for a model that
+    # does not report them at all.
+    first = d._daily_energy("SN1", {"DailyConsumption": "15.6"})
+    if first.get("load_today") != 15.6:
+        print(f"ERROR: load_today not read: {first}")
+        failed = True
+    if "import_today" in first:
+        print(f"ERROR: never-seen counter should be omitted, got {first}")
+        failed = True
+    # Same key absent on a later poll = rollover, so it must read zero rather than
+    # leaving the previously published 15.6 kWh standing as today's load.
+    after = d._daily_energy("SN1", {})
+    if after.get("load_today") != 0.0:
+        print(f"ERROR: load_today should reset to 0.0 at rollover, got {after}")
+        failed = True
+    assert not failed, "test_daily_energy_resets_to_zero_after_rollover"
+
+
+def test_capacity_warns_when_pack_voltage_contradicts_nominal():
+    """A high-voltage stack must not silently convert at the 48 V default."""
+    failed = False
+    d = DeyeAPI.__new__(DeyeAPI)
+    d.log_messages = []
+    d.log = lambda message: d.log_messages.append(message)
+    d.initialize(key="tok", auth_method="oauth")
+    d.device_battery_config = {"HV1": {"battCapacity": 100}}
+    d.device_values = {"HV1": {"battery_voltage": 300.0}}
+    d.log_messages.clear()
+    d._battery_capacity_kwh("HV1")
+    if not any("nominal" in message for message in d.log_messages):
+        print(f"ERROR: no warning for a 300 V pack converted at 51.2 V: {d.log_messages}")
+        failed = True
+    # An explicit override must be honoured and must not warn.
+    hv = DeyeAPI.__new__(DeyeAPI)
+    hv.log_messages = []
+    hv.log = lambda message: hv.log_messages.append(message)
+    hv.initialize(key="tok", auth_method="oauth", battery_nominal_voltage=300)
+    hv.device_battery_config = {"HV1": {"battCapacity": 100}}
+    hv.device_values = {"HV1": {"battery_voltage": 300.0}}
+    hv.log_messages.clear()
+    kwh = hv._battery_capacity_kwh("HV1")
+    if kwh != 30.0:
+        print(f"ERROR: 100 Ah at 300 V should be 30.0 kWh, got {kwh}")
+        failed = True
+    if hv.log_messages:
+        print(f"ERROR: warned despite an explicit nominal voltage: {hv.log_messages}")
+        failed = True
+    assert not failed, "test_capacity_warns_when_pack_voltage_contradicts_nominal"
 
 
 def test_unmatched_telemetry_keys_are_reported():
@@ -224,6 +311,9 @@ def run_deye_config_tests(my_predbat):
         ("initialize_token_hash_order", test_initialize_preserves_configured_token_hash),
         ("required_or_gate", test_deye_component_gated_by_required_or),
         ("oauth_access_token_not_hash", test_oauth_mode_uses_injected_access_token_not_hash),
+        ("infer_oauth_from_key", test_injected_key_without_app_credentials_infers_oauth),
+        ("daily_energy_rollover", test_daily_energy_resets_to_zero_after_rollover),
+        ("capacity_voltage_warning", test_capacity_warns_when_pack_voltage_contradicts_nominal),
         ("live_key_spellings", test_telemetry_and_energy_keys_match_live_response),
         ("capacity_ah_to_kwh", test_battery_capacity_converts_amp_hours_to_kwh),
         ("unmatched_telemetry_keys", test_unmatched_telemetry_keys_are_reported),
