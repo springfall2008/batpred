@@ -102,6 +102,57 @@ class DeyeInverterObservation:
         )
 
 
+def _validated_deye_station(station):
+    """Return one exact canonical Deye station reconstruction."""
+    if type(station) is not DeyeStationObservation:
+        raise ValueError("Deye station observation has an invalid type")
+    raw_station_id = station.station_id
+    raw_online = station.online
+    clean = DeyeStationObservation(
+        station_id=raw_station_id,
+        online=raw_online,
+    )
+    if (raw_station_id, raw_online) != (
+        clean.station_id,
+        clean.online,
+    ):
+        raise ValueError("Deye station observation is not canonical")
+    return clean
+
+
+def _validated_deye_inverter(inverter):
+    """Return one exact canonical Deye inverter reconstruction."""
+    if type(inverter) is not DeyeInverterObservation:
+        raise ValueError("Deye inverter observation has an invalid type")
+    raw_device_id = inverter.device_id
+    raw_station_id = inverter.station_id
+    raw_serial = inverter.api_verified_serial
+    raw_model = inverter.model
+    raw_online = inverter.online
+    clean = DeyeInverterObservation(
+        device_id=raw_device_id,
+        station_id=raw_station_id,
+        api_verified_serial=raw_serial,
+        model=raw_model,
+        online=raw_online,
+    )
+    if (
+        raw_device_id,
+        raw_station_id,
+        raw_serial,
+        raw_model,
+        raw_online,
+    ) != (
+        clean.device_id,
+        clean.station_id,
+        clean.api_verified_serial,
+        clean.model,
+        clean.online,
+    ):
+        raise ValueError("Deye inverter observation is not canonical")
+    return clean
+
+
 class DeyeInventoryFragmentPublisher(CompleteInventoryFragmentPublisher):
     """Default-off publisher for explicit complete Deye inventories."""
 
@@ -137,10 +188,17 @@ class DeyeInventoryFragmentPublisher(CompleteInventoryFragmentPublisher):
             DeyeInverterObservation,
             MAX_COMPLETE_INVENTORY_DEVICES,
         )
+        stations = tuple(_validated_deye_station(station) for station in stations)
+        inverters = tuple(_validated_deye_inverter(inverter) for inverter in inverters)
         return self.ingest_inventory(
             discovery_generation,
-            (station.inventory_site() for station in stations),
-            (inverter.inventory_device() for inverter in inverters),
+            (DeyeStationObservation.inventory_site(station) for station in stations),
+            (
+                DeyeInverterObservation.inventory_device(
+                    inverter,
+                )
+                for inverter in inverters
+            ),
             health=health,
             feedback_token=feedback_token,
         )

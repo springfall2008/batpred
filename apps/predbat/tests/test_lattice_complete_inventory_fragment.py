@@ -88,6 +88,50 @@ def assert_value_free_validation_error(test_case, action, raw_value):
         test_case.fail("expected a value-free ValueError")
 
 
+class HostileText(str):
+    """String subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = "provider-secret-value"
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    strip = _fail
+    lower = _fail
+    upper = _fail
+    __format__ = _fail
+    __iter__ = _fail
+    __len__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class HostileInt(int):
+    """Integer subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = HostileText.secret
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    __str__ = _fail
+    __format__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class InventorySiteObservationSubclass(InventorySiteObservation):
+    """Observation subclass that must not cross the public boundary."""
+
+
+class InventoryDeviceObservationSubclass(InventoryDeviceObservation):
+    """Observation subclass that must not cross the public boundary."""
+
+
 class TestInventoryObservations(unittest.TestCase):
     """Inventory inputs are closed, bounded, and provider-local."""
 
@@ -179,6 +223,36 @@ class TestInventoryObservations(unittest.TestCase):
                 store,
             )
 
+    def test_scalar_subclasses_are_rejected_before_any_hook_runs(self):
+        """Provider scalar subclasses cannot execute or retain source text."""
+        cases = (
+            lambda: site(HostileInt(1)),
+            lambda: device(device_id=HostileText("DEVICE")),
+            lambda: device(site_id=HostileText("SITE")),
+            lambda: device(kind=HostileText("inverter")),
+            lambda: device(model=HostileText("Model")),
+            lambda: device(
+                verified_hardware_serial=HostileText("SERIAL"),
+            ),
+            lambda: CompleteInventoryFragmentPublisher(
+                HostileText("inventory-provider"),
+                "Inventory Provider",
+                InMemoryFragmentAdapterStateStore(),
+            ),
+            lambda: CompleteInventoryFragmentPublisher(
+                "inventory-provider",
+                HostileText("Inventory Provider"),
+                InMemoryFragmentAdapterStateStore(),
+            ),
+        )
+        for action in cases:
+            with self.subTest(action=action):
+                assert_value_free_validation_error(
+                    self,
+                    action,
+                    HostileText.secret,
+                )
+
 
 class TestCompleteInventoryFragmentPublisher(unittest.TestCase):
     """Complete inventories replace one durable provider-local view."""
@@ -200,6 +274,163 @@ class TestCompleteInventoryFragmentPublisher(unittest.TestCase):
         self.assertEqual(state_store.writes, 0)
         with self.assertRaises(FragmentAdapterReadError):
             adapter.read_state()
+
+    def test_generation_and_observation_subclasses_fail_before_write(self):
+        """Subclass hooks cannot bypass complete-inventory normalization."""
+        cases = (
+            lambda adapter: adapter.ingest_inventory(
+                HostileInt(1),
+                (),
+                (),
+            ),
+            lambda adapter: adapter.ingest_inventory(
+                1,
+                (InventorySiteObservationSubclass("SITE-A"),),
+                (),
+            ),
+            lambda adapter: adapter.ingest_inventory(
+                1,
+                (site(),),
+                (
+                    InventoryDeviceObservationSubclass(
+                        "DEVICE-A",
+                        "SITE-A",
+                        "inverter",
+                    ),
+                ),
+            ),
+        )
+        for action in cases:
+            with self.subTest(action=action):
+                adapter, state_store = publisher()
+                assert_value_free_validation_error(
+                    self,
+                    lambda: action(adapter),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, 0)
+
+    def test_post_init_mutation_is_revalidated_before_set_sort_or_format(self):
+        """Frozen observation mutation cannot retain or execute source data."""
+        mutated_site = site()
+        object.__setattr__(
+            mutated_site,
+            "site_id",
+            HostileText("SITE-A"),
+        )
+        mutated_device = device()
+        object.__setattr__(
+            mutated_device,
+            "model",
+            HostileText("Model"),
+        )
+        cases = (
+            (
+                (mutated_site,),
+                (),
+            ),
+            (
+                (site(),),
+                (mutated_device,),
+            ),
+        )
+        for sites, devices in cases:
+            with self.subTest(
+                sites=sites,
+                devices=devices,
+            ):
+                adapter, state_store = publisher()
+                assert_value_free_validation_error(
+                    self,
+                    lambda: adapter.ingest_inventory(
+                        1,
+                        sites,
+                        devices,
+                    ),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, 0)
+
+    def test_post_init_normalization_cannot_heal_inventory_observations(self):
+        """Whitespace and case mutations fail before durable publication."""
+
+        def site_id():
+            candidate = site()
+            object.__setattr__(
+                candidate,
+                "site_id",
+                " SITE-A ",
+            )
+            return (candidate,), (), " SITE-A "
+
+        def device_id():
+            candidate = device()
+            object.__setattr__(
+                candidate,
+                "device_id",
+                " DEVICE-A ",
+            )
+            return (site(),), (candidate,), " DEVICE-A "
+
+        def device_site_id():
+            candidate = device()
+            object.__setattr__(
+                candidate,
+                "site_id",
+                " SITE-A ",
+            )
+            return (site(),), (candidate,), " SITE-A "
+
+        def device_kind():
+            candidate = device()
+            object.__setattr__(
+                candidate,
+                "kind",
+                "INVERTER",
+            )
+            return (site(),), (candidate,), "INVERTER"
+
+        def device_model():
+            candidate = device()
+            object.__setattr__(
+                candidate,
+                "model",
+                " Model A ",
+            )
+            return (site(),), (candidate,), " Model A "
+
+        def device_serial():
+            candidate = device(
+                verified_hardware_serial="SERIAL-A",
+            )
+            object.__setattr__(
+                candidate,
+                "verified_hardware_serial",
+                "serial-a",
+            )
+            return (site(),), (candidate,), "serial-a"
+
+        for build_case in (
+            site_id,
+            device_id,
+            device_site_id,
+            device_kind,
+            device_model,
+            device_serial,
+        ):
+            with self.subTest(build_case=build_case):
+                sites, devices, raw_value = build_case()
+                adapter, state_store = publisher()
+                assert_value_free_validation_error(
+                    self,
+                    lambda: adapter.ingest_inventory(
+                        1,
+                        sites,
+                        devices,
+                    ),
+                    raw_value,
+                )
+                self.assertEqual(state_store.writes, 0)
 
     def test_multi_site_inventory_is_deterministic_reference_only(self):
         """Order cannot affect topology or manufacture control authority."""

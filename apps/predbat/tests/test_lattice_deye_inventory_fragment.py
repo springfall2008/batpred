@@ -52,6 +52,50 @@ def assert_value_free_validation_error(test_case, action, raw_value):
         test_case.fail("expected a value-free ValueError")
 
 
+class HostileText(str):
+    """String subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = "provider-secret-value"
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    strip = _fail
+    lower = _fail
+    upper = _fail
+    __format__ = _fail
+    __iter__ = _fail
+    __len__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class HostileInt(int):
+    """Integer subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = HostileText.secret
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    __str__ = _fail
+    __format__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class DeyeStationObservationSubclass(DeyeStationObservation):
+    """Observation subclass that must not cross the public boundary."""
+
+
+class DeyeInverterObservationSubclass(DeyeInverterObservation):
+    """Observation subclass that must not cross the public boundary."""
+
+
 def station(station_id="STATION-A", online=True):
     """Build one explicit Deye station observation."""
     return DeyeStationObservation(
@@ -123,6 +167,171 @@ class TestDeyeInventoryFragmentPublisher(unittest.TestCase):
         self.assertEqual(state_store.writes, 0)
         with self.assertRaises(FragmentAdapterReadError):
             adapter.read_state()
+
+    def test_scalar_and_observation_subclasses_fail_value_free(self):
+        """Deye discovery cannot invoke provider-controlled scalar hooks."""
+        constructor_cases = (
+            lambda: station(HostileInt(1)),
+            lambda: inverter(device_id=HostileText("DEVICE")),
+            lambda: inverter(station_id=HostileText("STATION")),
+            lambda: inverter(
+                api_verified_serial=HostileText("SERIAL"),
+            ),
+            lambda: inverter(model=HostileText("Model")),
+        )
+        for action in constructor_cases:
+            with self.subTest(action=action):
+                assert_value_free_validation_error(
+                    self,
+                    action,
+                    HostileText.secret,
+                )
+
+        ingestion_cases = (
+            lambda adapter: adapter.ingest_snapshot(
+                HostileInt(1),
+                (),
+                (),
+            ),
+            lambda adapter: adapter.ingest_snapshot(
+                1,
+                (
+                    DeyeStationObservationSubclass(
+                        "STATION-A",
+                    ),
+                ),
+                (),
+            ),
+            lambda adapter: adapter.ingest_snapshot(
+                1,
+                (station(),),
+                (
+                    DeyeInverterObservationSubclass(
+                        "DEVICE-A",
+                        "STATION-A",
+                    ),
+                ),
+            ),
+        )
+        for action in ingestion_cases:
+            with self.subTest(action=action):
+                adapter, state_store = publisher()
+                assert_value_free_validation_error(
+                    self,
+                    lambda: action(adapter),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, 0)
+
+    def test_mutated_observations_are_revalidated_before_publication(self):
+        """Post-construction Deye mutation cannot execute source hooks."""
+        mutated_station = station()
+        object.__setattr__(
+            mutated_station,
+            "station_id",
+            HostileText("STATION-A"),
+        )
+        mutated_inverter = inverter()
+        object.__setattr__(
+            mutated_inverter,
+            "model",
+            HostileText("Model"),
+        )
+        cases = (
+            (
+                (mutated_station,),
+                (),
+            ),
+            (
+                (station(),),
+                (mutated_inverter,),
+            ),
+        )
+        for stations, inverters in cases:
+            with self.subTest(
+                stations=stations,
+                inverters=inverters,
+            ):
+                adapter, state_store = publisher()
+                assert_value_free_validation_error(
+                    self,
+                    lambda: adapter.ingest_snapshot(
+                        1,
+                        stations,
+                        inverters,
+                    ),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, 0)
+
+    def test_post_init_normalization_cannot_heal_deye_observations(self):
+        """Whitespace and case mutations fail before durable publication."""
+
+        def station_id():
+            candidate = station()
+            object.__setattr__(
+                candidate,
+                "station_id",
+                " STATION-A ",
+            )
+            return (candidate,), (), " STATION-A "
+
+        def inverter_device_id():
+            candidate = inverter()
+            object.__setattr__(
+                candidate,
+                "device_id",
+                " DEYE-DEVICE-A ",
+            )
+            return (station(),), (candidate,), " DEYE-DEVICE-A "
+
+        def inverter_station_id():
+            candidate = inverter()
+            object.__setattr__(
+                candidate,
+                "station_id",
+                " STATION-A ",
+            )
+            return (station(),), (candidate,), " STATION-A "
+
+        def inverter_serial():
+            candidate = inverter()
+            object.__setattr__(
+                candidate,
+                "api_verified_serial",
+                "deye-serial-a",
+            )
+            return (station(),), (candidate,), "deye-serial-a"
+
+        def inverter_model():
+            candidate = inverter()
+            object.__setattr__(
+                candidate,
+                "model",
+                " SUN-6K ",
+            )
+            return (station(),), (candidate,), " SUN-6K "
+
+        for build_case in (
+            station_id,
+            inverter_device_id,
+            inverter_station_id,
+            inverter_serial,
+            inverter_model,
+        ):
+            with self.subTest(build_case=build_case):
+                stations, inverters, raw_value = build_case()
+                adapter, state_store = publisher()
+                assert_value_free_validation_error(
+                    self,
+                    lambda: adapter.ingest_snapshot(
+                        1,
+                        stations,
+                        inverters,
+                    ),
+                    raw_value,
+                )
+                self.assertEqual(state_store.writes, 0)
 
     def test_multi_station_inventory_is_normalized_and_complete(self):
         """Deye ordering is deterministic and a newer view removes absence."""

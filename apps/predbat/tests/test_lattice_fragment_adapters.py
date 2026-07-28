@@ -1,16 +1,28 @@
 """Tests for generic durable Lattice fragment adapter discovery."""
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig noncanonical
 
 import os
 import sys
 import unittest
+from itertools import repeat
+from types import MappingProxyType
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from lattice_autoconfig import (  # noqa: E402
+    AliasRole,
     CompileStatus,
+    ProjectionCardinality,
+    ProjectionRouting,
+    ProjectionValueKind,
+    ProviderAlias,
+    ProviderConfigProjection,
     ProviderHealth,
+    ProviderIdentityAlias,
+    ProviderProjectionValue,
+    ProviderRoleAssignment,
+    ProviderSnapshot,
 )
 from lattice_compiled_publication import (  # noqa: E402
     InMemoryCompiledLatticeStateStore,
@@ -23,8 +35,188 @@ from lattice_fragment_adapters import (  # noqa: E402
     FragmentAdapterRemoved,
     FragmentAdapterState,
     InMemoryFragmentAdapterStateStore,
+    _semantic_fingerprint,
 )
 from tests.test_lattice_autoconfig import snapshot  # noqa: E402
+
+
+def assert_value_free_error(
+    test_case,
+    expected_type,
+    action,
+    raw_value,
+):
+    """Assert one boundary error retains no source-controlled value."""
+    try:
+        action()
+    except expected_type as error:
+        test_case.assertIs(type(error), expected_type)
+        test_case.assertNotIn(raw_value, str(error))
+        test_case.assertNotIn(raw_value, repr(error))
+        test_case.assertNotIn(raw_value, repr(error.args))
+        test_case.assertNotIn(raw_value, error.args)
+        test_case.assertIsNone(error.__cause__)
+        test_case.assertIsNone(error.__context__)
+    else:
+        test_case.fail(
+            "expected {}".format(expected_type.__name__),
+        )
+
+
+class HostileText(str):
+    """String subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = "provider-secret-value"
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    strip = _fail
+    __format__ = _fail
+    __iter__ = _fail
+    __len__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class HostileInt(int):
+    """Integer subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = HostileText.secret
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    __str__ = _fail
+    __format__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class HostileMapping(dict):
+    """Mapping whose traversal exposes a fake provider secret."""
+
+    def items(self):
+        """Fail if fingerprint validation traverses corrupt state."""
+        raise RuntimeError(HostileText.secret)
+
+
+class InfiniteItemsMapping(dict):
+    """Mapping whose item iterator never terminates."""
+
+    def items(self):
+        """Return an infinite exact key/value stream."""
+        return repeat(("item", 1))
+
+
+class HostileProviderSnapshot(ProviderSnapshot):
+    """Snapshot subclass whose field access exposes a fake provider secret."""
+
+    def __getattribute__(self, _name):
+        """Fail if publication reads a subclass-controlled field."""
+        raise RuntimeError(HostileText.secret)
+
+
+class FragmentAdapterStateSubclass(FragmentAdapterState):
+    """Durable state subclass that must not dispatch validation."""
+
+
+class HostileFragmentAdapterState(FragmentAdapterState):
+    """State subclass whose field access exposes a fake provider secret."""
+
+    def __getattribute__(self, _name):
+        """Fail if registry validation reads a subclass-controlled field."""
+        raise RuntimeError(HostileText.secret)
+
+
+class HostileRegistryAdapter:
+    """Structural adapter whose attribute access exposes a fake secret."""
+
+    def __getattribute__(self, _name):
+        """Fail if registry validation leaks an adapter hook."""
+        raise RuntimeError(HostileText.secret)
+
+
+class FakeHealth:
+    """Enum-shaped offline health that must never become usable."""
+
+    value = "offline"
+
+
+class FakeAlias:
+    """Alias-shaped value that is not an exact provider alias."""
+
+    name = "fake"
+    node_id = "GW-INV"
+    roles = frozenset((AliasRole.REFERENCE,))
+
+
+class FakeIdentityAlias:
+    """Identity-shaped value that is not an exact assertion."""
+
+    kind = "serial"
+    value = "SERIAL-A"
+    node_id = "GW-INV"
+
+
+class FakeRoleAssignment:
+    """Role-shaped value that is not an exact assignment."""
+
+    role = AliasRole.PRIMARY
+    group = "battery"
+    index = 0
+    node_id = "GW-INV"
+
+
+class FakeProjectionValue:
+    """Projection-value-shaped object that is not an exact value."""
+
+    node_id = "GW-INV"
+    kind = ProjectionValueKind.NONE
+    value = None
+    capability = None
+    identity_kind = None
+    identity_value = None
+    access_path_id = None
+
+
+class FakeConfigProjection:
+    """Projection-shaped object that is not an exact projection."""
+
+    argument = "fake_arg"
+    role = AliasRole.PRIMARY
+    group = "battery"
+    routing = ProjectionRouting.LEAF
+    cardinality = ProjectionCardinality.SCALAR
+    values = (FakeProjectionValue(),)
+    required = False
+    transforms = ()
+
+
+class MutableFragmentPublisher:
+    """Valid structural adapter whose state reader can fail after registration."""
+
+    def __init__(self, adapter):
+        """Delegate every surface while allowing a test reader replacement."""
+        self.provider_id = adapter.provider_id
+        self._adapter = adapter
+        self.state_reader = adapter.read_state
+
+    def read_state(self):
+        """Return the current test-selected state."""
+        return self.state_reader()
+
+    def read_snapshot(self):
+        """Delegate immutable snapshot reads."""
+        return self._adapter.read_snapshot()
+
+    def subscribe_invalidation(self, listener):
+        """Delegate compiler invalidation subscriptions."""
+        return self._adapter.subscribe_invalidation(listener)
 
 
 class FragmentComponent:
@@ -109,6 +301,36 @@ def advance(
     )
 
 
+def mutated_snapshot(field, value):
+    """Return one exact snapshot with a post-init field mutation."""
+    candidate = snapshot(
+        "gateway",
+        generation=1,
+        node_id="GW-INV",
+    )
+    object.__setattr__(candidate, field, value)
+    return candidate
+
+
+def matched_corrupt_state(candidate, provider_id="gateway"):
+    """Bind a corrupt snapshot to its matching semantic fingerprint."""
+    state = object.__new__(FragmentAdapterState)
+    object.__setattr__(
+        state,
+        "provider_id",
+        provider_id,
+    )
+    object.__setattr__(state, "generation", 1)
+    object.__setattr__(
+        state,
+        "semantic_fingerprint",
+        _semantic_fingerprint(candidate),
+    )
+    object.__setattr__(state, "snapshot", candidate)
+    object.__setattr__(state, "removed", False)
+    return state
+
+
 def compiled_registry(*adapters):
     """Discover generic components and create a durable compiler."""
     registry = FragmentAdapterRegistry(enabled=True)
@@ -133,13 +355,16 @@ class TestDurableFragmentAdapter(unittest.TestCase):
         self.assertIsInstance(state, FragmentAdapterState)
         self.assertEqual(state.generation, 1)
         self.assertEqual(len(state.semantic_fingerprint), 64)
-        self.assertIs(state.snapshot, initial)
-        self.assertIs(adapter.read_snapshot(), initial)
+        self.assertEqual(state.snapshot, initial)
+        self.assertIsNot(state.snapshot, initial)
+        self.assertEqual(adapter.read_snapshot(), initial)
+        self.assertIsNot(adapter.read_snapshot(), initial)
         self.assertEqual(state_store.writes, 1)
 
         restarted = DurableFragmentAdapter("gateway", state_store)
         self.assertEqual(restarted.read_state(), state)
-        self.assertIs(restarted.read_snapshot(), initial)
+        self.assertEqual(restarted.read_snapshot(), initial)
+        self.assertIsNot(restarted.read_snapshot(), initial)
 
     def test_restart_rejects_regression_and_generation_reuse(self):
         """Durable cursor restoration rejects regressions and mutations."""
@@ -165,11 +390,765 @@ class TestDurableFragmentAdapter(unittest.TestCase):
         """No synthetic or empty fragment is returned on durable read failure."""
         store = RaisingLoadStore()
 
-        with self.assertRaisesRegex(
+        assert_value_free_error(
+            self,
             FragmentAdapterReadError,
+            lambda: DurableFragmentAdapter("gateway", store),
             "disk unavailable",
-        ):
-            DurableFragmentAdapter("gateway", store)
+        )
+
+    def test_scalar_subclasses_fail_before_write_or_invalidation(self):
+        """Adapter scalar validation invokes no subclass-controlled hook."""
+        assert_value_free_error(
+            self,
+            ValueError,
+            lambda: DurableFragmentAdapter(
+                HostileText("gateway"),
+                InMemoryFragmentAdapterStateStore(),
+            ),
+            HostileText.secret,
+        )
+
+        adapter, state_store, initial = publisher("gateway")
+        invalidations = []
+        adapter.subscribe_invalidation(
+            lambda *event: invalidations.append(event),
+        )
+        writes = state_store.writes
+        cases = (
+            lambda: adapter.publish(
+                initial,
+                HostileText("reason"),
+            ),
+            lambda: adapter.remove(
+                HostileInt(2),
+                "integration removed",
+            ),
+        )
+        for action in cases:
+            with self.subTest(action=action):
+                assert_value_free_error(
+                    self,
+                    ValueError,
+                    action,
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, writes)
+                self.assertEqual(invalidations, [])
+
+    def test_snapshot_subclasses_and_mutations_fail_before_side_effects(self):
+        """Publication validates exact snapshots without retaining source data."""
+
+        def mutated_snapshot(field, value):
+            candidate = snapshot(
+                "gateway",
+                generation=1,
+                node_id="GW-INV",
+            )
+            object.__setattr__(candidate, field, value)
+            return candidate
+
+        hostile_subclass = object.__new__(
+            HostileProviderSnapshot,
+        )
+        cases = (
+            (
+                hostile_subclass,
+                False,
+            ),
+            (
+                mutated_snapshot(
+                    "provider_id",
+                    HostileText("gateway"),
+                ),
+                False,
+            ),
+            (
+                mutated_snapshot(
+                    "generation",
+                    HostileInt(1),
+                ),
+                False,
+            ),
+            (
+                mutated_snapshot(
+                    "topology_fragment",
+                    HostileMapping(),
+                ),
+                False,
+            ),
+            (
+                snapshot(
+                    "gateway",
+                    generation=1,
+                    node_id="GW-INV",
+                ),
+                HostileText("false"),
+            ),
+        )
+        for candidate, removed in cases:
+            with self.subTest(
+                candidate_type=type(candidate),
+                removed_type=type(removed),
+            ):
+                state_store = InMemoryFragmentAdapterStateStore()
+                adapter = DurableFragmentAdapter(
+                    "gateway",
+                    state_store,
+                )
+                invalidations = []
+                adapter.subscribe_invalidation(
+                    lambda *event: invalidations.append(event),
+                )
+                assert_value_free_error(
+                    self,
+                    ValueError,
+                    lambda: adapter.publish(
+                        candidate,
+                        "hostile candidate",
+                        removed=removed,
+                    ),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, 0)
+                self.assertEqual(invalidations, [])
+
+    def test_full_snapshot_reconstruction_rejects_invalid_types_and_bounds(self):
+        """Fingerprint-shaped mutations never become durable snapshots."""
+
+        def mutated_alias():
+            alias = ProviderAlias(
+                "gateway",
+                "GW-INV",
+            )
+            object.__setattr__(
+                alias,
+                "name",
+                HostileText("gateway"),
+            )
+            return mutated_snapshot("aliases", (alias,))
+
+        def mutated_identity():
+            alias = ProviderIdentityAlias(
+                "serial",
+                "SERIAL-A",
+                "GW-INV",
+            )
+            object.__setattr__(
+                alias,
+                "value",
+                HostileText("SERIAL-A"),
+            )
+            return mutated_snapshot(
+                "identity_aliases",
+                (alias,),
+            )
+
+        def mutated_role():
+            assignment = ProviderRoleAssignment(
+                AliasRole.PRIMARY,
+                "battery",
+                0,
+                "GW-INV",
+            )
+            object.__setattr__(
+                assignment,
+                "index",
+                HostileInt(0),
+            )
+            return mutated_snapshot(
+                "role_assignments",
+                (assignment,),
+            )
+
+        def projection(value=None):
+            if value is None:
+                value = ProviderProjectionValue(
+                    node_id="GW-INV",
+                    kind=ProjectionValueKind.NONE,
+                )
+            return ProviderConfigProjection(
+                argument="fake_arg",
+                role=AliasRole.PRIMARY,
+                group="battery",
+                routing=ProjectionRouting.LEAF,
+                cardinality=ProjectionCardinality.SCALAR,
+                values=(value,),
+                required=False,
+            )
+
+        def mutated_projection():
+            candidate = projection()
+            object.__setattr__(
+                candidate,
+                "argument",
+                HostileText("fake_arg"),
+            )
+            return mutated_snapshot(
+                "config_projections",
+                (candidate,),
+            )
+
+        def fake_projection_value():
+            candidate = projection()
+            object.__setattr__(
+                candidate,
+                "values",
+                (FakeProjectionValue(),),
+            )
+            return mutated_snapshot(
+                "config_projections",
+                (candidate,),
+            )
+
+        def mutated_projection_value():
+            value = ProviderProjectionValue(
+                node_id="GW-INV",
+                kind=ProjectionValueKind.NONE,
+            )
+            object.__setattr__(
+                value,
+                "node_id",
+                HostileText("GW-INV"),
+            )
+            return mutated_snapshot(
+                "config_projections",
+                (projection(value),),
+            )
+
+        def excessive_depth():
+            value = None
+            for _depth in range(34):
+                value = (value,)
+            return mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType(
+                    {
+                        "deep": value,
+                    }
+                ),
+            )
+
+        def excessive_total_items():
+            wide = (0,) * 65536
+            return mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType({"wide-{}".format(index): wide for index in range(16)}),
+            )
+
+        cases = (
+            lambda: mutated_snapshot(
+                "health",
+                FakeHealth(),
+            ),
+            lambda: mutated_snapshot(
+                "topology_fragment",
+                [],
+            ),
+            lambda: mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType(
+                    {
+                        "nested": MappingProxyType(
+                            HostileMapping(),
+                        ),
+                    }
+                ),
+            ),
+            lambda: mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType(
+                    InfiniteItemsMapping(),
+                ),
+            ),
+            lambda: mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType(
+                    {
+                        "huge": "x" * (16384 + 1),
+                    }
+                ),
+            ),
+            lambda: mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType(
+                    {
+                        "huge": 1 << 63,
+                    }
+                ),
+            ),
+            lambda: mutated_snapshot(
+                "topology_fragment",
+                MappingProxyType(
+                    {
+                        "notFinite": float("inf"),
+                    }
+                ),
+            ),
+            excessive_depth,
+            excessive_total_items,
+            lambda: mutated_snapshot(
+                "aliases",
+                (FakeAlias(),),
+            ),
+            mutated_alias,
+            lambda: mutated_snapshot(
+                "identity_aliases",
+                (FakeIdentityAlias(),),
+            ),
+            mutated_identity,
+            lambda: mutated_snapshot(
+                "role_assignments",
+                (FakeRoleAssignment(),),
+            ),
+            mutated_role,
+            lambda: mutated_snapshot(
+                "config_projections",
+                (FakeConfigProjection(),),
+            ),
+            mutated_projection,
+            fake_projection_value,
+            mutated_projection_value,
+        )
+        for build_candidate in cases:
+            with self.subTest(
+                build_candidate=build_candidate,
+            ):
+                candidate = build_candidate()
+                state_store = InMemoryFragmentAdapterStateStore()
+                adapter = DurableFragmentAdapter(
+                    "gateway",
+                    state_store,
+                )
+                invalidations = []
+                adapter.subscribe_invalidation(
+                    lambda *event: invalidations.append(event),
+                )
+                assert_value_free_error(
+                    self,
+                    ValueError,
+                    lambda: adapter.publish(
+                        candidate,
+                        "invalid snapshot",
+                    ),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, 0)
+                self.assertEqual(invalidations, [])
+
+    def test_matched_invalid_snapshot_fails_restart_registry_and_compiler(self):
+        """A matching fingerprint cannot legitimize an invalid snapshot."""
+        corrupt_snapshot = mutated_snapshot(
+            "health",
+            FakeHealth(),
+        )
+        corrupt_state = matched_corrupt_state(
+            corrupt_snapshot,
+        )
+
+        restart_store = InMemoryFragmentAdapterStateStore(
+            corrupt_state,
+        )
+        assert_value_free_error(
+            self,
+            FragmentAdapterReadError,
+            lambda: DurableFragmentAdapter(
+                "gateway",
+                restart_store,
+            ),
+            HostileText.secret,
+        )
+        self.assertEqual(restart_store.writes, 0)
+
+        valid_adapter, valid_store, _initial = publisher(
+            "gateway",
+        )
+        structural = MutableFragmentPublisher(
+            valid_adapter,
+        )
+        structural.state_reader = lambda: corrupt_state
+        registry = FragmentAdapterRegistry(enabled=True)
+        assert_value_free_error(
+            self,
+            ValueError,
+            lambda: registry.register(structural),
+            HostileText.secret,
+        )
+        self.assertEqual(registry.provider_ids, ())
+        self.assertEqual(valid_store.writes, 1)
+
+        live_registry = FragmentAdapterRegistry(enabled=True)
+        self.assertTrue(
+            live_registry.register(valid_adapter),
+        )
+        compiled_store = InMemoryCompiledLatticeStateStore()
+        compiler = live_registry.create_compiler(
+            compiled_store,
+        )
+        valid_store._state = corrupt_state
+        self.assertTrue(
+            compiler.invalidate(
+                "gateway",
+                1,
+                "matched invalid state",
+            )
+        )
+        run = compiler.drain()
+        self.assertIsNot(run.status, CompileStatus.FRESH)
+        self.assertIsNone(run.plan)
+        self.assertTrue(any(issue.code == "provider_read_failed" for issue in run.issues))
+        self.assertEqual(valid_store.writes, 1)
+
+    def test_noncanonical_snapshot_fields_fail_every_boundary(self):
+        """Normalizing reconstruction cannot heal mutated durable input."""
+
+        def projection(value=None, transforms=()):
+            if value is None:
+                value = ProviderProjectionValue(
+                    node_id="GW-INV",
+                    kind=ProjectionValueKind.NONE,
+                )
+            return ProviderConfigProjection(
+                argument="fake_arg",
+                role=AliasRole.PRIMARY,
+                group="battery",
+                routing=ProjectionRouting.LEAF,
+                cardinality=ProjectionCardinality.SCALAR,
+                values=(value,),
+                required=False,
+                transforms=transforms,
+            )
+
+        def snapshot_provider_id():
+            return mutated_snapshot(
+                "provider_id",
+                " gateway ",
+            )
+
+        def alias_name():
+            alias = ProviderAlias(
+                "gateway",
+                "GW-INV",
+            )
+            object.__setattr__(alias, "name", " gateway ")
+            return mutated_snapshot("aliases", (alias,))
+
+        def identity_kind():
+            alias = ProviderIdentityAlias(
+                "serial",
+                "SERIAL-A",
+                "GW-INV",
+            )
+            object.__setattr__(alias, "kind", "SERIAL")
+            return mutated_snapshot(
+                "identity_aliases",
+                (alias,),
+            )
+
+        def role_group():
+            assignment = ProviderRoleAssignment(
+                AliasRole.PRIMARY,
+                "battery",
+                0,
+                "GW-INV",
+            )
+            object.__setattr__(
+                assignment,
+                "group",
+                " battery ",
+            )
+            return mutated_snapshot(
+                "role_assignments",
+                (assignment,),
+            )
+
+        def projection_argument():
+            candidate = projection()
+            object.__setattr__(
+                candidate,
+                "argument",
+                " fake_arg ",
+            )
+            return mutated_snapshot(
+                "config_projections",
+                (candidate,),
+            )
+
+        def projection_value_identity_kind():
+            value = ProviderProjectionValue(
+                node_id="GW-INV",
+                kind=ProjectionValueKind.NONE,
+                identity_kind="serial",
+                identity_value="SERIAL-A",
+            )
+            object.__setattr__(
+                value,
+                "identity_kind",
+                "SERIAL",
+            )
+            return mutated_snapshot(
+                "config_projections",
+                (projection(value),),
+            )
+
+        def projection_transform():
+            candidate = projection(transforms=("scale",))
+            object.__setattr__(
+                candidate,
+                "transforms",
+                (" scale ",),
+            )
+            return mutated_snapshot(
+                "config_projections",
+                (candidate,),
+            )
+
+        cases = (
+            (snapshot_provider_id, " gateway "),
+            (alias_name, " gateway "),
+            (identity_kind, "SERIAL"),
+            (role_group, " battery "),
+            (projection_argument, " fake_arg "),
+            (projection_value_identity_kind, "SERIAL"),
+            (projection_transform, " scale "),
+        )
+        for build_candidate, raw_value in cases:
+            with self.subTest(
+                build_candidate=build_candidate,
+            ):
+                candidate = build_candidate()
+                empty_store = InMemoryFragmentAdapterStateStore()
+                adapter = DurableFragmentAdapter(
+                    "gateway",
+                    empty_store,
+                )
+                invalidations = []
+                adapter.subscribe_invalidation(
+                    lambda *event: invalidations.append(event),
+                )
+                assert_value_free_error(
+                    self,
+                    ValueError,
+                    lambda: adapter.publish(
+                        candidate,
+                        "noncanonical snapshot",
+                    ),
+                    raw_value,
+                )
+                self.assertEqual(empty_store.writes, 0)
+                self.assertEqual(invalidations, [])
+
+                corrupt_state = matched_corrupt_state(candidate)
+                restart_store = InMemoryFragmentAdapterStateStore(
+                    corrupt_state,
+                )
+                assert_value_free_error(
+                    self,
+                    FragmentAdapterReadError,
+                    lambda: DurableFragmentAdapter(
+                        "gateway",
+                        restart_store,
+                    ),
+                    raw_value,
+                )
+                self.assertEqual(restart_store.writes, 0)
+
+                valid_adapter, valid_store, _initial = publisher(
+                    "gateway",
+                )
+                structural = MutableFragmentPublisher(
+                    valid_adapter,
+                )
+                structural.state_reader = lambda: corrupt_state
+                registry = FragmentAdapterRegistry(enabled=True)
+                assert_value_free_error(
+                    self,
+                    ValueError,
+                    lambda: registry.register(structural),
+                    raw_value,
+                )
+                self.assertEqual(registry.provider_ids, ())
+                self.assertEqual(valid_store.writes, 1)
+
+                live_registry = FragmentAdapterRegistry(
+                    enabled=True,
+                )
+                self.assertTrue(
+                    live_registry.register(valid_adapter),
+                )
+                compiler = live_registry.create_compiler(
+                    InMemoryCompiledLatticeStateStore(),
+                )
+                valid_store._state = corrupt_state
+                self.assertTrue(
+                    compiler.invalidate(
+                        "gateway",
+                        1,
+                        "noncanonical durable state",
+                    )
+                )
+                run = compiler.drain()
+                self.assertIsNot(
+                    run.status,
+                    CompileStatus.FRESH,
+                )
+                self.assertIsNone(run.plan)
+                self.assertTrue(any(issue.code == "provider_read_failed" for issue in run.issues))
+                for issue in run.issues:
+                    self.assertNotIn(
+                        raw_value,
+                        issue.detail,
+                    )
+                self.assertEqual(valid_store.writes, 1)
+
+    def test_noncanonical_durable_provider_id_fails_every_read_boundary(self):
+        """The durable cursor provider ID must already be canonical."""
+        candidate = mutated_snapshot(
+            "provider_id",
+            "gateway",
+        )
+        raw_value = " gateway "
+        corrupt_state = matched_corrupt_state(
+            candidate,
+            provider_id=raw_value,
+        )
+
+        restart_store = InMemoryFragmentAdapterStateStore(
+            corrupt_state,
+        )
+        assert_value_free_error(
+            self,
+            FragmentAdapterReadError,
+            lambda: DurableFragmentAdapter(
+                "gateway",
+                restart_store,
+            ),
+            raw_value,
+        )
+        self.assertEqual(restart_store.writes, 0)
+
+        valid_adapter, valid_store, _initial = publisher(
+            "gateway",
+        )
+        structural = MutableFragmentPublisher(valid_adapter)
+        structural.state_reader = lambda: corrupt_state
+        registry = FragmentAdapterRegistry(enabled=True)
+        assert_value_free_error(
+            self,
+            ValueError,
+            lambda: registry.register(structural),
+            raw_value,
+        )
+        self.assertEqual(registry.provider_ids, ())
+        self.assertEqual(valid_store.writes, 1)
+
+        live_registry = FragmentAdapterRegistry(enabled=True)
+        self.assertTrue(live_registry.register(valid_adapter))
+        compiler = live_registry.create_compiler(
+            InMemoryCompiledLatticeStateStore(),
+        )
+        valid_store._state = corrupt_state
+        self.assertTrue(
+            compiler.invalidate(
+                "gateway",
+                1,
+                "noncanonical durable provider ID",
+            )
+        )
+        run = compiler.drain()
+        self.assertIsNot(run.status, CompileStatus.FRESH)
+        self.assertIsNone(run.plan)
+        self.assertTrue(any(issue.code == "provider_read_failed" for issue in run.issues))
+        for issue in run.issues:
+            self.assertNotIn(raw_value, issue.detail)
+        self.assertEqual(valid_store.writes, 1)
+
+    def test_hostile_durable_state_fails_value_free_after_restart(self):
+        """Every corrupt scalar and snapshot hook is sanitized on read."""
+
+        def mutate_state(field, value):
+            return lambda state: object.__setattr__(
+                state,
+                field,
+                value,
+            )
+
+        def mutate_snapshot(field, value):
+            return lambda state: object.__setattr__(
+                state.snapshot,
+                field,
+                value,
+            )
+
+        def replace_with_subclass(state):
+            replacement = object.__new__(
+                FragmentAdapterStateSubclass,
+            )
+            for field in (
+                "provider_id",
+                "generation",
+                "semantic_fingerprint",
+                "snapshot",
+                "removed",
+            ):
+                object.__setattr__(
+                    replacement,
+                    field,
+                    getattr(state, field),
+                )
+            return replacement
+
+        cases = (
+            mutate_state(
+                "provider_id",
+                HostileText("gateway"),
+            ),
+            mutate_state(
+                "generation",
+                HostileInt(1),
+            ),
+            mutate_state(
+                "semantic_fingerprint",
+                HostileText("fingerprint"),
+            ),
+            mutate_state(
+                "removed",
+                HostileText("false"),
+            ),
+            mutate_snapshot(
+                "provider_id",
+                HostileText("gateway"),
+            ),
+            mutate_snapshot(
+                "generation",
+                HostileInt(1),
+            ),
+            mutate_snapshot(
+                "topology_fragment",
+                HostileMapping(),
+            ),
+            replace_with_subclass,
+        )
+        for corrupt in cases:
+            with self.subTest(corrupt=corrupt):
+                adapter, state_store, _initial = publisher(
+                    "gateway",
+                )
+                state = state_store.load()
+                replacement = corrupt(state)
+                if replacement is not None:
+                    state_store._state = replacement
+                writes = state_store.writes
+                assert_value_free_error(
+                    self,
+                    FragmentAdapterReadError,
+                    lambda: DurableFragmentAdapter(
+                        "gateway",
+                        state_store,
+                    ),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, writes)
 
     def test_conflicting_atomic_write_leaves_requested_generation_pending(self):
         """A rejected CAS never presents an uncommitted fragment as current."""
@@ -274,6 +1253,72 @@ class TestFragmentAdapterRegistry(unittest.TestCase):
             )
 
         self.assertEqual(registry.provider_ids, ())
+
+    def test_hostile_adapter_and_state_hooks_fail_value_free(self):
+        """Every registry entry path sanitizes adapter and state faults."""
+        adapter, state_store, _initial = publisher("gateway")
+        state = adapter.read_state()
+        hostile_state = object.__new__(
+            HostileFragmentAdapterState,
+        )
+        for field in (
+            "provider_id",
+            "generation",
+            "semantic_fingerprint",
+            "snapshot",
+            "removed",
+        ):
+            object.__setattr__(
+                hostile_state,
+                field,
+                object.__getattribute__(state, field),
+            )
+
+        register_registry = FragmentAdapterRegistry(enabled=True)
+        assert_value_free_error(
+            self,
+            ValueError,
+            lambda: register_registry.register(
+                HostileRegistryAdapter(),
+            ),
+            HostileText.secret,
+        )
+        self.assertEqual(register_registry.provider_ids, ())
+
+        discovered = MutableFragmentPublisher(adapter)
+        discovered.state_reader = lambda: hostile_state
+        discover_registry = FragmentAdapterRegistry(enabled=True)
+        assert_value_free_error(
+            self,
+            ValueError,
+            lambda: discover_registry.discover(
+                (FragmentComponent(discovered),),
+            ),
+            HostileText.secret,
+        )
+        self.assertEqual(discover_registry.provider_ids, ())
+
+        compiling = MutableFragmentPublisher(adapter)
+        compiler_registry = FragmentAdapterRegistry(enabled=True)
+        self.assertTrue(
+            compiler_registry.register(compiling),
+        )
+
+        def fail_state_read():
+            raise RuntimeError(HostileText.secret)
+
+        compiling.state_reader = fail_state_read
+        compiled_store = InMemoryCompiledLatticeStateStore()
+        assert_value_free_error(
+            self,
+            ValueError,
+            lambda: compiler_registry.create_compiler(
+                compiled_store,
+            ),
+            HostileText.secret,
+        )
+        self.assertEqual(compiled_store.writes, 0)
+        self.assertEqual(state_store.writes, 1)
 
     def test_register_unregister_only_before_compiler_is_sealed(self):
         """Runtime membership changes cannot silently alter compiler inputs."""

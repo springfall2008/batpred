@@ -14,6 +14,7 @@ from lattice_compiled_publication import (  # noqa: E402
 )
 from lattice_fragment_adapters import (  # noqa: E402
     DurableFragmentAdapter,
+    FragmentAdapterReadError,
     FragmentAdapterState,
     FragmentAdapterRegistry,
     FragmentAdapterRemoved,
@@ -21,6 +22,69 @@ from lattice_fragment_adapters import (  # noqa: E402
     _compiler_fragment_snapshot,
 )
 from tests.test_lattice_autoconfig import snapshot  # noqa: E402
+
+
+def assert_value_free_read_error(test_case, action, raw_value):
+    """Assert compiler structural reads retain no source-controlled value."""
+    try:
+        action()
+    except FragmentAdapterReadError as error:
+        test_case.assertIs(type(error), FragmentAdapterReadError)
+        test_case.assertNotIn(raw_value, str(error))
+        test_case.assertNotIn(raw_value, repr(error))
+        test_case.assertNotIn(raw_value, repr(error.args))
+        test_case.assertNotIn(raw_value, error.args)
+        test_case.assertIsNone(error.__cause__)
+        test_case.assertIsNone(error.__context__)
+    else:
+        test_case.fail("expected a value-free fragment read error")
+
+
+class HostileText(str):
+    """String subclass whose scalar hooks expose a fake provider secret."""
+
+    secret = "provider-secret-value"
+
+    def _fail(self, *_args, **_kwargs):
+        """Fail if validation invokes any subclass-controlled hook."""
+        raise RuntimeError(self.secret)
+
+    strip = _fail
+    __format__ = _fail
+    __iter__ = _fail
+    __len__ = _fail
+    __hash__ = _fail
+    __eq__ = _fail
+    __lt__ = _fail
+
+
+class HostileMapping(dict):
+    """Mapping whose traversal exposes a fake provider secret."""
+
+    def items(self):
+        """Fail if fingerprint validation traverses corrupt state."""
+        raise RuntimeError(HostileText.secret)
+
+
+class HostileFragmentAdapterState(FragmentAdapterState):
+    """State subclass whose validator must never be dispatched."""
+
+    def __post_init__(self):
+        """Expose a fake secret if subclass dispatch occurs."""
+        raise RuntimeError(HostileText.secret)
+
+
+class StructuralAdapter:
+    """Minimal compiler-facing adapter for hostile-read tests."""
+
+    def __init__(self, provider_id, reader):
+        """Store one provider scalar and structural reader."""
+        self.provider_id = provider_id
+        self._reader = reader
+
+    def read_state(self):
+        """Delegate to the hostile structural reader."""
+        return self._reader()
 
 
 def publisher(provider_id, node_id):
@@ -72,7 +136,9 @@ class TestCompilerFragmentTombstones(unittest.TestCase):
         """Translation changes only a durable removal state."""
         adapter, _store, initial = publisher("gateway", "GW-INV")
 
-        self.assertIs(_compiler_fragment_snapshot(adapter), initial)
+        live = _compiler_fragment_snapshot(adapter)
+        self.assertEqual(live, initial)
+        self.assertIsNot(live, initial)
         self.assertTrue(adapter.remove(2, "integration removed"))
 
         with self.assertRaises(FragmentAdapterRemoved):
@@ -88,6 +154,70 @@ class TestCompilerFragmentTombstones(unittest.TestCase):
         self.assertEqual(tombstone.identity_aliases, ())
         self.assertEqual(tombstone.role_assignments, ())
         self.assertEqual(tombstone.config_projections, ())
+
+    def test_hostile_structural_reads_fail_value_free_without_dispatch(self):
+        """Compiler reads sanitize faults, subclasses, and corrupt snapshots."""
+        adapter, state_store, _initial = publisher(
+            "gateway",
+            "GW-INV",
+        )
+        state = state_store.load()
+        hostile_state = object.__new__(
+            HostileFragmentAdapterState,
+        )
+        for field in (
+            "provider_id",
+            "generation",
+            "semantic_fingerprint",
+            "snapshot",
+            "removed",
+        ):
+            object.__setattr__(
+                hostile_state,
+                field,
+                getattr(state, field),
+            )
+
+        cases = (
+            StructuralAdapter(
+                "gateway",
+                lambda: (_ for _ in ()).throw(
+                    RuntimeError(HostileText.secret),
+                ),
+            ),
+            StructuralAdapter(
+                HostileText("gateway"),
+                lambda: state,
+            ),
+            StructuralAdapter(
+                "gateway",
+                lambda: hostile_state,
+            ),
+        )
+        for structural_adapter in cases:
+            with self.subTest(adapter=structural_adapter):
+                writes = state_store.writes
+                assert_value_free_read_error(
+                    self,
+                    lambda: _compiler_fragment_snapshot(
+                        structural_adapter,
+                    ),
+                    HostileText.secret,
+                )
+                self.assertEqual(state_store.writes, writes)
+
+        object.__setattr__(
+            state.snapshot,
+            "topology_fragment",
+            HostileMapping(),
+        )
+        writes = state_store.writes
+        assert_value_free_read_error(
+            self,
+            lambda: _compiler_fragment_snapshot(adapter),
+            HostileText.secret,
+        )
+        self.assertEqual(state_store.writes, writes)
 
     def test_all_removed_publishes_deterministic_empty_plan_and_restarts(self):
         """All tombstones settle, persist, and restore as one empty plan."""

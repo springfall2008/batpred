@@ -66,7 +66,7 @@ _DEVICE_KINDS = frozenset(
 
 def _bounded_text(value, name, maximum):
     """Return normalized non-empty text with an explicit size bound."""
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str or not value.strip():
         raise ValueError("{} must be a non-empty string".format(name))
     if any(unicodedata.category(character) in ("Cc", "Cf", "Cs") for character in value):
         raise ValueError(
@@ -92,7 +92,7 @@ def _provider_id(value):
 
 def _provider_identifier(value, name):
     """Normalize one bounded provider-local string or integer identifier."""
-    if isinstance(value, int) and not isinstance(value, bool):
+    if type(value) is int:
         value = str(value)
     value = _bounded_text(value, name, 128)
     if _IDENTIFIER_RE.fullmatch(value) is None:
@@ -116,7 +116,7 @@ def _optional_bool(value, name):
 
 def _discovery_generation(value):
     """Validate one caller-owned monotonic discovery generation."""
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    if type(value) is not int or value < 0:
         raise ValueError(
             "discovery_generation must be a non-negative integer",
         )
@@ -164,7 +164,7 @@ def _bounded_observations(values, name, observation_type, maximum):
                 maximum,
             ),
         )
-    if any(not isinstance(observation, observation_type) for observation in observations):
+    if any(type(observation) is not observation_type for observation in observations):
         raise ValueError(
             "{} must contain only {} values".format(
                 name,
@@ -262,6 +262,23 @@ def _normalize_sites(sites):
         InventorySiteObservation,
         MAX_COMPLETE_INVENTORY_SITES,
     )
+    canonical_sites = []
+    for site in sites:
+        raw_site_id = site.site_id
+        raw_online = site.online
+        clean = InventorySiteObservation(
+            site_id=raw_site_id,
+            online=raw_online,
+        )
+        if (raw_site_id, raw_online) != (
+            clean.site_id,
+            clean.online,
+        ):
+            raise ValueError(
+                "complete inventory site observation is not canonical",
+            )
+        canonical_sites.append(clean)
+    sites = tuple(canonical_sites)
     seen = set()
     for site in sites:
         if site.site_id in seen:
@@ -280,6 +297,42 @@ def _normalize_devices(devices, site_ids):
         InventoryDeviceObservation,
         MAX_COMPLETE_INVENTORY_DEVICES,
     )
+    canonical_devices = []
+    for device in devices:
+        raw_device_id = device.device_id
+        raw_site_id = device.site_id
+        raw_kind = device.kind
+        raw_model = device.model
+        raw_online = device.online
+        raw_serial = device.verified_hardware_serial
+        clean = InventoryDeviceObservation(
+            device_id=raw_device_id,
+            site_id=raw_site_id,
+            kind=raw_kind,
+            model=raw_model,
+            online=raw_online,
+            verified_hardware_serial=raw_serial,
+        )
+        if (
+            raw_device_id,
+            raw_site_id,
+            raw_kind,
+            raw_model,
+            raw_online,
+            raw_serial,
+        ) != (
+            clean.device_id,
+            clean.site_id,
+            clean.kind,
+            clean.model,
+            clean.online,
+            clean.verified_hardware_serial,
+        ):
+            raise ValueError(
+                "complete inventory device observation is not canonical",
+            )
+        canonical_devices.append(clean)
+    devices = tuple(canonical_devices)
 
     device_owners = {}
     serial_owners = {}
