@@ -71,6 +71,7 @@ coro
 cprofile
 creds
 crosscharge
+csp
 customisation
 Customise
 cvalue
@@ -174,6 +175,7 @@ Ginlong
 GivEnergy
 givtcp
 gnueabihf
+greppable
 gridcode
 gridconsumption
 gridconsumptionpower
@@ -190,6 +192,7 @@ hasattr
 hass
 hassapi
 hassio
+hazmat
 heatingactive
 heatingtemp
 heatpump
@@ -329,7 +332,9 @@ perc
 percnt
 peterhaban
 photovoltaics
+pinv
 pitem
+pkcs1v15
 pkwh
 plenticore
 postdata
@@ -362,6 +367,7 @@ pytest
 pytz
 randn
 rarr
+rawkey
 reactivepower
 recp
 redownload
@@ -472,6 +478,7 @@ twinx
 tzfile
 tzpath
 unconfigured
+unfetched
 unparseable
 unsmoothed
 unstaged
