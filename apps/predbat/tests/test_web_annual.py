@@ -1428,6 +1428,50 @@ def test_web_annual_pages(my_predbat):
             print("  ERROR: the compare table should show {}, got {}".format(expected, table))
             failed = True
 
+    print("Test: each run's figures land in its OWN row, not merely somewhere in the table")
+    # A per-table substring check (above) cannot tell "each run got its own row" apart
+    # from "the rows are swapped/shifted but every value still appears somewhere" - a
+    # transposed row would pass it just as cleanly as a correct table. Splitting into
+    # <tr> blocks and checking each run's label sits next to ITS OWN figures - and not
+    # the other run's - is what actually catches a row/summary mismatch, which is
+    # exactly the defect class the global constraint calls out as having happened once
+    # on this branch already.
+    data_rows = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", table, re.S) if "<th>" not in row]
+    if len(data_rows) != len(runs):
+        print("  ERROR: expected {} data rows, got {}".format(len(runs), len(data_rows)))
+        failed = True
+    else:
+        row_expectations = [
+            ("5.6 kWp, Agile", ["5.6", "9.5", "Agile", "13.6"], ["Cosy", "8.2", "12 kWp"]),
+            ("12 kWp, Cosy", ["12", "20", "Cosy", "8.2"], ["Agile", "13.6", "5.6 kWp"]),
+        ]
+        for row, (label_fragment, must_contain, must_not_contain) in zip(data_rows, row_expectations):
+            if label_fragment not in row:
+                print("  ERROR: expected a row for {}, got {}".format(label_fragment, row))
+                failed = True
+            for expected in must_contain:
+                if expected not in row:
+                    print("  ERROR: the {} row should show {}, got {}".format(label_fragment, expected, row))
+                    failed = True
+            for unexpected in must_not_contain:
+                if unexpected in row:
+                    print("  ERROR: the {} row should not show {}'s figures, got {}".format(label_fragment, unexpected, row))
+                    failed = True
+
+        print("Test: cost and saving render as pounds, not raw pence (an off-by-100 would ship green otherwise)")
+        if "£660.00" not in data_rows[0]:
+            print("  ERROR: cost_with_predbat_p=66000.0p should render as £660.00 on the Agile row, got {}".format(data_rows[0]))
+            failed = True
+        if "£1140.00" not in data_rows[0]:
+            print("  ERROR: saving_vs_none_p=114000.0p should render as £1140.00 on the Agile row, got {}".format(data_rows[0]))
+            failed = True
+        if "£400.00" not in data_rows[1]:
+            print("  ERROR: cost_with_predbat_p=40000.0p should render as £400.00 on the Cosy row, got {}".format(data_rows[1]))
+            failed = True
+        if "£1400.00" not in data_rows[1]:
+            print("  ERROR: saving_vs_none_p=140000.0p should render as £1400.00 on the Cosy row, got {}".format(data_rows[1]))
+            failed = True
+
     print("Test: a run whose payback was unavailable shows a dash and its reason, not a number")
     unavailable = [
         {
