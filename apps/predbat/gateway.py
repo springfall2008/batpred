@@ -197,23 +197,27 @@ class GatewayMQTT(ComponentBase):
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
 
-        # Normalise serial filter to a list (or None if not set)
+        # Normalise the serial filter to a list. Whitespace-only values are
+        # equivalent to an unset filter, including when they arrive inside a
+        # list or a JSON-encoded list.
         if gateway_inverter_serial is None:
-            self.gateway_inverter_serial = []
+            serials = []
         elif isinstance(gateway_inverter_serial, list):
-            self.gateway_inverter_serial = gateway_inverter_serial
+            serials = gateway_inverter_serial
         else:
-            if isinstance(gateway_inverter_serial, str) and (gateway_inverter_serial.startswith("{") or gateway_inverter_serial.startswith("[")):
+            serial_value = gateway_inverter_serial.strip() if isinstance(gateway_inverter_serial, str) else gateway_inverter_serial
+            if isinstance(serial_value, str) and (serial_value.startswith("{") or serial_value.startswith("[")):
                 try:
-                    parsed = json.loads(gateway_inverter_serial)
+                    parsed = json.loads(serial_value)
                     if isinstance(parsed, list):
-                        self.gateway_inverter_serial = [str(s) for s in parsed]
+                        serials = parsed
                     else:
-                        self.gateway_inverter_serial = [str(parsed)]
+                        serials = [parsed]
                 except json.JSONDecodeError:
-                    self.gateway_inverter_serial = [str(gateway_inverter_serial)]
+                    serials = [serial_value]
             else:
-                self.gateway_inverter_serial = [gateway_inverter_serial]
+                serials = [serial_value]
+        self.gateway_inverter_serial = [serial for value in serials if (serial := str(value).strip())]
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
