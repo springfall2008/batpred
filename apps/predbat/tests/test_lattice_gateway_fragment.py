@@ -124,16 +124,31 @@ class TestGatewayRetainedTopologyFragmentPublisher(unittest.TestCase):
         adapter.ingest_retained_topology(topology(), online=True)
         state_store.fail_reads = True
 
-        with self.assertRaisesRegex(
-            FragmentAdapterReadError,
-            "durable Gateway fragment unavailable",
+        raw_value = "durable Gateway fragment unavailable"
+        for action in (
+            adapter.lattice_fragment_adapter,
+            lambda: adapter.set_liveness(False),
         ):
-            adapter.lattice_fragment_adapter()
-        with self.assertRaisesRegex(
-            FragmentAdapterReadError,
-            "durable Gateway fragment unavailable",
-        ):
-            adapter.set_liveness(False)
+            with self.subTest(action=action):
+                try:
+                    action()
+                except FragmentAdapterReadError as error:
+                    self.assertIs(
+                        type(error),
+                        FragmentAdapterReadError,
+                    )
+                    self.assertNotIn(raw_value, str(error))
+                    self.assertNotIn(raw_value, repr(error))
+                    self.assertNotIn(
+                        raw_value,
+                        repr(error.args),
+                    )
+                    self.assertIsNone(error.__cause__)
+                    self.assertIsNone(error.__context__)
+                else:
+                    self.fail(
+                        "expected a value-free fragment read error",
+                    )
 
     def test_retained_topology_publishes_immutable_reference_snapshot(self):
         """A retained fragment becomes detached provider-local metadata."""
