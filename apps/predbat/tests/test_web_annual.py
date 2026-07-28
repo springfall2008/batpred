@@ -413,6 +413,71 @@ def test_web_annual_form(my_predbat):
                 print("  ERROR: {} should be rendered as a wide field".format(field))
                 failed = True
 
+        print("Test: selecting a basic-rates tariff uses THAT tariff, not the price-cap default")
+        # The bug this pins: the dropdown only ever populated the URL boxes, and
+        # config_from_post read the boxes. A basic-rates entry has no URL, so both boxes
+        # were cleared and the no-URL fallback silently substituted the price-cap rates -
+        # a different tariff to the one named on screen, and different money out.
+        eon_post = valid_postdata()
+        eon_post["tariff_id"] = "eon_next_drive"
+        eon_post["tariff_import_url"] = ""
+        eon_post["tariff_export_url"] = ""
+        eon_config = make_page(my_predbat).config_from_post(eon_post)
+        eon_rates = eon_config["tariff"].get("rates_import") or []
+        if not any(abs(float(entry.get("rate", 0)) - 6.7) < 0.001 for entry in eon_rates):
+            print("  ERROR: selecting Eon Next Drive should use its 6.7p night rate, got {}".format(eon_config["tariff"]))
+            failed = True
+        if any(abs(float(entry.get("rate", 0)) - 24.86) < 0.001 for entry in eon_rates) and len(eon_rates) == 1:
+            print("  ERROR: selecting Eon Next Drive fell back to the flat price-cap default, got {}".format(eon_config["tariff"]))
+            failed = True
+        validate_config(eon_config)
+
+        print("Test: selecting a URL tariff takes the URL from the catalogue, not the text box")
+        # The box is hidden for a built-in entry, so a stale value left in it from an
+        # earlier selection must not be what actually runs.
+        stale_post = valid_postdata()
+        stale_post["tariff_id"] = "agile_fixed"
+        stale_post["tariff_import_url"] = "https://example.com/STALE-LEFTOVER/"
+        stale_config = make_page(my_predbat).config_from_post(stale_post)
+        if "STALE-LEFTOVER" in str(stale_config["tariff"]):
+            print("  ERROR: a built-in tariff must ignore the hidden URL box, got {}".format(stale_config["tariff"]))
+            failed = True
+        if "AGILE" not in str(stale_config["tariff"].get("import_octopus_url", "")).upper():
+            print("  ERROR: selecting Agile should use the Agile URL, got {}".format(stale_config["tariff"]))
+            failed = True
+
+        print("Test: Custom still honours the hand-entered URLs")
+        custom_post = valid_postdata()
+        custom_post["tariff_id"] = CUSTOM_ID
+        custom_post["tariff_import_url"] = "https://example.com/my-own/"
+        custom_config = make_page(my_predbat).config_from_post(custom_post)
+        if custom_config["tariff"].get("import_octopus_url") != "https://example.com/my-own/":
+            print("  ERROR: Custom should use the typed URL, got {}".format(custom_config["tariff"]))
+            failed = True
+
+        print("Test: the URL boxes are only shown for Custom")
+        builtin_form = make_page(my_predbat).render_form(stale_config)
+        custom_form = make_page(my_predbat).render_form(custom_config)
+        builtin_row = re.search(r'<div id="tariff-custom-urls" style="display:([^"]*)"', builtin_form)
+        custom_row = re.search(r'<div id="tariff-custom-urls" style="display:([^"]*)"', custom_form)
+        if not builtin_row or builtin_row.group(1) != "none":
+            print("  ERROR: the URL boxes should be hidden for a built-in tariff, got {}".format(builtin_row and builtin_row.group(1)))
+            failed = True
+        if not custom_row or custom_row.group(1) != "block":
+            print("  ERROR: the URL boxes should be shown for Custom, got {}".format(custom_row and custom_row.group(1)))
+            failed = True
+
+        print("Test: a basic-rates tariff re-selects its own dropdown entry, not the first one")
+        if not re.search(r'<option value="eon_next_drive"[^>]*selected', make_page(my_predbat).render_form(eon_config)):
+            print("  ERROR: a basic-rates config should re-select its own catalogue entry")
+            failed = True
+
+        print("Test: the Octopus import option warns against using it with an existing system")
+        octopus_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if "do not already have solar or a battery" not in octopus_form:
+            print("  ERROR: the Octopus option must warn that meter readings understate an existing system's load")
+            failed = True
+
         print("Test: the two submit buttons say what they do, and only the run button marks the tab")
         # "Save" next to results that save themselves reads as though it saves the run;
         # it only ever saved the form. The labels have to distinguish the two actions.

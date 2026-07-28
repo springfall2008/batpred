@@ -109,6 +109,19 @@ synthetic UK-average profile rather than being billed as zero. `car_rate_kw` has
 effect on an Octopus load and is ignored there — there is no separately-tracked car
 energy to apply a charging rate to.
 
+**Only use the Octopus option if you do not already have solar or a battery.** An import
+meter records what you *bought from the grid*, not what your home used. If you already
+generate or store your own energy, that self-consumption and battery discharge have
+already been subtracted from every reading — so the series is your residual grid demand,
+not your household load. Feeding it in and then modelling a solar and battery system on
+top applies the same saving twice: the tool would credit you for displacing import that
+your existing system had already displaced, and overstate what a new system is worth.
+
+For a home that already has a system, use `annual_kwh` instead, and give your **total
+household consumption** — generation included — rather than the figure on your bill. The
+web form says the same, and says it more loudly when it can see that your Predbat
+instance already has a battery or an array configured.
+
 `car_rate_kw` is the charger's power, used to size both the dumb timer's charge window
 (scenarios 1 and 2, which share the same fixed timer) and the smart plan's charging rate
 (scenario 3): a smaller number (say 3.0 for a granny charger) spreads the same energy over
@@ -202,12 +215,15 @@ values, so the form is always complete rather than partially blank.
 The **Tariff** dropdown lists a curated set of built-in Octopus products (Agile, Cosy,
 Flux, Intelligent Go and so on) plus, if your `apps.yaml` has a `compare_list`, your own
 entries from it — a user entry with the same id as a built-in replaces it rather than
-appearing twice. Picking an entry fills in the import/export URL fields beneath it, and
-those fields stay editable afterwards, so a dropdown choice is a starting point rather
-than a lock. If the chosen URL contains `{dno_region}` (as the Octopus product codes do),
+appearing twice. **The dropdown is what runs.** Picking an entry takes that tariff's
+rates straight from the catalogue, whether it is defined by an Octopus URL or by a fixed
+rate structure; the URL fields appear only when you choose **Custom**, because that is
+the only case where what you type in them is used. If the chosen URL contains
+`{dno_region}` (as the Octopus product codes do),
 the **Octopus region letter** field is required; leaving it blank is rejected up front,
 with the field named in the error, rather than left to fail as a 404 partway through the
-run. Choosing **Custom** clears the URL fields for hand-entered rates.
+run. Choosing **Custom** reveals the URL fields, pre-filled with whichever tariff you were
+looking at, so hand-entering one starts from something rather than from nothing.
 
 Every field the CLI's `annual.yaml` accepts has a form equivalent, including the
 manual-usage/Octopus-consumption choice under **Load** and the year, sample count and P10

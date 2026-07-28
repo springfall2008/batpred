@@ -410,6 +410,21 @@ class AnnualPage:
         text += self._text_field("load_octopus_api_key", "Octopus API key", saved_octopus.get("api_key") or (args_key if args_key and args_account else "") or "", wide=True)
         text += self._text_field("load_octopus_account_id", "Account ID", saved_octopus.get("account_id") or (args_account if args_key and args_account else "") or "", wide=True)
         text += '<p class="annual-note">Your meter readings already include any car charging, so the figures above are not used with this option.</p>\n'
+        # An import meter records what was BOUGHT, not what the house used. On a home that
+        # already has solar or a battery, the existing system's self-consumption and
+        # discharge have already been subtracted from every reading. Modelling solar and a
+        # battery on top of that applies the saving twice and overstates the result - so
+        # this option is only sound for a house with neither fitted yet, which is also the
+        # case the whole tool is aimed at.
+        text += '<p class="annual-banner"><strong>Only use this if you do not already have solar or a battery.</strong> '
+        text += "Octopus gives us what you imported from the grid, not what your home used. If you already generate or store your own, "
+        text += "that has already been taken off these readings, and adding a modelled system on top would count the same saving twice "
+        text += "and overstate what it is worth. With an existing system, enter your total annual consumption above instead.</p>\n"
+        if self.is_configured():
+            # The live instance already reports a battery or an array, so this is not a
+            # hypothetical for this particular user.
+            text += '<p class="annual-banner"><strong>Your Predbat setup already has solar or a battery configured</strong>, so meter readings from this account will '
+            text += "understate what your home actually uses. Enter your annual consumption above rather than importing it.</p>\n"
         text += "</div>\n"
         text += "</fieldset>\n"
 
@@ -417,13 +432,22 @@ class AnnualPage:
         text += '<div class="annual-field"><label for="tariff_id">Tariff</label><select id="tariff_id" name="tariff_id" onchange="annualTariffChanged()">\n'
         catalogue = self.catalogue()
         current_import_url = tariff.get("import_octopus_url")
+        current_rates = tariff.get("rates_import")
         # A hand-entered URL (no matching catalogue entry) is what Custom means, so it
         # is the fallback selection rather than leaving the dropdown on its first entry.
+        #
+        # Basic-rates entries are matched on their rates, not a URL: several catalogue
+        # entries ("Price cap import / SEG export", "Eon Next Drive") carry no URL at
+        # all, and matching on URL alone left the dropdown showing the first entry in
+        # the list rather than the tariff the config actually holds.
         selected_id = None
-        if current_import_url:
+        if current_import_url or current_rates:
             selected_id = CUSTOM_ID
             for entry in catalogue:
-                if entry.get("import_octopus_url") == current_import_url:
+                if current_import_url and entry.get("import_octopus_url") == current_import_url:
+                    selected_id = entry["id"]
+                    break
+                if not current_import_url and entry.get("rates_import") == current_rates:
                     selected_id = entry["id"]
                     break
         for entry in catalogue:
@@ -435,8 +459,14 @@ class AnnualPage:
                 html.escape(entry["name"], quote=True),
             )
         text += "</select></div>\n"
+        # The URL boxes belong to Custom alone. The dropdown is authoritative for every
+        # other entry (see config_from_post), so leaving them on screen for a built-in
+        # tariff invites someone to edit a value that is then ignored - and worse, used
+        # to look like the selection when it no longer matches it.
+        text += '<div id="tariff-custom-urls" style="display:{}">\n'.format("block" if selected_id == CUSTOM_ID else "none")
         text += self._text_field("tariff_import_url", "Import rates URL", tariff.get("import_octopus_url", ""), wide=True)
         text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""), wide=True)
+        text += "</div>\n"
         text += self._text_field("tariff_dno_region", "Octopus region letter", tariff.get("dno_region", ""))
         text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", 60.0), suffix="p/day")
         text += "</fieldset>\n"
@@ -559,14 +589,33 @@ class AnnualPage:
                 "car_rate_kw": numeric("load_car_rate_kw", 7.4),
             }
 
+        # The dropdown is authoritative for every entry except Custom, and the URL boxes
+        # are only shown for Custom. Reading the boxes regardless (as this used to) meant
+        # the two could disagree: picking a BASIC-RATES entry such as "Eon Next Drive"
+        # or "Price cap import / SEG export" cleared both boxes, and the no-URL fallback
+        # below then silently ran the run at the price-cap default instead of the tariff
+        # named in the dropdown - a different set of rates to the one on screen.
         tariff = {"standing_charge_p_per_day": numeric("tariff_standing_charge", 0)}
-        if value("tariff_import_url"):
-            tariff["import_octopus_url"] = value("tariff_import_url")
-        if value("tariff_export_url"):
-            tariff["export_octopus_url"] = value("tariff_export_url")
+        selected_tariff = value("tariff_id") or CUSTOM_ID
+        if selected_tariff != CUSTOM_ID:
+            for entry in self.catalogue():
+                if entry.get("id") != selected_tariff:
+                    continue
+                for key in ["import_octopus_url", "export_octopus_url", "rates_import", "rates_export"]:
+                    if entry.get(key):
+                        tariff[key] = copy.deepcopy(entry[key])
+                break
+        else:
+            if value("tariff_import_url"):
+                tariff["import_octopus_url"] = value("tariff_import_url")
+            if value("tariff_export_url"):
+                tariff["export_octopus_url"] = value("tariff_export_url")
+
         if value("tariff_dno_region"):
             tariff["dno_region"] = value("tariff_dno_region")
-        if not tariff.get("import_octopus_url"):
+        # Only reached by Custom with nothing filled in, or an id that is no longer in the
+        # catalogue (a compare_list entry the user has since removed).
+        if not tariff.get("import_octopus_url") and not tariff.get("rates_import"):
             tariff["rates_import"] = DEFAULT_CONFIG["tariff"]["rates_import"]
             tariff["rates_export"] = DEFAULT_CONFIG["tariff"]["rates_export"]
         config["tariff"] = tariff
@@ -1407,8 +1456,14 @@ table.annual-compare { white-space: nowrap; }
 function annualTariffChanged() {
   var select = document.getElementById('tariff_id');
   var option = select.options[select.selectedIndex];
+  // The URL boxes belong to Custom alone - every other entry is taken from the
+  // catalogue server-side, so showing editable boxes for one would offer an edit that
+  // is then ignored. They are still populated, so switching to Custom starts from the
+  // tariff you were looking at rather than from nothing.
   document.getElementById('tariff_import_url').value = option.getAttribute('data-import') || '';
   document.getElementById('tariff_export_url').value = option.getAttribute('data-export') || '';
+  var custom = document.getElementById('tariff-custom-urls');
+  if (custom) { custom.style.display = (select.value === 'custom') ? 'block' : 'none'; }
 }
 function annualCancel() { fetch('./annual_cancel', {method: 'POST'}); }
 function annualSolarModeChanged(index) {
