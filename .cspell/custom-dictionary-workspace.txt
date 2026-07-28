@@ -70,6 +70,8 @@ connack
 Consolas
 cooldown
 coro
+corruptleg
+corruptplans
 cprofile
 creds
 crosscharge

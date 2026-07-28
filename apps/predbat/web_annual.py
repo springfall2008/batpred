@@ -930,7 +930,12 @@ class AnnualPage:
         text += self._render_payback(results)
         text += self._render_chart(results)
         text += self._render_month_table(results)
-        text += self._render_plan_viewer(results, selected_id)
+        selected_entry = next((run for run in (runs or []) if run.get("id") == selected_id), None)
+        # None when the index entry carries no "plan_index" key at all - a run stored
+        # before this existed - so _render_plan_viewer falls back to reading plans out
+        # of the document itself; [] for a found entry that simply captured none.
+        plan_index = selected_entry.get("plan_index") if selected_entry is not None else None
+        text += self._render_plan_viewer(results, selected_id, plan_index)
         text += self._render_caveats(results)
         if selected_id:
             text += '<p><a href="./annual_download?run={}">Download this run as JSON</a></p>\n'.format(html.escape(str(selected_id), quote=True))
@@ -1097,27 +1102,47 @@ class AnnualPage:
         text += "</table>\n"
         return text
 
-    def _render_plan_viewer(self, results, selected_id):
+    def _render_plan_viewer(self, results, selected_id, plan_index):
         """Return the captured-plan viewer, or nothing when this run captured no plans.
 
-        A debug run's month rows carry a non-empty ``"plans"`` list (see Task 1); a
-        non-debug run has no ``"plans"`` key on any month at all, so ``options``
-        stays empty and this returns "" - no empty viewer shell must appear for an
-        ordinary run.
+        ``annual_store.save_run`` strips a debug run's captured plans out of the
+        results document and records their labels (month, index, day, leg - no
+        payload) as ``plan_index`` on the run's index entry instead, so this reads
+        from ``plan_index`` rather than from ``results`` - the document ``save_run``
+        stores no longer carries the plans at all.
 
-        The day options are built in the results document's own order - months
-        1..12, each month's plans in the order the engine sampled them - which is
-        already chronological, so no separate sort is needed.
+        ``plan_index`` is ``None`` for a run stored before it existed (an index
+        entry with no ``"plan_index"`` key), which falls back to reading the plans
+        out of the document itself, exactly as this used to work for every run -
+        that document still has them embedded, since it predates the split. An
+        empty list, by contrast, means the entry was found and simply captured no
+        plans (an ordinary, non-debug run), and must not trigger that fallback.
+
+        The day options are built in the same order the plans were recorded in -
+        months 1..12, each month's legs in the order the engine sampled them -
+        which is already chronological, so no separate sort is needed either way.
         """
         options = []
-        for entry in results.get("months", []) or []:
-            plans = entry.get("plans") or []
-            for index, plan in enumerate(plans):
-                day = plan.get("day", "")
-                leg = plan.get("leg", "single")
+        if plan_index is not None:
+            for item in plan_index:
+                if not isinstance(item, dict):
+                    continue
+                day = item.get("day") or ""
+                leg = item.get("leg", "single")
                 label = day if leg == "single" else "{} ({})".format(day, leg)
-                value = "{}:{}".format(entry.get("month"), index)
+                value = "{}:{}".format(item.get("month"), item.get("index"))
                 options.append((value, label))
+        else:
+            for entry in results.get("months", []) or []:
+                plans = entry.get("plans") or []
+                for index, plan in enumerate(plans):
+                    if not isinstance(plan, dict):
+                        continue
+                    day = plan.get("day", "")
+                    leg = plan.get("leg", "single")
+                    label = day if leg == "single" else "{} ({})".format(day, leg)
+                    value = "{}:{}".format(entry.get("month"), index)
+                    options.append((value, label))
 
         if not options:
             return ""

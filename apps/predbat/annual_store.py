@@ -161,6 +161,12 @@ async def save_run(storage, results, config, run_id):
     small, and each plan can be fetched on its own rather than re-reading a
     several-megabyte document on every click of the plan viewer.
 
+    A small ``plan_index`` (month, index, day, leg - no payload) is recorded on the
+    index entry alongside ``plan_keys``, so the results page's plan viewer can build
+    its day/scenario selector from the index entry rather than from the document,
+    which - now that this same function has stripped the plans out of it - no
+    longer carries them.
+
     ``results`` is deep-copied before anything is stripped from it, so the
     caller's own dict (the web layer still holds it after this returns) is left
     untouched.
@@ -173,6 +179,7 @@ async def save_run(storage, results, config, run_id):
 
     stored = copy.deepcopy(results) if isinstance(results, dict) else results
     plan_keys = []
+    plan_index = []
     if isinstance(stored, dict):
         for month in stored.get("months") or []:
             if not isinstance(month, dict):
@@ -184,6 +191,14 @@ async def save_run(storage, results, config, run_id):
                 key = _plan_key(run_id, month.get("month", 0), index)
                 await storage.save(STORAGE_MODULE, key, leg, format="json")
                 plan_keys.append(key)
+                plan_index.append(
+                    {
+                        "month": month.get("month", 0),
+                        "index": index,
+                        "day": leg.get("day") if isinstance(leg, dict) else None,
+                        "leg": leg.get("leg", "single") if isinstance(leg, dict) else "single",
+                    }
+                )
 
     await storage.save(STORAGE_MODULE, _run_key(run_id), stored, format="json")
 
@@ -196,6 +211,7 @@ async def save_run(storage, results, config, run_id):
         "status": "ok" if annual.get("months_included") else "empty",
         "summary": build_summary(results, config),
         "plan_keys": plan_keys,
+        "plan_index": plan_index,
     }
 
     index = await list_runs(storage)

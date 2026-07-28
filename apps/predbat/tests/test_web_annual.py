@@ -19,7 +19,7 @@ from unittest.mock import patch
 from aiohttp import web as aiohttp_web
 
 from annual import AnnualConfigError, validate_config
-from annual_store import list_runs, save_run
+from annual_store import list_runs, load_run, save_run
 from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage, _json_for_script
@@ -1230,15 +1230,38 @@ def test_web_annual_results(my_predbat):
         print("  ERROR: the selected run should be downloadable as JSON")
         failed = True
 
-    print("Test: a run with captured plans offers a plan viewer")
+    print("Test: a run with captured plans, saved and reloaded through storage, still offers a plan viewer")
+    # Round-tripped through save_run/load_run/list_runs rather than handed a dict that
+    # still has "plans" embedded: save_run strips plans out of the document it stores
+    # and records their labels as plan_index on the index entry instead, so a test built
+    # on a hand-built embedded-plans dict would stay green even if the viewer were still
+    # reading the (now-empty) document instead of plan_index - which is exactly the bug
+    # this replaces (the viewer was permanently empty for every run saved after the
+    # split, because it read entry.get("plans") from a document that no longer has one).
+    plan_storage = RaceStorage()
     debug_results = copy.deepcopy(sample_run_results())
     debug_results["months"][0]["plans"] = [{"day": "2025-01-15", "leg": "single", "scenarios": {"with_predbat": {"rows": [], "soc_max": 9.5}}}]
-    html_text = page.render_results(debug_results, runs, runs[0]["id"])
+    asyncio.run(save_run(plan_storage, debug_results, {}, "20260727-plan-viewer"))
+    stored_results = asyncio.run(load_run(plan_storage, "20260727-plan-viewer"))
+    stored_runs = asyncio.run(list_runs(plan_storage))
+    html_text = page.render_results(stored_results, stored_runs, "20260727-plan-viewer")
     if "annual-plan-viewer" not in html_text:
-        print("  ERROR: a run with plans should render the plan viewer")
+        print("  ERROR: a run whose plans were split into their own storage keys should still render the plan viewer")
         failed = True
     if "renderPlanTable" not in html_text:
         print("  ERROR: the viewer must use the existing plan renderer")
+        failed = True
+    if "2025-01-15" not in html_text:
+        print("  ERROR: the day option should come from the index's plan_index, got {!r}".format(html_text))
+        failed = True
+
+    print("Test: a legacy run (plans still embedded in the document, no plan_index recorded) still offers a plan viewer")
+    legacy_runs = [{"id": "legacy-plan-run", "label": "legacy", "months_included": 2}]
+    legacy_debug_results = copy.deepcopy(sample_run_results())
+    legacy_debug_results["months"][0]["plans"] = [{"day": "2025-01-15", "leg": "single", "scenarios": {"with_predbat": {"rows": [], "soc_max": 9.5}}}]
+    legacy_html = page.render_results(legacy_debug_results, legacy_runs, "legacy-plan-run")
+    if "annual-plan-viewer" not in legacy_html:
+        print("  ERROR: a legacy run with embedded plans and no plan_index should still render the plan viewer")
         failed = True
 
     print("Test: a run with no captured plans renders no viewer")

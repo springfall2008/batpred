@@ -336,6 +336,20 @@ def test_annual_store(my_predbat):
         print("  ERROR: three legs should produce three plan keys, got {}".format(index[0].get("plan_keys")))
         failed = True
 
+    print("Test: save_run records a plan_index entry per leg, carrying the labels the viewer needs")
+    plan_index = index[0].get("plan_index") or []
+    if len(plan_index) != 3:
+        print("  ERROR: three legs should produce three plan_index entries, got {}".format(plan_index))
+        failed = True
+    expected = [
+        {"month": 1, "index": 0, "day": "2025-01-08", "leg": "with_car"},
+        {"month": 1, "index": 1, "day": "2025-01-08", "leg": "without_car"},
+        {"month": 2, "index": 0, "day": "2025-02-10", "leg": "single"},
+    ]
+    if plan_index != expected:
+        print("  ERROR: expected {}, got {}".format(expected, plan_index))
+        failed = True
+
     print("Test: load_plan returns the right scenario from its own key")
     plan = run_async(load_plan(storage, "20260728-091000", 1, 1, "with_predbat"))
     if plan != {"rows": [2]}:
@@ -352,16 +366,74 @@ def test_annual_store(my_predbat):
     print("Test: load_plan falls back to a document that still has its plans embedded")
     # A run stored before this split. It must stay viewable rather than silently losing
     # its plans.
-    storage = FakeStorage()
-    run_async(storage.save(STORAGE_MODULE, "run_legacy", {"months": [{"month": 3, "plans": [{"leg": "single", "scenarios": {"pv_only": {"rows": [9]}}}]}]}, format="json"))
-    if run_async(load_plan(storage, "legacy", 3, 0, "pv_only")) != {"rows": [9]}:
+    legacy_storage = FakeStorage()
+    run_async(legacy_storage.save(STORAGE_MODULE, "run_legacy", {"months": [{"month": 3, "plans": [{"leg": "single", "scenarios": {"pv_only": {"rows": [9]}}}]}]}, format="json"))
+    if run_async(load_plan(legacy_storage, "legacy", 3, 0, "pv_only")) != {"rows": [9]}:
         print("  ERROR: a legacy embedded-plans run should still resolve")
         failed = True
 
-    print("Test: load_plan returns None rather than raising for anything it cannot resolve")
-    for args in [("20260728-091000", 99, 0, "with_predbat"), ("20260728-091000", 1, 99, "with_predbat"), ("20260728-091000", 1, 0, "nope"), ("nosuchrun", 1, 0, "with_predbat")]:
+    print("Test: the legacy fallback bounds-checks the embedded plans list rather than indexing past the end")
+    # legacy_storage's "run_legacy" document has exactly one plan, at index 0, for month
+    # 3. Deleting the bound check in load_plan's fallback (`index >= len(plans)`) would
+    # let `plans[index]` raise IndexError here instead of resolving to None.
+    for args in [("legacy", 3, 1, "pv_only"), ("legacy", 3, 99, "pv_only")]:
         try:
-            if run_async(load_plan(storage, *args)) is not None:
+            if run_async(load_plan(legacy_storage, *args)) is not None:
+                print("  ERROR: {} should resolve to None".format(args))
+                failed = True
+        except Exception as error:
+            print("  ERROR: {} raised {} instead of returning None".format(args, type(error).__name__))
+            failed = True
+
+    print("Test: load_plan's legacy fallback resolves None, not an exception, when 'plans' itself is not a list")
+    for corrupt_plans in [{"0": "not a list"}, "also not a list", 42, None]:
+        corrupt_legacy_storage = FakeStorage()
+        run_async(corrupt_legacy_storage.save(STORAGE_MODULE, "run_corruptplans", {"months": [{"month": 5, "plans": corrupt_plans}]}, format="json"))
+        try:
+            result = run_async(load_plan(corrupt_legacy_storage, "corruptplans", 5, 0, "with_predbat"))
+        except Exception as error:
+            print("  ERROR: a legacy document whose plans is {!r} raised {} instead of returning None".format(corrupt_plans, type(error).__name__))
+            failed = True
+        else:
+            if result is not None:
+                print("  ERROR: a legacy document whose plans is {!r} should resolve to None, got {!r}".format(corrupt_plans, result))
+                failed = True
+
+    print("Test: load_plan resolves None, not an exception, when the primary key itself holds a corrupt leg blob")
+    corrupt_leg_storage = FakeStorage()
+    run_async(corrupt_leg_storage.save(STORAGE_MODULE, "run_corruptleg_plans_01_0", "not a dict", format="json"))
+    run_async(corrupt_leg_storage.save(STORAGE_MODULE, "run_corruptleg_plans_01_1", ["not", "a", "dict"], format="json"))
+    run_async(corrupt_leg_storage.save(STORAGE_MODULE, "run_corruptleg_plans_01_2", {"leg": "single"}, format="json"))  # a dict with no "scenarios" key
+    run_async(corrupt_leg_storage.save(STORAGE_MODULE, "run_corruptleg", {"months": [{"month": 1, "status": "ok"}]}, format="json"))
+    for index in [0, 1, 2]:
+        try:
+            result = run_async(load_plan(corrupt_leg_storage, "corruptleg", 1, index, "with_predbat"))
+        except Exception as error:
+            print("  ERROR: a corrupt leg blob at index {} raised {} instead of returning None".format(index, type(error).__name__))
+            failed = True
+        else:
+            if result is not None:
+                print("  ERROR: a corrupt leg blob at index {} should resolve to None, got {!r}".format(index, result))
+                failed = True
+
+    print("Test: load_plan returns None rather than raising for anything it cannot resolve, against a run that actually exists")
+    # Uses its own storage holding the real "20260728-091000" run, not the leftover
+    # legacy_storage above (which only contains "run_legacy") - reusing that would let
+    # every case here short-circuit on "run not found" before reaching the out-of-range
+    # month/index or bad-scenario logic it claims to exercise.
+    resolve_storage = FakeStorage()
+    run_async(save_run(resolve_storage, debug_results, {}, "20260728-091000"))
+    for args in [
+        ("20260728-091000", 99, 0, "with_predbat"),  # month not present
+        ("20260728-091000", 1, 99, "with_predbat"),  # index out of range for a real month
+        ("20260728-091000", 1, 0, "nope"),  # scenario not recorded on that leg
+        ("nosuchrun", 1, 0, "with_predbat"),  # run id not present
+        ("20260728-091000", "not-a-number", 0, "with_predbat"),  # non-integer month
+        ("20260728-091000", 1, "not-a-number", "with_predbat"),  # non-integer index
+        ("20260728-091000", 1, -1, "with_predbat"),  # negative index
+    ]:
+        try:
+            if run_async(load_plan(resolve_storage, *args)) is not None:
                 print("  ERROR: {} should resolve to None".format(args))
                 failed = True
         except Exception as error:
