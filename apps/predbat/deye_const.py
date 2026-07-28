@@ -101,9 +101,12 @@ DEYE_RATED_POWER_KEY = "RatedPower"
 # giving a 51.2 V nominal pack: 1200 Ah x 51.2 V = 61.4 kWh.
 LIFEPO4_CHARGE_VOLTS_PER_CELL = 3.6
 LIFEPO4_NOMINAL_VOLTS_PER_CELL = 3.2
-# Resting volts/cell, used only to infer the cell count when the BMS charge voltage is
-# absent; a resting pack sits near 3.3 V/cell across most of its SOC range.
-LIFEPO4_RESTING_VOLTS_PER_CELL = 3.3
+# The RESTING pack voltage must never be used to derive a nominal pack voltage: it climbs
+# with SOC (~53.8 V at 94% but ~58 V at 100% on the same 16S pack), so inferring a cell
+# count from it overstates capacity by a whole cell near full charge. The nominal comes
+# from the BMS charge target, or from deye_battery_nominal_voltage. There is deliberately
+# no fallback default -- see nominal_pack_voltage() in deye.py for why a guessed soc_max
+# is worse than none.
 
 # device/latest batches serials on this body key (max 10 per call).  # CONFIRMED
 DEYE_LATEST_BODY_KEY = "deviceList"

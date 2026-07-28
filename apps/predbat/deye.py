@@ -49,7 +49,6 @@ from deye_const import (
     DEYE_RATED_POWER_KEY,
     LIFEPO4_CHARGE_VOLTS_PER_CELL,
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
-    LIFEPO4_RESTING_VOLTS_PER_CELL,
 )
 
 
@@ -61,7 +60,24 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     # caller (tests, the CLI tool) builds the object without going through initialize().
     api_debug = True
 
-    def initialize(self, app_id="", app_secret="", username="", password="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs):
+    def initialize(
+        self,
+        app_id="",
+        app_secret="",
+        username="",
+        password="",
+        key="",
+        data_center="eu",
+        company_id="",
+        auth_method="app_credentials",
+        token_expires_at=None,
+        token_hash="",
+        inverter_sn=None,
+        automatic=False,
+        automatic_ignore_pv=False,
+        battery_nominal_voltage=None,
+        **kwargs,
+    ):
         """Initialise the DEYE component from its resolved config args.
 
         ComponentBase.__init__ calls initialize(**kwargs); the Components
@@ -96,9 +112,22 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.applied_payload = {}
         self.control_active = set()
         self.cached_values = {}
+        self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, 0.0)
+        # auth_method defaults to app_credentials, but an injected access token with no
+        # developer app credentials can only be oauth — and in app_credentials mode
+        # _init_oauth() throws the key away, so a host that forgets deye_auth_method gets a
+        # component that authenticates with nothing. Infer the mode from what was supplied.
+        if key and not app_id and auth_method != "oauth":
+            self.log("Info: DEYE inferring auth_method 'oauth' - an access token was injected without app credentials")
+            auth_method = "oauth"
+        # _init_oauth() assigns key straight to self.access_token in oauth mode, so it must
+        # be the injected ACCESS TOKEN (deye_key) — NOT token_hash, which is only the dedup
+        # handle echoed back to oauth-refresh. Passing the hash made DEYE reject every call
+        # with "auth invalid token", and a token_expires_at far in the future meant the
+        # refresh that would have replaced it never ran.
         self._init_oauth(
             auth_method=auth_method,
-            key=app_secret or token_hash,
+            key=key or app_secret,
             token_expires_at=token_expires_at,
             provider_name="deye",
         )
@@ -158,6 +187,15 @@ class DeyeAPI(ComponentBase, OAuthMixin):
 
     async def fetch_token(self):
         """Fetch an access token using app credentials (app_credentials mode)."""
+        # Every app_credentials arg is optional in COMPONENT_LIST (the component also
+        # accepts the SaaS token path), so a misconfigured instance can reach here with
+        # them unset. Fail soft: both callers already treat False as "skip this run",
+        # whereas hashing a None password raises AttributeError out of run() and buries
+        # the real problem under a traceback on every cycle.
+        missing = [name for name in ("app_id", "app_secret", "username", "password") if not getattr(self, name, None)]
+        if missing:
+            self.log(f"Warn: DEYE app_credentials login is missing {', '.join(missing)} - set deye_auth_method to 'oauth' if this is a Predbat.com instance")
+            return False
         url = f"{self.base_url}{DEYE_ENDPOINTS['token']}?appId={self.app_id}"
         body = {"appSecret": self.app_secret, "password": self._sha256(self.password), **self._login_payload(self.username)}
         if self.company_id:
@@ -320,20 +358,32 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.device_values[sn] = result
         return result
 
-    def nominal_pack_voltage(self, bms_charge_voltage, battery_voltage):
+    def nominal_pack_voltage(self, bms_charge_voltage):
         """Infer the LiFePO4 pack's nominal voltage from its BMS charge target.
 
-        The cell count is what actually matters: a 57.6 V charge target is 16 cells,
-        which is a 51.2 V nominal pack. Falls back to the resting pack voltage when the
-        BMS charge voltage is absent, since that only shifts the estimate by a cell or so.
+        The cell count is what actually matters: a 57.6 V charge target is 16 cells, which
+        is a 51.2 V nominal pack. Deriving it this way rather than assuming 48 V means
+        DEYE's high-voltage stacks scale correctly with no configuration.
+
+        The RESTING pack voltage must never be used for this — it climbs with SOC, so the
+        same 16S pack reads ~53.8 V at 94% but ~58 V at 100%, which rounds to 18 cells and
+        overstates capacity by 12.5%. An explicit deye_battery_nominal_voltage wins over
+        everything; otherwise there is no safe inference and 0 is returned.
         """
+        if self.battery_nominal_voltage > 0:
+            return self.battery_nominal_voltage
         if bms_charge_voltage > 0:
             cells = round(bms_charge_voltage / LIFEPO4_CHARGE_VOLTS_PER_CELL)
-        elif battery_voltage > 0:
-            cells = round(battery_voltage / LIFEPO4_RESTING_VOLTS_PER_CELL)
-        else:
-            return 0.0
-        return cells * LIFEPO4_NOMINAL_VOLTS_PER_CELL if cells > 0 else 0.0
+            if cells > 0:
+                return cells * LIFEPO4_NOMINAL_VOLTS_PER_CELL
+        # Deliberately NO default. Guessing (say 51.2 V for a 48 V hybrid) would be right
+        # for the common LV pack and several-fold wrong for an HV stack, and a wrong
+        # soc_max is worse than none: it becomes nominal_capacity, which sets the
+        # 0.65-1.20 plausibility band that filters find_battery_size(), so a bad value
+        # also rejects every correct sample from Predbat's own estimator. Returning 0
+        # leaves that band disabled and lets the estimator work from the soc_percent and
+        # battery_power history instead.
+        return 0.0
 
     def derive_battery_capacity(self, sn, flat):
         """Derive pack capacity in kWh from device/latest, caching it as a soc_max source.
@@ -346,9 +396,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         rated_ah = self._as_float(flat.get(DEYE_CAPACITY_KEYS["rated_capacity_ah"]))
         if rated_ah <= 0:
             return 0.0
-        volts = self.nominal_pack_voltage(self._as_float(flat.get(DEYE_CAPACITY_KEYS["bms_charge_voltage"])), self._as_float(flat.get(DEYE_CAPACITY_KEYS["battery_voltage"])))
+        volts = self.nominal_pack_voltage(self._as_float(flat.get(DEYE_CAPACITY_KEYS["bms_charge_voltage"])))
         if volts <= 0:
-            self.log(f"Warn: DEYE {sn} has a {rated_ah}Ah rating but no usable pack voltage, cannot derive battery capacity")
+            measured = self._as_float(flat.get(DEYE_CAPACITY_KEYS["battery_voltage"]))
+            self.log(f"Warn: DEYE {sn} reports a {rated_ah}Ah pack but no BMS charge voltage, so kWh cannot be derived (pack currently reads {measured}V, which varies with SOC and cannot be used). Set deye_battery_nominal_voltage, or soc_max in apps.yaml")
             return 0.0
         self.device_pack_voltage[sn] = volts
         capacity = round(rated_ah * volts / 1000.0, 2)

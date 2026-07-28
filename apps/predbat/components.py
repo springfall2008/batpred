@@ -250,6 +250,11 @@ COMPONENT_LIST = {
         "args": {
             "app_id": {"required": False, "config": "deye_app_id"},
             "app_secret": {"required": False, "config": "deye_app_secret"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as deye_key;
+            # without this entry it is dropped and DEYE rejects every call as
+            # "auth invalid token".
+            "key": {"required": False, "config": "deye_key"},
             "username": {"required": False, "config": "deye_username"},
             "password": {"required": False, "config": "deye_password"},
             "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
@@ -260,12 +265,18 @@ COMPONENT_LIST = {
             "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "deye_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+            # config/battery reports capacity in Ah, so it needs a pack voltage to become
+            # kWh. Normally derived from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "deye_battery_nominal_voltage"},
         },
         # Gate activation on having at least one auth path — app credentials (app_id,
-        # self-hosted add-on) OR an injected SaaS token (token_hash). Without this the
+        # self-hosted add-on) OR an injected SaaS access token (key). Without this the
         # component would start for every instance since all individual args are
-        # optional to allow either auth mode.
-        "required_or": ["app_id", "token_hash"],
+        # optional to allow either auth mode. Gate on key, not token_hash: the hash is
+        # only a refresh dedup handle, so gating on it starts the component for an
+        # instance that has no usable token and then fails on every API call.
+        "required_or": ["app_id", "key"],
         "phase": 1,
     },
     "enphase": {

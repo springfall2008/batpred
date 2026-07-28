@@ -41,6 +41,7 @@ class MockDeye(DeyeAPI):
         self.device_pack_voltage = {}
         self.device_energy = {}
         self.device_rated_power = {}
+        self.battery_nominal_voltage = 0.0
         self.local_schedule = {}
         self.pending_orders = {}
         self.order_poll_count = {}
@@ -216,22 +217,60 @@ def test_derive_battery_capacity_from_live_payload():
 
 
 def test_nominal_pack_voltage_variants():
-    """Cell count comes from the BMS charge target, falling back to resting pack voltage."""
+    """Cell count comes from the BMS charge target; there is no guessed default."""
     failed = False
     d = MockDeye()
     cases = [
-        ((57.6, 53.83), 51.2, "16S from BMS charge voltage"),
-        ((28.8, 26.9), 25.6, "8S from BMS charge voltage"),
-        ((403.2, 380.0), 358.4, "112S HV pack"),
-        ((0.0, 53.83), 51.2, "falls back to resting voltage"),
-        ((0.0, 0.0), 0.0, "no voltage available"),
+        (57.6, 51.2, "16S from BMS charge voltage"),
+        (28.8, 25.6, "8S from BMS charge voltage"),
+        (403.2, 358.4, "112S HV pack scales with no configuration"),
+        (0.0, 0.0, "no BMS charge voltage means no safe inference"),
     ]
-    for (bms, resting), want, label in cases:
-        got = d.nominal_pack_voltage(bms, resting)
+    for bms, want, label in cases:
+        got = d.nominal_pack_voltage(bms)
         if abs(got - want) > 0.01:
             print(f"ERROR: {label}: expected {want}, got {got}")
             failed = True
+    # An explicit override wins over everything, including a reported charge voltage
+    d.battery_nominal_voltage = 102.4
+    if d.nominal_pack_voltage(57.6) != 102.4:
+        print(f"ERROR: configured nominal should win, got {d.nominal_pack_voltage(57.6)}")
+        failed = True
+    if d.nominal_pack_voltage(0.0) != 102.4:
+        print(f"ERROR: configured nominal should apply without a charge voltage, got {d.nominal_pack_voltage(0.0)}")
+        failed = True
     assert not failed, "test_nominal_pack_voltage_variants"
+
+
+def test_no_capacity_guessed_without_pack_voltage():
+    """Without a BMS charge voltage no capacity is invented, and the warning names the fix.
+
+    A guessed soc_max is worse than none: it becomes nominal_capacity, which sets the
+    plausibility band that filters Predbat's own find_battery_size() estimator, so a wrong
+    value also rejects every correct sample. Leaving it unset keeps that band disabled.
+    """
+    failed = False
+    d = MockDeye()
+    flat = {"BatteryRatedCapacity": "1200", "BatteryVoltage": "58.0"}
+    if d.derive_battery_capacity("INV1", flat) != 0.0:
+        print("ERROR: capacity must not be derived from the resting pack voltage")
+        failed = True
+    if "INV1" in d.device_capacity:
+        print("ERROR: no capacity should be cached")
+        failed = True
+    warning = [m for m in d.log_messages if "cannot be derived" in m]
+    if not warning:
+        print(f"ERROR: expected a warning, got {d.log_messages}")
+        failed = True
+    elif "deye_battery_nominal_voltage" not in warning[0]:
+        print(f"ERROR: the warning should name the setting that fixes it: {warning[0]}")
+        failed = True
+    # With the override supplied the same payload does resolve
+    d.battery_nominal_voltage = 51.2
+    if abs(d.derive_battery_capacity("INV1", flat) - 61.44) > 0.01:
+        print(f"ERROR: expected 61.44 kWh with the override, got {d.derive_battery_capacity('INV1', flat)}")
+        failed = True
+    assert not failed, "test_no_capacity_guessed_without_pack_voltage"
 
 
 def test_battery_capacity_scales_config_battery_amp_hours():
@@ -498,6 +537,7 @@ def run_deye_api_tests(my_predbat):
         ("fetch_device_data_missing_keys", test_fetch_device_data_warns_on_missing_keys),
         ("derive_battery_capacity", test_derive_battery_capacity_from_live_payload),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
+        ("no_capacity_guess", test_no_capacity_guessed_without_pack_voltage),
         ("battery_capacity_amp_hours", test_battery_capacity_scales_config_battery_amp_hours),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rated_power_captured", test_rated_power_captured_for_inverter_limit),
