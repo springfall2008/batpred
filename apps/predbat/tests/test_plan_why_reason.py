@@ -9,7 +9,9 @@
 # pylint: disable=attribute-defined-outside-init
 
 import re
+import warnings
 
+import web_helper
 from prediction import Prediction
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import
 from utils import calc_percent_limit
@@ -156,7 +158,7 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 5.0)
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or _codes(row) != ["freeze_charge_reserve"]:
+    if row is None or _codes(row) != ["freeze_charge"]:
         print("ERROR: FrzChrg reasons unexpected: {}".format(row and _codes(row)))
         failed = True
     elif set(row["reasons"][0]["params"]) != {"rate", "threshold"}:
@@ -273,6 +275,34 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     my_predbat.manual_demand_times = []
 
+    # --- Test 10b: split slot where the export window only starts partway through ---
+    # The state cell splits into "arrow | Exp", so the tooltip must explain both halves - the
+    # pre-window arrow used to contribute no reason at all, leaving the split cell with only the
+    # export sentence.
+    print("Test split slot (demand arrow then export) explains both halves")
+    my_predbat.charge_window_best = []
+    my_predbat.charge_limit_best = []
+    my_predbat.export_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 15.0}]
+    my_predbat.export_limits_best = [50.0]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or not row.get("split"):
+        print("ERROR: expected a split state cell for a mid-slot export window start")
+        failed = True
+    elif len(_codes(row)) != 2 or not _codes(row)[0].startswith("demand_before_export_") or _codes(row)[1] != "export_high_rate":
+        # The arrow direction depends on the predicted SoC trend; only the pairing matters here
+        print("ERROR: split slot reasons unexpected: {}".format(_codes(row)))
+        failed = True
+    else:
+        rendered = _render(row, templates)
+        if "Until the export window starts" not in rendered or "Exporting down to" not in rendered:
+            print("ERROR: split slot tooltip should explain both halves, got: {}".format(rendered))
+            failed = True
+        # The pre-window wording must not claim nothing is scheduled - the slot does export later
+        if "no charging or exporting is scheduled" in rendered:
+            print("ERROR: split slot tooltip contradicts itself: {}".format(rendered))
+            failed = True
+
     # --- Test 11: reason_templates has an entry for every code used across all scenarios ---
     print("Test reason_templates covers every code used")
     all_codes = set()
@@ -300,6 +330,43 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     if "state2_color || '#FFFFFF'}${titleAttr}" not in renderer_js:
         print("ERROR: expected the split (state2) cell to also carry the title= tooltip, not just the first half")
+        failed = True
+
+    # --- Test 13: the read-only (History / Yesterday Without Predbat) state cells also get tooltips ---
+    print("Test the non-editable state cell path also emits a title= tooltip")
+    if "function reasonTitleAttr" not in renderer_js:
+        print("ERROR: expected a shared reasonTitleAttr() helper used by both state-cell paths")
+        failed = True
+    if "state_color || '#FFFFFF'}${titleAttr}" not in renderer_js:
+        print("ERROR: expected the read-only state cell (editable=false) to carry the title= tooltip")
+        failed = True
+    # Both the editable and read-only paths render a split second half, so the tooltip appears twice
+    if renderer_js.count("state2_color || '#FFFFFF'}${titleAttr}") != 2:
+        print("ERROR: expected both the editable and read-only split cells to carry the title= tooltip")
+        failed = True
+    # Templates must come from the dataset being rendered, not the plan view's global - otherwise
+    # the History/Yesterday views would render against the wrong (or a missing) template table
+    if "window.planData && window.planData.reason_templates" in renderer_js:
+        print("ERROR: reason templates should come from the rendered jsonData, not window.planData")
+        failed = True
+    if "const reasonTemplates = jsonData.reason_templates" not in renderer_js:
+        print("ERROR: expected renderPlanTable to take reason_templates from the dataset it renders")
+        failed = True
+
+    # --- Test 14: the renderer JS source has no invalid Python escape sequences ---
+    # The JS regexes live inside plain (non-raw) triple-quoted Python strings, so a backslash
+    # intended for JS must be doubled. A single "\{" raises SyntaxWarning today and becomes a
+    # SyntaxError in a future Python.
+    print("Test web_helper.py has no invalid escape sequences")
+    with open(web_helper.__file__, "r") as han:
+        web_helper_source = han.read()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        compile(web_helper_source, web_helper.__file__, "exec")
+        syntax_warnings = [item for item in caught if issubclass(item.category, SyntaxWarning)]
+    if syntax_warnings:
+        for item in syntax_warnings:
+            print("ERROR: SyntaxWarning in web_helper.py line {}: {}".format(item.lineno, item.message))
         failed = True
 
     if not failed:
