@@ -1105,6 +1105,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
 
     async def refresh_live(self):
         """Poll device/latest for every device, then cache ratings (telemetry is not persisted)."""
+        got_any = False
         for sn in self.device_list:
             try:
                 if await self.fetch_device_data(sn):
