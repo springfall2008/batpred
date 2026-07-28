@@ -813,6 +813,104 @@ class AnnualPage:
         return None
 
     @staticmethod
+    def _describe_tariff_side(tariff, url_key, rates_key):
+        """Return a readable description of one side of a tariff, import or export.
+
+        A rates URL is ~130 characters of mostly boilerplate, so the Octopus product
+        code is pulled out of it - that is the part a user recognises. The full URL is
+        kept as the cell's title attribute for anyone who needs to check the exact
+        endpoint.
+        """
+        url = tariff.get(url_key)
+        if url:
+            match = re.search(r"/products/([^/]+)/", str(url))
+            product = match.group(1) if match else str(url)
+            return html.escape(product, quote=True), html.escape(str(url), quote=True)
+        rates = tariff.get(rates_key)
+        if isinstance(rates, list) and rates:
+            values = [entry.get("rate") for entry in rates if isinstance(entry, dict) and entry.get("rate") is not None]
+            if values and len(set(values)) == 1:
+                return "flat {}p".format(values[0]), ""
+            if values:
+                return "{} rates, {}p to {}p".format(len(values), min(values), max(values)), ""
+        return "not set", ""
+
+    def _render_run_details(self, results):
+        """Return a small table of the key settings this run actually used.
+
+        Read from the run's OWN stored config, never from the form above or the live
+        instance: the selector can show a run made with a different system entirely, and
+        labelling it with today's settings would misattribute every figure below it.
+
+        Secrets are already redacted - ``scrub_secrets`` replaced anything key-like with
+        "xxx" before the results document was written - so nothing sensitive is rendered
+        here even though the Octopus account is shown.
+        """
+        config = results.get("config")
+        if not isinstance(config, dict) or not config:
+            return "<p class='annual-note'>This run did not record the settings it used.</p>\n"
+
+        rows = []
+        rows.append(("Year modelled", html.escape(str(results.get("year", "unknown")), quote=True)))
+
+        solar = config.get("solar") or []
+        if isinstance(solar, dict):
+            solar = [solar]
+        if isinstance(solar, list) and solar:
+            total_kwp = sum(float(array.get("kwp", 0) or 0) for array in solar if isinstance(array, dict))
+            panels = [int(array.get("panels", 0) or 0) for array in solar if isinstance(array, dict)]
+            # Only show a panel count when EVERY array was given as panels; a partial
+            # count would read as the whole system's.
+            if all(panels) and panels:
+                summary = "{:g} kWp across {} panels".format(round(total_kwp, 2), sum(panels))
+            else:
+                summary = "{:g} kWp".format(round(total_kwp, 2))
+            if len(solar) > 1:
+                summary += " in {} arrays".format(len(solar))
+            rows.append(("Solar", html.escape(summary, quote=True)))
+        else:
+            rows.append(("Solar", "none"))
+
+        battery = config.get("battery") or {}
+        if isinstance(battery, dict) and battery.get("size_kwh"):
+            summary = "{:g} kWh, {:g} kW inverter".format(float(battery["size_kwh"]), float(battery.get("inverter_kw", 0) or 0))
+            if battery.get("export_limit_kw"):
+                summary += ", {:g} kW export limit".format(float(battery["export_limit_kw"]))
+            summary += ", hybrid" if battery.get("hybrid", True) else ", AC coupled"
+            rows.append(("Battery", html.escape(summary, quote=True)))
+        else:
+            rows.append(("Battery", "none"))
+
+        load = config.get("load") or {}
+        if isinstance(load, dict) and load.get("octopus"):
+            account = (load.get("octopus") or {}).get("account_id", "")
+            rows.append(("Household load", html.escape("Octopus consumption history{}".format(" for {}".format(account) if account else ""), quote=True)))
+            rows.append(("Car charging", "included in the meter readings"))
+        elif isinstance(load, dict):
+            shape = {"night": "more at night", "day": "more during the day", "flat": "about the same through the day"}.get(load.get("shape", "flat"), str(load.get("shape", "")))
+            rows.append(("Household load", html.escape("{:,.0f} kWh a year, {}".format(float(load.get("annual_kwh", 0) or 0), shape), quote=True)))
+            car_kwh = float(load.get("car_charging_kwh", 0) or 0)
+            car = "{:,.0f} kWh a year at {:g} kW".format(car_kwh, float(load.get("car_rate_kw", 7.4) or 7.4)) if car_kwh > 0 else "none"
+            rows.append(("Car charging", html.escape(car, quote=True)))
+
+        tariff = config.get("tariff") or {}
+        if isinstance(tariff, dict):
+            for label, url_key, rates_key in [("Import tariff", "import_octopus_url", "rates_import"), ("Export tariff", "export_octopus_url", "rates_export")]:
+                value, title = self._describe_tariff_side(tariff, url_key, rates_key)
+                rows.append((label, '<span title="{}">{}</span>'.format(title, value) if title else value))
+            if tariff.get("standing_charge_p_per_day") is not None:
+                rows.append(("Standing charge", html.escape("{:g}p a day".format(float(tariff["standing_charge_p_per_day"])), quote=True)))
+
+        if config.get("samples_per_month"):
+            rows.append(("Days sampled", html.escape("{} a month".format(config["samples_per_month"]), quote=True)))
+
+        text = "<h2>What this run used</h2>\n<table class='comparison-table annual-details'>\n"
+        for label, value in rows:
+            text += "<tr><th>{}</th><td>{}</td></tr>\n".format(label, value)
+        text += "</table>\n"
+        return text
+
+    @staticmethod
     def _pounds(pence):
         """Return a pence value formatted as pounds with an explicit unit."""
         try:
@@ -821,8 +919,13 @@ class AnnualPage:
             return "n/a"
 
     def render_results(self, results, runs, selected_id):
-        """Return the results view: selector, totals, chart, monthly table, caveats."""
-        text = '<div class="annual-results">\n'
+        """Return the results view: selector, run details, totals, chart, monthly table, caveats."""
+        # The form above and the results below are two different things - one is what
+        # you are about to run, the other is what a past run actually used - and with no
+        # break between them it was easy to read the form's current values as though
+        # they described the run on screen. They often do not: the selector can show a
+        # run from a completely different system.
+        text = '<hr class="annual-divider">\n<h1 class="annual-results-heading">Results</h1>\n<div class="annual-results">\n'
         text += self._render_selector(runs, selected_id)
 
         if not results:
@@ -832,6 +935,8 @@ class AnnualPage:
         if not isinstance(results, dict):
             text += "<p>This run's results file is missing or could not be read.</p>\n</div>\n"
             return text
+
+        text += self._render_run_details(results)
 
         annual = results.get("annual", {}) or {}
         scenarios = annual.get("scenarios")
@@ -1124,6 +1229,11 @@ annualLoadPlan();
 .annual-progress { margin: 1rem 0; }
 .annual-bar { height: 1.25rem; border: 1px solid var(--md-border, #cbd5e1); }
 .annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
+.annual-divider { border: 0; border-top: 2px solid var(--md-border, #cbd5e1); margin: 2rem 0 1rem; }
+.annual-results-heading { margin-top: 0; }
+/* Label column narrow and left-aligned, so the values line up and read as a list of
+   settings rather than a data grid. */
+.annual-details th { text-align: left; white-space: nowrap; padding-right: 1rem; font-weight: 600; }
 .annual-caveats li { margin-bottom: 0.35rem; }
 .annual-unavailable { opacity: 0.6; font-style: italic; }
 .annual-synthesised-tag { font-size: 0.75rem; font-weight: 600; color: #D55E00; border: 1px solid #D55E00; border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; }

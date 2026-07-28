@@ -960,6 +960,19 @@ def sample_run_results():
     }
     return {
         "year": 2025,
+        # The run's OWN settings, as scrub_secrets left them - what the details table
+        # must describe, rather than whatever the live form happens to hold.
+        "config": {
+            "solar": [{"kwp": 5.6, "declination": 35, "azimuth": 180}],
+            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
+            "load": {"annual_kwh": 3800, "shape": "night", "car_charging_kwh": 3000, "car_rate_kw": 7.4},
+            "tariff": {
+                "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/",
+                "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-A/standard-unit-rates/",
+                "standing_charge_p_per_day": 60.0,
+            },
+            "samples_per_month": 2,
+        },
         "months": [
             {"month": 1, "status": "ok", "days": 31, "sampled_days": ["2025-01-08", "2025-01-24"], "standing_charge_p": 1860.0, "scenarios": scenarios},
             {"month": 2, "status": "degraded", "days": 28, "failed_days": ["2025-02-14"], "standing_charge_p": 1680.0, "scenarios": scenarios},
@@ -1010,6 +1023,50 @@ def test_web_annual_results(my_predbat):
         if banned in html:
             print("  ERROR: {} fails CVD separation for this chart and must not be used".format(banned))
             failed = True
+
+    print("Test: the results are visually separated from the form above them")
+    if "annual-divider" not in html or ">Results<" not in html:
+        print("  ERROR: the results need their own heading and a divider from the settings form")
+        failed = True
+
+    print("Test: a run states the key settings it actually used")
+    details = page._render_run_details(results)
+    for expected in ["5.6 kWp", "9.5 kWh", "AGILE-24-10-01", "OUTGOING-PRIME-FIX-12M-26-06-23", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
+        if expected not in details:
+            print("  ERROR: the run details should state {}, got {}".format(expected, details))
+            failed = True
+
+    print("Test: the details describe the RUN's own config, not the live form")
+    # The selector can show a run from a completely different system; labelling it with
+    # today's settings would misattribute every figure below it.
+    other = copy.deepcopy(results)
+    other["config"]["solar"] = [{"kwp": 12.0}]
+    other["config"]["battery"] = {"size_kwh": 20.0, "inverter_kw": 8.0, "hybrid": False}
+    other_details = page._render_run_details(other)
+    if "12 kWp" not in other_details or "20 kWh" not in other_details or "AC coupled" not in other_details:
+        print("  ERROR: the details must come from the stored run, got {}".format(other_details))
+        failed = True
+    if "5.6 kWp" in other_details:
+        print("  ERROR: the details are showing another run's system")
+        failed = True
+
+    print("Test: an Octopus-sourced run says so rather than inventing a kWh figure")
+    octopus_run = copy.deepcopy(results)
+    octopus_run["config"]["load"] = {"octopus": {"api_key": "xxx", "account_id": "A-1234ABCD"}, "shape": "flat"}
+    octopus_details = page._render_run_details(octopus_run)
+    if "A-1234ABCD" not in octopus_details or "Octopus consumption history" not in octopus_details:
+        print("  ERROR: an Octopus run should name its account, got {}".format(octopus_details))
+        failed = True
+    if "3,800 kWh a year" in octopus_details:
+        print("  ERROR: an Octopus run has no synthetic annual figure to show")
+        failed = True
+
+    print("Test: a run that recorded no settings says so rather than rendering an empty table")
+    bare = copy.deepcopy(results)
+    bare.pop("config", None)
+    if "did not record the settings" not in page._render_run_details(bare):
+        print("  ERROR: a run with no stored config should say so")
+        failed = True
 
     print("Test: the PV-only scenario appears in the chart and the month table")
     # Scoped to _render_chart()/_render_month_table() directly, not the whole page: a
