@@ -217,7 +217,7 @@ class GatewayMQTT(ComponentBase):
                     serials = [serial_value]
             else:
                 serials = [serial_value]
-self.gateway_inverter_serial = [serial for value in serials if value is not None and (serial := str(value).strip())]
+        self.gateway_inverter_serial = [serial for value in serials if value is not None and (serial := str(value).strip())]
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
