@@ -59,17 +59,37 @@ DEYE_WORKMODE = {
     "zero_export_ct": "ZERO_EXPORT_TO_CT",
 }
 
-# device/latest dataList[].key spellings — the one item to confirm from a live
-# response (request body/shape is confirmed; exact value keys are not in the
-# sample).  # VERIFY@SPIKE (values only)
+# device/latest dataList[].key spellings — CONFIRMED 2026-07-28 against a live
+# SUN-8K three-phase hybrid (88 dataList entries). The earlier guessed spellings
+# (batterySOC/batteryPower/gridPower/pvPower/loadPower/batteryTemperature) matched
+# NOTHING, and because _as_float() coerces an absent key to 0.0 that published a
+# full set of zeros rather than failing. Do not "tidy" these names: the casing is
+# DEYE's, and the temperature key really does contain a space after the hyphen.
 DEYE_TELEMETRY_KEYS = {
-    "soc": "batterySOC",
-    "battery_power": "batteryPower",
-    "grid_power": "gridPower",
-    "pv_power": "pvPower",
-    "load_power": "loadPower",
-    "temperature": "batteryTemperature",
+    "soc": "SOC",
+    "battery_power": "BatteryPower",
+    "grid_power": "TotalGridPower",
+    "pv_power": "TotalSolarPower",
+    "load_power": "TotalConsumptionPower",
+    "temperature": "Temperature- Battery",
 }
+
+# Cumulative daily energy counters (kWh), same device/latest dataList.  # CONFIRMED
+# 2026-07-28. Predbat needs these for load_today/import_today/export_today/pv_today;
+# without load_today fetch_sensor_data() raises ValueError and the whole run aborts.
+DEYE_ENERGY_KEYS = {
+    "load_today": "DailyConsumption",
+    "import_today": "DailyEnergyPurchased",
+    "export_today": "DailyGridFeedIn",
+    "pv_today": "DailyActiveProduction",
+}
+
+# Rated battery capacity is reported in AMP-HOURS, not kWh — config/battery
+# battCapacity=1200 alongside dataList BatteryRatedCapacity='1200' unit='Ah'.
+# Multiply by the nominal pack voltage to get kWh. DEYE low-voltage hybrids are
+# 48 V nominal (16S LiFePO4 ~51.2 V); the observed pack floats ~58 V at 99% SOC,
+# so the resting voltage must NOT be used for this conversion.
+DEYE_NOMINAL_BATTERY_VOLTAGE = 51.2
 
 # TimeUseSettingItem per-slot fields — CONFIRMED from official sample
 # clientcode/commission/sys_tou_update.py and the strategy/* samples.

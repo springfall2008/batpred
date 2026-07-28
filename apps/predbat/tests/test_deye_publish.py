@@ -54,11 +54,15 @@ def test_publish_data_publishes_battery_capacity():
     failed = False
     d = RecordingDeye()
     d.device_list = ["INV1"]
-    d.device_battery_config = {"INV1": {"battCapacity": 10.0, "battLowCapacity": 10, "maxChargeCurrent": 50, "maxDischargeCurrent": 50}}
+    # battCapacity is AMP-HOURS (live SUN-8K reports 1200 alongside a dataList
+    # BatteryRatedCapacity of unit "Ah"), so capacity is converted to kWh against the
+    # nominal pack voltage: 1200 Ah * 51.2 V / 1000 = 61.44 kWh. This assertion used to
+    # expect the raw figure, which advertised a 1200 kWh battery.
+    d.device_battery_config = {"INV1": {"battCapacity": 1200, "battLowCapacity": 10, "maxChargeCurrent": 50, "maxDischargeCurrent": 50}}
     import tests.test_infra as ti
 
     ti.run_async(d.publish_data())
-    if d.published.get("sensor.predbat_deye_inv1_battery_capacity") != 10.0:
+    if d.published.get("sensor.predbat_deye_inv1_battery_capacity") != 61.44:
         print(f"ERROR: battery_capacity not published correctly; got {d.published.get('sensor.predbat_deye_inv1_battery_capacity')!r}")
         failed = True
     if d.published.get("sensor.predbat_deye_inv1_battery_reserve_min") != 10.0:

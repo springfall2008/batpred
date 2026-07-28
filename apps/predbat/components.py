@@ -250,6 +250,10 @@ COMPONENT_LIST = {
         "args": {
             "app_id": {"required": False, "config": "deye_app_id"},
             "app_secret": {"required": False, "config": "deye_app_secret"},
+            # In oauth mode OAuthMixin treats 'key' as the access token (see
+            # oauth_mixin._init_oauth). Predbat.com injects it as deye_key; without this
+            # entry the token is dropped and DEYE rejects every call as "auth invalid token".
+            "key": {"required": False, "config": "deye_key"},
             "username": {"required": False, "config": "deye_username"},
             "password": {"required": False, "config": "deye_password"},
             "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
@@ -262,10 +266,12 @@ COMPONENT_LIST = {
             "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
         },
         # Gate activation on having at least one auth path — app credentials (app_id,
-        # self-hosted add-on) OR an injected SaaS token (token_hash). Without this the
+        # self-hosted add-on) OR an injected SaaS access token (key). Without this the
         # component would start for every instance since all individual args are
-        # optional to allow either auth mode.
-        "required_or": ["app_id", "token_hash"],
+        # optional to allow either auth mode. Gate on key, not token_hash: the hash is
+        # only a refresh dedup handle, so gating on it starts the component for an
+        # instance that has no usable token and fails on every API call instead.
+        "required_or": ["app_id", "key"],
         "phase": 1,
     },
     "enphase": {

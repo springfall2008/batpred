@@ -25,13 +25,31 @@ import os
 from datetime import datetime
 from component_base import ComponentBase
 from oauth_mixin import OAuthMixin
-from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_TIMEOUT, DEYE_RETRIES, DEYE_TELEMETRY_KEYS, DEYE_LATEST_BODY_KEY, DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS, CONFIG_BATTERY_KEYS
+from deye_const import (
+    DEYE_BASE_URLS,
+    DEYE_ENDPOINTS,
+    DEYE_TIMEOUT,
+    DEYE_RETRIES,
+    DEYE_TELEMETRY_KEYS,
+    DEYE_ENERGY_KEYS,
+    DEYE_NOMINAL_BATTERY_VOLTAGE,
+    DEYE_LATEST_BODY_KEY,
+    DEYE_WORKMODE,
+    FREEZE_EXPORT_SOC,
+    TOU_FIELD,
+    TOU_SLOT_COUNT,
+    TOU_FILLER_TIMES,
+    DEYE_ORDER_MAX_POLLS,
+    CONFIG_BATTERY_KEYS,
+)
 
 
 class DeyeAPI(ComponentBase, OAuthMixin):
     """DEYE Cloud API component."""
 
-    def initialize(self, app_id="", app_secret="", username="", password="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs):
+    def initialize(
+        self, app_id="", app_secret="", username="", password="", key="", data_center="eu", company_id="", auth_method="app_credentials", token_expires_at=None, token_hash="", inverter_sn=None, automatic=False, automatic_ignore_pv=False, **kwargs
+    ):
         """Initialise the DEYE component from its resolved config args.
 
         ComponentBase.__init__ calls initialize(**kwargs); the Components
@@ -61,9 +79,16 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.applied_payload = {}
         self.control_active = set()
         self.cached_values = {}
+        self._telemetry_keys_reported = set()
+        self._battery_config_reported = set()
+        # _init_oauth() assigns key to self.access_token in oauth mode, so key must be the
+        # injected access token (deye_key) — NOT token_hash, which is only the dedup handle
+        # echoed back to oauth-refresh. Passing the hash here made every DEYE call fail with
+        # "auth invalid token", and token_expires_at being far in the future meant the
+        # refresh that would have replaced it never ran.
         self._init_oauth(
             auth_method=auth_method,
-            key=app_secret or token_hash,
+            key=key or app_secret,
             token_expires_at=token_expires_at,
             provider_name="deye",
         )
@@ -94,6 +119,15 @@ class DeyeAPI(ComponentBase, OAuthMixin):
 
     async def fetch_token(self):
         """Fetch an access token using app credentials (app_credentials mode)."""
+        # Every app_credentials arg is optional in COMPONENT_LIST (the component also
+        # accepts the SaaS token_hash path), so a mis-configured instance can reach here
+        # with them unset. Fail soft: the callers already treat False as "skip this run",
+        # whereas hashing a None password raises AttributeError out of run() and buries
+        # the real problem under a traceback on every cycle.
+        missing = [name for name in ("app_id", "app_secret", "username", "password") if not getattr(self, name, None)]
+        if missing:
+            self.log(f"Warn: DEYE app_credentials login is missing {', '.join(missing)} - set deye_auth_method to 'oauth' if this is a Predbat.com instance")
+            return False
         url = f"{self.base_url}{DEYE_ENDPOINTS['token']}?appId={self.app_id}"
         body = {"appSecret": self.app_secret, "password": self._sha256(self.password), **self._login_payload(self.username)}
         if self.company_id:
@@ -193,6 +227,25 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         except (TypeError, ValueError):
             return default
 
+    def _report_unmatched_telemetry(self, sn, flat):
+        """Log the keys DEYE actually returned when DEYE_TELEMETRY_KEYS does not match.
+
+        _as_float() coerces an absent key to 0.0, so a wrong spelling in
+        DEYE_TELEMETRY_KEYS publishes a full set of plausible-looking zeros
+        (SOC 0%, temperature 0C) rather than failing. That is indistinguishable
+        from a flat battery on a cold night, so surface the real key names once
+        per serial instead of silently zeroing.
+        """
+        missing = sorted(key for key in DEYE_TELEMETRY_KEYS.values() if key not in flat)
+        # Test doubles build DeyeAPI via __new__ without initialize(), so create the
+        # seen-set lazily rather than requiring every caller to pre-seed it.
+        if not hasattr(self, "_telemetry_keys_reported"):
+            self._telemetry_keys_reported = set()
+        if not missing or sn in self._telemetry_keys_reported:
+            return
+        self._telemetry_keys_reported.add(sn)
+        self.log(f"Warn: DEYE device/latest for {sn} returned none of {missing} - correct DEYE_TELEMETRY_KEYS to the keys actually present: {sorted(flat.keys())}")
+
     async def fetch_device_data(self, sn):
         """Fetch and normalise the latest telemetry for one inverter."""
         data = await self._post("device_latest", {DEYE_LATEST_BODY_KEY: [sn]})
@@ -203,7 +256,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not rows:
             return {}
         flat = self._datalist_to_dict(rows[0].get("dataList"))
+        self._report_unmatched_telemetry(sn, flat)
         result = {name: self._as_float(flat.get(key)) for name, key in DEYE_TELEMETRY_KEYS.items()}
+        # Daily counters are only present once the inverter has reported today, so
+        # omit rather than zero them - a spurious 0.0 load_today would look like a
+        # real reading and skew the load model.
+        result.update({name: self._as_float(flat[key]) for name, key in DEYE_ENERGY_KEYS.items() if key in flat})
         self.device_values[sn] = result
         return result
 
@@ -214,12 +272,30 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             self.log(f"Warn: DEYE config/battery failed for {sn}: {data.get('msg', 'unknown')}")
             return {}
         self.device_battery_config[sn] = data
+        # CONFIG_BATTERY_KEYS was never confirmed against a live response (units in
+        # particular), so record the raw payload once per serial - a capacity that is
+        # really Ah or Wh silently becomes a nonsense soc_max otherwise.
+        if not hasattr(self, "_battery_config_reported"):
+            self._battery_config_reported = set()
+        if sn not in self._battery_config_reported:
+            self._battery_config_reported.add(sn)
+            self.log(f"Info: DEYE config/battery raw payload for {sn}: {json.dumps(data, default=str)}")
         return data
 
     def _battery_config_value(self, sn, key, default=0.0):
         """Read a config_battery field for one inverter via CONFIG_BATTERY_KEYS (spike-confirmable), safely coerced."""
         raw = self.device_battery_config.get(sn, {}).get(CONFIG_BATTERY_KEYS[key])
         return self._as_float(raw, default)
+
+    def _battery_capacity_kwh(self, sn):
+        """Return rated battery capacity in kWh, converting DEYE's amp-hours.
+
+        config/battery battCapacity is AMP-HOURS (corroborated by the dataList
+        entry BatteryRatedCapacity, unit "Ah"), but Predbat's soc_max is kWh --
+        publishing the raw figure advertised a 1200 kWh battery. Convert against
+        the nominal pack voltage, never the resting voltage, which rises with SOC.
+        """
+        return round(self._battery_config_value(sn, "capacity") * DEYE_NOMINAL_BATTERY_VOLTAGE / 1000.0, 2)
 
     def derive_control_state(self, schedule, current_soc):
         """Map Predbat's schedule intent to a DEYE control state (see design spec table)."""
@@ -424,6 +500,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         for sn in self.device_list:
             values = self.device_values.get(sn, {})
             units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C"}
+            units.update({leaf: "kWh" for leaf in DEYE_ENERGY_KEYS})
             for leaf, unit in units.items():
                 if leaf in values:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
@@ -431,7 +508,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if sn in self.device_battery_config:
                 capability_units = {"battery_capacity": ("capacity", "kWh"), "battery_reserve_min": ("reserve_min", "%"), "max_charge_current": ("max_charge_current", "A"), "max_discharge_current": ("max_discharge_current", "A")}
                 for leaf, (key, unit) in capability_units.items():
-                    value = self._battery_config_value(sn, key)
+                    value = self._battery_capacity_kwh(sn) if key == "capacity" else self._battery_config_value(sn, key)
                     self.dashboard_item(self._sensor_name(sn, leaf), state=value, attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
 
     async def publish_schedule_settings_ha(self, sn):
@@ -557,6 +634,14 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if not self.automatic_ignore_pv:
             self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
         self.set_arg("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
+        # Cumulative daily energy — fetch.py raises ValueError outright when load_today
+        # is unset ("you will have no load data"), which aborts the whole Predbat run,
+        # so these are not optional extras. Mirrors fox.py/solis.py automatic_config.
+        self.set_arg("load_today", [self._sensor_name(sn, "load_today") for sn in devices])
+        self.set_arg("import_today", [self._sensor_name(sn, "import_today") for sn in devices])
+        self.set_arg("export_today", [self._sensor_name(sn, "export_today") for sn in devices])
+        if not self.automatic_ignore_pv:
+            self.set_arg("pv_today", [self._sensor_name(sn, "pv_today") for sn in devices])
         self.set_arg("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
         self.set_arg("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
         self.set_arg("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
