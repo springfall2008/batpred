@@ -59,11 +59,6 @@ _GATEWAY_BASE_TIME = datetime.datetime.strptime("00:00", "%H:%M")
 _GATEWAY_OPTIONS_TIME = [(_GATEWAY_BASE_TIME + datetime.timedelta(seconds=m * 60)).strftime("%H:%M:%S") for m in range(0, 24 * 60, 5)]
 
 
-# Operating mode selector (0=AUTO, 1=MANUAL; higher values reserved)
-GATEWAY_OPERATING_MODE_NAMES = {0: "AUTO", 1: "MANUAL"}
-GATEWAY_OPERATING_MODE_VALUES = {"AUTO": 0, "MANUAL": 1}
-GATEWAY_OPERATING_MODE_OPTIONS = ["AUTO", "MANUAL"]
-
 PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
@@ -105,8 +100,6 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # Control switches
     "charge_enabled": {"friendly_name": "Charge Enabled", "icon": "mdi:battery-plus"},
     "discharge_enabled": {"friendly_name": "Discharge Enabled", "icon": "mdi:battery-minus"},
-    # Operating mode selector
-    "mode_select": {"friendly_name": "Operating Mode", "icon": "mdi:cog", "options": GATEWAY_OPERATING_MODE_OPTIONS},
     # Control numbers
     "export_limit_w": {"friendly_name": "Export Limit", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
     "charge_rate": {"friendly_name": "Charge Rate", "icon": "mdi:battery-plus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
@@ -833,9 +826,6 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_target_soc", control.target_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("target_soc", {}), app="gateway")
-        mode_name = GATEWAY_OPERATING_MODE_NAMES.get(getattr(control, "mode", 0), "AUTO")
-        self.dashboard_item(f"select.{pfx}_mode_select", mode_name, attributes=GATEWAY_ATTRIBUTE_TABLE.get("mode_select", {}), app="gateway")
-
         # Schedule times (convert HHMM uint32 → HH:MM:SS string)
         # Always set with defaults so PredBat doesn't crash on missing charge_start_time
         sched = inv.schedule if inv.schedule.ByteSize() > 0 else None
@@ -1550,8 +1540,8 @@ class GatewayMQTT(ComponentBase):
         """Build and publish a JSON command to the gateway.
 
         Args:
-            command: Command name (set_mode, set_charge_rate, etc.)
-            **kwargs: Command-specific fields (mode, power_w, target_soc).
+            command: Command name (set_charge_rate, set_reserve, etc.)
+            **kwargs: Command-specific fields (power_w, target_soc, etc.).
         """
         self._command_id += 1
         cmd_json = self.build_command(command, command_id=self._command_id, **kwargs)
@@ -1624,11 +1614,11 @@ class GatewayMQTT(ComponentBase):
         return serial
 
     async def select_event(self, entity_id, value):
-        """Handle select entity changes (mode, schedule times).
+        """Handle schedule select entity changes.
 
         Args:
             entity_id: The entity ID that changed.
-            value: The new selected value (HH:MM:SS for times, or mode name).
+            value: The new selected value (HH:MM:SS).
         """
 
         self.log("Info: GatewayMQTT: select_event: entity_id={}, value={}".format(entity_id, value))
@@ -1636,13 +1626,6 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: select_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        # Operating mode selector
-        if "_mode_select" in entity_id:
-            mode_int = GATEWAY_OPERATING_MODE_VALUES.get(str(value).strip(), 0)
-            await self.publish_command("set_mode", mode=mode_int, serial=serial)
-            self.log(f"Info: GatewayMQTT: Operating mode set to {value} ({mode_int})")
-            return
-
         # Schedule time changes — convert HH:MM:SS to HHMM and send slot command
         time_str = str(value).strip()
         parts = time_str.split(":")

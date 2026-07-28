@@ -24,7 +24,7 @@ def approx_equal(actual, expected, abs_tol=0.01):
 class TestProtobufDecode:
     """Test protobuf telemetry → entity mapping."""
 
-    def _make_status(self, soc=50, battery_power=1000, pv_power=2000, grid_power=-500, load_power=1500, mode=0):
+    def _make_status(self, soc=50, battery_power=1000, pv_power=2000, grid_power=-500, load_power=1500):
         status = pb.GatewayStatus()
         status.device_id = "pbgw_test123"
         status.firmware = "0.4.5"
@@ -57,7 +57,6 @@ class TestProtobufDecode:
         inv.inverter.active_power_w = 1800
         inv.inverter.temperature_c = 35.0
 
-        inv.control.mode = mode
         inv.control.charge_enabled = True
         inv.control.discharge_enabled = True
         inv.control.charge_rate_w = 3000
@@ -86,6 +85,9 @@ class TestProtobufDecode:
         assert approx_equal(decoded.inverters[0].grid.voltage_v, 242.5, abs_tol=0.1)
         assert decoded.inverters[0].control.charge_enabled is True
         assert decoded.inverters[0].battery.soh_percent == 98
+
+    def test_control_status_reserves_retired_operating_mode_field(self):
+        assert "mode" not in pb.ControlStatus.DESCRIPTOR.fields_by_name
 
 
 class TestPlanSerialization:
@@ -145,17 +147,6 @@ class TestPlanSerialization:
 
 
 class TestCommandFormat:
-    def test_set_mode_command(self):
-        from gateway import GatewayMQTT
-
-        cmd = GatewayMQTT.build_command("set_mode", mode=1)
-        import json
-
-        parsed = json.loads(cmd)
-        assert parsed["command"] == "set_mode"
-        assert parsed["mode"] == 1
-        assert "command_id" in parsed
-
     def test_set_charge_rate_command(self):
         from gateway import GatewayMQTT
 
@@ -181,7 +172,7 @@ class TestCommandFormat:
         from gateway import GatewayMQTT
         import json
 
-        cmd = GatewayMQTT.build_command("set_mode", mode=1, command_id=7)
+        cmd = GatewayMQTT.build_command("set_charge_rate", power_w=2500, command_id=7)
         parsed = json.loads(cmd)
         assert parsed["command_id"] == "PBAT7"
         assert isinstance(parsed["command_id"], str)
@@ -191,7 +182,7 @@ class TestCommandFormat:
         from gateway import GatewayMQTT
         import json
 
-        cmd = GatewayMQTT.build_command("set_mode", mode=1, serial="CE123456789")
+        cmd = GatewayMQTT.build_command("set_reserve", target_soc=10, serial="CE123456789")
         parsed = json.loads(cmd)
         assert parsed["dongle_serial"] == "CE123456789"
         assert "serial" not in parsed
@@ -211,7 +202,7 @@ class TestCommandFormat:
         from gateway import GatewayMQTT
         import json
 
-        cmd = GatewayMQTT.build_command("set_mode", mode=1)
+        cmd = GatewayMQTT.build_command("set_charge_rate", power_w=2500)
         parsed = json.loads(cmd)
         assert "dongle_serial" not in parsed
         assert "serial" not in parsed
@@ -255,20 +246,20 @@ class TestSerialFromEntityId:
         """Normal entity with 6-char suffix resolves to the correct full serial."""
         gw = self._make_gateway()
         gw._suffix_to_serial["456789"] = "CE123456789"
-        assert gw._serial_from_entity_id("select.predbat_gateway_456789_mode_select") == "CE123456789"
+        assert gw._serial_from_entity_id("select.predbat_gateway_456789_charge_slot1_start") == "CE123456789"
 
     def test_short_serial_suffix(self):
         """Serials shorter than 6 chars produce a shorter suffix; lookup still succeeds."""
         gw = self._make_gateway()
         gw._suffix_to_serial["abc"] = "ABC"  # serial == suffix (3 chars)
-        assert gw._serial_from_entity_id("select.predbat_gateway_abc_mode_select") == "ABC"
+        assert gw._serial_from_entity_id("select.predbat_gateway_abc_charge_slot1_start") == "ABC"
 
     def test_suffix_lookup_is_case_insensitive(self):
         """Entity ID suffix is lowercased before lookup even if entity_id contains upper chars."""
         gw = self._make_gateway()
         gw._suffix_to_serial["456789"] = "CE123456789"
         # Uppercase in entity_id (unusual but should still resolve)
-        assert gw._serial_from_entity_id("select.predbat_gateway_456789_mode_select") == "CE123456789"
+        assert gw._serial_from_entity_id("select.predbat_gateway_456789_charge_slot1_start") == "CE123456789"
 
     def test_no_gateway_marker_returns_none(self):
         """Entity IDs without '_gateway_' return None without logging."""
@@ -280,7 +271,7 @@ class TestSerialFromEntityId:
     def test_unknown_suffix_returns_none_and_warns(self):
         """Unknown suffix returns None and emits a Warn log."""
         gw = self._make_gateway()
-        result = gw._serial_from_entity_id("select.predbat_gateway_456789_mode_select")
+        result = gw._serial_from_entity_id("select.predbat_gateway_456789_charge_slot1_start")
         assert result is None
         gw.log.assert_called_once()
         assert "Warn" in gw.log.call_args[0][0]
@@ -465,6 +456,12 @@ class TestInjectEntities:
         # discharge_end = 1900 → 19:00:00
         state, _ = gw._dashboard_calls[f"select.predbat_gateway_{suffix}_discharge_slot1_end"]
         assert state == "19:00:00"
+
+    def test_operating_mode_selector_is_not_published(self):
+        gw = self._make_gateway()
+        gw._inject_entities(self._make_status())
+
+        assert "select.predbat_gateway_456789_mode_select" not in gw._dashboard_calls
 
     def test_energy_counters_wh_to_kwh(self):
         """Energy counters are converted from Wh to kWh correctly."""
@@ -1922,15 +1919,6 @@ class TestSelectEvent:
     # Serial routing
     # ------------------------------------------------------------------
 
-    def test_mode_select_includes_serial_when_known(self):
-        """mode_select passes full inverter serial to publish_command when suffix is in the map."""
-        gw = self._make_gateway()
-        gw._suffix_to_serial["456789"] = "CE123456789"
-        self._run(gw.select_event("select.predbat_gateway_456789_mode_select", "Eco"))
-        assert len(gw._published) == 1
-        _, kwargs = gw._published[0]
-        assert kwargs.get("serial") == "CE123456789"
-
     def test_charge_slot_includes_serial_when_known(self):
         """charge_slot1_start passes full inverter serial when suffix is in the map."""
         gw = self._make_gateway()
@@ -1943,7 +1931,7 @@ class TestSelectEvent:
         """No command is sent when the entity suffix cannot be resolved to a serial."""
         gw = self._make_gateway()
         gw._suffix_to_serial = {}  # clear — suffix "456789" unknown
-        self._run(gw.select_event("select.predbat_gateway_456789_mode_select", "Eco"))
+        self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "01:30:00"))
         assert gw._published == []
         gw.log.assert_called()
 
