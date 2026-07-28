@@ -125,6 +125,26 @@ def applied(command, verified=True, **overrides):
     return ScheduleAck(**value)
 
 
+def cancellation_applied(command, **overrides):
+    """Build exact durable/native proof that cancellation released authority."""
+    value = {
+        "command_id": command.command_id,
+        "state": RESULT_APPLIED,
+        "scope_id": command.lease.scope_id,
+        "fencing_token": command.lease.fencing_token,
+        "lease_id": command.lease.lease_id,
+        "lease_expires_ts_ms": command.lease.expires_ts_ms,
+        "origin_id": command.lease.origin_id,
+        "controller_class": command.lease.controller_class,
+        "cancelled_plan_digest": command.cancellation.expected_plan_digest,
+        "writer_exclusion_released": True,
+        "verification": VERIFICATION_DURABLE_STORE_READBACK,
+        "verified": True,
+    }
+    value.update(overrides)
+    return ScheduleAck(**value)
+
+
 def rejected(command, fallback=FALLBACK_SAFE, reason="UNSUPPORTED_OFFER", **overrides):
     """Build one definite NOT_APPLIED schedule result."""
     value = {
@@ -332,7 +352,7 @@ class TestLatticeScheduleAuthority(unittest.TestCase):
         harness = Harness(send_results=[applied], storage=FakeStorage(fail_saves={2}))
         decision = self.dispatch(harness)
         self.assertEqual(decision.state, RESULT_UNKNOWN)
-        self.assertFalse(decision.legacy_suppressed)
+        self.assertTrue(decision.legacy_suppressed)
         self.assertFalse(decision.fallback_allowed)
         self.assertTrue(decision.quarantined)
 
@@ -382,7 +402,7 @@ class TestLatticeScheduleAuthority(unittest.TestCase):
                 decision = self.dispatch(harness)
                 self.assertEqual(decision.state, RESULT_UNKNOWN)
                 self.assertTrue(decision.quarantined)
-                self.assertFalse(decision.legacy_suppressed)
+                self.assertTrue(decision.legacy_suppressed)
                 self.assertFalse(decision.fallback_allowed)
 
     def test_truncated_clamp_detail_list_is_valid(self):
@@ -435,7 +455,7 @@ class TestLatticeScheduleAuthority(unittest.TestCase):
         self.assertEqual(decision.state, RESULT_UNKNOWN)
         self.assertTrue(decision.quarantined)
         self.assertFalse(decision.fallback_allowed)
-        self.assertFalse(decision.legacy_suppressed)
+        self.assertTrue(decision.legacy_suppressed)
 
     def test_lost_result_reconciles_by_id_without_republishing(self):
         """An absent immediate result performs one ledger lookup only."""
@@ -578,16 +598,347 @@ class TestLatticeScheduleAuthority(unittest.TestCase):
         self.assertEqual(restarted.sent, [])
 
     def test_expired_ownership_no_longer_suppresses_legacy(self):
-        """Suppression ends only when the applied schedule validity ends."""
+        """Clock expiry requests an ending transition but cannot release authority."""
         first = Harness(send_results=[applied])
         self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
         expired = asyncio.run(first.authority.legacy_decision(self.schedule.valid_until_ts_ms))
         invalid_clock = asyncio.run(first.authority.legacy_decision(0))
-        self.assertEqual(expired.state, RESULT_NOT_APPLIED)
-        self.assertFalse(expired.legacy_suppressed)
+        self.assertEqual(expired.state, RESULT_APPLIED)
+        self.assertTrue(expired.legacy_suppressed)
+        self.assertTrue(expired.ending_transition_required)
         self.assertFalse(expired.fallback_allowed)
         self.assertEqual(invalid_clock.state, RESULT_UNKNOWN)
         self.assertTrue(invalid_clock.quarantined)
+
+    def test_guarded_verified_cancellation_is_the_only_authority_release(self):
+        """Matching durable readback proof ends exclusion after validity expiry."""
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+
+        ending = Harness(storage=first.storage, send_results=[cancellation_applied])
+        decision = asyncio.run(
+            ending.authority.cancel(
+                target(),
+                lease(fence=11, expiry=self.schedule.valid_until_ts_ms + 3_600_000),
+                installed_digest,
+                "VALIDITY_END",
+                self.schedule.valid_until_ts_ms,
+                "cmd-end",
+            )
+        )
+
+        self.assertEqual(decision.state, RESULT_APPLIED)
+        self.assertFalse(decision.legacy_suppressed)
+        self.assertFalse(decision.ending_transition_required)
+        self.assertFalse(decision.fallback_allowed)
+        self.assertIsNone(ending.storage.snapshot["installed"])
+        restarted = Harness(storage=ending.storage)
+        self.assertFalse(asyncio.run(restarted.authority.legacy_decision(self.schedule.valid_until_ts_ms + 1)).legacy_suppressed)
+        self.assertEqual(ending.sent[0].to_wire()["schedule_transition"]["cancellation"]["expected_plan_digest"], installed_digest)
+
+    def test_applied_replacement_holds_exclusion_continuously_after_expiry(self):
+        """A definite replacement swaps the installed digest without a write gap."""
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        transition_now = self.schedule.valid_until_ts_ms
+        new_origin = datetime.fromtimestamp(transition_now / 1000, UTC)
+        replacement_schedule = compile_absolute_schedule(
+            plan(
+                [window(0, 60, "force_export")],
+                horizon=120,
+                origin=new_origin,
+            ),
+            new_origin,
+        )
+        replacement = Harness(storage=first.storage)
+
+        async def send_with_old_authority_reserved(command):
+            """Observe that reservation preserves the old installed authority."""
+            self.assertEqual(replacement.storage.snapshot["installed"]["command_id"], "cmd-1")
+            return applied(command)
+
+        replacement.authority._send = send_with_old_authority_reserved
+        decision = asyncio.run(
+            replacement.authority.dispatch(
+                replacement_schedule,
+                target(),
+                lease(fence=11, expiry=transition_now + 3_600_000),
+                transition_now,
+                "cmd-replace",
+            )
+        )
+        self.assertEqual(decision.state, RESULT_APPLIED)
+        self.assertTrue(decision.legacy_suppressed)
+        self.assertFalse(decision.ending_transition_required)
+        self.assertEqual(
+            replacement.storage.snapshot["installed"]["command_id"],
+            "cmd-replace",
+        )
+
+    def test_bare_or_mismatched_applied_cancellation_cannot_release(self):
+        """APPLIED without exact durable/native release evidence quarantines."""
+        mutations = [
+            {"cancelled_plan_digest": "f" * 64},
+            {"writer_exclusion_released": False},
+            {
+                "verification": VERIFICATION_ACCEPTED_ONLY,
+                "verified": False,
+            },
+        ]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                first = Harness(send_results=[applied])
+                self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+                installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+                ending = Harness(
+                    storage=first.storage,
+                    send_results=[lambda command, mutation=mutation: cancellation_applied(command, **mutation)],
+                )
+                decision = asyncio.run(
+                    ending.authority.cancel(
+                        target(),
+                        lease(fence=11),
+                        installed_digest,
+                        "OPERATOR",
+                        NOW_MS,
+                        "cmd-end",
+                    )
+                )
+                self.assertEqual(decision.state, RESULT_UNKNOWN)
+                self.assertTrue(decision.quarantined)
+                self.assertTrue(decision.legacy_suppressed)
+                self.assertEqual(
+                    ending.storage.snapshot["installed"]["applied_plan_digest"],
+                    installed_digest,
+                )
+
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+        ending = Harness(
+            storage=first.storage,
+            send_results=[
+                lambda command: ScheduleAck(
+                    command_id=command.command_id,
+                    state=RESULT_APPLIED,
+                    scope_id=command.lease.scope_id,
+                )
+            ],
+        )
+        bare = asyncio.run(
+            ending.authority.cancel(
+                target(),
+                lease(fence=11),
+                installed_digest,
+                "OPERATOR",
+                NOW_MS,
+                "cmd-bare",
+            )
+        )
+        self.assertEqual(bare.state, RESULT_UNKNOWN)
+        self.assertTrue(bare.legacy_suppressed)
+        self.assertIsNotNone(ending.storage.snapshot["installed"])
+
+    def test_cancellation_digest_guard_rejects_before_transport(self):
+        """A delayed cancellation cannot remove a different installed digest."""
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        ending = Harness(storage=first.storage, send_results=[cancellation_applied])
+        decision = asyncio.run(
+            ending.authority.cancel(
+                target(),
+                lease(fence=11),
+                "e" * 64,
+                "SUPERSEDED",
+                NOW_MS,
+                "cmd-stale-cancel",
+            )
+        )
+        self.assertEqual(decision.state, RESULT_NOT_APPLIED)
+        self.assertEqual(decision.detail, "PLAN_DIGEST_MISMATCH")
+        self.assertTrue(decision.legacy_suppressed)
+        self.assertEqual(ending.sent, [])
+
+    def test_cancellation_requires_the_installed_gateway_route(self):
+        """Provider/access hints cannot redirect an authority-ending command."""
+        for mutation in (
+            {"provider": "cloud-provider"},
+            {"access_path": "cloud-api"},
+        ):
+            with self.subTest(mutation=mutation):
+                first = Harness(send_results=[applied])
+                self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+                installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+                ending = Harness(storage=first.storage, send_results=[cancellation_applied])
+                decision = asyncio.run(
+                    ending.authority.cancel(
+                        target(**mutation),
+                        lease(fence=11),
+                        installed_digest,
+                        "OPERATOR",
+                        NOW_MS,
+                        "cmd-end",
+                    )
+                )
+                self.assertEqual(decision.state, RESULT_NOT_APPLIED)
+                self.assertTrue(decision.legacy_suppressed)
+                self.assertEqual(decision.detail, "unsafe topology cancellation target")
+                self.assertEqual(ending.sent, [])
+
+    def test_unknown_quarantine_timestamp_is_durable_and_paired(self):
+        """UNKNOWN keeps its first quarantine time and corrupt pairs fail closed."""
+        ambiguous = Harness(send_results=[unknown])
+        decision = self.dispatch(ambiguous)
+        self.assertEqual(decision.state, RESULT_UNKNOWN)
+        self.assertEqual(ambiguous.storage.snapshot["quarantine_since_ts_ms"], NOW_MS)
+
+        restarted = Harness(storage=ambiguous.storage, query_results=[None])
+        reconciled = asyncio.run(restarted.authority.reconcile(NOW_MS + 1))
+        self.assertEqual(reconciled.state, RESULT_UNKNOWN)
+        self.assertEqual(restarted.storage.snapshot["quarantine_since_ts_ms"], NOW_MS)
+
+        missing_timestamp = copy.deepcopy(restarted.storage.snapshot)
+        missing_timestamp["quarantine_since_ts_ms"] = None
+        corrupt_unknown = Harness(storage=FakeStorage(missing_timestamp))
+        corrupt_decision = asyncio.run(corrupt_unknown.authority.legacy_decision(NOW_MS + 2))
+        self.assertEqual(corrupt_decision.state, RESULT_UNKNOWN)
+        self.assertTrue(corrupt_decision.quarantined)
+        self.assertTrue(corrupt_decision.legacy_suppressed)
+
+        stray_timestamp = copy.deepcopy(restarted.storage.snapshot)
+        stray_timestamp["command"]["state"] = RESULT_NOT_APPLIED
+        stray_timestamp["command"]["fallback"] = FALLBACK_BLOCKED
+        stray_timestamp["command"]["reason"] = "SCOPE_BUSY"
+        corrupt_terminal = Harness(storage=FakeStorage(stray_timestamp))
+        corrupt_decision = asyncio.run(corrupt_terminal.authority.legacy_decision(NOW_MS + 2))
+        self.assertEqual(corrupt_decision.state, RESULT_UNKNOWN)
+        self.assertTrue(corrupt_decision.quarantined)
+        self.assertTrue(corrupt_decision.legacy_suppressed)
+
+    def test_authority_release_rejections_are_always_blocked(self):
+        """Cancellation release failures never accept a SAFE fallback claim."""
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+
+        blocked = Harness(
+            storage=first.storage,
+            send_results=[
+                lambda command: rejected(
+                    command,
+                    reason="AUTHORITY_RELEASE_UNCONFIRMED",
+                    fallback=FALLBACK_BLOCKED,
+                )
+            ],
+        )
+        decision = asyncio.run(
+            blocked.authority.cancel(
+                target(),
+                lease(fence=11),
+                installed_digest,
+                "OPERATOR",
+                NOW_MS,
+                "cmd-blocked",
+            )
+        )
+        self.assertEqual(decision.state, RESULT_NOT_APPLIED)
+        self.assertFalse(decision.quarantined)
+        self.assertTrue(decision.legacy_suppressed)
+        self.assertEqual(blocked.storage.snapshot["command"]["fallback"], FALLBACK_BLOCKED)
+
+        unsafe = Harness(
+            storage=blocked.storage,
+            send_results=[
+                lambda command: rejected(
+                    command,
+                    reason="PLAN_DIGEST_MISMATCH",
+                    fallback=FALLBACK_SAFE,
+                )
+            ],
+            query_results=[None],
+        )
+        decision = asyncio.run(
+            unsafe.authority.cancel(
+                target(),
+                lease(fence=12),
+                installed_digest,
+                "OPERATOR",
+                NOW_MS,
+                "cmd-unsafe",
+            )
+        )
+        self.assertEqual(decision.state, RESULT_UNKNOWN)
+        self.assertTrue(decision.quarantined)
+        self.assertTrue(decision.legacy_suppressed)
+        self.assertEqual(unsafe.storage.snapshot["command"]["fallback"], FALLBACK_BLOCKED)
+
+    def test_restart_reconciles_unknown_cancellation_without_republishing(self):
+        """Power loss queries the exact cancellation ID and never sends twice."""
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+        ending = Harness(
+            storage=first.storage,
+            send_results=[None],
+            query_results=[None],
+        )
+        unknown_decision = asyncio.run(
+            ending.authority.cancel(
+                target(),
+                lease(fence=11),
+                installed_digest,
+                "VALIDITY_END",
+                NOW_MS,
+                "cmd-end",
+            )
+        )
+        self.assertEqual(unknown_decision.state, RESULT_UNKNOWN)
+        self.assertTrue(unknown_decision.legacy_suppressed)
+        self.assertEqual(len(ending.sent), 1)
+
+        restarted = Harness(
+            storage=ending.storage,
+            query_results=[lambda _command: cancellation_applied(ending.sent[0])],
+        )
+        reconciled = asyncio.run(restarted.authority.reconcile(NOW_MS))
+        self.assertEqual(reconciled.state, RESULT_APPLIED)
+        self.assertFalse(reconciled.legacy_suppressed)
+        self.assertEqual(restarted.sent, [])
+        self.assertEqual(restarted.queries, ["cmd-end"])
+        self.assertIsNone(restarted.storage.snapshot["installed"])
+
+    def test_corrupt_pending_cancellation_snapshot_fails_closed(self):
+        """A restored cancellation must still name the installed plan exactly."""
+        first = Harness(send_results=[applied])
+        self.assertEqual(self.dispatch(first).state, RESULT_APPLIED)
+        installed_digest = first.storage.snapshot["installed"]["applied_plan_digest"]
+        ending = Harness(
+            storage=first.storage,
+            send_results=[None],
+            query_results=[None],
+        )
+        self.assertEqual(
+            asyncio.run(
+                ending.authority.cancel(
+                    target(),
+                    lease(fence=11),
+                    installed_digest,
+                    "VALIDITY_END",
+                    NOW_MS,
+                    "cmd-end",
+                )
+            ).state,
+            RESULT_UNKNOWN,
+        )
+        ending.storage.snapshot["command"]["plan_digest"] = "d" * 64
+
+        restarted = Harness(storage=ending.storage)
+        decision = asyncio.run(restarted.authority.legacy_decision(NOW_MS))
+        self.assertEqual(decision.state, RESULT_UNKNOWN)
+        self.assertTrue(decision.quarantined)
+        self.assertTrue(decision.legacy_suppressed)
+        self.assertEqual(restarted.sent, [])
 
     def test_lease_expiry_does_not_unsuppress_an_installed_schedule(self):
         """Lease expiry permits ownership change but does not cancel device effect."""
@@ -755,7 +1106,7 @@ class TestLatticeScheduleAuthority(unittest.TestCase):
         decision = asyncio.run(harness.authority.legacy_decision(NOW_MS))
         self.assertEqual(decision.state, RESULT_UNKNOWN)
         self.assertTrue(decision.quarantined)
-        self.assertFalse(decision.legacy_suppressed)
+        self.assertTrue(decision.legacy_suppressed)
         self.assertFalse(decision.fallback_allowed)
 
 

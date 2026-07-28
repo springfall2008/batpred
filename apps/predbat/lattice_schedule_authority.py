@@ -31,8 +31,10 @@ VERIFICATION_DURABLE_STORE_READBACK = "DURABLE_STORE_READBACK"
 VERIFICATION_NATIVE_TARGET_READBACK = "NATIVE_TARGET_READBACK"
 MAX_SCHEDULE_SLOTS = 8
 _STATE_PENDING = "PENDING"
+_TRANSITION_REPLACE = "REPLACE"
+_TRANSITION_CANCEL = "CANCEL"
 _STORAGE_MODULE = "lattice_schedule_authority"
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _MAX_EPOCH_MS = (1 << 53) - 1
 _MAX_UINT32 = (1 << 32) - 1
 _MAX_UINT64 = (1 << 64) - 1
@@ -67,9 +69,16 @@ _REJECTION_REASONS = (
     "VERIFICATION_FAILED",
     "INTERNAL",
     "SCOPE_BUSY",
+    "COMMAND_ID_COLLISION",
+    "NO_ACTIVE_SCHEDULE",
+    "PLAN_DIGEST_MISMATCH",
+    "AUTHORITY_RELEASE_UNCONFIRMED",
 )
+_CANCELLATION_REASONS = ("VALIDITY_END", "SUPERSEDED", "OPERATOR", "SAFETY")
 _COMMAND_IDENTITY_FIELDS = (
+    "transition_kind",
     "plan_digest",
+    "cancellation_reason",
     "slot_count",
     "valid_from_ts_ms",
     "valid_until_ts_ms",
@@ -267,7 +276,51 @@ class ScheduleCommand:
             "command_id": self.command_id,
             "doc_version": self.target.doc_version,
             "cap_ref": self.target.cap_ref,
-            "absolute_schedule_intent": self.schedule.to_wire(),
+            "schedule_transition": {"replacement": self.schedule.to_wire()},
+            "controller": {
+                "origin_id": self.lease.origin_id,
+                "controller_class": self.lease.controller_class,
+            },
+            "lease": {
+                "lease_id": self.lease.lease_id,
+                "scope_id": self.lease.scope_id,
+                "fencing_token": self.lease.fencing_token,
+                "expires_ts_ms": self.lease.expires_ts_ms,
+            },
+        }
+
+
+@dataclass(frozen=True)
+class ScheduleCancellation:
+    """One digest-guarded request to end the installed schedule authority."""
+
+    expected_plan_digest: str
+    reason: str
+
+    def to_wire(self):
+        """Return the exact v0.4 conditional-cancellation field shape."""
+        return {
+            "expected_plan_digest": self.expected_plan_digest,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class ScheduleCancellationCommand:
+    """Protocol-neutral representation of one v0.4 cancellation command."""
+
+    command_id: str
+    target: ScheduleTarget
+    cancellation: ScheduleCancellation
+    lease: ScheduleLease
+
+    def to_wire(self):
+        """Return the exact v0.4 control-field shape for a protobuf adapter."""
+        return {
+            "command_id": self.command_id,
+            "doc_version": self.target.doc_version,
+            "cap_ref": self.target.cap_ref,
+            "schedule_transition": {"cancellation": self.cancellation.to_wire()},
             "controller": {
                 "origin_id": self.lease.origin_id,
                 "controller_class": self.lease.controller_class,
@@ -308,6 +361,8 @@ class ScheduleAck:
     durably_accepted: bool = False
     valid_from_ts_ms: int = 0
     valid_until_ts_ms: int = 0
+    cancelled_plan_digest: str = ""
+    writer_exclusion_released: bool = False
     verification: str = ""
     clamps: tuple[ScheduleClamp, ...] = ()
     clamp_count: int = 0
@@ -333,6 +388,8 @@ class ScheduleAck:
             self.durably_accepted,
             self.valid_from_ts_ms,
             self.valid_until_ts_ms,
+            self.cancelled_plan_digest,
+            self.writer_exclusion_released,
             self.verification,
             self.clamps,
             self.clamp_count,
@@ -351,6 +408,7 @@ class AuthorityDecision:
     state: str
     command_id: str = ""
     legacy_suppressed: bool = False
+    ending_transition_required: bool = False
     fallback_allowed: bool = False
     quarantined: bool = False
     detail: str = ""
@@ -657,6 +715,26 @@ def _valid_target(target, schedule, scope_id):
     )
 
 
+def _valid_cancellation_target(target, installed, scope_id):
+    """Return whether provider-local coordinates still bind the installed plan."""
+    return (
+        isinstance(target, ScheduleTarget)
+        and target.provider == "predbat-gateway"
+        and target.access_path == "gw-local"
+        and target.topology_version == "0.4.0"
+        and _is_int(target.doc_version)
+        and target.doc_version == installed["doc_version"]
+        and _is_int(target.cap_ref)
+        and target.cap_ref == installed["cap_ref"]
+        and target.node_id == installed["node_id"]
+        and target.altitude_id == installed["altitude_id"]
+        and target.scope_id == scope_id
+        and list(target.owned_node_ids) == installed["owned_node_ids"]
+        and isinstance(target.offer, ResolvedScheduleOffer)
+        and target.offer.fingerprint == installed["offer_fingerprint"]
+    )
+
+
 def _valid_lease(lease, scope_id, now_ts_ms):
     """Return whether the controller lease is well-formed and currently live."""
     return (
@@ -680,7 +758,9 @@ def _record_for(command):
     return {
         "command_id": command.command_id,
         "state": _STATE_PENDING,
+        "transition_kind": _TRANSITION_REPLACE,
         "plan_digest": command.schedule.plan_digest,
+        "cancellation_reason": "",
         "slot_count": len(command.schedule.slots),
         "valid_from_ts_ms": command.schedule.valid_from_ts_ms,
         "valid_until_ts_ms": command.schedule.valid_until_ts_ms,
@@ -696,6 +776,44 @@ def _record_for(command):
         "owned_node_ids": list(command.target.owned_node_ids),
         "offer_fingerprint": command.target.offer.fingerprint,
         "applied_plan_digest": "",
+        "cancelled_plan_digest": "",
+        "writer_exclusion_released": False,
+        "verification": "",
+        "clamps": [],
+        "clamp_count": 0,
+        "clamps_truncated": False,
+        "fallback": "",
+        "reason": "",
+        "durably_accepted": False,
+        "verified": False,
+    }
+
+
+def _cancellation_record_for(command, installed):
+    """Build a durable cancellation reservation bound to the installed plan."""
+    return {
+        "command_id": command.command_id,
+        "state": _STATE_PENDING,
+        "transition_kind": _TRANSITION_CANCEL,
+        "plan_digest": command.cancellation.expected_plan_digest,
+        "cancellation_reason": command.cancellation.reason,
+        "slot_count": installed["slot_count"],
+        "valid_from_ts_ms": installed["valid_from_ts_ms"],
+        "valid_until_ts_ms": installed["valid_until_ts_ms"],
+        "fencing_token": command.lease.fencing_token,
+        "lease_id": command.lease.lease_id,
+        "lease_expires_ts_ms": command.lease.expires_ts_ms,
+        "origin_id": command.lease.origin_id,
+        "controller_class": command.lease.controller_class,
+        "doc_version": command.target.doc_version,
+        "cap_ref": command.target.cap_ref,
+        "node_id": command.target.node_id,
+        "altitude_id": command.target.altitude_id,
+        "owned_node_ids": list(command.target.owned_node_ids),
+        "offer_fingerprint": command.target.offer.fingerprint,
+        "applied_plan_digest": "",
+        "cancelled_plan_digest": "",
+        "writer_exclusion_released": False,
         "verification": "",
         "clamps": [],
         "clamp_count": 0,
@@ -737,6 +855,8 @@ def _valid_ack_receipt(ack, expected):
         or not isinstance(ack.verified, bool)
         or ack.valid_from_ts_ms != expected["valid_from_ts_ms"]
         or ack.valid_until_ts_ms != expected["valid_until_ts_ms"]
+        or ack.cancelled_plan_digest != ""
+        or ack.writer_exclusion_released is not False
         or ack.verification not in (VERIFICATION_ACCEPTED_ONLY, VERIFICATION_DURABLE_STORE_READBACK, VERIFICATION_NATIVE_TARGET_READBACK)
         or not isinstance(ack.clamps, tuple)
         or len(ack.clamps) > MAX_SCHEDULE_SLOTS
@@ -752,14 +872,47 @@ def _valid_ack_receipt(ack, expected):
     return all(isinstance(clamp, ScheduleClamp) and _valid_clamp_values(clamp.slot_index, clamp.field, clamp.requested, clamp.applied, ack.accepted_slot_count) for clamp in ack.clamps)
 
 
+def _valid_ack_cancellation_receipt(ack, expected):
+    """Validate definite durable/native proof that writer exclusion was released."""
+    return (
+        ack.plan_digest == ""
+        and ack.accepted_slot_count == 0
+        and ack.durably_accepted is False
+        and ack.valid_from_ts_ms == 0
+        and ack.valid_until_ts_ms == 0
+        and ack.clamps == ()
+        and ack.clamp_count == 0
+        and ack.clamps_truncated is False
+        and ack.cancelled_plan_digest == expected["plan_digest"]
+        and ack.writer_exclusion_released is True
+        and ack.verification in (VERIFICATION_DURABLE_STORE_READBACK, VERIFICATION_NATIVE_TARGET_READBACK)
+        and ack.verified is True
+    )
+
+
 def _valid_stored_receipt(record):
-    """Validate a JSON-compatible durable copy of an applied receipt."""
+    """Validate a JSON-compatible durable copy of an APPLIED receipt."""
     verification = record.get("verification")
+    if record.get("transition_kind") == _TRANSITION_CANCEL:
+        return (
+            record.get("applied_plan_digest") == ""
+            and record.get("cancelled_plan_digest") == record.get("plan_digest")
+            and record.get("writer_exclusion_released") is True
+            and verification in (VERIFICATION_DURABLE_STORE_READBACK, VERIFICATION_NATIVE_TARGET_READBACK)
+            and record.get("verified") is True
+            and record.get("durably_accepted") is False
+            and record.get("clamps") == []
+            and record.get("clamp_count") == 0
+            and record.get("clamps_truncated") is False
+        )
     clamps = record.get("clamps")
     clamp_count = record.get("clamp_count")
     clamps_truncated = record.get("clamps_truncated")
     if (
         not _valid_digest(record.get("applied_plan_digest"))
+        or record.get("durably_accepted") is not True
+        or record.get("cancelled_plan_digest") != ""
+        or record.get("writer_exclusion_released") is not False
         or verification not in (VERIFICATION_ACCEPTED_ONLY, VERIFICATION_DURABLE_STORE_READBACK, VERIFICATION_NATIVE_TARGET_READBACK)
         or not isinstance(clamps, list)
         or len(clamps) > MAX_SCHEDULE_SLOTS
@@ -788,7 +941,12 @@ def _valid_command_record(record):
         return False
     if record.get("state") not in (_STATE_PENDING, RESULT_APPLIED, RESULT_NOT_APPLIED, RESULT_UNKNOWN):
         return False
+    if record.get("transition_kind") not in (_TRANSITION_REPLACE, _TRANSITION_CANCEL):
+        return False
     if not _valid_digest(record.get("plan_digest")):
+        return False
+    cancellation_reason = record.get("cancellation_reason")
+    if (record["transition_kind"] == _TRANSITION_REPLACE and cancellation_reason != "") or (record["transition_kind"] == _TRANSITION_CANCEL and cancellation_reason not in _CANCELLATION_REASONS):
         return False
     if not _valid_digest(record.get("offer_fingerprint")):
         return False
@@ -822,8 +980,16 @@ def _valid_command_record(record):
     if not isinstance(record.get("durably_accepted"), bool) or not isinstance(record.get("verified"), bool):
         return False
     if record["state"] == RESULT_APPLIED:
-        return record["durably_accepted"] and record["fallback"] == "" and record["reason"] == "" and _valid_stored_receipt(record)
-    if record.get("applied_plan_digest") != "" or record.get("verification") != "" or record.get("clamps") != [] or record.get("clamp_count") != 0 or record.get("clamps_truncated") is not False:
+        return record["fallback"] == "" and record["reason"] == "" and _valid_stored_receipt(record)
+    if (
+        record.get("applied_plan_digest") != ""
+        or record.get("cancelled_plan_digest") != ""
+        or record.get("writer_exclusion_released") is not False
+        or record.get("verification") != ""
+        or record.get("clamps") != []
+        or record.get("clamp_count") != 0
+        or record.get("clamps_truncated") is not False
+    ):
         return False
     if record["state"] == RESULT_NOT_APPLIED:
         return not record["durably_accepted"] and record["fallback"] in (FALLBACK_SAFE, FALLBACK_BLOCKED) and bool(record["reason"])
@@ -839,13 +1005,26 @@ def _valid_snapshot(snapshot, scope_id):
     high_water = snapshot.get("high_water_token")
     if not _is_int(high_water) or high_water < 0 or high_water > _MAX_UINT64:
         return False
+    quarantine_since_ts_ms = snapshot.get("quarantine_since_ts_ms")
+    if quarantine_since_ts_ms is not None and (not _is_int(quarantine_since_ts_ms) or quarantine_since_ts_ms <= 0 or quarantine_since_ts_ms > _MAX_EPOCH_MS):
+        return False
     command = snapshot.get("command")
     installed = snapshot.get("installed")
-    if installed is not None and (not _valid_command_record(installed) or installed["state"] != RESULT_APPLIED or installed["fencing_token"] > high_water):
+    if installed is not None and (not _valid_command_record(installed) or installed["state"] != RESULT_APPLIED or installed["transition_kind"] != _TRANSITION_REPLACE or installed["fencing_token"] > high_water):
         return False
     if command is None:
-        return installed is None
-    return _valid_command_record(command) and command["fencing_token"] <= high_water
+        return installed is None and quarantine_since_ts_ms is None
+    if not _valid_command_record(command) or command["fencing_token"] > high_water:
+        return False
+    if (command["state"] == RESULT_UNKNOWN) is not (quarantine_since_ts_ms is not None):
+        return False
+    if command["transition_kind"] == _TRANSITION_CANCEL:
+        if command["state"] == RESULT_APPLIED:
+            return installed is None
+        return installed is not None and command["plan_digest"] == installed["applied_plan_digest"]
+    if command["state"] == RESULT_APPLIED:
+        return installed is not None and _same_command_identity(command, installed)
+    return True
 
 
 def _same_command_identity(left, right):
@@ -857,21 +1036,34 @@ def _decision_from_record(record, now_ts_ms=None):
     """Derive legacy suppression and fallback from one validated record."""
     state = record["state"]
     if state == RESULT_APPLIED:
-        if now_ts_ms is not None and record["valid_until_ts_ms"] <= now_ts_ms:
-            return AuthorityDecision(RESULT_NOT_APPLIED, record["command_id"], detail="durable Lattice schedule validity has expired")
-        return AuthorityDecision(state, record["command_id"], legacy_suppressed=True)
+        return AuthorityDecision(
+            state,
+            record["command_id"],
+            legacy_suppressed=record["transition_kind"] == _TRANSITION_REPLACE,
+        )
     if state == RESULT_NOT_APPLIED:
         return AuthorityDecision(state, record["command_id"], fallback_allowed=record["fallback"] == FALLBACK_SAFE, detail=record["reason"])
-    return AuthorityDecision(RESULT_UNKNOWN, record["command_id"], quarantined=True, detail=record.get("reason") or "command result unresolved")
+    return AuthorityDecision(
+        RESULT_UNKNOWN,
+        record["command_id"],
+        legacy_suppressed=True,
+        quarantined=True,
+        detail=record.get("reason") or "command result unresolved",
+    )
 
 
 def _decision_from_snapshot(snapshot, now_ts_ms):
-    """Preserve suppression while a previously installed schedule may act."""
+    """Preserve suppression until a guarded ending transition proves release."""
     record = snapshot.get("command")
     decision = AuthorityDecision(RESULT_NOT_APPLIED, detail="no durable Lattice acceptance") if record is None else _decision_from_record(record, now_ts_ms)
     installed = snapshot.get("installed")
-    if installed is not None and installed["valid_until_ts_ms"] > now_ts_ms:
-        return replace(decision, legacy_suppressed=True, fallback_allowed=False)
+    if installed is not None:
+        return replace(
+            decision,
+            legacy_suppressed=True,
+            ending_transition_required=now_ts_ms >= installed["valid_until_ts_ms"],
+            fallback_allowed=False,
+        )
     return decision
 
 
@@ -962,23 +1154,27 @@ class LatticeScheduleAuthority:
         if any(value != absent and value != wanted for value, absent, wanted in optional_coordinates):
             return False
         if ack.state == RESULT_APPLIED:
-            return (
+            coordinates_match = (
                 ack.fencing_token == expected["fencing_token"]
                 and ack.lease_id == expected["lease_id"]
                 and ack.lease_expires_ts_ms == expected["lease_expires_ts_ms"]
                 and ack.origin_id == expected["origin_id"]
                 and ack.controller_class == expected["controller_class"]
-                and _valid_ack_receipt(ack, expected)
                 and ack.fallback == ""
                 and ack.reason == ""
                 and ack.detail == ""
             )
+            if expected["transition_kind"] == _TRANSITION_CANCEL:
+                return coordinates_match and _valid_ack_cancellation_receipt(ack, expected)
+            return coordinates_match and _valid_ack_receipt(ack, expected)
         receipt_absent = (
             ack.plan_digest == ""
             and ack.accepted_slot_count == 0
             and ack.durably_accepted is False
             and ack.valid_from_ts_ms == 0
             and ack.valid_until_ts_ms == 0
+            and ack.cancelled_plan_digest == ""
+            and ack.writer_exclusion_released is False
             and ack.verification == ""
             and ack.clamps == ()
             and ack.clamp_count == 0
@@ -994,6 +1190,10 @@ class LatticeScheduleAuthority:
             "SCOPE_MISMATCH",
             "SCOPE_QUARANTINED",
             "SCOPE_BUSY",
+            "COMMAND_ID_COLLISION",
+            "NO_ACTIVE_SCHEDULE",
+            "PLAN_DIGEST_MISMATCH",
+            "AUTHORITY_RELEASE_UNCONFIRMED",
             "EXECUTION_AMBIGUOUS",
             "INTERNAL",
         )
@@ -1054,6 +1254,8 @@ class LatticeScheduleAuthority:
             {
                 "state": ack.state,
                 "applied_plan_digest": ack.plan_digest,
+                "cancelled_plan_digest": ack.cancelled_plan_digest,
+                "writer_exclusion_released": ack.writer_exclusion_released,
                 "verification": ack.verification,
                 "clamps": [
                     {
@@ -1074,8 +1276,12 @@ class LatticeScheduleAuthority:
         )
         snapshot = dict(snapshot)
         snapshot["command"] = record
+        snapshot["quarantine_since_ts_ms"] = now_ts_ms if ack.state == RESULT_UNKNOWN else None
         if ack.state == RESULT_APPLIED:
-            snapshot["installed"] = dict(record)
+            if record["transition_kind"] == _TRANSITION_CANCEL:
+                snapshot["installed"] = None
+            else:
+                snapshot["installed"] = dict(record)
         if not await self._save(snapshot):
             return replace(
                 _decision_from_snapshot(previous_snapshot, now_ts_ms),
@@ -1101,6 +1307,7 @@ class LatticeScheduleAuthority:
         )
         updated = dict(snapshot)
         updated["command"] = record
+        updated["quarantine_since_ts_ms"] = snapshot.get("quarantine_since_ts_ms") or now_ts_ms
         await self._save(updated)
         return replace(
             _decision_from_snapshot(updated, now_ts_ms),
@@ -1124,12 +1331,17 @@ class LatticeScheduleAuthority:
         """Read the durable state used by a future legacy-suppression gate."""
         async with self._current_lock():
             if not _is_int(now_ts_ms) or now_ts_ms <= 0 or now_ts_ms > _MAX_EPOCH_MS:
-                return AuthorityDecision(RESULT_UNKNOWN, quarantined=True, detail="now_ts_ms is invalid")
+                return AuthorityDecision(RESULT_UNKNOWN, legacy_suppressed=True, quarantined=True, detail="now_ts_ms is invalid")
             snapshot = await self._load()
             if snapshot is None:
                 return AuthorityDecision(RESULT_NOT_APPLIED, detail="no durable Lattice acceptance")
             if not _valid_snapshot(snapshot, self._scope_id):
-                return AuthorityDecision(RESULT_UNKNOWN, quarantined=True, detail="corrupt persisted authority state")
+                return AuthorityDecision(
+                    RESULT_UNKNOWN,
+                    legacy_suppressed=True,
+                    quarantined=True,
+                    detail="corrupt persisted authority state",
+                )
             record = snapshot.get("command")
             if record is None:
                 return AuthorityDecision(RESULT_NOT_APPLIED, detail="no durable Lattice acceptance")
@@ -1139,12 +1351,17 @@ class LatticeScheduleAuthority:
         """Resume a pending/UNKNOWN command after restart without republishing."""
         async with self._current_lock():
             if not _is_int(now_ts_ms) or now_ts_ms <= 0 or now_ts_ms > _MAX_EPOCH_MS:
-                return AuthorityDecision(RESULT_UNKNOWN, quarantined=True, detail="now_ts_ms is invalid")
+                return AuthorityDecision(RESULT_UNKNOWN, legacy_suppressed=True, quarantined=True, detail="now_ts_ms is invalid")
             snapshot = await self._load()
             if snapshot is None:
                 return AuthorityDecision(RESULT_NOT_APPLIED, detail="no command to reconcile")
             if not _valid_snapshot(snapshot, self._scope_id):
-                return AuthorityDecision(RESULT_UNKNOWN, quarantined=True, detail="corrupt persisted authority state")
+                return AuthorityDecision(
+                    RESULT_UNKNOWN,
+                    legacy_suppressed=True,
+                    quarantined=True,
+                    detail="corrupt persisted authority state",
+                )
             record = snapshot.get("command")
             if record is None:
                 return AuthorityDecision(RESULT_NOT_APPLIED, detail="no command to reconcile")
@@ -1152,11 +1369,157 @@ class LatticeScheduleAuthority:
                 return await self._reconcile_snapshot(snapshot, now_ts_ms)
             return _decision_from_snapshot(snapshot, now_ts_ms)
 
+    async def cancel(self, target, lease, expected_plan_digest, reason, now_ts_ms, command_id=None):
+        """Guard and reconcile one definite installed-schedule ending transition."""
+        async with self._current_lock():
+            if not _is_int(now_ts_ms) or now_ts_ms <= 0 or now_ts_ms > _MAX_EPOCH_MS:
+                return AuthorityDecision(RESULT_UNKNOWN, legacy_suppressed=True, quarantined=True, detail="now_ts_ms is invalid")
+            snapshot = await self._load()
+            if snapshot is None:
+                return AuthorityDecision(RESULT_NOT_APPLIED, detail="no installed Lattice schedule")
+            if not _valid_snapshot(snapshot, self._scope_id):
+                return AuthorityDecision(
+                    RESULT_UNKNOWN,
+                    legacy_suppressed=True,
+                    quarantined=True,
+                    detail="corrupt persisted authority state",
+                )
+
+            previous = snapshot.get("command")
+            if previous and previous["state"] in (_STATE_PENDING, RESULT_UNKNOWN):
+                previous_decision = await self._reconcile_snapshot(snapshot, now_ts_ms)
+                if previous_decision.state == RESULT_UNKNOWN:
+                    return previous_decision
+                snapshot = await self._load()
+                if snapshot is None or not _valid_snapshot(snapshot, self._scope_id):
+                    return replace(
+                        previous_decision,
+                        state=RESULT_UNKNOWN,
+                        legacy_suppressed=True,
+                        fallback_allowed=False,
+                        quarantined=True,
+                        detail="reconciled state could not be reloaded",
+                    )
+                if previous["transition_kind"] == _TRANSITION_CANCEL and previous["plan_digest"] == expected_plan_digest and previous["cancellation_reason"] == reason and previous_decision.state == RESULT_APPLIED:
+                    return previous_decision
+
+            installed = snapshot.get("installed")
+            if installed is None:
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    fallback_allowed=False,
+                    detail="NO_ACTIVE_SCHEDULE",
+                )
+            if not _valid_digest(expected_plan_digest) or reason not in _CANCELLATION_REASONS:
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    fallback_allowed=False,
+                    detail="cancellation is invalid",
+                )
+            if expected_plan_digest != installed["applied_plan_digest"]:
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    fallback_allowed=False,
+                    detail="PLAN_DIGEST_MISMATCH",
+                )
+            if not _valid_cancellation_target(target, installed, self._scope_id):
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    fallback_allowed=False,
+                    detail="unsafe topology cancellation target",
+                )
+            if not _valid_lease(lease, self._scope_id, now_ts_ms):
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    fallback_allowed=False,
+                    detail="lease is invalid or expired",
+                )
+            try:
+                resolved_command_id = command_id or self._command_id_factory()
+            except Exception:
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_UNKNOWN,
+                    fallback_allowed=False,
+                    quarantined=True,
+                    detail="command_id generation failed",
+                )
+            if not isinstance(resolved_command_id, str) or not resolved_command_id or _utf8_length(resolved_command_id) > 63:
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    fallback_allowed=False,
+                    detail="command_id is invalid",
+                )
+
+            command = ScheduleCancellationCommand(
+                resolved_command_id,
+                target,
+                ScheduleCancellation(expected_plan_digest, reason),
+                lease,
+            )
+            expected = _cancellation_record_for(command, installed)
+            previous = snapshot.get("command")
+            if previous and previous["command_id"] == resolved_command_id and not _same_command_identity(previous, expected):
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_UNKNOWN,
+                    command_id=resolved_command_id,
+                    fallback_allowed=False,
+                    quarantined=True,
+                    detail="command_id conflicts with durable command",
+                )
+            if previous and _same_command_identity(previous, expected):
+                return _decision_from_snapshot(snapshot, now_ts_ms)
+            if lease.fencing_token < snapshot["high_water_token"]:
+                return replace(
+                    _decision_from_snapshot(snapshot, now_ts_ms),
+                    state=RESULT_NOT_APPLIED,
+                    command_id=resolved_command_id,
+                    fallback_allowed=False,
+                    detail="STALE_FENCE",
+                )
+
+            previous_snapshot = snapshot
+            snapshot = {
+                "schema_version": _SCHEMA_VERSION,
+                "scope_id": self._scope_id,
+                "high_water_token": max(snapshot["high_water_token"], lease.fencing_token),
+                "command": expected,
+                "installed": installed,
+                "quarantine_since_ts_ms": None,
+            }
+            if not await self._save(snapshot):
+                return replace(
+                    _decision_from_snapshot(previous_snapshot, now_ts_ms),
+                    state=RESULT_UNKNOWN,
+                    command_id=resolved_command_id,
+                    fallback_allowed=False,
+                    quarantined=True,
+                    detail="cancellation reservation persistence failed",
+                )
+
+            result, conflict = await self._exchange(self._send, command, expected)
+            if conflict:
+                return await self._mark_unknown(snapshot, "conflicting cancellation result", now_ts_ms)
+            if result is None:
+                unknown = await self._mark_unknown(snapshot, "cancellation result unavailable", now_ts_ms)
+                reloaded = await self._load()
+                if reloaded is None or not _valid_snapshot(reloaded, self._scope_id):
+                    return unknown
+                return await self._reconcile_snapshot(reloaded, now_ts_ms)
+            return await self._persist_terminal(snapshot, result, now_ts_ms)
+
     async def dispatch(self, schedule, target, lease, now_ts_ms, command_id=None):
         """Reserve, send, and reconcile one schedule without any legacy write."""
         async with self._current_lock():
             if not _is_int(now_ts_ms) or now_ts_ms <= 0 or now_ts_ms > _MAX_EPOCH_MS:
-                return AuthorityDecision(RESULT_UNKNOWN, quarantined=True, detail="now_ts_ms is invalid")
+                return AuthorityDecision(RESULT_UNKNOWN, legacy_suppressed=True, quarantined=True, detail="now_ts_ms is invalid")
             snapshot = await self._load()
             if snapshot is None:
                 snapshot = {
@@ -1165,9 +1528,15 @@ class LatticeScheduleAuthority:
                     "high_water_token": 0,
                     "command": None,
                     "installed": None,
+                    "quarantine_since_ts_ms": None,
                 }
             elif not _valid_snapshot(snapshot, self._scope_id):
-                return AuthorityDecision(RESULT_UNKNOWN, quarantined=True, detail="corrupt persisted authority state")
+                return AuthorityDecision(
+                    RESULT_UNKNOWN,
+                    legacy_suppressed=True,
+                    quarantined=True,
+                    detail="corrupt persisted authority state",
+                )
             if not _valid_schedule_intent(schedule, now_ts_ms):
                 return replace(
                     _decision_from_snapshot(snapshot, now_ts_ms),
@@ -1253,6 +1622,7 @@ class LatticeScheduleAuthority:
                 "high_water_token": max(snapshot["high_water_token"], lease.fencing_token),
                 "command": expected,
                 "installed": snapshot.get("installed"),
+                "quarantine_since_ts_ms": None,
             }
             if not await self._save(snapshot):
                 return replace(
