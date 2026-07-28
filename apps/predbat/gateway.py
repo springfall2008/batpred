@@ -20,6 +20,7 @@ import pytz as _pytz
 
 from component_base import ComponentBase
 from lattice_control import CAPABILITY_CHARGE_POWER_LIMIT, LatticeScalarDispatcher
+from lattice_schedule_integration import lattice_async_writer
 from lattice_topology import LatticeTopologyStore, TopologyValidationError
 
 try:
@@ -1574,6 +1575,7 @@ class GatewayMQTT(ComponentBase):
             return True
         return plan_entries != self._last_published_plan
 
+    @lattice_async_writer("gateway legacy plan publish")
     async def publish_plan(self, plan_entries, timezone_str):
         """Build and publish an ExecutionPlan protobuf to the gateway.
 
@@ -1604,6 +1606,7 @@ class GatewayMQTT(ComponentBase):
         self._last_published_plan = plan_entries
         self.log(f"Info: GatewayMQTT: Published execution plan v{self._plan_version} ({len(plan_entries)} entries)")
 
+    @lattice_async_writer("gateway legacy plan republish")
     async def _republish_plan_if_stale(self):
         """Re-publish the last plan periodically so its embedded timestamp stays fresh.
 
@@ -1625,6 +1628,7 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_publish_time = time.time()
         self.log("Info: GatewayMQTT: Re-published execution plan (refreshed timestamp)")
 
+    @lattice_async_writer(lambda _gateway, command, **_kwargs: "gateway legacy command {}".format(command))
     async def publish_command(self, command, **kwargs):
         """Build and publish a JSON command to the gateway.
 

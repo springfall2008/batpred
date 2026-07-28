@@ -409,6 +409,8 @@ class AuthorityDecision:
     command_id: str = ""
     legacy_suppressed: bool = False
     ending_transition_required: bool = False
+    installed_plan_digest: str = ""
+    durable_state_present: bool = False
     fallback_allowed: bool = False
     quarantined: bool = False
     detail: str = ""
@@ -1062,9 +1064,11 @@ def _decision_from_snapshot(snapshot, now_ts_ms):
             decision,
             legacy_suppressed=True,
             ending_transition_required=now_ts_ms >= installed["valid_until_ts_ms"],
+            installed_plan_digest=installed["applied_plan_digest"],
+            durable_state_present=record is not None,
             fallback_allowed=False,
         )
-    return decision
+    return replace(decision, durable_state_present=record is not None)
 
 
 class LatticeScheduleAuthority:
@@ -1339,6 +1343,7 @@ class LatticeScheduleAuthority:
                 return AuthorityDecision(
                     RESULT_UNKNOWN,
                     legacy_suppressed=True,
+                    durable_state_present=snapshot is not _LOAD_FAILED,
                     quarantined=True,
                     detail="corrupt persisted authority state",
                 )

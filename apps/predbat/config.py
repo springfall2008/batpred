@@ -64,6 +64,19 @@ CONFIG_ITEMS = [
         "enable": "lattice_control_enable",
     },
     {
+        "name": "lattice_schedule_shadow_enable",
+        "friendly_name": "Lattice Schedule Shadow (experimental)",
+        "type": "switch",
+        "default": False,
+    },
+    {
+        "name": "lattice_schedule_control_enable",
+        "friendly_name": "Lattice Schedule Control (experimental)",
+        "type": "switch",
+        "default": False,
+        "enable": "lattice_control_enable",
+    },
+    {
         "name": "active",
         "friendly_name": "Predbat Active",
         "type": "switch",

@@ -345,6 +345,7 @@ class TestLatticeScheduleAuthority(unittest.TestCase):
         self.assertFalse(decision.fallback_allowed)
         durable = asyncio.run(harness.authority.legacy_decision(NOW_MS))
         self.assertTrue(durable.legacy_suppressed)
+        self.assertTrue(durable.durable_state_present)
         self.assertEqual(len(harness.sent), 1)
 
     def test_applied_receipt_save_failure_never_allows_fallback(self):
