@@ -152,6 +152,15 @@ actually performs, and forces a corrective rewrite after any longer outage.
   next tick. No other tier is affected.
 - Restored data is shape-validated (`isinstance` dict/list) before use, as
   `gecloud.py` does, so a truncated file cannot poison in-memory state.
+- A first cycle whose live poll returns nothing makes `run()` return **False**.
+  `automatic_config()` runs on the first cycle alone, so completing startup
+  without telemetry would permanently skip the energy args until the next process
+  restart. Returning False leaves `first` set and `ComponentBase` retries the
+  whole startup path on its backoff (60s doubling to 128 minutes). Deliberately
+  gated on the live poll only, not on `config/battery`: that endpoint can be
+  permanently unsupported on a model (`2106001`), and gating on it would back off
+  to 128 minutes and never complete startup, whereas `automatic_config()` already
+  degrades gracefully when battery config is missing.
 - A failed refresh must **not** save — saving would reset the TTL and skip the
   retry — and must not clobber good in-memory state. This is the same principle
   as the `RatedPower` clobber fix: absence of data is not zero.
@@ -178,6 +187,8 @@ Cases:
 - `applied_payload` restored inside 15 minutes suppresses a redundant write;
   outside 15 minutes it is discarded and the next apply writes.
 - A discovery that returns nothing does not clobber an already-known device list.
+- A first cycle without telemetry returns False and does not run
+  `automatic_config()`; the retry with telemetry returns True and does.
 - A pending order restored from storage resumes polling to completion.
 
 ## Files touched

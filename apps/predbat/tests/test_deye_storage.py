@@ -414,6 +414,88 @@ def test_fresh_applied_payload_suppresses_a_redundant_write():
     assert not failed, "test_fresh_applied_payload_suppresses_a_redundant_write"
 
 
+def test_first_run_fails_when_telemetry_is_unavailable():
+    """A first cycle with no telemetry returns False so ComponentBase retries startup.
+
+    automatic_config() runs on the first cycle alone, so completing startup without
+    telemetry would permanently skip the energy args (import_today and friends) until the
+    next process restart. Failing the run leaves first set and the driver backs off and
+    retries instead.
+    """
+    failed = False
+    d = StorageDeye(auth_method="oauth")
+    d._mock_storage = _warm_cache()
+    configured = []
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: device/latest reports a failure body."""
+        if endpoint_key == "device_latest":
+            return {"success": False, "msg": "device offline"}
+        return {"success": True}
+
+    async def record_config():
+        """Record that automatic_config was reached."""
+        configured.append(True)
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        with patch.object(d, "check_and_refresh_oauth_token", side_effect=_true):
+            with patch.object(d, "publish_data", side_effect=_noop):
+                with patch.object(d, "publish_schedule_settings_ha", side_effect=_noop_arg):
+                    with patch.object(d, "_reconcile_control", side_effect=_noop):
+                        with patch.object(d, "automatic_config", side_effect=record_config):
+                            d.automatic = True
+                            result = run_async(d.run(seconds=0, first=True))
+
+    if result is not False:
+        print(f"ERROR: a first run without telemetry must return False, got {result!r}")
+        failed = True
+    if configured:
+        print("ERROR: automatic_config must not run on an incomplete first cycle")
+        failed = True
+    if not any("deferring startup" in m for m in d.log_messages):
+        print(f"ERROR: expected a deferred-startup warning: {d.log_messages}")
+        failed = True
+    assert not failed, "test_first_run_fails_when_telemetry_is_unavailable"
+
+
+def test_first_run_succeeds_once_telemetry_arrives():
+    """The retry completes startup: telemetry polls, automatic_config runs, run returns True."""
+    failed = False
+    d = StorageDeye(auth_method="oauth")
+    d._mock_storage = _warm_cache()
+    configured = []
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: device/latest now succeeds."""
+        if endpoint_key == "device_latest":
+            return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+        return {"success": True}
+
+    async def record_config():
+        """Record that automatic_config was reached."""
+        configured.append(True)
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        with patch.object(d, "check_and_refresh_oauth_token", side_effect=_true):
+            with patch.object(d, "publish_data", side_effect=_noop):
+                with patch.object(d, "publish_schedule_settings_ha", side_effect=_noop_arg):
+                    with patch.object(d, "_reconcile_control", side_effect=_noop):
+                        with patch.object(d, "automatic_config", side_effect=record_config):
+                            d.automatic = True
+                            result = run_async(d.run(seconds=0, first=True))
+
+    if result is not True:
+        print(f"ERROR: a first run with telemetry must return True, got {result!r}")
+        failed = True
+    if not configured:
+        print("ERROR: automatic_config should run once telemetry is available")
+        failed = True
+    if not d.device_energy.get("INV1"):
+        print(f"ERROR: energy counters should be populated for automatic_config: {d.device_energy}")
+        failed = True
+    assert not failed, "test_first_run_succeeds_once_telemetry_arrives"
+
+
 def test_storage_absent_behaves_as_before():
     """With no storage component every load/save no-ops and each tier simply refreshes."""
     failed = False
@@ -576,6 +658,8 @@ def run_deye_storage_tests(my_predbat):
         ("restore_primes_ratings", test_restore_primes_the_ratings_signature),
         ("stale_applied_payload", test_stale_applied_payload_is_discarded_but_orders_are_not),
         ("fresh_applied_payload_suppresses", test_fresh_applied_payload_suppresses_a_redundant_write),
+        ("first_fails_without_telemetry", test_first_run_fails_when_telemetry_is_unavailable),
+        ("first_succeeds_with_telemetry", test_first_run_succeeds_once_telemetry_arrives),
         ("storage_absent", test_storage_absent_behaves_as_before),
         ("corrupt_cache_isolated", test_corrupt_cache_only_affects_its_own_tier),
         ("shape_validation", test_shape_validation_rejects_garbage),

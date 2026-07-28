@@ -1146,8 +1146,9 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if self.tier_expired("config", DEYE_TTL_CONFIG):
             await self.refresh_config()
 
+        live_ok = True
         if self.tier_expired("live", DEYE_TTL_LIVE):
-            await self.refresh_live()
+            live_ok = await self.refresh_live()
 
         # Free: reads the HA control entities rather than the API, so it runs every tick
         # regardless of tier.
@@ -1186,6 +1187,15 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             await self.save_control()
 
         await self._reconcile_control()
+
+        if first and not live_ok:
+            # Startup has not really succeeded without telemetry: automatic_config() would
+            # map only the args backed by cached ratings and permanently skip the rest,
+            # because it runs on the first cycle alone. Returning False leaves first set,
+            # so ComponentBase retries the whole startup path on its backoff (60s doubling
+            # to 128 minutes) until a poll comes back.
+            self.log("Warn: DEYE first poll returned no telemetry, deferring startup; it will be retried after a backoff")
+            return False
 
         if first and self.automatic:
             await self.automatic_config()
