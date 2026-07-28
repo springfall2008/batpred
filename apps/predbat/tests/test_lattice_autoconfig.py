@@ -165,6 +165,40 @@ def projection_value(
     )
 
 
+def partial_projection_snapshot(
+    provider,
+    node_id,
+    index,
+    argument,
+    value,
+    required=True,
+    identity_aliases=(),
+):
+    """Build one provider-owned aggregate slot and local projection value."""
+    roles = tuple(
+        ProviderRoleAssignment(
+            role,
+            "inverters",
+            index,
+            node_id,
+        )
+        for role in (AliasRole.PRIMARY, AliasRole.CONTROL)
+    )
+    return projection_snapshot(
+        provider,
+        (node_id,),
+        roles,
+        (
+            config_projection(
+                argument,
+                (value,),
+                required=required,
+            ),
+        ),
+        identity_aliases=identity_aliases,
+    )
+
+
 def config_projection(
     argument,
     values,
@@ -523,6 +557,362 @@ class TestPlanCompilation(unittest.TestCase):
 
 class TestConfigProjectionCompilation(unittest.TestCase):
     """Provider contracts project selected indexed capabilities into config."""
+
+    def test_disjoint_providers_compose_partial_indexed_slots(self):
+        """Each provider can fill its own slot without publishing aggregate width."""
+        gateway = partial_projection_snapshot(
+            "gateway",
+            "GW1",
+            0,
+            "battery_power",
+            projection_value(
+                "GW1",
+                ProjectionValueKind.ENTITY,
+                "sensor.gateway_battery_power",
+            ),
+        )
+        cloud = partial_projection_snapshot(
+            "cloud",
+            "CLOUD1",
+            1,
+            "battery_power",
+            projection_value(
+                "CLOUD1",
+                ProjectionValueKind.ENTITY,
+                "sensor.cloud_battery_power",
+            ),
+        )
+
+        left = compile_auto_config((gateway, cloud))
+        right = compile_auto_config((cloud, gateway))
+        argument = left.config_arguments[0]
+
+        self.assertEqual(left.digest, right.digest)
+        self.assertEqual(
+            left.projected_config["battery_power"],
+            (
+                "sensor.gateway_battery_power",
+                "sensor.cloud_battery_power",
+            ),
+        )
+        self.assertEqual(
+            {
+                candidate.provider_id: (
+                    candidate.slot_indexes,
+                    candidate.target_count,
+                    candidate.values,
+                )
+                for candidate in argument.candidates
+            },
+            {
+                "gateway": (
+                    (0,),
+                    2,
+                    ("sensor.gateway_battery_power",),
+                ),
+                "cloud": (
+                    (1,),
+                    2,
+                    ("sensor.cloud_battery_power",),
+                ),
+            },
+        )
+        self.assertEqual(
+            [
+                (
+                    source.field_path,
+                    source.provider_id,
+                )
+                for source in argument.provenance
+            ],
+            [
+                ("/projected_config/battery_power/0", "gateway"),
+                ("/projected_config/battery_power/1", "cloud"),
+            ],
+        )
+        self.assertFalse(left.materialization_readiness.ready)
+        self.assertEqual(
+            left.materialization_readiness.blockers,
+            ("atomic_materializer_missing",),
+        )
+
+    def test_provider_owned_slot_disambiguates_repeated_canonical_node(self):
+        """Explicit roles place correlated providers in their owned slots."""
+        identity = "SER-SHARED"
+        gateway = partial_projection_snapshot(
+            "gateway",
+            "GW1",
+            0,
+            "battery_power",
+            projection_value(
+                "GW1",
+                ProjectionValueKind.ENTITY,
+                "sensor.gateway_battery_power",
+            ),
+            identity_aliases=(
+                ProviderIdentityAlias(
+                    "serial",
+                    identity,
+                    "GW1",
+                ),
+            ),
+        )
+        cloud = partial_projection_snapshot(
+            "cloud",
+            "CLOUD1",
+            1,
+            "battery_power",
+            projection_value(
+                "CLOUD1",
+                ProjectionValueKind.ENTITY,
+                "sensor.cloud_battery_power",
+            ),
+            identity_aliases=(
+                ProviderIdentityAlias(
+                    "serial",
+                    identity,
+                    "CLOUD1",
+                ),
+            ),
+        )
+
+        plan = compile_auto_config((gateway, cloud))
+
+        self.assertEqual(
+            plan.projected_config["battery_power"],
+            (
+                "sensor.gateway_battery_power",
+                "sensor.cloud_battery_power",
+            ),
+        )
+        self.assertEqual(
+            {candidate.provider_id: candidate.slot_indexes for candidate in plan.config_arguments[0].candidates},
+            {
+                "gateway": (0,),
+                "cloud": (1,),
+            },
+        )
+
+    def test_repeated_node_projection_ignores_role_declaration_order(self):
+        """Role tuple order cannot swap values between repeated node slots."""
+        roles = tuple(
+            ProviderRoleAssignment(
+                role,
+                "inverters",
+                index,
+                "GW1",
+            )
+            for index in (0, 1)
+            for role in (AliasRole.PRIMARY, AliasRole.CONTROL)
+        )
+        projection = config_projection(
+            "battery_power",
+            (
+                projection_value(
+                    "GW1",
+                    ProjectionValueKind.ENTITY,
+                    "sensor.gateway_slot_0",
+                ),
+                projection_value(
+                    "GW1",
+                    ProjectionValueKind.ENTITY,
+                    "sensor.gateway_slot_1",
+                ),
+            ),
+        )
+        left = projection_snapshot(
+            "gateway",
+            ("GW1",),
+            roles,
+            (projection,),
+        )
+        right = projection_snapshot(
+            "gateway",
+            ("GW1",),
+            tuple(reversed(roles)),
+            (projection,),
+        )
+
+        left_plan = compile_auto_config((left,))
+        right_plan = compile_auto_config((right,))
+
+        self.assertEqual(left_plan.digest, right_plan.digest)
+        self.assertEqual(
+            left_plan.projected_config["battery_power"],
+            (
+                "sensor.gateway_slot_0",
+                "sensor.gateway_slot_1",
+            ),
+        )
+
+    def test_unowned_value_cannot_guess_between_repeated_canonical_slots(self):
+        """A correlated observer must not guess which repeated slot it fills."""
+        identity = "SER-AMBIGUOUS"
+
+        def target_provider(provider, node_id, index):
+            """Build one indexed target without a config projection."""
+            roles = tuple(
+                ProviderRoleAssignment(
+                    role,
+                    "inverters",
+                    index,
+                    node_id,
+                )
+                for role in (AliasRole.PRIMARY, AliasRole.CONTROL)
+            )
+            return projection_snapshot(
+                provider,
+                (node_id,),
+                roles,
+                (),
+                identity_aliases=(
+                    ProviderIdentityAlias(
+                        "serial",
+                        identity,
+                        node_id,
+                    ),
+                ),
+            )
+
+        observer = projection_snapshot(
+            "observer",
+            ("OBS1",),
+            (),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "OBS1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.observer_battery_power",
+                        ),
+                    ),
+                ),
+            ),
+            identity_aliases=(
+                ProviderIdentityAlias(
+                    "serial",
+                    identity,
+                    "OBS1",
+                ),
+            ),
+        )
+
+        with self.assertRaisesRegex(
+            AutoConfigCompileError,
+            "ambiguous across aggregate slots",
+        ):
+            compile_auto_config(
+                (
+                    target_provider("gateway", "GW1", 0),
+                    target_provider("cloud", "CLOUD1", 1),
+                    observer,
+                )
+            )
+
+    def test_partial_indexed_user_override_covers_aggregate_shape(self):
+        """A user override resolves the complete array and retains candidates."""
+        gateway = partial_projection_snapshot(
+            "gateway",
+            "GW1",
+            0,
+            "battery_power",
+            projection_value(
+                "GW1",
+                ProjectionValueKind.ENTITY,
+                "sensor.gateway_candidate",
+            ),
+        )
+        cloud = partial_projection_snapshot(
+            "cloud",
+            "CLOUD1",
+            1,
+            "battery_power",
+            projection_value(
+                "CLOUD1",
+                ProjectionValueKind.ENTITY,
+                "sensor.cloud_candidate",
+            ),
+        )
+        override = UserConfigOverride(
+            "battery_power",
+            [
+                "sensor.user_slot_0",
+                "sensor.user_slot_1",
+            ],
+            "/apps.yaml/battery_power",
+        )
+
+        plan = compile_auto_config(
+            (gateway, cloud),
+            user_overrides=(override,),
+        )
+        argument = plan.config_arguments[0]
+
+        self.assertEqual(
+            plan.projected_config["battery_power"],
+            (
+                "sensor.user_slot_0",
+                "sensor.user_slot_1",
+            ),
+        )
+        self.assertEqual(
+            {source.provider_id for source in argument.candidate_provenance},
+            {"gateway", "cloud"},
+        )
+        self.assertEqual(
+            [source.provider_id for source in argument.provenance],
+            ["user_override"],
+        )
+
+    def test_optional_partial_projection_preserves_aggregate_hole(self):
+        """An absent optional slot remains explicit None in the final array."""
+        cloud_roles = tuple(
+            ProviderRoleAssignment(
+                role,
+                "inverters",
+                1,
+                "CLOUD1",
+            )
+            for role in (AliasRole.PRIMARY, AliasRole.CONTROL)
+        )
+        gateway = partial_projection_snapshot(
+            "gateway",
+            "GW1",
+            0,
+            "pause_mode",
+            projection_value(
+                "GW1",
+                ProjectionValueKind.NONE,
+            ),
+            required=False,
+        )
+        cloud = projection_snapshot(
+            "cloud",
+            ("CLOUD1",),
+            cloud_roles,
+            (),
+        )
+
+        plan = compile_auto_config((gateway, cloud))
+
+        self.assertEqual(
+            plan.projected_config["pause_mode"],
+            (None, None),
+        )
+        self.assertEqual(
+            {
+                (
+                    source.field_path,
+                    source.provider_id,
+                )
+                for source in plan.config_arguments[0].candidate_provenance
+            },
+            {
+                ("/projected_config/pause_mode/0", "gateway"),
+            },
+        )
 
     def test_gateway_multi_aio_projects_ordered_leaf_arrays(self):
         """Two Gateway-like AIO nodes produce deterministic per-index arrays."""
