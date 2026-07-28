@@ -11,7 +11,7 @@ invalidate their monotonically increasing generations.  A later, separately
 gated runtime component can supply a materializer.
 """
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig popleft
 
 import copy
 import hashlib
@@ -423,6 +423,8 @@ class ProjectionCandidate:
     cardinality: str
     required: bool
     values: tuple
+    slot_indexes: tuple
+    target_count: int
     value_kinds: tuple
     capabilities: tuple
     identity_selectors: tuple
@@ -956,11 +958,11 @@ def _projection_override_value(override, candidate):
     if candidate.cardinality == ProjectionCardinality.PER_INDEX.value:
         if not isinstance(value, tuple):
             raise AutoConfigCompileError("override {} must be an ordered per-index sequence".format(override.argument))
-        if len(value) != len(candidate.values):
+        if len(value) != candidate.target_count:
             raise AutoConfigCompileError(
                 "override {} cardinality mismatch: expected {}, got {}".format(
                     override.argument,
-                    len(candidate.values),
+                    candidate.target_count,
                     len(value),
                 )
             )
@@ -976,6 +978,111 @@ def _projection_override_value(override, candidate):
     if candidate.required and any(item is None for item in values):
         raise AutoConfigCompileError("override {} leaves a required slot empty".format(override.argument))
     return value
+
+
+def _projection_slot_indexes(projection, snapshot, targets, canonical_by_node):
+    """Map provider-local projection values onto aggregate target slots."""
+    if projection.cardinality is ProjectionCardinality.SCALAR:
+        canonical_node_id = canonical_by_node[
+            (
+                snapshot.provider_id,
+                projection.values[0].node_id,
+            )
+        ]
+        target = targets[0]
+        if canonical_node_id != target.node_id:
+            raise AutoConfigCompileError(
+                "projection {} slot 0 is unrelated to selected canonical target {}".format(
+                    projection.argument,
+                    target.node_id,
+                )
+            )
+        return (0,)
+
+    targets_by_index = {target.index: target for target in targets}
+    owned_by_local_node = {}
+    for assignment in sorted(
+        snapshot.role_assignments,
+        key=lambda item: (
+            item.group,
+            item.role.value,
+            item.index,
+            item.node_id,
+        ),
+    ):
+        if assignment.role is not projection.role or assignment.group != projection.group:
+            continue
+        target = targets_by_index.get(assignment.index)
+        if target is None:
+            continue
+        canonical_node_id = canonical_by_node[
+            (
+                snapshot.provider_id,
+                assignment.node_id,
+            )
+        ]
+        if target.node_id == canonical_node_id:
+            owned_by_local_node.setdefault(
+                assignment.node_id,
+                deque(),
+            ).append(assignment.index)
+
+    available_by_node = {}
+    for target in targets:
+        available_by_node.setdefault(target.node_id, deque()).append(target.index)
+    unowned_value_counts = {}
+    for value in projection.values:
+        if value.node_id in owned_by_local_node:
+            continue
+        canonical_node_id = canonical_by_node[
+            (
+                snapshot.provider_id,
+                value.node_id,
+            )
+        ]
+        unowned_value_counts[canonical_node_id] = unowned_value_counts.get(canonical_node_id, 0) + 1
+
+    slot_indexes = []
+    used_slots = set()
+    for value in projection.values:
+        canonical_node_id = canonical_by_node[
+            (
+                snapshot.provider_id,
+                value.node_id,
+            )
+        ]
+        available = owned_by_local_node.get(value.node_id)
+        if available is None:
+            available = available_by_node.get(canonical_node_id)
+            while available and available[0] in used_slots:
+                available.popleft()
+            if available and unowned_value_counts[canonical_node_id] != len(available):
+                raise AutoConfigCompileError(
+                    "projection {} value for {} is ambiguous across aggregate slots {}".format(
+                        projection.argument,
+                        value.node_id,
+                        tuple(available),
+                    )
+                )
+            unowned_value_counts[canonical_node_id] -= 1
+        if not available:
+            raise AutoConfigCompileError(
+                "projection {} value for {} is unrelated to an available selected target".format(
+                    projection.argument,
+                    value.node_id,
+                )
+            )
+        target_index = available.popleft()
+        if target_index in used_slots:
+            raise AutoConfigCompileError(
+                "projection {} repeats aggregate slot {}".format(
+                    projection.argument,
+                    target_index,
+                )
+            )
+        slot_indexes.append(target_index)
+        used_slots.add(target_index)
+    return tuple(slot_indexes)
 
 
 def _compile_config_projections(
@@ -1026,22 +1133,9 @@ def _compile_config_projections(
                         projection.group,
                     )
                 )
-            if projection.cardinality is ProjectionCardinality.PER_INDEX and len(projection.values) != len(targets):
-                raise AutoConfigCompileError(
-                    "projection {} cardinality mismatch: expected {}, got {}".format(
-                        projection.argument,
-                        len(targets),
-                        len(projection.values),
-                    )
-                )
             if projection.routing is ProjectionRouting.COORDINATOR and len({target.node_id for target in targets}) != 1:
                 raise AutoConfigCompileError("coordinator projection {} requires one canonical target".format(projection.argument))
-
-            values = []
-            kinds = []
-            specificities = []
-            provenance = []
-            for value_index, value in enumerate(projection.values):
+            for value in projection.values:
                 if value.node_id not in provider_nodes[snapshot.provider_id]:
                     raise AutoConfigCompileError(
                         "projection {} targets unknown provider-local node {}".format(
@@ -1049,6 +1143,18 @@ def _compile_config_projections(
                             value.node_id,
                         )
                     )
+            slot_indexes = _projection_slot_indexes(
+                projection,
+                snapshot,
+                targets,
+                canonical_by_node,
+            )
+
+            values = []
+            kinds = []
+            specificities = []
+            provenance = []
+            for value_index, value in enumerate(projection.values):
                 if value.kind is ProjectionValueKind.ENTITY:
                     matching_capabilities = {
                         access_path_id
@@ -1075,17 +1181,7 @@ def _compile_config_projections(
                                 value.access_path_id,
                             )
                         )
-                target_index = value_index if projection.cardinality is ProjectionCardinality.PER_INDEX else 0
-                canonical_node_id = canonical_by_node[(snapshot.provider_id, value.node_id)]
-                target = targets[target_index]
-                if canonical_node_id != target.node_id:
-                    raise AutoConfigCompileError(
-                        "projection {} slot {} is unrelated to selected canonical target {}".format(
-                            projection.argument,
-                            target_index,
-                            target.node_id,
-                        )
-                    )
+                target_index = slot_indexes[value_index]
 
                 specificity = 0
                 if value.identity_kind is not None:
@@ -1150,6 +1246,8 @@ def _compile_config_projections(
                 cardinality=projection.cardinality.value,
                 required=projection.required,
                 values=tuple(values),
+                slot_indexes=slot_indexes,
+                target_count=(len(targets) if projection.cardinality is ProjectionCardinality.PER_INDEX else 1),
                 value_kinds=tuple(kinds),
                 capabilities=tuple(value.capability for value in projection.values),
                 identity_selectors=tuple(
@@ -1199,7 +1297,7 @@ def _compile_config_projections(
                 candidate.cardinality,
                 candidate.required,
                 candidate.transforms,
-                len(candidate.values),
+                candidate.target_count,
             )
             for candidate in candidates
         }
@@ -1211,10 +1309,28 @@ def _compile_config_projections(
         selected_values = []
         selected_provenance = []
         if override is None:
-            for index in range(len(first.values)):
-                highest_specificity = max(candidate.specificities[index] for candidate in candidates)
-                selected = tuple(candidate for candidate in candidates if candidate.specificities[index] == highest_specificity)
-                kinds = {candidate.value_kinds[index] for candidate in selected}
+            for index in range(first.target_count):
+                slot_candidates = tuple(
+                    (
+                        candidate,
+                        candidate.slot_indexes.index(index),
+                    )
+                    for candidate in candidates
+                    if index in candidate.slot_indexes
+                )
+                if not slot_candidates:
+                    if first.required:
+                        raise AutoConfigCompileError(
+                            "projection {} cardinality mismatch: required slot {} has no provider candidate".format(
+                                argument,
+                                index,
+                            )
+                        )
+                    selected_values.append(None)
+                    continue
+                highest_specificity = max(candidate.specificities[value_index] for candidate, value_index in slot_candidates)
+                selected = tuple((candidate, value_index) for candidate, value_index in slot_candidates if candidate.specificities[value_index] == highest_specificity)
+                kinds = {candidate.value_kinds[value_index] for candidate, value_index in selected}
                 if len(kinds) != 1:
                     raise AutoConfigCompileError(
                         "projection {} type mismatch at slot {}".format(
@@ -1222,7 +1338,7 @@ def _compile_config_projections(
                             index,
                         )
                     )
-                canonical_values = {_canonical_json(candidate.values[index]) for candidate in selected}
+                canonical_values = {_canonical_json(candidate.values[value_index]) for candidate, value_index in selected}
                 if len(canonical_values) != 1:
                     raise AutoConfigCompileError(
                         "ambiguous multi-provider projection {} at slot {}".format(
@@ -1230,8 +1346,8 @@ def _compile_config_projections(
                             index,
                         )
                     )
-                selected_values.append(selected[0].values[index])
-                selected_provenance.extend(source for candidate in selected for source in candidate.provenance[index])
+                selected_values.append(selected[0][0].values[selected[0][1]])
+                selected_provenance.extend(source for candidate, value_index in selected for source in candidate.provenance[value_index])
             if first.cardinality == ProjectionCardinality.PER_INDEX.value:
                 effective_value = tuple(selected_values)
             else:
