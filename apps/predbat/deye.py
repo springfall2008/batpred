@@ -54,12 +54,10 @@ from deye_const import (
     DEYE_TTL_STATIC,
     DEYE_TTL_CONFIG,
     DEYE_TTL_LIVE,
-    DEYE_RESTORE_MAX_LIVE,
     DEYE_RESTORE_MAX_CONTROL,
     DEYE_CACHE_STATIC,
     DEYE_CACHE_CONFIG,
     DEYE_CACHE_RATINGS,
-    DEYE_CACHE_LIVE,
     DEYE_CACHE_CONTROL,
 )
 
@@ -128,6 +126,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         # at startup so the refresh cadence survives a restart instead of restarting with it.
         self._tier_refreshed = {}
         self._cache_restored = False
+        self._saved_ratings = None  # signature of the ratings last written, to skip no-op saves
         self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, 0.0)
         # auth_method defaults to app_credentials, but an injected access token with no
         # developer app credentials can only be oauth — and in app_credentials mode
@@ -967,13 +966,25 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """Cache the per-device config/battery responses."""
         return await self.save_cache(DEYE_CACHE_CONFIG, self.device_battery_config)
 
-    async def save_ratings(self):
-        """Cache the static per-device ratings derived from device/latest."""
-        return await self.save_cache(DEYE_CACHE_RATINGS, {"capacity": self.device_capacity, "pack_voltage": self.device_pack_voltage, "rated_power": self.device_rated_power})
+    def _ratings_payload(self):
+        """Return the static per-device ratings in their cached shape."""
+        return {"capacity": self.device_capacity, "pack_voltage": self.device_pack_voltage, "rated_power": self.device_rated_power}
 
-    async def save_live(self):
-        """Cache the latest telemetry and energy counters."""
-        return await self.save_cache(DEYE_CACHE_LIVE, {"values": self.device_values, "energy": self.device_energy})
+    async def save_ratings(self):
+        """Cache the ratings, but only when they have actually changed.
+
+        These are written by the once-a-minute live poll yet are static per install, so an
+        unconditional save would rewrite an identical file 1440 times a day. Compared by
+        serialised value rather than identity because the dicts are mutated in place.
+        """
+        payload = self._ratings_payload()
+        signature = json.dumps(payload, sort_keys=True, default=str)
+        if signature == getattr(self, "_saved_ratings", None):
+            return False
+        if await self.save_cache(DEYE_CACHE_RATINGS, payload):
+            self._saved_ratings = signature
+            return True
+        return False
 
     async def save_control(self):
         """Cache control state: what was last written, and any order still in flight."""
@@ -1013,15 +1024,14 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             self.device_capacity = ratings.get("capacity") or {}
             self.device_pack_voltage = ratings.get("pack_voltage") or {}
             self.device_rated_power = ratings.get("rated_power") or {}
+            # Record what is already on disk so the first poll does not rewrite an
+            # identical file.
+            self._saved_ratings = json.dumps(self._ratings_payload(), sort_keys=True, default=str)
 
-        live, age = await self.load_cache(DEYE_CACHE_LIVE)
-        if isinstance(live, dict) and live:
-            if age is not None and age < DEYE_RESTORE_MAX_LIVE:
-                self.device_values = live.get("values") or {}
-                self.device_energy = live.get("energy") or {}
-                self.mark_refreshed("live", age)
-            else:
-                self.log(f"Info: DEYE telemetry cache is stale (age {self._age_text(age)}), waiting for a fresh poll rather than republishing it")
+        # Telemetry is deliberately not restored: the live tier polls every minute anyway,
+        # and HA keeps the last published value of each entity, so there is nothing to gain
+        # from caching it 1440 times a day. The live clock therefore starts unset and the
+        # first tick polls immediately.
 
         control, age = await self.load_cache(DEYE_CACHE_CONTROL)
         if isinstance(control, dict):
@@ -1104,7 +1114,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 self.log(f"Warn: DEYE device/latest failed for {sn}: {e}")
         if got_any:
             self.mark_refreshed("live")
-            await self.save_live()
+            # Only the ratings are cached, and only when they change — the telemetry itself
+            # is not persisted (see DEYE_CACHE_* in deye_const.py).
             await self.save_ratings()
         return got_any
 

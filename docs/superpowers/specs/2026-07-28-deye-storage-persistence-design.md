@@ -48,8 +48,8 @@ no special handling.
 |---|---|---|---|
 | `static` | 8h | `station/list`, `station/device`, `station/latest`, `device/measurePoints` | `station_ids`, `device_list` |
 | `config` | 15 min | `config/battery` per device | `device_battery_config` |
-| `ratings` | — (written by the `live` refresh) | none of its own | `device_capacity`, `device_pack_voltage`, `device_rated_power` |
-| `live` | 1 min | `device/latest` per device | `device_values`, `device_energy` |
+| `ratings` | — (written by the `live` refresh, saved only on change) | none of its own | `device_capacity`, `device_pack_voltage`, `device_rated_power` |
+| `live` | 1 min | `device/latest` per device | `device_values`, `device_energy` — **not cached** |
 | `control` | on change | none | `applied_payload`, `pending_orders`, `order_poll_count` |
 
 `device/latest` returns telemetry, the energy counters and the ratings
@@ -62,8 +62,22 @@ Steady-state API cost falls from 2 calls/device/minute to ~1.07, and
 
 ## Storage layout
 
-One file per tier under module `deye`: `static`, `config`, `ratings`, `live`,
-`control`.
+Four files under module `deye`: `static`, `config`, `ratings`, `control`.
+
+Telemetry and the energy counters are deliberately **not** cached. The live tier
+polls every minute, so persisting it would mean 1440 writes a day to save at most
+one tick's gap at startup — a poor trade against that much file or network IO.
+Home Assistant already retains the last published value of every entity, and
+`publish_data()` only writes a sensor when it has a value, so a failed poll
+leaves the previous reading in place rather than overwriting it. The `live` tier
+therefore has a TTL (governing poll cadence) but no file: its clock starts unset
+after a restart and the first tick polls immediately.
+
+Ratings come from the same `device/latest` response but *are* cached, because
+they are static and are what lets `automatic_config()` map `soc_max`,
+`battery_rate_max` and `inverter_limit` before the first poll returns. They are
+written only when the value actually changes, compared by serialised signature,
+so the once-a-minute poll does not rewrite an identical file.
 
 Per-tier files rather than a single blob because `storage.age()` is per-file, so
 each tier gets an independent clock for free. A single blob would need
@@ -109,7 +123,6 @@ removed.
 | `static` | unconditional | Station and device IDs do not go stale. |
 | `config` | unconditional | Installer settings. Also covers a transient `config/battery` failure — this endpoint has already returned `2106001 config point not supported` on one cycle and succeeded on the next. |
 | `ratings` | unconditional | Static per install. Restoring these is the main win: `automatic_config()` can map `soc_max`, `battery_rate_max` and `inverter_limit` at startup without waiting for a poll. |
-| `live` | only if age < 15 min | Republishing hours-old SOC as current is worse than a brief gap, and the energy counters feed Predbat's load/rate history. |
 | `control` — `pending_orders`, `order_poll_count` | unconditional | An unpolled order is orphaned. `DEYE_ORDER_MAX_POLLS` still bounds it. |
 | `control` — `applied_payload` | only if age < 15 min | See below. |
 
@@ -153,6 +166,9 @@ Cases:
 
 - Cold start, no stored state: every tier refreshes.
 - Warm restart inside every TTL: **zero** API calls beyond the `live` tier.
+- Telemetry is never restored and the live clock always starts expired.
+- Unchanged ratings are not rewritten by repeated polls; a changed rating is.
+- Restored ratings prime the signature so the first poll writes nothing.
 - Each tier expiring independently: an expired `config` does not trigger a
   `static` refresh, and vice versa.
 - Empty `device_list` forces a `static` refresh despite a fresh clock.
@@ -161,6 +177,7 @@ Cases:
 - A failed refresh does not save and does not clobber cached state.
 - `applied_payload` restored inside 15 minutes suppresses a redundant write;
   outside 15 minutes it is discarded and the next apply writes.
+- A discovery that returns nothing does not clobber an already-known device list.
 - A pending order restored from storage resumes polling to completion.
 
 ## Files touched

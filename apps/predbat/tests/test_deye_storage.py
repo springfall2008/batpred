@@ -12,7 +12,7 @@ import time
 from unittest.mock import patch
 from tests.test_infra import run_async
 from tests.test_deye_api import MockDeye, LIVE_DATA_LIST
-from deye_const import DEYE_TTL_STATIC, DEYE_TTL_CONFIG, DEYE_TTL_LIVE, DEYE_RESTORE_MAX_LIVE, DEYE_RESTORE_MAX_CONTROL, DEYE_CACHE_STATIC, DEYE_CACHE_CONFIG, DEYE_CACHE_RATINGS, DEYE_CACHE_LIVE, DEYE_CACHE_CONTROL
+from deye_const import DEYE_TTL_STATIC, DEYE_TTL_CONFIG, DEYE_TTL_LIVE, DEYE_RESTORE_MAX_CONTROL, DEYE_CACHE_STATIC, DEYE_CACHE_CONFIG, DEYE_CACHE_RATINGS, DEYE_CACHE_CONTROL
 
 
 class FakeStorage:
@@ -62,7 +62,6 @@ def _warm_cache(**ages):
         DEYE_CACHE_STATIC: {"station_ids": [61016286], "device_list": ["INV1"]},
         DEYE_CACHE_CONFIG: {"INV1": {"battCapacity": 1200, "battLowCapacity": 14, "maxChargeCurrent": 185}},
         DEYE_CACHE_RATINGS: {"capacity": {"INV1": 61.44}, "pack_voltage": {"INV1": 51.2}, "rated_power": {"INV1": 8000.0}},
-        DEYE_CACHE_LIVE: {"values": {"INV1": {"soc": 94.0}}, "energy": {"INV1": {"load_today": 14326.4}}},
         DEYE_CACHE_CONTROL: {"applied_payload": {"INV1": {"deviceSn": "INV1", "touAction": "on"}}, "pending_orders": {}, "order_poll_count": {}},
     }
     default_ages = {name: ages.get(name, 0.5) for name in data}
@@ -115,16 +114,17 @@ def test_restore_seeds_clocks_and_state():
     if d.device_capacity.get("INV1") != 61.44 or d.device_rated_power.get("INV1") != 8000.0:
         print(f"ERROR: ratings not restored: {d.device_capacity} {d.device_rated_power}")
         failed = True
-    if d.device_values.get("INV1", {}).get("soc") != 94.0:
-        print(f"ERROR: telemetry not restored: {d.device_values}")
-        failed = True
     if d.applied_payload.get("INV1", {}).get("touAction") != "on":
         print(f"ERROR: applied_payload not restored: {d.applied_payload}")
         failed = True
-    for tier, ttl in (("static", DEYE_TTL_STATIC), ("config", DEYE_TTL_CONFIG), ("live", DEYE_TTL_LIVE)):
+    for tier, ttl in (("static", DEYE_TTL_STATIC), ("config", DEYE_TTL_CONFIG)):
         if d.tier_expired(tier, ttl):
             print(f"ERROR: {tier} clock should have been seeded fresh")
             failed = True
+    # Live is deliberately not cached, so its clock stays unset and the first tick polls
+    if not d.tier_expired("live", DEYE_TTL_LIVE):
+        print("ERROR: the live tier must start expired so telemetry is polled fresh")
+        failed = True
     assert not failed, "test_restore_seeds_clocks_and_state"
 
 
@@ -134,7 +134,6 @@ def test_warm_restart_makes_no_api_calls_beyond_live():
     d = StorageDeye(auth_method="oauth")
     d._mock_storage = _warm_cache()
     # Live is 1 minute, so age it past that while leaving the other tiers fresh
-    d._mock_storage.ages[DEYE_CACHE_LIVE] = 5.0
     calls = []
 
     async def fake_post(endpoint_key, body):
@@ -277,26 +276,83 @@ def test_failed_discovery_is_not_cached():
     assert not failed, "test_failed_discovery_is_not_cached"
 
 
-def test_stale_telemetry_is_discarded():
-    """Telemetry older than the restore bound is dropped rather than republished as current."""
+def test_telemetry_is_not_cached_at_all():
+    """Telemetry is never persisted: the live tier re-polls, and HA holds the last value.
+
+    Caching it would mean 1440 writes a day to save at most one tick's gap at startup.
+    Ratings come from the same poll but ARE cached, because they are static and are what
+    lets automatic_config() map soc_max/inverter_limit before the first poll returns.
+    """
     failed = False
     d = StorageDeye()
     d._mock_storage = _warm_cache()
-    d._mock_storage.ages[DEYE_CACHE_LIVE] = DEYE_RESTORE_MAX_LIVE + 1
 
     run_async(d.restore_state())
 
-    if d.device_values:
-        print(f"ERROR: stale telemetry should not be restored: {d.device_values}")
+    if d.device_values or d.device_energy:
+        print(f"ERROR: telemetry must not be restored: {d.device_values} {d.device_energy}")
         failed = True
-    if not any("telemetry cache is stale" in m for m in d.log_messages):
-        print(f"ERROR: expected a stale-telemetry log line: {d.log_messages}")
+    if not d.tier_expired("live", DEYE_TTL_LIVE):
+        print("ERROR: with no telemetry cache the live tier must start expired so it polls")
         failed = True
-    # Ratings are static and must survive regardless of the telemetry bound
     if d.device_rated_power.get("INV1") != 8000.0:
-        print(f"ERROR: ratings must restore unconditionally: {d.device_rated_power}")
+        print(f"ERROR: ratings must still restore: {d.device_rated_power}")
         failed = True
-    assert not failed, "test_stale_telemetry_is_discarded"
+    assert not failed, "test_telemetry_is_not_cached_at_all"
+
+
+def test_ratings_are_saved_only_when_they_change():
+    """The once-a-minute poll must not rewrite an identical ratings file every time."""
+    failed = False
+    d = StorageDeye()
+    d._mock_storage = FakeStorage()
+    d.device_list = ["INV1"]
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST returning the same device/latest payload each call."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async(d.refresh_live())
+        first_saves = list(d._mock_storage.saves)
+        for _ in range(5):
+            run_async(d.refresh_live())
+
+    if first_saves.count(DEYE_CACHE_RATINGS) != 1:
+        print(f"ERROR: the first poll should write ratings once: {first_saves}")
+        failed = True
+    if d._mock_storage.saves.count(DEYE_CACHE_RATINGS) != 1:
+        print(f"ERROR: unchanged ratings must not be rewritten: {d._mock_storage.saves}")
+        failed = True
+
+    # A genuine change is written
+    d.device_rated_power["INV1"] = 5000.0
+    run_async(d.save_ratings())
+    if d._mock_storage.saves.count(DEYE_CACHE_RATINGS) != 2:
+        print(f"ERROR: changed ratings should be saved: {d._mock_storage.saves}")
+        failed = True
+    assert not failed, "test_ratings_are_saved_only_when_they_change"
+
+
+def test_restore_primes_the_ratings_signature():
+    """Restored ratings are recorded as already-on-disk so the first poll writes nothing."""
+    failed = False
+    d = StorageDeye()
+    d._mock_storage = _warm_cache()
+    run_async(d.restore_state())
+    d.device_list = ["INV1"]
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST returning the same ratings the cache already holds."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async(d.refresh_live())
+
+    if DEYE_CACHE_RATINGS in d._mock_storage.saves:
+        print(f"ERROR: identical restored ratings must not be rewritten: {d._mock_storage.saves}")
+        failed = True
+    assert not failed, "test_restore_primes_the_ratings_signature"
 
 
 def test_stale_applied_payload_is_discarded_but_orders_are_not():
@@ -411,10 +467,9 @@ def test_shape_validation_rejects_garbage():
             DEYE_CACHE_STATIC: ["not", "a", "dict"],
             DEYE_CACHE_CONFIG: "garbage",
             DEYE_CACHE_RATINGS: 42,
-            DEYE_CACHE_LIVE: {"values": "not-a-dict"},
             DEYE_CACHE_CONTROL: {"applied_payload": "nope", "pending_orders": []},
         },
-        ages={name: 0.1 for name in (DEYE_CACHE_STATIC, DEYE_CACHE_CONFIG, DEYE_CACHE_RATINGS, DEYE_CACHE_LIVE, DEYE_CACHE_CONTROL)},
+        ages={name: 0.1 for name in (DEYE_CACHE_STATIC, DEYE_CACHE_CONFIG, DEYE_CACHE_RATINGS, DEYE_CACHE_CONTROL)},
     )
 
     run_async(d.restore_state())
@@ -432,7 +487,7 @@ def test_shape_validation_rejects_garbage():
 
 
 def test_refresh_saves_each_tier():
-    """A successful refresh writes its own cache file, and live also writes ratings."""
+    """A successful refresh writes its own cache file; the live poll writes ratings."""
     failed = False
     d = StorageDeye()
     d._mock_storage = FakeStorage()
@@ -448,7 +503,7 @@ def test_refresh_saves_each_tier():
         run_async(d.refresh_config())
         run_async(d.refresh_live())
 
-    for name in (DEYE_CACHE_CONFIG, DEYE_CACHE_LIVE, DEYE_CACHE_RATINGS):
+    for name in (DEYE_CACHE_CONFIG, DEYE_CACHE_RATINGS):
         if name not in d._mock_storage.saves:
             print(f"ERROR: {name} was not saved after a successful refresh: {d._mock_storage.saves}")
             failed = True
@@ -516,7 +571,9 @@ def run_deye_storage_tests(my_predbat):
         ("tiers_expire_independently", test_expired_config_refreshes_without_touching_discovery),
         ("empty_devices_force_discovery", test_empty_device_list_forces_discovery_despite_fresh_clock),
         ("failed_discovery_not_cached", test_failed_discovery_is_not_cached),
-        ("stale_telemetry_discarded", test_stale_telemetry_is_discarded),
+        ("telemetry_not_cached", test_telemetry_is_not_cached_at_all),
+        ("ratings_saved_on_change", test_ratings_are_saved_only_when_they_change),
+        ("restore_primes_ratings", test_restore_primes_the_ratings_signature),
         ("stale_applied_payload", test_stale_applied_payload_is_discarded_but_orders_are_not),
         ("fresh_applied_payload_suppresses", test_fresh_applied_payload_suppresses_a_redundant_write),
         ("storage_absent", test_storage_absent_behaves_as_before),
