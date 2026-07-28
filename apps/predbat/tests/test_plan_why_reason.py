@@ -303,6 +303,21 @@ def run_test_plan_why_reason(my_predbat):
             print("ERROR: split slot tooltip contradicts itself: {}".format(rendered))
             failed = True
 
+    # --- Test 10c: a near-flat SoC before the export window reads as steady, not rising ---
+    # Deliberately a small but non-zero rise (0.02kWh over the pre-window period): an exact-zero
+    # trend would also pass under a plain "> 0" test, so only a near-flat one actually exercises
+    # the same 0.05kWh tolerance the whole-slot demand arrow uses.
+    print("Test near-flat SoC before an export window reads as steady")
+    my_predbat.predict_soc_best = {minute: 5.0 + min(minute, 15) * (0.02 / 15.0) for minute in range(0, my_predbat.forecast_minutes + my_predbat.plan_interval_minutes + 5, 5)}
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["demand_before_export_steady", "export_high_rate"]:
+        print("ERROR: flat pre-export slot reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "expected to stay steady" not in _render(row, templates):
+        print("ERROR: flat pre-export tooltip unexpected: {}".format(_render(row, templates)))
+        failed = True
+
     # --- Test 11: reason_templates has an entry for every code used across all scenarios ---
     print("Test reason_templates covers every code used")
     all_codes = set()

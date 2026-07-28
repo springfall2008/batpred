@@ -1305,15 +1305,18 @@ class Output:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
-                        if soc_change_this >= 0:
-                            state = " &nearr;"
-                            reason_parts.append({"code": "demand_before_export_rising", "params": {}})
-                        elif soc_change_this < 0:
-                            state = " &searr;"
-                            reason_parts.append({"code": "demand_before_export_falling", "params": {}})
-                        else:
+                        # Same near-flat tolerance as the whole-slot demand arrow above - testing
+                        # soc_change_this >= 0 first would make the steady case unreachable and
+                        # render a flat pre-window period as rising
+                        if abs(soc_change_this) < 0.05:
                             state = " &rarr;"
                             reason_parts.append({"code": "demand_before_export_steady", "params": {}})
+                        elif soc_change_this >= 0:
+                            state = " &nearr;"
+                            reason_parts.append({"code": "demand_before_export_rising", "params": {}})
+                        else:
+                            state = " &searr;"
+                            reason_parts.append({"code": "demand_before_export_falling", "params": {}})
                         state_color = "#FFFFFF"
                         show_limit = ""
                         had_state = True
