@@ -506,7 +506,7 @@ class AnnualPage:
             # Only one of kwp/panels is ever sent - validate_config rejects an array
             # carrying both, so the mode radio decides which single field goes out.
             if value("solar_mode_{}".format(index)) == "panels":
-                array["panels"] = int(numeric("solar_panels_{}".format(index), 0) or 0)
+                array["panels"] = numeric("solar_panels_{}".format(index), 0)
                 array["panel_watts"] = numeric("solar_panel_watts_{}".format(index), 400)
             else:
                 array["kwp"] = numeric("solar_kwp_{}".format(index))
@@ -877,11 +877,29 @@ class AnnualPage:
             text += "<p class='annual-unavailable'>{}</p>\n".format(reason)
             return text
 
+        has_pv = costs.get("total_kwp", 0) > 0
+        has_battery = costs.get("battery_kwh", 0) > 0
+        # A row prices hardware the system does not have: with no battery configured,
+        # "PV + battery"/"With Predbat" would show the PV-only capital against a
+        # battery-and-PV saving, reading as though the battery cost nothing (finding
+        # #1); with no PV, "PV only" would show a solar system that was never modelled
+        # (finding #7). Suppress rather than render a plausible-looking wrong number.
+        rows = []
+        if has_pv:
+            rows.append(("pv_only", "PV only"))
+        if has_battery:
+            rows.append(("pv_battery", "PV + battery"))
+            rows.append(("pv_battery_predbat", "With Predbat"))
+
+        if not rows:
+            text += "<p class='annual-unavailable'>No PV or battery is configured, so there is nothing to price a payback for.</p>\n"
+            return text
+
         text += "<table class='comparison-table'>\n<tr><th>Option</th><th>Capital</th><th>Saving a year</th><th>Pays back in</th></tr>\n"
-        for key, label in [("pv_only", "PV only"), ("pv_battery", "PV + battery"), ("pv_battery_predbat", "With Predbat")]:
+        for key, label in rows:
             row = payback.get(key) or {}
-            if row.get("pays_back"):
-                years = "{:.1f} years".format(row.get("years", 0))
+            if row.get("pays_back") and row.get("years") is not None:
+                years = "{:.1f} years".format(row["years"])
             else:
                 years = "<span class='annual-unavailable'>does not pay back</span>"
             saving = "£{:,.0f}".format(row.get("annual_saving_gbp", 0))
@@ -898,6 +916,12 @@ class AnnualPage:
         Only months with a usable result contribute a bar. An unavailable month is
         left out of the series entirely rather than plotted as zero - a zero-height
         bar reads as free electricity, which is the opposite of what happened.
+
+        The same rule applies to a scenario missing from a month's own ``scenarios``
+        dict (a run stored before this scenario existed, e.g. a pre-``pv_only`` legacy
+        document): that point is plotted as a gap (``None``, which ApexCharts skips),
+        never as a fabricated zero, and a scenario absent from every included month is
+        dropped from the payload entirely rather than shipped as an all-gap series.
         """
         categories = []
         series = {key: [] for key in SCENARIO_ORDER}
@@ -906,15 +930,17 @@ class AnnualPage:
                 continue
             categories.append(calendar.month_abbr[entry["month"]])
             for key in SCENARIO_ORDER:
-                series[key].append(round(entry.get("scenarios", {}).get(key, {}).get("cost_p", 0) / 100.0, 2))
+                cost_p = entry.get("scenarios", {}).get(key, {}).get("cost_p")
+                series[key].append(round(cost_p / 100.0, 2) if isinstance(cost_p, (int, float)) else None)
 
         if not categories:
             return "<p>No month produced a usable result, so there is nothing to chart.</p>\n"
 
+        chart_keys = [key for key in SCENARIO_ORDER if any(value is not None for value in series[key])]
         payload = {
             "chart": {"type": "bar", "height": 400, "toolbar": {"show": False}},
-            "series": [{"name": SCENARIO_LABELS[key], "data": series[key]} for key in SCENARIO_ORDER],
-            "colors": [SCENARIO_COLOURS[key] for key in SCENARIO_ORDER],
+            "series": [{"name": SCENARIO_LABELS[key], "data": series[key]} for key in chart_keys],
+            "colors": [SCENARIO_COLOURS[key] for key in chart_keys],
             "xaxis": {"categories": categories},
             "yaxis": {"title": {"text": "Cost (£)"}},
             "plotOptions": {"bar": {"columnWidth": "70%", "borderRadius": 4, "borderRadiusApplication": "end"}},
@@ -938,7 +964,13 @@ class AnnualPage:
         return text
 
     def _render_month_table(self, results):
-        """Return the per-month energy breakdown, marking degraded, unavailable and rate-synthesised months."""
+        """Return the per-month energy breakdown, marking degraded, unavailable and rate-synthesised months.
+
+        A scenario missing from a month's own ``scenarios`` dict (e.g. ``pv_only`` on a
+        run stored before that scenario existed) gets no row at all here - not a row of
+        fabricated ``0 kWh`` cells, which would read as "this scenario really used zero
+        energy" rather than "this scenario was never modelled for this month".
+        """
         text = "<h2>By month</h2>\n<table class='comparison-table'>\n"
         text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th></tr>\n"
         for entry in results.get("months", []):
@@ -955,11 +987,15 @@ class AnnualPage:
                 # Without this, it renders identically to a month priced from real
                 # historical rates, which is exactly the ambiguity being fixed here.
                 suffix += " <span class='annual-synthesised-tag' title='Rates for this month came from today&#39;s rates, not what was actually charged then'>rates synthesised: {}</span>".format(html.escape(", ".join(synthesised), quote=True))
+            month_scenarios = entry.get("scenarios", {}) or {}
+            first_row = True
             for key in SCENARIO_ORDER:
-                scenario = entry.get("scenarios", {}).get(key, {})
+                if key not in month_scenarios:
+                    continue
+                scenario = month_scenarios[key]
                 text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(
-                    name if key == SCENARIO_ORDER[0] else "",
-                    suffix if key == SCENARIO_ORDER[0] else "",
+                    name if first_row else "",
+                    suffix if first_row else "",
                     SCENARIO_LABELS[key],
                     self._pounds(scenario.get("cost_p")),
                     round(scenario.get("import_kwh", 0), 1),
@@ -967,6 +1003,7 @@ class AnnualPage:
                     round(scenario.get("pv_generated_kwh", 0), 1),
                     round(scenario.get("battery_throughput_kwh", 0), 1),
                 )
+                first_row = False
         text += "</table>\n"
         return text
 

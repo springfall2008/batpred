@@ -17,6 +17,8 @@ bucketing, not a real price. Interpolating between each band's midpoint keeps to
 cost monotonic across the whole range.
 """
 
+import math
+
 # Published median install costs, GBP per kWp, for financial year 2025/26. Each is the
 # median for systems within a size band, so it describes the typical system at that
 # band's CENTRE - which is where it is anchored below.
@@ -41,9 +43,10 @@ _RATE_KEYS = ("pv_rate_small_gbp_per_kwp", "pv_rate_medium_gbp_per_kwp", "pv_rat
 def resolve_costs(raw):
     """Return the cost settings, merging any overrides over the defaults.
 
-    Every value must be a non-negative number; anything else raises ValueError naming
-    the field, rather than silently falling back to a default and quietly costing the
-    user's system at a price they did not ask for.
+    Every value must be a finite, non-negative number; anything else (including NaN
+    and +/-Infinity, both valid YAML) raises ValueError naming the field, rather than
+    silently falling back to a default and quietly costing the user's system at a
+    price they did not ask for.
     """
     settings = dict(DEFAULT_COSTS)
     if not raw:
@@ -56,6 +59,8 @@ def resolve_costs(raw):
         try:
             number = float(value)
         except (TypeError, ValueError):
+            raise ValueError("annual.costs.{} must be a number, got {!r}".format(key, value))
+        if not math.isfinite(number):
             raise ValueError("annual.costs.{} must be a number, got {!r}".format(key, value))
         if number < 0:
             raise ValueError("annual.costs.{} must not be negative, got {}".format(key, number))

@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 from aiohttp import web as aiohttp_web
 
-from annual import validate_config
+from annual import AnnualConfigError, validate_config
 from annual_store import list_runs, save_run
 from tariff_catalogue import CUSTOM_ID
 from web import WebInterface
@@ -608,6 +608,48 @@ def test_web_annual_form(my_predbat):
             failed = True
         validate_config(config)
 
+        print("Test: a non-numeric panel count reaches validate_config as the posted string, and raises AnnualConfigError, not a bare ValueError")
+        # The kwp branch (numeric("solar_kwp_0")) already passes an unparsed value
+        # straight through so validate_config can raise its actionable error; the
+        # panels branch used to wrap it in int(...), which raised a bare ValueError
+        # from inside config_from_post itself - before validate_config ever ran, and
+        # uncaught by anything in the request handler.
+        postdata = valid_postdata()
+        postdata["solar_mode_0"] = "panels"
+        postdata["solar_panels_0"] = "abc"
+        postdata["solar_panel_watts_0"] = "400"
+        bad_panels_config = make_page(my_predbat).config_from_post(postdata)
+        if bad_panels_config["solar"][0].get("panels") != "abc":
+            print("  ERROR: a non-numeric panel count should survive config_from_post unchanged, got {!r}".format(bad_panels_config["solar"][0].get("panels")))
+            failed = True
+        try:
+            validate_config(bad_panels_config)
+            print("  ERROR: a non-numeric panel count should be rejected by validate_config, it validated cleanly")
+            failed = True
+        except AnnualConfigError:
+            pass
+        except Exception as error:  # noqa: BLE001 - the point of this test is that nothing but AnnualConfigError escapes
+            print("  ERROR: a non-numeric panel count should raise AnnualConfigError, got a bare {}: {}".format(type(error).__name__, error))
+            failed = True
+
+        print("Test: a fractional panel count is rejected by validate_config, not silently truncated")
+        # int(13.7) == 13 would have quietly cost 0.7 of a panel (~£30) less than the
+        # user typed, defeating _require_number's integer-float guard.
+        postdata = valid_postdata()
+        postdata["solar_mode_0"] = "panels"
+        postdata["solar_panels_0"] = "13.7"
+        postdata["solar_panel_watts_0"] = "400"
+        fractional_config = make_page(my_predbat).config_from_post(postdata)
+        if fractional_config["solar"][0].get("panels") != 13.7:
+            print("  ERROR: a fractional panel count should survive config_from_post as 13.7, not truncated, got {!r}".format(fractional_config["solar"][0].get("panels")))
+            failed = True
+        try:
+            validate_config(fractional_config)
+            print("  ERROR: a fractional panel count (13.7) should be rejected, it validated cleanly (silently truncated)")
+            failed = True
+        except AnnualConfigError:
+            pass
+
         print("Test: the cost settings appear and round-trip")
         for key in ["cost_battery_install_gbp", "cost_battery_per_kwh_gbp", "cost_pv_minimum_gbp", "cost_predbat_annual_gbp"]:
             if 'name="{}"'.format(key) not in form:
@@ -621,9 +663,16 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: submitted cost settings should reach the config, got {}".format(config.get("costs")))
             failed = True
 
-        print("Test: the Predbat annual cost defaults to zero")
-        if make_page(my_predbat).prefill_config().get("costs", {}).get("predbat_annual_gbp", 0) != 0:
-            print("  ERROR: predbat_annual_gbp must default to 0 - Predbat is free when self-hosted")
+        print("Test: the Predbat annual cost defaults to zero in the rendered form")
+        # prefill_config() itself has no "costs" key at all when unconfigured (see
+        # DEFAULT_CONFIG), so asserting against prefill_config().get("costs", {})...
+        # reduces to "0 != 0" and would pass even with the whole cost feature deleted.
+        # Assert against what the visitor actually sees instead: the rendered
+        # cost_predbat_annual_gbp field.
+        default_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        default_field = re.search(r'id="cost_predbat_annual_gbp"[^>]*value="([^"]*)"', default_form)
+        if not default_field or float(default_field.group(1)) != 0:
+            print("  ERROR: predbat_annual_gbp must default to 0 - Predbat is free when self-hosted, got {!r}".format(default_field.group(1) if default_field else None))
             failed = True
 
     finally:
@@ -956,6 +1005,81 @@ def test_web_annual_results(my_predbat):
         if label not in payback_html:
             print("  ERROR: the payback table should include {}".format(label))
             failed = True
+
+    print("Test: a no-battery run does not price a PV + battery or With Predbat row")
+    # A user who blanks the battery field gets a config with no battery configured
+    # (a supported, first-class configuration - see build_label's "no battery" runs).
+    # Before the fix, these two rows still rendered at the PV-only capital, reading
+    # as though the battery were free.
+    no_battery = copy.deepcopy(results)
+    no_battery["annual"]["costs"]["battery_kwh"] = 0
+    no_battery_html = page._render_payback(no_battery)
+    if "PV + battery" in no_battery_html or "With Predbat" in no_battery_html:
+        print("  ERROR: a no-battery run must not price a battery row, got {!r}".format(no_battery_html))
+        failed = True
+    if "PV only" not in no_battery_html:
+        print("  ERROR: a no-battery run should still show the PV-only row, got {!r}".format(no_battery_html))
+        failed = True
+
+    print("Test: a no-PV run does not price a PV only row")
+    no_pv = copy.deepcopy(results)
+    no_pv["annual"]["costs"]["total_kwp"] = 0
+    no_pv_html = page._render_payback(no_pv)
+    if "PV only" in no_pv_html:
+        print("  ERROR: a no-PV run must not price a PV-only row, got {!r}".format(no_pv_html))
+        failed = True
+    if "PV + battery" not in no_pv_html or "With Predbat" not in no_pv_html:
+        print("  ERROR: a no-PV run should still show the battery rows, got {!r}".format(no_pv_html))
+        failed = True
+
+    print("Test: a run with neither PV nor battery says so instead of rendering an empty table")
+    neither = copy.deepcopy(results)
+    neither["annual"]["costs"]["battery_kwh"] = 0
+    neither["annual"]["costs"]["total_kwp"] = 0
+    neither_html = page._render_payback(neither)
+    if "<table" in neither_html:
+        print("  ERROR: a run with no PV and no battery must not render a payback table, got {!r}".format(neither_html))
+        failed = True
+
+    print("Test: a payback row with pays_back True but years None does not raise, and falls back safely")
+    # build_payback never produces this combination today, but a future engine
+    # change or a hand-edited stored document could - "{:.1f} years".format(None)
+    # raises TypeError, which would 500 the results page.
+    malformed = copy.deepcopy(results)
+    malformed["annual"]["payback"]["pv_only"] = {"pays_back": True, "years": None, "capital_gbp": 8000.0, "annual_saving_gbp": 100.0, "gross_annual_saving_gbp": 100.0, "predbat_annual_gbp": 0.0}
+    try:
+        malformed_html = page._render_payback(malformed)
+    except TypeError as error:
+        print("  ERROR: a row with pays_back True and years None must not raise, got {}".format(error))
+        failed = True
+    else:
+        if "does not pay back" not in malformed_html.lower():
+            print("  ERROR: a row with years=None should fall back to the 'does not pay back' message, got {!r}".format(malformed_html))
+            failed = True
+
+    print("Test: a scenario missing from every included month (a run stored before the scenario existed) is dropped from the chart, not drawn as a fabricated zero bar")
+    legacy_results = copy.deepcopy(sample_run_results())
+    for month_entry in legacy_results["months"]:
+        (month_entry.get("scenarios") or {}).pop("pv_only", None)
+    legacy_chart_html = page._render_chart(legacy_results)
+    if '"PV only"' in legacy_chart_html:
+        print("  ERROR: a scenario absent from every included month must be dropped from the chart series entirely, got it still named in the payload: {!r}".format(legacy_chart_html))
+        failed = True
+    if "#9439ef" in legacy_chart_html:
+        print("  ERROR: the PV-only colour must not appear once the scenario itself was dropped from the chart")
+        failed = True
+    if "No PV/Battery" not in legacy_chart_html:
+        print("  ERROR: the other, still-present scenarios must still render normally in the chart")
+        failed = True
+
+    print("Test: the same missing scenario is omitted from the month table, not shown as a fabricated 0 kWh row")
+    legacy_month_table = page._render_month_table(legacy_results)
+    if "PV only" in legacy_month_table:
+        print("  ERROR: a scenario missing from a month must not get a row in the month table, got {!r}".format(legacy_month_table))
+        failed = True
+    if "No PV/Battery" not in legacy_month_table:
+        print("  ERROR: the other, still-present scenarios must still get a row in the month table")
+        failed = True
 
     print("Test: a non-paying-back option says so rather than showing a number")
     no_payback = copy.deepcopy(results)

@@ -90,6 +90,20 @@ def test_annual_costs(my_predbat):
         print("  ERROR: custom cost settings were not honoured: {}".format(custom))
         failed = True
 
+    print("Test: NaN and Infinity are rejected, not accepted as valid costs")
+    # float("nan") < 0 is False, so the existing "must not be negative" guard alone lets
+    # NaN straight through; a NaN annual_saving_gbp then makes payback_row's net <= 0
+    # gate also False (NaN comparisons are always False), so it reports "pays_back:
+    # True, years: nan" and the page would render "nan years" as though it were a real
+    # answer. math.isfinite must catch both NaN and +/-Infinity before that can happen.
+    for bad in [float("nan"), float("inf"), float("-inf")]:
+        try:
+            resolve_costs({"predbat_annual_gbp": bad})
+            print("  ERROR: resolve_costs should reject a non-finite cost ({}), it was accepted".format(bad))
+            failed = True
+        except ValueError:
+            pass
+
     print("Test: payback divides capital by the annual saving")
     row = payback_row(10000.0, 1000.0)
     if not row["pays_back"] or not close(row["years"], 10.0):
