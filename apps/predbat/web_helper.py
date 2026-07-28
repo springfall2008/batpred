@@ -6378,6 +6378,10 @@ def get_plan_renderer_js():
             // not 0 which is what a plain hours*60+minutes calculation would return).
             window.planMidnightRef = jsonData.time || null;
 
+            // Reason templates come from the dataset being rendered, not from window.planData -
+            // the History/Yesterday views publish their own copy alongside their own rows.
+            const reasonTemplates = jsonData.reason_templates;
+
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
@@ -6462,15 +6466,16 @@ def get_plan_renderer_js():
                 // State cells (with rowspan and split handling)
                 if (!row.skip_state_cell) {
                     if (editable) {
-                        html += renderStateCell(row, timeDisplay, overrides);
+                        html += renderStateCell(row, timeDisplay, overrides, reasonTemplates);
                     } else {
                         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
                         const colspanAttr = row.split ? '' : ' colspan=2';
-                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}>${row.state_text || ''}</td>`;
+                        const titleAttr = reasonTitleAttr(row, reasonTemplates);
+                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}${titleAttr}>${row.state_text || ''}</td>`;
 
-                        // Second state cell if split
+                        // Second state cell if split - same combined reason text as the first half
                         if (row.split && row.state2_text) {
-                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${titleAttr}>${row.state2_text}</td>`;
                         }
                     }
                 }
@@ -6705,7 +6710,7 @@ def get_plan_renderer_js():
                 if (!template) {
                     return '';
                 }
-                return template.replace(/\{(\w+)\}/g, function (match, key) {
+                return template.replace(/\\{(\\w+)\\}/g, function (match, key) {
                     return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
                 });
             })
@@ -6713,8 +6718,16 @@ def get_plan_renderer_js():
             .join(' ');
     }
 
+    // Build the ` title="..."` tooltip attribute for a row's state cell, or '' when the row
+    // has no reasons. Shared by both the editable (renderStateCell) and read-only state-cell
+    // paths so the History/Yesterday views get the same tooltips as the plan view.
+    function reasonTitleAttr(row, templates) {
+        const reasonText = renderReasonText(row.reasons, templates);
+        return reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
+    }
+
     // Render state cell without dropdown (dropdown moved to time column)
-    function renderStateCell(row, timeDisplay, overrides) {
+    function renderStateCell(row, timeDisplay, overrides, templates) {
         const cellStyle = 'style="padding: 4px;"';
         const timeStr = row.time;
         const minutesFromMidnight = row.slot_minute !== undefined ? row.slot_minute : getMinutesFromTimeString(timeStr);
@@ -6742,8 +6755,7 @@ def get_plan_renderer_js():
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
         const colspanAttr = row.split ? '' : ' colspan=2';
-        const reasonText = renderReasonText(row.reasons, window.planData && window.planData.reason_templates);
-        const titleAttr = reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
+        const titleAttr = reasonTitleAttr(row, templates);
 
         let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}"${titleAttr}>`;
         html += row.state_text || '';

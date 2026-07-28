@@ -32,12 +32,18 @@ REASON_TEMPLATES = {
     "demand_rising": "Battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
     "demand_falling": "Battery is expected to discharge to cover house demand; no charging or exporting is scheduled this slot.",
     "demand_steady": "Battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
-    "freeze_charge_reserve": "Freeze charging — the battery holds at the reserve level rather than charging further this slot (import rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
+    # Used for the first half of a split slot where the export window only starts partway through -
+    # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
+    # reasons above, which would contradict the export reason sitting alongside it in the same slot.
+    "demand_before_export_rising": "Until the export window starts partway through this slot, the battery level is expected to rise from solar generation.",
+    "demand_before_export_falling": "Until the export window starts partway through this slot, the battery is expected to discharge to cover house demand.",
+    "demand_before_export_steady": "Until the export window starts partway through this slot, the battery level is expected to stay steady.",
+    "freeze_charge": "Freeze charging — the battery holds at the current level rather than charging further this slot (import rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
     "hold_charge_at_target": "Holding — the battery is already predicted to be at or above the {target_percent}% target for this window without charging further.",
-    "charge_low_rate": "Charging up to {target_percent}% because the import rate this slot ({rate}p/kWh) is low enough to be worth it before a more expensive period.",
-    "freeze_export_below_threshold": "Freezing export — the battery holds its charge rather than selling it back this slot (export rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
+    "charge_low_rate": "Charging up to {target_percent}% at the import rate for this slot of ({rate}p/kWh).",
+    "freeze_export_below_threshold": "Freezing export — excess solar is exported to the grid (export rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
     "hold_export_unreachable": "Export window active but not triggered — the battery isn't predicted to reach the {target_percent}% level needed to export this slot.",
-    "export_high_rate": "Exporting down to {target_percent}% because the export rate this slot ({rate}p/kWh) is high enough to be worth selling stored energy back to the grid.",
+    "export_high_rate": "Exporting down to {target_percent}% at the export rate of ({rate}p/kWh) using stored energy back to the grid.",
     "manual_override_charge": "You manually set this slot to charge.",
     "manual_override_freeze_charge": "You manually set this slot to freeze charging.",
     "manual_override_export": "You manually set this slot to export.",
@@ -1269,7 +1275,7 @@ class Output:
                         state_color = "#EEEEEE"
                         raw_state = "FrzChrg"
                         limit_percent = soc_percent
-                        reason_parts.append({"code": "freeze_charge_reserve", "params": {"rate": "{:.2f}".format(rate_value_import), "threshold": "{:.2f}".format(import_cost_threshold)}})
+                        reason_parts.append({"code": "freeze_charge", "params": {"rate": "{:.2f}".format(rate_value_import), "threshold": "{:.2f}".format(import_cost_threshold)}})
                     elif limit_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
@@ -1299,12 +1305,18 @@ class Output:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
-                        if soc_change_this >= 0:
-                            state = " &nearr;"
-                        elif soc_change_this < 0:
-                            state = " &searr;"
-                        else:
+                        # Same near-flat tolerance as the whole-slot demand arrow above - testing
+                        # soc_change_this >= 0 first would make the steady case unreachable and
+                        # render a flat pre-window period as rising
+                        if abs(soc_change_this) < 0.05:
                             state = " &rarr;"
+                            reason_parts.append({"code": "demand_before_export_steady", "params": {}})
+                        elif soc_change_this >= 0:
+                            state = " &nearr;"
+                            reason_parts.append({"code": "demand_before_export_rising", "params": {}})
+                        else:
+                            state = " &searr;"
+                            reason_parts.append({"code": "demand_before_export_falling", "params": {}})
                         state_color = "#FFFFFF"
                         show_limit = ""
                         had_state = True
