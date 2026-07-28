@@ -984,7 +984,7 @@ class AnnualPage:
         """Return the run selector, or nothing when there are no stored runs."""
         if not runs:
             return ""
-        text = '<form action="./annual" method="get" class="annual-selector"><label for="run">Run</label><select id="run" name="run" onchange="this.form.submit()">\n'
+        text = '<form action="./annual_view" method="get" class="annual-selector"><label for="run">Run</label><select id="run" name="run" onchange="this.form.submit()">\n'
         for run in runs:
             run_id = html.escape(str(run["id"]), quote=True)
             label = html.escape(str(run.get("label", run["id"])), quote=True)
@@ -1324,6 +1324,12 @@ annualLoadPlan();
         years = payback_years.get(key)
         if years is None:
             return '<td class="annual-unavailable">does not pay back</td>\n'
+        # A non-numeric years figure (a corrupt stored document, say) is unknown, not
+        # "never pays back" - render the same dash used for a value that was never
+        # computed, rather than letting "{:.1f}".format() raise and 500 the whole
+        # compare page.
+        if not isinstance(years, (int, float)):
+            return '<td class="annual-unavailable">—</td>\n'
         return "<td>{}</td>\n".format(html.escape("{:.1f} years".format(years), quote=True))
 
     def render_nav(self, current):

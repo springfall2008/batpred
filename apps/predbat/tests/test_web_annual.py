@@ -1226,6 +1226,19 @@ def test_web_annual_results(my_predbat):
         print("  ERROR: the selected run should be marked in the dropdown")
         failed = True
 
+    print("Test: the selector submits to the viewer, not the configure page")
+    # Before the page split, ./annual rendered the results and read ?run=; now it is
+    # the configuration form and ignores the parameter entirely. A selector that still
+    # posts to ./annual strands the visitor on the config page with the run dropped -
+    # the critical regression this test exists to catch.
+    selector_html = page._render_selector(runs, runs[0]["id"])
+    if 'action="./annual_view"' not in selector_html:
+        print("  ERROR: the run selector should submit to ./annual_view, got {!r}".format(selector_html))
+        failed = True
+    if 'action="./annual"' in selector_html:
+        print("  ERROR: the run selector must not submit to ./annual (the configure page), got {!r}".format(selector_html))
+        failed = True
+
     print("Test: a download link is offered for the selected run")
     if "annual_download?run=20260726-101500" not in html:
         print("  ERROR: the selected run should be downloadable as JSON")
@@ -1363,6 +1376,46 @@ def test_web_annual_pages(my_predbat):
         print("  ERROR: the viewer page must not render the configuration form")
         failed = True
 
+    print("Test: the viewer renders a stored run's own figures, selector and plan viewer")
+    # The negative assertion above (no form) would still pass if html_annual_view
+    # stopped calling render_results altogether - that is precisely the hole finding
+    # #1 (the selector navigating to the wrong page) fell through: nothing drove the
+    # viewer against a real stored run. Round-tripped through save_run/load_run/
+    # list_runs, not a hand-built dict - a hand-built dict would stay green even if
+    # the viewer read plans straight off the document instead of the index's
+    # plan_index, a mistake already made twice on this branch.
+    view_storage = RaceStorage()
+    page._storage = lambda: view_storage
+    stored_view_results = copy.deepcopy(sample_run_results())
+    stored_view_results["months"][0]["plans"] = [{"day": "2025-01-15", "leg": "single", "scenarios": {"with_predbat": {"rows": [], "soc_max": 9.5}}}]
+    asyncio.run(save_run(view_storage, stored_view_results, {}, "20260728-view-check"))
+    stored_view_html = asyncio.run(page.html_annual_view(FakeRequest(query={"run": "20260728-view-check"}))).text
+    page._storage = lambda: None  # restore the default so later tests in this function are unaffected
+    if "Annual totals for" not in stored_view_html:
+        print("  ERROR: the viewer should render the stored run's own totals heading")
+        failed = True
+    if "90.00" not in stored_view_html:
+        print("  ERROR: the viewer should render the stored run's own PV/battery saving (9000p = £90.00)")
+        failed = True
+    if "24.00" not in stored_view_html:
+        print("  ERROR: the viewer should render the stored run's own Predbat saving (2400p = £24.00)")
+        failed = True
+    if "annual-selector" not in stored_view_html:
+        print("  ERROR: the viewer should show the run selector for a stored run")
+        failed = True
+    if "20260728-view-check" not in stored_view_html:
+        print("  ERROR: the viewer should identify the selected run in the selector")
+        failed = True
+    if "annual-plan-viewer" not in stored_view_html:
+        print("  ERROR: a stored run with a plan_index should still render the plan viewer")
+        failed = True
+    if "2025-01-15" not in stored_view_html:
+        print("  ERROR: the plan viewer's day option should come from the stored run's plan_index")
+        failed = True
+    if "renderPlanTable" not in stored_view_html:
+        print("  ERROR: the plan viewer must use the existing plan renderer")
+        failed = True
+
     print("Test: the nav marks the current page and disables the end arrows")
     nav = page.render_nav("config")
     if "annual-nav-current" not in nav:
@@ -1395,7 +1448,11 @@ def test_web_annual_pages(my_predbat):
     runs = [
         {
             "id": "20260728-0900",
-            "label": "9.5 kWh battery, 5.6 kWp, Agile",
+            # Deliberately does not repeat "5.6"/"9.5" in the label: earlier versions of
+            # this test used a label like "9.5 kWh battery, 5.6 kWp, Agile", which meant
+            # the Solar/Battery assertions below were satisfied by the label text alone -
+            # deleting the Solar/Battery <td> cells outright would still have passed.
+            "label": "System Alpha, Agile",
             "summary": {
                 "total_kwp": 5.6,
                 "battery_kwh": 9.5,
@@ -1409,7 +1466,7 @@ def test_web_annual_pages(my_predbat):
         },
         {
             "id": "20260728-0800",
-            "label": "20 kWh battery, 12 kWp, Cosy",
+            "label": "System Beta, Cosy",
             "summary": {
                 "total_kwp": 12.0,
                 "battery_kwh": 20.0,
@@ -1423,7 +1480,7 @@ def test_web_annual_pages(my_predbat):
         },
     ]
     table = page.render_compare(runs, "20260728-0900")
-    for expected in ["5.6", "9.5", "Agile", "13.6", "12", "20", "Cosy", "8.2"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Agile", "13.6", "12 kWp", "20 kWh", "Cosy", "8.2"]:
         if expected not in table:
             print("  ERROR: the compare table should show {}, got {}".format(expected, table))
             failed = True
@@ -1442,8 +1499,8 @@ def test_web_annual_pages(my_predbat):
         failed = True
     else:
         row_expectations = [
-            ("5.6 kWp, Agile", ["5.6", "9.5", "Agile", "13.6"], ["Cosy", "8.2", "12 kWp"]),
-            ("12 kWp, Cosy", ["12", "20", "Cosy", "8.2"], ["Agile", "13.6", "5.6 kWp"]),
+            ("System Alpha, Agile", ["5.6 kWp", "9.5 kWh", "Agile", "13.6"], ["Cosy", "8.2", "12 kWp", "20 kWh"]),
+            ("System Beta, Cosy", ["12 kWp", "20 kWh", "Cosy", "8.2"], ["Agile", "13.6", "5.6 kWp", "9.5 kWh"]),
         ]
         for row, (label_fragment, must_contain, must_not_contain) in zip(data_rows, row_expectations):
             if label_fragment not in row:
@@ -1470,6 +1527,40 @@ def test_web_annual_pages(my_predbat):
             failed = True
         if "£1400.00" not in data_rows[1]:
             print("  ERROR: saving_vs_none_p=140000.0p should render as £1400.00 on the Cosy row, got {}".format(data_rows[1]))
+            failed = True
+
+    print("Test: unknown Solar/Battery/Cost/Saving figures render as a dash, never as 0 or n/a")
+    # _compare_number and _compare_money exist solely to turn a None summary figure
+    # into "-" rather than "0 kWp"/"n/a" - a None kWp reading as "a system with no
+    # panels" or a None saving reading as "n/a" are both worse than an honest "unknown".
+    # No other fixture in this file supplies None for these four fields, so replacing
+    # either helper with a plain formatter would have stayed green.
+    unknown_run = [
+        {
+            "id": "unknown-figures",
+            "label": "System Gamma, unknown figures",
+            "summary": {
+                "total_kwp": None,
+                "battery_kwh": None,
+                "tariff": "Agile",
+                "cost_with_predbat_p": None,
+                "saving_vs_none_p": None,
+                "payback_years": {"pv_only": 5.0, "pv_battery": 4.0, "pv_battery_predbat": 3.0},
+                "payback_reason": None,
+                "months_included": 12,
+            },
+        }
+    ]
+    unknown_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", page.render_compare(unknown_run, "unknown-figures"), re.S) if "<th>" not in row][0]
+    unknown_cells = re.findall(r"<td[^>]*>(.*?)</td>", unknown_row, re.S)
+    # Cell order: label, Solar, Battery, Tariff, Cost, Saving, then three payback cells.
+    for index, field in [(1, "total_kwp"), (2, "battery_kwh"), (4, "cost_with_predbat_p"), (5, "saving_vs_none_p")]:
+        cell = unknown_cells[index].strip()
+        if cell != "—":
+            print("  ERROR: an unknown {} should render as a dash, got {!r} in cell {}".format(field, cell, unknown_cells))
+            failed = True
+        if cell in ("0", "0 kWp", "0 kWh", "£0.00", "n/a"):
+            print("  ERROR: an unknown {} must not render as zero/n-a, got {!r}".format(field, cell))
             failed = True
 
     print("Test: a run whose payback was unavailable shows a dash and its reason, not a number")
@@ -1517,6 +1608,44 @@ def test_web_annual_pages(my_predbat):
     if "does not pay back" not in page.render_compare(never, "y"):
         print("  ERROR: a non-paying-back run should say so")
         failed = True
+
+    print("Test: a non-numeric payback 'years' renders as a dash instead of 500ing the whole compare page")
+    # build_summary type-guards cost_p but passes years through unchecked (finding #4);
+    # a hand-edited or corrupted stored document with years as a string must not raise
+    # out of "{:.1f} years".format(years) at render time - backfill_summaries' own
+    # try/except cannot catch a render-time raise, so one bad document would take down
+    # /annual_compare for every run.
+    corrupt_years = [
+        {
+            "id": "z",
+            "label": "corrupt",
+            "summary": {
+                "total_kwp": 5.0,
+                "battery_kwh": 9.0,
+                "tariff": "Agile",
+                "cost_with_predbat_p": 100.0,
+                "saving_vs_none_p": 50.0,
+                "payback_years": {"pv_only": "17.8", "pv_battery": None, "pv_battery_predbat": 9.0},
+                "payback_reason": None,
+                "months_included": 12,
+            },
+        }
+    ]
+    try:
+        corrupt_html = page.render_compare(corrupt_years, "z")
+    except ValueError as error:
+        print("  ERROR: a non-numeric payback 'years' must not raise, got {}".format(error))
+        failed = True
+    else:
+        corrupt_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", corrupt_html, re.S) if "<th>" not in row][0]
+        corrupt_cells = re.findall(r"<td[^>]*>(.*?)</td>", corrupt_row, re.S)
+        # Cell order: label, Solar, Battery, Tariff, Cost, Saving, pv_only, pv_battery, pv_battery_predbat.
+        if corrupt_cells[6].strip() != "—":
+            print("  ERROR: a non-numeric pv_only years should render as a dash, got {!r}".format(corrupt_cells[6]))
+            failed = True
+        if "17.8" in corrupt_cells[6]:
+            print("  ERROR: a non-numeric years must not be formatted as though it were a float, got {!r}".format(corrupt_cells[6]))
+            failed = True
 
     print("Test: the compare table is horizontally scrollable rather than widening the page")
     if "overflow-x" not in page.render_css():
