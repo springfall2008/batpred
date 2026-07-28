@@ -1024,9 +1024,10 @@ def test_web_annual_results(my_predbat):
             print("  ERROR: {} fails CVD separation for this chart and must not be used".format(banned))
             failed = True
 
-    print("Test: the results are visually separated from the form above them")
-    if "annual-divider" not in html or ">Results<" not in html:
-        print("  ERROR: the results need their own heading and a divider from the settings form")
+    print("Test: the nav marks the viewer as the current page, so it is clear which page this is")
+    nav = page.render_nav("view")
+    if "annual-nav-current" not in nav:
+        print("  ERROR: the nav should mark the viewer page as current")
         failed = True
 
     print("Test: a run states the key settings it actually used")
@@ -1341,6 +1342,58 @@ def test_web_annual_results(my_predbat):
     return failed
 
 
+def test_web_annual_pages(my_predbat):
+    """Verify the config, viewer and compare pages are separate, and the nav between them."""
+    failed = False
+    print("**** Testing web_annual pages and nav ****")
+
+    print("Test: the config page shows the form and no results")
+    page = make_page(my_predbat)
+    config_html = asyncio.run(page.html_annual(FakeRequest())).text
+    if 'name="solar_kwp_0"' not in config_html:
+        print("  ERROR: the config page should show the form")
+        failed = True
+    if "Annual totals for" in config_html or "What this run used" in config_html:
+        print("  ERROR: the config page must not also render the results")
+        failed = True
+
+    print("Test: the viewer shows results and no form")
+    view_html = asyncio.run(page.html_annual_view(FakeRequest())).text
+    if 'name="solar_kwp_0"' in view_html:
+        print("  ERROR: the viewer page must not render the configuration form")
+        failed = True
+
+    print("Test: the nav marks the current page and disables the end arrows")
+    nav = page.render_nav("config")
+    if "annual-nav-current" not in nav:
+        print("  ERROR: the nav should mark the current page")
+        failed = True
+    if "annual-nav-disabled" not in nav:
+        print("  ERROR: the arrow at the first page should be disabled, not wrap")
+        failed = True
+    middle = page.render_nav("view")
+    if "annual-nav-disabled" in middle:
+        print("  ERROR: neither arrow should be disabled on the middle page")
+        failed = True
+    for target in ["./annual", "./annual_view", "./annual_compare"]:
+        if target not in nav:
+            print("  ERROR: the nav should link to {}".format(target))
+            failed = True
+
+    print("Test: the progress area is on every page, so a run stays visible when you navigate")
+    for name, rendered in [("config", config_html), ("view", view_html)]:
+        if "annual-progress" not in rendered:
+            print("  ERROR: the {} page should carry the progress area".format(name))
+            failed = True
+
+    print("Test: a finished run sends the tab that started it to the viewer, not the form")
+    if "'./annual_view'" not in page.render_script():
+        print("  ERROR: run completion should navigate to the viewer page")
+        failed = True
+
+    return failed
+
+
 def _collect_stringy_numbers(node, path, failures):
     """Recursively record every path in ``node`` whose value is a string that parses as a number.
 
@@ -1443,7 +1496,7 @@ def test_web_annual_post_numeric_coercion(my_predbat):
 
 
 def test_web_annual_routes_registered(my_predbat):
-    """Verify all seven Annual routes are registered, so a typo'd path cannot ship green."""
+    """Verify all nine Annual routes are registered, so a typo'd path cannot ship green."""
     failed = False
     print("**** Testing web_annual route registration ****")
 
@@ -1463,6 +1516,8 @@ def test_web_annual_routes_registered(my_predbat):
         ("POST", "/annual_cancel"),
         ("GET", "/annual_download"),
         ("GET", "/annual_plan"),
+        ("GET", "/annual_view"),
+        ("GET", "/annual_compare"),
     }
     missing = expected - registered
     if missing:

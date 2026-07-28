@@ -76,6 +76,10 @@ def _json_for_script(value):
 class AnnualPage:
     """Renders and drives the Annual prediction tab."""
 
+    # Ordered, because the arrows step through it. Not wrapped: "next" from the last page
+    # landing back on the first reads as a misclick rather than a choice.
+    NAV_PAGES = [("config", "Configure", "./annual"), ("view", "Results", "./annual_view"), ("compare", "Compare", "./annual_compare")]
+
     def __init__(self, web_interface):
         """Attach to the running web interface so args and Storage are reachable."""
         self.web = web_interface
@@ -676,7 +680,7 @@ class AnnualPage:
         return status
 
     async def html_annual(self, request, error=None, config=None):
-        """Render the Annual tab: the form, then the selected run's results.
+        """Render the Annual configuration page: the form and the run progress, nothing else.
 
         ``error`` is a validation message threaded through from a POST handler in
         the same request-response cycle, not read off ``self`` - the page object is
@@ -689,6 +693,12 @@ class AnnualPage:
         silently discard whatever the visitor had actually typed and re-render the
         previous, unrelated saved configuration instead - the opposite of the "form
         still populated with what was entered" behaviour ``render_form`` promises.
+
+        Deliberately does not render any stored run's results: showing the form and a
+        past run's totals on the same page let the form's current values read as
+        though they described the run below them, which is often untrue - the run
+        selector can show a run made on a completely different system. The results
+        live on their own page, ``html_annual_view``.
         """
         self.web.default_page = "./annual"
         if config is None:
@@ -697,14 +707,43 @@ class AnnualPage:
         text = self.web.get_header("Predbat Annual")
         text += "<body>\n"
         text += self.render_css()
+        text += self.render_nav("config")
         text += self.render_form(config, errors=error)
         text += self.render_progress()
+        text += self.render_script()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
 
+    async def html_annual_view(self, request):
+        """Render the results viewer for one stored run."""
+        self.web.default_page = "./annual_view"
+        text = self.web.get_header("Predbat Annual")
+        text += "<body>\n"
+        text += self.render_css()
+        text += self.render_nav("view")
+        text += self.render_progress()
         storage = self._storage()
         runs = await list_runs(storage)
         selected = request.query.get("run") or (runs[0]["id"] if runs else None)
         results = await load_run(storage, selected) if selected else None
         text += self.render_results(results, runs, selected)
+        text += self.render_script()
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
+    async def html_annual_compare(self, request):
+        """Render the compare page.
+
+        A placeholder until a later task fills it in: only the nav and progress area,
+        so the route exists and the tab strip has somewhere real to link to rather
+        than 404ing.
+        """
+        self.web.default_page = "./annual_compare"
+        text = self.web.get_header("Predbat Annual")
+        text += "<body>\n"
+        text += self.render_css()
+        text += self.render_nav("compare")
+        text += self.render_progress()
         text += self.render_script()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -884,13 +923,14 @@ class AnnualPage:
             return "n/a"
 
     def render_results(self, results, runs, selected_id):
-        """Return the results view: selector, run details, totals, chart, monthly table, caveats."""
-        # The form above and the results below are two different things - one is what
-        # you are about to run, the other is what a past run actually used - and with no
-        # break between them it was easy to read the form's current values as though
-        # they described the run on screen. They often do not: the selector can show a
-        # run from a completely different system.
-        text = '<hr class="annual-divider">\n<h1 class="annual-results-heading">Results</h1>\n<div class="annual-results">\n'
+        """Return the results view: selector, run details, totals, chart, monthly table, caveats.
+
+        The configuration form and these results now live on separate pages (see
+        ``html_annual`` and ``html_annual_view``), so no divider or heading is needed
+        here to keep them visually apart - the nav strip above already tells the
+        visitor which page, and therefore which of the two, they are looking at.
+        """
+        text = '<div class="annual-results">\n'
         text += self._render_selector(runs, selected_id)
 
         if not results:
@@ -1199,6 +1239,20 @@ annualLoadPlan();
         text += "</ul>\n"
         return text
 
+    def render_nav(self, current):
+        """Return the tab strip, marking the current page and disabling the end arrows."""
+        names = [name for name, _, _ in self.NAV_PAGES]
+        position = names.index(current) if current in names else 0
+        text = '<div class="annual-nav">\n'
+        previous = self.NAV_PAGES[position - 1][2] if position > 0 else None
+        text += '<a class="annual-nav-arrow{}" href="{}">&#9664;</a>\n'.format("" if previous else " annual-nav-disabled", previous or "#")
+        for name, label, href in self.NAV_PAGES:
+            text += '<a class="annual-nav-tab{}" href="{}">{}</a>\n'.format(" annual-nav-current" if name == current else "", href, label)
+        following = self.NAV_PAGES[position + 1][2] if position < len(self.NAV_PAGES) - 1 else None
+        text += '<a class="annual-nav-arrow{}" href="{}">&#9654;</a>\n'.format("" if following else " annual-nav-disabled", following or "#")
+        text += "</div>\n"
+        return text
+
     def render_css(self):
         """Return the scoped styles for the tab."""
         return """<style>
@@ -1219,8 +1273,17 @@ annualLoadPlan();
 .annual-progress { margin: 1rem 0; }
 .annual-bar { height: 1.25rem; border: 1px solid var(--md-border, #cbd5e1); }
 .annual-bar-fill { height: 100%; background: #0072B2; width: 0%; }
-.annual-divider { border: 0; border-top: 2px solid var(--md-border, #cbd5e1); margin: 2rem 0 1rem; }
-.annual-results-heading { margin-top: 0; }
+/* The tab strip between the header and the page body. The current tab is visually
+   distinct (bold, underlined) so a visitor can tell which of the three pages they are
+   on without reading the URL. A disabled arrow - at either end of the strip, never in
+   the middle - is faded AND pointer-events:none, so it cannot be clicked at all: merely
+   fading it would still let "next" from the last page wrap back to the first, which
+   reads as a misclick rather than a deliberate choice. */
+.annual-nav { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 1px solid var(--md-border, #cbd5e1); padding-bottom: 0.5rem; }
+.annual-nav-tab { padding: 0.25rem 0.75rem; text-decoration: none; border-radius: 3px; }
+.annual-nav-tab.annual-nav-current { font-weight: 600; text-decoration: underline; }
+.annual-nav-arrow { text-decoration: none; padding: 0 0.5rem; }
+.annual-nav-arrow.annual-nav-disabled { opacity: 0.35; pointer-events: none; }
 /* Label column narrow and left-aligned, so the values line up and read as a list of
    settings rather than a data grid. */
 .annual-details th { text-align: left; white-space: nowrap; padding-right: 1rem; font-weight: 600; }
@@ -1307,8 +1370,8 @@ function annualPoll() {
       if (button) { button.disabled = false; }
       if (s.state === 'complete') {
         box.style.display = 'block';
-        // The tab that started the run goes straight to the results - ./annual with no
-        // run parameter selects the newest stored run, which is the one that just
+        // The tab that started the run goes straight to the viewer - ./annual_view with
+        // no run parameter selects the newest stored run, which is the one that just
         // finished. Every OTHER tab only gets the link: this poll fires in all of them,
         // including ones mid-edit on a form for a run they never started, and a forced
         // reload there would silently drop whatever the user had typed.
@@ -1318,10 +1381,10 @@ function annualPoll() {
         // page's own first poll sees idle rather than 'complete' again.
         if (annualStartedHere()) {
           document.getElementById('annual-progress-text').textContent = 'Run complete — loading results…';
-          window.location.href = './annual';
+          window.location.href = './annual_view';
           return;
         }
-        document.getElementById('annual-progress-text').innerHTML = 'Run complete — <a href="./annual">view results</a>';
+        document.getElementById('annual-progress-text').innerHTML = 'Run complete — <a href="./annual_view">view results</a>';
         return;
       }
       if (s.state === 'failed' || s.state === 'cancelled') {
