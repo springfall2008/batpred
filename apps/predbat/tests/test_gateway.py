@@ -1773,7 +1773,7 @@ class TestAutomaticConfig:
             gateway_device_id="pbgw_test",
             mqtt_host="mqtt.example.com",
             mqtt_token="tok",
-            gateway_inverter_serial=["", "  ", " CE000000AA1 ", "\t"],
+            gateway_inverter_serial=["", None, "  ", " CE000000AA1 ", "\t"],
         )
         assert gw.gateway_inverter_serial == ["CE000000AA1"]
 
