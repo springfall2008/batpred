@@ -165,6 +165,22 @@ Compare. Unlike the rest of the UI it needs neither Home Assistant nor a configu
 Predbat instance — it is the tool a prospective buyer reaches for before they have
 installed anything, as well as the quick option for an existing user.
 
+Annual is actually three pages, not one — Configure (`/annual`), Results
+(`/annual_view`) and Compare (`/annual_compare`) — sharing a tab strip with
+previous/next arrows across the top of all three:
+
+```text
+◀   [ Configure ]  [ Results ]  [ Compare ]   ▶
+```
+
+The current page is marked in the strip. The arrows step through that order and stop
+at the ends rather than wrapping — pressing "next" on Compare does not loop back round
+to Configure. Configure holds the form and the **Run simulations** button; Results
+holds the run selector, "what this run used", the annual totals, chart, month table,
+cost and payback, the plan viewer and the caveats; Compare holds the run-comparison
+table described below. Each is a real URL you can bookmark, so the browser's back button
+and a saved link both behave.
+
 ### The form
 
 The form prefills from your live Predbat setup wherever it can: location, solar arrays,
@@ -206,12 +222,14 @@ to six minutes with a car configured (each sampled day is planned twice — with
 without a charging session — to work out how often the car overflows the cheap window).
 Once started it shows a progress bar with the current step and elapsed time, and it keeps
 running on the server if you navigate away or close the tab — come back to the Annual tab
-later and the same run is still there, or already finished. Only one run is active at a
-time: submitting **Run** again while one is already in progress does not queue a second
-run or interrupt the first, though any form edits you made are still saved.
+later and the same run is still there, or already finished. The progress area appears on
+all three pages, not just Configure, so switching to Results or Compare mid-run does not
+lose sight of it. Only one run is active at a time: submitting **Run** again while one is
+already in progress does not queue a second run or interrupt the first, though any form
+edits you made are still saved.
 
 **Cancel** stops the running job. When the run finishes, the tab you pressed **Run
-simulations** in goes straight to the results.
+simulations** in navigates straight to the Results page.
 
 Any other tab you have open only gets a **view results** link rather than being
 navigated. The progress poll runs in every open tab, so reloading them all would
@@ -219,22 +237,50 @@ silently discard whatever had been typed into a form somewhere else — an earli
 version of the page did exactly that. Only the tab that actually started the run
 follows the completion.
 
-### Comparing runs
-
-Every completed run is saved automatically — there is nothing to press — and the last
-twenty are kept, each labelled with a short summary of its
-configuration (battery size, solar size, tariff) rather than just a timestamp. A selector
-above the results lets you switch between them — instantly, with no re-run — so you can
-compare a 5 kWh battery against a 10 kWh one, or two tariffs, side by side. Each stored
-run can also be downloaded as its raw JSON results document.
-
 ### The results view
 
-The results view mirrors the CLI's output: an annual totals table, the chart below, a
+The Results page mirrors the CLI's output: an annual totals table, the chart below, a
 month-by-month breakdown and the run's caveats. One thing carries over unchanged from how
 the engine reports it, and matters for reading the numbers correctly: a month with
 `status: unavailable` is left out of the chart and the totals — it is never drawn as a
 zero-cost bar or counted as a free month.
+
+Every completed run is saved automatically — there is nothing to press — and the last
+twenty are kept, each labelled with a short summary of its configuration (battery size,
+solar size, tariff) rather than just a timestamp. A selector above the results lets you
+switch between them — instantly, with no re-run — so you can compare a 5 kWh battery
+against a 10 kWh one, or two tariffs, side by side. Each stored run can also be
+downloaded as its raw JSON results document; a debug run's captured plans are not part
+of that download (see [Debugging a run](#debugging-a-run)).
+
+### Comparing runs
+
+The Compare page lists every stored run in one table, newest first, so you do not have
+to hold numbers in your head while flipping the Results selector back and forth. Each
+row is: run (label, linking to that run in the Results page), solar size, battery size,
+import tariff, cost with Predbat, saving versus no system, and three payback columns —
+PV only, PV + battery, and + Predbat. The row for the run the Results page is currently
+showing is highlighted. Nine columns is wide, so the table scrolls sideways inside its
+own container rather than widening the whole page.
+
+**A dash in this table means the figure could not be computed — it is not a zero.**
+This is the distinction the table turns on, so it is worth being explicit about it:
+
+- A run covering less than a full year has no payback figures at all — the totals
+  themselves refuse to extrapolate a partial year (see [Cost and
+  payback](#cost-and-payback)) — and all three payback cells show a dash. Hovering
+  one explains why, in the same words as the run's own caveats (for example, "only
+  11 of 12 months could be modelled").
+- A payback option that *was* costed but genuinely never earns back its capital says
+  **does not pay back** in words, never a number — that is a different fact from
+  "unavailable" and the table keeps the two apart rather than collapsing them onto
+  the same dash.
+
+Each row reads only that run's own stored summary, never the live form and never
+another run's figures, so the columns are guaranteed to describe the system named at
+the start of the row. Treat this table as a comparison aid for the same reason the
+payback figures it shows are one: it is a quick way to see which of your stored runs
+looks better, not a substitute for reading a run's own caveats before quoting it.
 
 ## Running it
 
@@ -380,6 +426,14 @@ The results page then offers a plan viewer below the monthly table, with a day a
 scenario selector. It renders with exactly the same code as the live
 [plan page](predbat-plan-card.md) — same columns, same colours, same debug-column toggle —
 so anything you already know about reading a Predbat plan applies unchanged.
+
+Captured plans are stored separately from the run's results document, one storage key
+per sampled day's leg, rather than embedded inside it. That keeps the results document
+itself small — the totals, chart and month table you look at on every visit do not carry
+the plans — and a plan is only fetched off storage the moment you actually pick a day and
+scenario in the viewer, not every time the results page loads. A run downloaded as JSON
+is that results document as stored, which means it is the results **without** the
+captured plans; the plan viewer is the only place to get at them.
 
 Two things to know before turning it on:
 
