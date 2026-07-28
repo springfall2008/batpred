@@ -28,7 +28,7 @@ from aiohttp import web
 from annual import AnnualConfigError, validate_config
 from annual_costs import DEFAULT_COSTS
 from annual_job import AnnualJob
-from annual_store import list_runs, load_plan, load_run, save_run
+from annual_store import backfill_summaries, list_runs, load_plan, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
 from web_helper import get_plan_css, get_plan_renderer_js
 
@@ -732,18 +732,16 @@ class AnnualPage:
         return web.Response(content_type="text/html", text=text)
 
     async def html_annual_compare(self, request):
-        """Render the compare page.
-
-        A placeholder until a later task fills it in: only the nav and progress area,
-        so the route exists and the tab strip has somewhere real to link to rather
-        than 404ing.
-        """
+        """Render the run comparison table."""
         self.web.default_page = "./annual_compare"
+        storage = self._storage()
+        runs = await backfill_summaries(storage, await list_runs(storage))
         text = self.web.get_header("Predbat Annual")
         text += "<body>\n"
         text += self.render_css()
         text += self.render_nav("compare")
         text += self.render_progress()
+        text += self.render_compare(runs, request.query.get("run"))
         text += self.render_script()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -1239,6 +1237,95 @@ annualLoadPlan();
         text += "</ul>\n"
         return text
 
+    def render_compare(self, runs, selected_id):
+        """Return the run comparison table, or an explanation when there are none.
+
+        Each row is built from that run's OWN ``summary`` alone (see
+        ``_render_compare_row``) - never another run's, and never the live form -
+        so twenty rows correctly show twenty different systems rather than one
+        run's figures echoed down every row.
+        """
+        if not runs:
+            return '<div class="annual-compare-scroll"><p>No runs have been stored yet — run some simulations to compare them here.</p></div>\n'
+
+        text = '<div class="annual-compare-scroll">\n<table class="comparison-table annual-compare">\n'
+        text += "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>Tariff</th><th>Cost with Predbat</th><th>Saving vs no system</th>" "<th>PV only pays back in</th><th>PV + battery pays back in</th><th>With Predbat pays back in</th></tr>\n"
+        for run in runs:
+            text += self._render_compare_row(run, selected_id)
+        text += "</table>\n</div>\n"
+        return text
+
+    def _render_compare_row(self, run, selected_id):
+        """Return one comparison row, reading entirely from ``run``'s own summary.
+
+        Reading anything other than ``run["summary"]`` here - another run in the
+        list, or the live configuration form - has already been a defect once on
+        this branch: it misattributes every figure on the row to the wrong system.
+        """
+        summary = run.get("summary") or {}
+        run_id = str(run.get("id", ""))
+        label = str(run.get("label", run_id))
+        row_class = ' class="annual-compare-current"' if run.get("id") == selected_id else ""
+
+        text = "<tr{}>\n".format(row_class)
+        text += '<td><a href="./annual_view?run={}">{}</a></td>\n'.format(html.escape(run_id, quote=True), html.escape(label, quote=True))
+        text += "<td>{}</td>\n".format(self._compare_number(summary.get("total_kwp"), " kWp"))
+        text += "<td>{}</td>\n".format(self._compare_number(summary.get("battery_kwh"), " kWh"))
+        tariff = summary.get("tariff")
+        text += "<td>{}</td>\n".format(html.escape(str(tariff), quote=True) if tariff else "—")
+        text += "<td>{}</td>\n".format(self._compare_money(summary.get("cost_with_predbat_p")))
+        text += "<td>{}</td>\n".format(self._compare_money(summary.get("saving_vs_none_p")))
+        payback_years = summary.get("payback_years") or {}
+        payback_reason = summary.get("payback_reason")
+        for key in ["pv_only", "pv_battery", "pv_battery_predbat"]:
+            text += self._render_payback_cell(payback_years, payback_reason, key)
+        text += "</tr>\n"
+        return text
+
+    @staticmethod
+    def _compare_number(value, suffix):
+        """Return a formatted numeric cell, or an em dash when the value is unknown.
+
+        ``None`` means the figure could not be computed - rendered as a dash, never
+        as ``0``, which would read as "a system with no panels" rather than "unknown".
+        """
+        if value is None:
+            return "—"
+        try:
+            return html.escape("{:g}{}".format(float(value), suffix), quote=True)
+        except (TypeError, ValueError):
+            return "—"
+
+    def _compare_money(self, pence):
+        """Return a pence value formatted as pounds, or an em dash when it is unknown.
+
+        A summary figure of ``None`` means the value is unknown, not that it is
+        zero: rendering it via ``self._pounds`` would print "n/a" rather than the
+        dash the rest of this table uses for "unknown", so ``None`` is intercepted
+        here first.
+        """
+        if pence is None:
+            return "—"
+        return html.escape(self._pounds(pence), quote=True)
+
+    @staticmethod
+    def _render_payback_cell(payback_years, payback_reason, key):
+        """Return one payback cell for ``key``, distinguishing "unavailable" from "never pays back".
+
+        An empty ``payback_years`` means payback was never computed at all - the run
+        covered less than a full year - rendered as a dash carrying ``payback_reason``
+        as its title. A populated dict with this key set to ``None`` means the option
+        WAS costed and genuinely never pays back: a materially different fact from
+        "unavailable", so it is rendered in words rather than as the same dash.
+        """
+        if not payback_years:
+            reason = html.escape(str(payback_reason or "Payback could not be calculated."), quote=True)
+            return '<td class="annual-unavailable" title="{}">—</td>\n'.format(reason)
+        years = payback_years.get(key)
+        if years is None:
+            return '<td class="annual-unavailable">does not pay back</td>\n'
+        return "<td>{}</td>\n".format(html.escape("{:.1f} years".format(years), quote=True))
+
     def render_nav(self, current):
         """Return the tab strip, marking the current page and disabling the end arrows."""
         names = [name for name, _, _ in self.NAV_PAGES]
@@ -1290,6 +1377,12 @@ annualLoadPlan();
 .annual-caveats li { margin-bottom: 0.35rem; }
 .annual-unavailable { opacity: 0.6; font-style: italic; }
 .annual-synthesised-tag { font-size: 0.75rem; font-weight: 600; color: #D55E00; border: 1px solid #D55E00; border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; }
+/* Nine columns is wide - the table scrolls within its own container instead of
+   forcing the whole page wider, which would otherwise push the nav strip and
+   everything else sideways on anything narrower than a desktop monitor. */
+.annual-compare-scroll { overflow-x: auto; }
+table.annual-compare { white-space: nowrap; }
+.annual-compare-current { font-weight: 600; }
 </style>
 """
 

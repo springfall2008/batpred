@@ -1391,6 +1391,99 @@ def test_web_annual_pages(my_predbat):
         print("  ERROR: run completion should navigate to the viewer page")
         failed = True
 
+    print("Test: the compare table lists every run with its own figures")
+    runs = [
+        {
+            "id": "20260728-0900",
+            "label": "9.5 kWh battery, 5.6 kWp, Agile",
+            "summary": {
+                "total_kwp": 5.6,
+                "battery_kwh": 9.5,
+                "tariff": "Agile",
+                "cost_with_predbat_p": 66000.0,
+                "saving_vs_none_p": 114000.0,
+                "payback_years": {"pv_only": 17.8, "pv_battery": 13.61, "pv_battery_predbat": 11.78},
+                "payback_reason": None,
+                "months_included": 12,
+            },
+        },
+        {
+            "id": "20260728-0800",
+            "label": "20 kWh battery, 12 kWp, Cosy",
+            "summary": {
+                "total_kwp": 12.0,
+                "battery_kwh": 20.0,
+                "tariff": "Cosy",
+                "cost_with_predbat_p": 40000.0,
+                "saving_vs_none_p": 140000.0,
+                "payback_years": {"pv_only": 9.1, "pv_battery": 8.2, "pv_battery_predbat": 7.0},
+                "payback_reason": None,
+                "months_included": 12,
+            },
+        },
+    ]
+    table = page.render_compare(runs, "20260728-0900")
+    for expected in ["5.6", "9.5", "Agile", "13.6", "12", "20", "Cosy", "8.2"]:
+        if expected not in table:
+            print("  ERROR: the compare table should show {}, got {}".format(expected, table))
+            failed = True
+
+    print("Test: a run whose payback was unavailable shows a dash and its reason, not a number")
+    unavailable = [
+        {
+            "id": "x",
+            "label": "partial",
+            "summary": {
+                "total_kwp": 5.0,
+                "battery_kwh": 9.0,
+                "tariff": "Agile",
+                "cost_with_predbat_p": 100.0,
+                "saving_vs_none_p": 50.0,
+                "payback_years": {},
+                "payback_reason": "Payback needs a full year, but only 11 of 12 months could be modelled.",
+                "months_included": 11,
+            },
+        }
+    ]
+    text = page.render_compare(unavailable, "x")
+    if "11 of 12" not in text:
+        print("  ERROR: the reason payback is unavailable should be available to the user")
+        failed = True
+    if "0.0 years" in text or "None" in text:
+        print("  ERROR: an unavailable payback must not render as a number, got {}".format(text))
+        failed = True
+
+    print("Test: a run that does not pay back says so rather than showing a number")
+    never = [
+        {
+            "id": "y",
+            "label": "never",
+            "summary": {
+                "total_kwp": 5.0,
+                "battery_kwh": 9.0,
+                "tariff": "Agile",
+                "cost_with_predbat_p": 100.0,
+                "saving_vs_none_p": -50.0,
+                "payback_years": {"pv_only": None, "pv_battery": None, "pv_battery_predbat": None},
+                "payback_reason": None,
+                "months_included": 12,
+            },
+        }
+    ]
+    if "does not pay back" not in page.render_compare(never, "y"):
+        print("  ERROR: a non-paying-back run should say so")
+        failed = True
+
+    print("Test: the compare table is horizontally scrollable rather than widening the page")
+    if "overflow-x" not in page.render_css():
+        print("  ERROR: a nine-column table needs its own scroll container")
+        failed = True
+
+    print("Test: with no stored runs the compare page says so rather than showing an empty table")
+    if "No runs" not in page.render_compare([], None):
+        print("  ERROR: an empty compare page should explain itself")
+        failed = True
+
     return failed
 
 
