@@ -48,6 +48,8 @@ class MockDeye(DeyeAPI):
         self.applied_payload = {}
         self.control_active = set()
         self.cached_values = {}
+        self._tier_refreshed = {}
+        self._cache_restored = False
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
