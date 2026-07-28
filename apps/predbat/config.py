@@ -875,7 +875,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Low power mode margin",
         "type": "input_number",
         "min": 0,
-        "max": 30,
+        "max": 60,
         "step": 5,
         "unit": "minutes",
         "icon": "mdi:seatbelt",
