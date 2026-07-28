@@ -1637,13 +1637,15 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       target:
         entity_id: select.sigen_plant_remote_ems_control_mode
       data:
-        option: >
-          {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
-          {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
-          {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
-          {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
-          {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
-          {% endif %}
+        # Rendered as a single Jinja expression (not a folded if/elif block) so there's no
+        # embedded literal newline/whitespace in the result - select.select_option requires an
+        # exact match against the target entity's options list.
+        option: >-
+          {{ "Maximum Self Consumption" if is_state('input_select.predbat_requested_mode', "Demand")
+             else "Command Charging (PV First)" if is_state('input_select.predbat_requested_mode', "Charging")
+             else "Maximum Self Consumption" if is_state('input_select.predbat_requested_mode', "Freeze Charging")
+             else "Command Discharging (PV First)" if is_state('input_select.predbat_requested_mode', "Discharging")
+             else "Maximum Self Consumption" }}
     - choose:
         # Freeze Charging
         # Docs:
