@@ -348,7 +348,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             # DEYE's grid sign is the opposite of Predbat's (see DEYE_TELEMETRY_NEGATE).
             result[name] = -value if name in DEYE_TELEMETRY_NEGATE else value
         self.device_energy[sn] = {name: self._as_float(flat.get(key)) for name, key in DEYE_ENERGY_KEYS.items() if key in flat}
-        self.device_rated_power[sn] = self._as_float(flat.get(DEYE_RATED_POWER_KEY))
+        # Only record when actually present. An unconditional write would coerce an absent
+        # key to 0.0 and clobber a rating captured on an earlier cycle, which then stops
+        # publishing the inverter_limit sensor and stops automatic_config mapping it —
+        # the same reason the energy counters above and derive_battery_capacity() below
+        # both leave their caches alone when the source key is missing.
+        if DEYE_RATED_POWER_KEY in flat:
+            self.device_rated_power[sn] = self._as_float(flat[DEYE_RATED_POWER_KEY])
         self.derive_battery_capacity(sn, flat)
         missing = [DEYE_TELEMETRY_KEYS[name] for name in DEYE_TELEMETRY_REQUIRED if DEYE_TELEMETRY_KEYS[name] not in flat]
         if missing:

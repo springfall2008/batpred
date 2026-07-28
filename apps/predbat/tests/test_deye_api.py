@@ -346,6 +346,47 @@ def test_rated_power_captured_for_inverter_limit():
     assert not failed, "test_rated_power_captured_for_inverter_limit"
 
 
+def test_rated_power_survives_a_payload_that_omits_it():
+    """A later payload without RatedPower must not wipe a rating captured earlier.
+
+    Coercing an absent key to 0.0 would stop publish_data() emitting the inverter_limit
+    sensor and stop automatic_config() mapping it, even though the device had reported the
+    rating on a previous cycle. DEYE responses are demonstrably not always complete —
+    config/battery returned "config point not supported" transiently on this same site.
+    """
+    failed = False
+    d = MockDeye()
+    payloads = [LIVE_DATA_LIST, [{"key": "SOC", "value": "50"}]]
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: full payload first, then one missing RatedPower."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": payloads.pop(0)}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        run_async_local(d.fetch_device_data("INV1"))
+        if d.device_rated_power.get("INV1") != 8000.0:
+            print(f"ERROR: first poll should capture 8000.0, got {d.device_rated_power.get('INV1')}")
+            failed = True
+        run_async_local(d.fetch_device_data("INV1"))
+
+    if d.device_rated_power.get("INV1") != 8000.0:
+        print(f"ERROR: rating was clobbered by the incomplete payload, got {d.device_rated_power.get('INV1')}")
+        failed = True
+    # A device that has never reported it still records nothing, so no bogus sensor
+    d2 = MockDeye()
+
+    async def fake_post_never(endpoint_key, body):
+        """Fake DEYE POST: a payload that never carries RatedPower."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV2", "dataList": [{"key": "SOC", "value": "50"}]}]}
+
+    with patch.object(d2, "_post", side_effect=fake_post_never):
+        run_async_local(d2.fetch_device_data("INV2"))
+    if "INV2" in d2.device_rated_power:
+        print(f"ERROR: expected no rating recorded, got {d2.device_rated_power.get('INV2')}")
+        failed = True
+    assert not failed, "test_rated_power_survives_a_payload_that_omits_it"
+
+
 def test_fetch_device_data_captures_energy_counters():
     """The lifetime energy counters are captured from device/latest for Predbat's history."""
     failed = False
@@ -541,6 +582,7 @@ def run_deye_api_tests(my_predbat):
         ("battery_capacity_amp_hours", test_battery_capacity_scales_config_battery_amp_hours),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rated_power_captured", test_rated_power_captured_for_inverter_limit),
+        ("rated_power_not_clobbered", test_rated_power_survives_a_payload_that_omits_it),
         ("energy_counters_captured", test_fetch_device_data_captures_energy_counters),
         ("energy_counters_absent", test_energy_counters_absent_are_not_invented),
         ("derive_capacity_no_rating", test_derive_battery_capacity_without_rating),
