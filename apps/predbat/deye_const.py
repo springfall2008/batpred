@@ -37,6 +37,13 @@ TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00
 # cache is invalidated and the next apply is forced to re-write.
 DEYE_ORDER_MAX_POLLS = 3
 
+# DEYE executes one control order at a time per device. A second command sent while one is
+# still running is rejected with this code — it means "retry shortly", not "rejected", so
+# it is logged as back-pressure rather than a failure and the caller re-applies next cycle.
+# Observed live as: {"code": "2104004", "msg": "command concurrent running", "success": false}
+DEYE_BUSY_CODES = ("2104004",)
+DEYE_BUSY_MARKERS = ("command concurrent running", "concurrent running", "order is running")
+
 # Storage module name for every persisted DEYE cache file.
 DEYE_STORAGE_MODULE = "deye"
 
