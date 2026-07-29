@@ -1902,8 +1902,12 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         if print:
-            # Calculate minimum forward rates only once rate replicate has run (when print is True)
-            self.rate_min_forward = self.rate_min_forward_calc(self.rate_import)
+            # Calculate minimum forward rates only once rate replicate has run (when print is True).
+            # Use the `rates` argument, not self.rate_import: during fetch's atomic rebuild self.rate_import
+            # still holds the PREVIOUS cycle's data (publish is deferred to the end of the block), so
+            # reading it here would make rate_min_forward - which drives plan.py charge/discharge economics
+            # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
+            self.rate_min_forward = self.rate_min_forward_calc(rates)
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
     def rate_scan_gas(self, rates, print=True):
