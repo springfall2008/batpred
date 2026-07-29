@@ -647,9 +647,9 @@ def fetch_axle_sessions(base):
     return axle_events_deduplicated
 
 
-def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
+def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
     """
-    Load Axle VPP session slot
+    Load Axle VPP session slot into rate_dict (in place)
     """
     if rate_replicate is None:
         rate_replicate = {}
@@ -679,11 +679,11 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
                 base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
+                        rate_dict[minute] = rate_dict.get(minute, 0) + pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_saving
                         rate_replicate[minute] = "saving"
                     else:
-                        base.rate_import[minute] = base.rate_import.get(minute, 0) - pence_per_kwh
+                        rate_dict[minute] = rate_dict.get(minute, 0) - pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_free
                         rate_replicate[minute] = "saving"
 

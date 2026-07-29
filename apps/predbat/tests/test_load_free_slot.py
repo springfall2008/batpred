@@ -52,7 +52,7 @@ def test_load_free_slot(my_predbat):
     free_slots = [{"start": "2025-01-15T10:00:00+00:00", "end": "2025-01-15T11:00:00+00:00", "rate": 0.0}]
 
     rate_replicate = {}
-    my_predbat.load_free_slot(free_slots, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(free_slots, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Check rates were set to 0 for the hour (10:00-11:00 = minute 600-660)
     start_min = 10 * 60  # 600
@@ -89,7 +89,7 @@ def test_load_free_slot(my_predbat):
     print("*** Test 2: Free slot setting export rates to 0")
 
     rate_replicate = {}
-    my_predbat.load_free_slot(free_slots, export=True, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(free_slots, my_predbat.rate_export, export=True, rate_replicate=rate_replicate)
 
     for minute in range(start_min, end_min):
         if my_predbat.rate_export[minute] != 0.0:
@@ -116,7 +116,7 @@ def test_load_free_slot(my_predbat):
     multi_slots = [{"start": "2025-01-15T10:00:00+00:00", "end": "2025-01-15T11:00:00+00:00", "rate": 0.0}, {"start": "2025-01-15T14:00:00+00:00", "end": "2025-01-15T15:30:00+00:00", "rate": 0.0}]
 
     rate_replicate = {}
-    my_predbat.load_free_slot(multi_slots, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(multi_slots, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Check first slot (10:00-11:00)
     for minute in range(10 * 60, 11 * 60):
@@ -151,7 +151,7 @@ def test_load_free_slot(my_predbat):
     midnight_slot = [{"start": "2025-01-15T23:00:00+00:00", "end": "2025-01-16T01:00:00+00:00", "rate": 0.0}]
 
     rate_replicate = {}
-    my_predbat.load_free_slot(midnight_slot, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(midnight_slot, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Check 23:00-00:00 (day 1)
     for minute in range(23 * 60, 24 * 60):
@@ -181,7 +181,7 @@ def test_load_free_slot(my_predbat):
     invalid_slots = [{"start": "invalid-time", "end": "2025-01-15T11:00:00+00:00", "rate": 0.0}, {"start": "2025-01-15T12:00:00+00:00", "end": "also-invalid", "rate": 0.0}]
 
     rate_replicate = {}
-    my_predbat.load_free_slot(invalid_slots, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(invalid_slots, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Rates should remain unchanged
     if my_predbat.rate_import[10 * 60] != 20.0 or my_predbat.rate_import[12 * 60] != 20.0:
@@ -201,7 +201,7 @@ def test_load_free_slot(my_predbat):
     future_slot = [{"start": "2025-01-17T10:00:00+00:00", "end": "2025-01-17T11:00:00+00:00", "rate": 0.0}]  # Day 3, outside forecast
 
     rate_replicate = {}
-    my_predbat.load_free_slot(future_slot, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(future_slot, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # No rates should change since slot is outside forecast window
     unchanged = all(my_predbat.rate_import[n] == 20.0 for n in range(0, min(100, my_predbat.forecast_minutes)))
@@ -222,7 +222,7 @@ def test_load_free_slot(my_predbat):
     partial_slot = [{"start": "2025-01-16T23:00:00+00:00", "end": "2025-01-17T02:00:00+00:00", "rate": 0.0}]  # Near end of day 2  # Extends into day 3 (beyond forecast)
 
     rate_replicate = {}
-    my_predbat.load_free_slot(partial_slot, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(partial_slot, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Should apply to minutes within forecast window only
     # 23:00 on day 2 = minute 47*60 = 2820
@@ -247,7 +247,7 @@ def test_load_free_slot(my_predbat):
     bonus_slot = [{"start": "2025-01-15T10:00:00+00:00", "end": "2025-01-15T11:00:00+00:00", "rate": -5.0}]  # Negative rate (you get paid to use electricity)
 
     rate_replicate = {}
-    my_predbat.load_free_slot(bonus_slot, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(bonus_slot, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Check the rate is set correctly (min of existing rate and slot rate)
     for minute in range(10 * 60, 11 * 60):
@@ -273,7 +273,7 @@ def test_load_free_slot(my_predbat):
     overlap_slot = [{"start": "2025-01-15T10:00:00+00:00", "end": "2025-01-15T11:00:00+00:00", "rate": 5.0}]  # Higher than existing 1.0 for first 30 mins
 
     rate_replicate = {}
-    my_predbat.load_free_slot(overlap_slot, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(overlap_slot, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # First 30 minutes should keep lower rate of 1.0
     for minute in range(10 * 60, 10 * 60 + 30):
@@ -299,7 +299,7 @@ def test_load_free_slot(my_predbat):
     my_predbat.rate_import = {n: 20.0 for n in range(0, my_predbat.forecast_minutes)}
 
     rate_replicate = {}
-    my_predbat.load_free_slot([], export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot([], my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Nothing should change
     if my_predbat.rate_import[10 * 60] != 20.0:
@@ -317,7 +317,7 @@ def test_load_free_slot(my_predbat):
     none_slots = [{"start": None, "end": "2025-01-15T11:00:00+00:00", "rate": 0.0}, {"start": "2025-01-15T12:00:00+00:00", "end": None, "rate": 0.0}]
 
     rate_replicate = {}
-    my_predbat.load_free_slot(none_slots, export=False, rate_replicate=rate_replicate)
+    my_predbat.load_free_slot(none_slots, my_predbat.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Rates should remain unchanged
     if my_predbat.rate_import[10 * 60] != 20.0 or my_predbat.rate_import[12 * 60] != 20.0:
