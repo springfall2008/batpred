@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 import aiohttp
 
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
 TESLEMETRY_DEFAULT_URL = "https://api.teslemetry.com"
@@ -1234,59 +1235,6 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     async def final(self):
         """Cleanup on shutdown."""
         self.log("Info: TeslemetryAPI shutdown")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base object for standalone Teslemetry testing (stands in for the PredBat instance)."""
-
-    def __init__(self):
-        """Initialise the mock base with a local-time clock and empty entity/arg stores."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return a configured arg value, consulting self.args so set_read_only actually gates the emulator's control writes (the CLI harness relies on this to run read-only)."""
-        return self.args.get(arg, default)
-
-    def set_arg(self, key, value):
-        """Print an arg assignment made by automatic_config, showing the referenced entity's current state."""
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):

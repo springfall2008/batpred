@@ -23,8 +23,8 @@ import aiohttp
 import argparse
 import json
 import os
-from datetime import datetime
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from deye_const import (
     DEYE_BASE_URLS,
@@ -1396,57 +1396,6 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     async def final(self):
         """Cleanup on shutdown."""
         self.log("Info: DeyeAPI shutdown")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base object so DeyeAPI can be exercised from the command line."""
-
-    def __init__(self):
-        """Set up the minimal base surface DeyeAPI reads (tz, prefix, args, time, entities)."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return a previously published entity state (or default)."""
-        if raw:
-            return self.entities.get(entity_id, {})
-        return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Record an entity state locally."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print a timestamped log line."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and record a published dashboard entity."""
-        print(f"ENTITY: {entity_id} = {state}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return the caller's default (no configured args in CLI mode)."""
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 def _build_deye(mock_base, args):  # pragma: no cover
