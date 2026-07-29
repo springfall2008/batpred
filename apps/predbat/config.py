@@ -1986,7 +1986,7 @@ INVERTER_DEF = {
         "has_target_soc": True,
         "has_reserve_soc": True,
         "has_timed_pause": False,
-        "charge_time_format": "HH:MM",
+        "charge_time_format": "HH:MM:SS",
         "charge_time_entity_is_option": True,
         "soc_units": "%",
         "num_load_entities": 1,
