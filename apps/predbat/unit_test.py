@@ -74,7 +74,7 @@ from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
-from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
+from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -302,6 +302,7 @@ def main():
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),

@@ -40,6 +40,12 @@ INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter da
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
 
+# PV production (kWh) forecast across the remainder of a charge window above which low power charging is
+# abandoned in favour of the max charge rate. Throttling the charge rate while the sun is shining stops the
+# PV reaching the battery, the surplus is exported cheaply and the target is then made up with grid import,
+# which increases the cost of the plan over the full rate charge the planner costed the window at.
+LOW_POWER_PV_THRESHOLD = 0.1
+
 INVERTER_TEST = False  # Run inverter control self test
 
 # Create an array of times in the day in 5-minute intervals

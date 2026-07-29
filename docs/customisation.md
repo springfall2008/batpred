@@ -382,6 +382,10 @@ as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
 
+Low-power charging is skipped for any charge window that overlaps with forecast solar production, the full charge rate is used instead.
+Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus would be exported at the
+export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat planned for.
+
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low-power charging works and shows how Predbat automatically creates it.
 
