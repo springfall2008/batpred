@@ -530,7 +530,7 @@ class Output:
         """
         values = set()
         for minute in range(start_minute, end_minute, self.plan_interval_minutes):
-            values.add(dp2(rate_dict.get(minute, 0)))
+            values.add(dp2(rate_dict.get(minute, fallback_value)))
         if not values:
             return "{:.2f}".format(fallback_value)
         low, high = min(values), max(values)
