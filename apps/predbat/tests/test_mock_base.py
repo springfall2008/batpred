@@ -14,7 +14,16 @@ Tests for the shared MockBase used by the standalone command-line harnesses.
 
 from datetime import datetime, timezone
 
+from component_base import ComponentBase
 from mock_base import MockBase
+
+
+class _ContractProbeComponent(ComponentBase):
+    """Minimal concrete ComponentBase subclass used only to exercise the base contract."""
+
+    def initialize(self, **kwargs):
+        """Do nothing; this probe only needs the base ComponentBase wiring, not extra state."""
+        pass
 
 
 def test_mock_base_attribute_superset(my_predbat):
@@ -45,6 +54,48 @@ def test_mock_base_attribute_superset(my_predbat):
     assert base.had_errors is False, "had_errors should start False"
     assert base.config_root == "./temp_predbat", "config_root should use the documented default"
     print("PASS: MockBase exposes the full base attribute superset")
+    return False
+
+
+def test_mock_base_covers_component_base_contract(my_predbat):
+    """MockBase must satisfy every property and delegated method ComponentBase exposes.
+
+    test_mock_base_attribute_superset only checks that MockBase's attribute list mirrors this
+    file's own hardcoded copy of the ComponentBase surface - it is a change-detector, not a
+    regression test, because both lists drift together. This test instead binds a real
+    ComponentBase subclass to a MockBase and exercises the actual properties and delegate
+    methods ComponentBase defines, so it fails with an AttributeError if someone adds a new
+    self.base.<something> dereference to component_base.py that the mock does not cover.
+    """
+    component = _ContractProbeComponent(MockBase())
+
+    # Properties defined on ComponentBase that read through to self.base.
+    assert component.currency_symbols == "£p", "currency_symbols property failed"
+    assert component.arg_errors == {}, "arg_errors property failed"
+    assert component.now_utc is not None, "now_utc property failed"
+    assert component.midnight_utc is not None, "midnight_utc property failed"
+    assert component.now_utc_exact is not None, "now_utc_exact property failed"
+    assert isinstance(component.minutes_now, int), "minutes_now property failed"
+    assert component.plan_interval_minutes == 30, "plan_interval_minutes property failed"
+    assert component.num_cars == 0, "num_cars property failed"
+    assert component.config_root == "./temp_predbat", "config_root property failed"
+    assert component.storage is None, "storage property failed (components is None on MockBase)"
+    assert component.fatal_error is False, "fatal_error property failed"
+
+    # Methods ComponentBase delegates straight through to self.base.
+    assert component.get_arg("missing_key", "fallback") == "fallback", "get_arg delegate failed"
+    component.set_arg("probe_key", "probe_value")
+    assert component.get_arg("probe_key") == "probe_value", "set_arg delegate failed"
+    component.dashboard_item("sensor.predbat_probe", "on", {"friendly_name": "Probe"})
+    assert component.get_ha_config("anything", "fallback") == "fallback", "get_ha_config delegate failed"
+    assert component.get_state_wrapper("sensor.predbat_probe") == "on", "get_state_wrapper delegate failed"
+    component.set_state_wrapper("sensor.predbat_probe2", "off")
+    assert component.get_state_wrapper("sensor.predbat_probe2") == "off", "set_state_wrapper delegate failed"
+    assert component.get_history_wrapper("sensor.predbat_probe") is None, "get_history_wrapper delegate failed"
+    component.call_notify("probe notification")
+    component.log("probe log message")
+
+    print("PASS: MockBase covers the full ComponentBase property/delegate contract")
     return False
 
 
@@ -98,6 +149,65 @@ def test_mock_base_arg_round_trip(my_predbat):
     base.set_arg("set_read_only", True)
     assert base.get_arg("set_read_only", False) is True, "set_arg value should be readable via get_arg"
     print("PASS: MockBase get_arg/set_arg round-trip")
+    return False
+
+
+def test_mock_base_set_arg_none_deletes_key(my_predbat):
+    """set_arg(key, None) must delete the key, matching userinterface.py's Fetch.set_arg.
+
+    gecloud.py makes several set_arg(key, None) calls expecting the key to disappear so a
+    later get_arg(key, default) falls back to the caller's default rather than returning None.
+    """
+    base = MockBase()
+    base.set_arg("probe_key", "probe_value")
+    assert base.get_arg("probe_key", "fallback") == "probe_value", "set_arg should have stored the value"
+    base.set_arg("probe_key", None)
+    assert base.get_arg("probe_key", "fallback") == "fallback", "set_arg(key, None) should delete the key, not store None"
+    assert "probe_key" not in base.args, "the deleted key must not remain in args"
+    print("PASS: MockBase set_arg(key, None) deletes the key")
+    return False
+
+
+def test_mock_base_reexport_identity(my_predbat):
+    """The five plain re-export modules must expose the identical shared MockBase object.
+
+    deye, enphase, fox and solis are not otherwise exercised anywhere (teslemetry is covered
+    incidentally by test_teslemetry.py), so nothing else would catch a botched edit to one of
+    those `from mock_base import MockBase` lines - e.g. accidentally defining a local class
+    that shadows the shared one.
+    """
+    from deye import MockBase as DeyeMockBase
+    from enphase import MockBase as EnphaseMockBase
+    from fox import MockBase as FoxMockBase
+    from solis import MockBase as SolisMockBase
+    from teslemetry import MockBase as TeslemetryMockBase
+
+    for name, reexported in (
+        ("deye", DeyeMockBase),
+        ("enphase", EnphaseMockBase),
+        ("fox", FoxMockBase),
+        ("solis", SolisMockBase),
+        ("teslemetry", TeslemetryMockBase),
+    ):
+        assert reexported is MockBase, f"{name}.MockBase should be the identical shared mock_base.MockBase object"
+
+    from axle import MockBase as AxleMockBase
+    from gecloud import MockBase as GECloudMockBase
+    from octopus import MockBase as OctopusMockBase
+    from sigenergy import MockBase as SigenergyMockBase
+    from solax import MockBase as SolaxMockBase
+
+    for name, subclass in (
+        ("axle", AxleMockBase),
+        ("gecloud", GECloudMockBase),
+        ("octopus", OctopusMockBase),
+        ("sigenergy", SigenergyMockBase),
+        ("solax", SolaxMockBase),
+    ):
+        assert issubclass(subclass, MockBase), f"{name}.MockBase should be a subclass of the shared mock_base.MockBase"
+        assert subclass is not MockBase, f"{name}.MockBase should be its own subclass, not a bare re-export"
+
+    print("PASS: the eleven module MockBase names resolve to the shared class or a true subclass of it")
     return False
 
 
@@ -208,11 +318,14 @@ def test_mock_base_all(my_predbat):
     """Run all mock_base tests."""
     tests = [
         ("attribute_superset", test_mock_base_attribute_superset, "Full base attribute superset is present"),
+        ("component_base_contract", test_mock_base_covers_component_base_contract, "MockBase satisfies the real ComponentBase property/delegate contract"),
         ("constructor_overrides", test_mock_base_config_root_and_local_tz_overrides, "config_root and local_tz are overridable"),
         ("midnight_aware", test_mock_base_midnight_utc_is_aware, "midnight_utc is timezone-aware"),
         ("kwargs_args", test_mock_base_kwargs_populate_args, "Surplus kwargs populate args"),
         ("none_kwargs", test_mock_base_none_kwargs_are_skipped, "None kwargs are skipped, False is kept"),
         ("arg_round_trip", test_mock_base_arg_round_trip, "get_arg/set_arg round-trip"),
+        ("set_arg_none_deletes", test_mock_base_set_arg_none_deletes_key, "set_arg(key, None) deletes the key"),
+        ("reexport_identity", test_mock_base_reexport_identity, "Re-export and subclass modules resolve to the shared MockBase"),
         ("dashboard_no_mutate", test_mock_base_dashboard_item_does_not_mutate_attributes, "dashboard_item does not mutate caller attributes"),
         ("dashboard_datetime", test_mock_base_dashboard_item_serialises_datetime, "dashboard_item serialises datetime attributes"),
         ("state_wrapper", test_mock_base_state_wrapper_paths, "get_state_wrapper raw/attribute/default paths"),

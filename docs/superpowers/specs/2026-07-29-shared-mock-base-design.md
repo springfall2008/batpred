@@ -47,10 +47,11 @@ The eleven CLI test-double classes listed above.
 - **`web_mcp.py:1293`** — an inline mock with an unrelated surface (`raw_plan`, `soc_kw`,
   `is_running`); it has no `get_state_wrapper`, `get_arg`, `log` or `dashboard_item`. There
   is nothing to share.
-- **`self.record_status(...)` calls in `octopus.py`.** `OctopusAPI` inherits `ComponentBase`,
-  which defines no `record_status` (it lives on `Output`), so those error paths would raise
-  `AttributeError` regardless of the mock. That is a pre-existing defect on `self`, not
-  `self.base`, and this work does not address it.
+- **`self.record_status(...)` calls in `octopus.py`.** These calls (around
+  `octopus.py:2067-2334`) are inside `class Octopus`, a PredBat mixin composed alongside
+  `Output` in the main `PredBat` class, where `Output.record_status` genuinely exists at
+  runtime. They are unrelated to `OctopusAPI`/`ComponentBase` or to `self.base`, and out of
+  scope for this work.
 
 ## Design
 
@@ -121,8 +122,9 @@ Three deliberate changes, all confined to CLI-harness behaviour and output:
    version adopts that approach. `default=str` (currently only in `axle`) prevents a
    `TypeError` when a component publishes a datetime.
 
-   Cosmetic consequence: `axle` and `deye` CLI output will now elide `options` as the other
-   nine already do.
+   Cosmetic consequence: `axle` CLI output will now elide `options` as the other modules
+   already do. `deye`'s old `dashboard_item` printed no attributes at all, so it gains
+   attribute printing outright rather than merely eliding `options`.
 
 3. **`set_arg` logging.** `axle` and `sigenergy` print a terser line; they adopt the common
    form that resolves the referenced entity's state. More informative, CLI-only.

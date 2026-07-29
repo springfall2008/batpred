@@ -52,8 +52,12 @@ class MockBase:
         self.arg_errors = {}
         self.args = {key: value for key, value in kwargs.items() if value is not None}
 
-    def log(self, message):
-        """Print a timestamped log line."""
+    def log(self, message, quiet=True):
+        """Print a timestamped log line.
+
+        Accepts the real Hass.log's quiet keyword for signature compatibility with callers
+        that pass it; the mock always prints regardless of its value.
+        """
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
 
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
@@ -92,8 +96,16 @@ class MockBase:
         return self.args.get(arg, default)
 
     def set_arg(self, key, value):
-        """Record an argument set by automatic_config, printing it with any referenced entity's state."""
-        self.args[key] = value
+        """Record an argument set by automatic_config, printing it with any referenced entity's state.
+
+        Matches userinterface.py's Fetch.set_arg: a None value deletes the key rather than
+        storing it, so a later get_arg(key, default) falls back to the caller's default
+        instead of returning None.
+        """
+        if value is None:
+            self.args.pop(key, None)
+        else:
+            self.args[key] = value
         if isinstance(value, str) and "." in value:
             state = self.get_state_wrapper(value, default=None)
         elif isinstance(value, list):
