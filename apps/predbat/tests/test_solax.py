@@ -12,7 +12,15 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 import json
-from solax import SolaxAPI, SOLAX_MIN_RESERVE_PERCENT, SOLAX_CONTROL_RETRY_BACKOFF, SOLAX_CONTROL_RETRY_MAX
+from solax import (
+    SolaxAPI,
+    SOLAX_MIN_RESERVE_PERCENT,
+    SOLAX_CONTROL_RETRY_BACKOFF,
+    SOLAX_CONTROL_RETRY_MAX,
+    SOLAX_PLANT_INFO_MAX_AGE,
+    SOLAX_DEVICE_INFO_MAX_AGE,
+    SOLAX_CACHE_EXPIRY_HOURS,
+)
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -29,6 +37,9 @@ class MockSolaxAPI(SolaxAPI):
         self.device_info = {}
         self.realtime_data = {}
         self.realtime_device_data = {}
+        self.realtime_plant_failed = set()  # Plants whose last realtime read failed
+        self.realtime_device_failed = set()  # Devices whose last realtime read failed
+        self._storage = None  # No storage cache by default in tests
         self.log_messages = []
         self.dashboard_items = {}
         self.current_mode_hash = None
@@ -59,6 +70,16 @@ class MockSolaxAPI(SolaxAPI):
         self.access_token = None
         self.token_expiry = None
         self.error_count = 0
+
+    @property
+    def storage(self):
+        """Mock storage component, ComponentBase resolves this from the base object which tests do not have"""
+        return self._storage
+
+    @storage.setter
+    def storage(self, value):
+        """Allow tests to install a mock storage backend"""
+        self._storage = value
 
     def log(self, message):
         """Mock log method"""
@@ -165,6 +186,8 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_apply_controls_backoff_main(my_predbat))
         failed |= asyncio.run(test_publish_plant_info_main(my_predbat))
         failed |= asyncio.run(test_publish_plant_info_capacity_floor_main(my_predbat))
+        failed |= asyncio.run(test_static_info_cache_main(my_predbat))
+        failed |= asyncio.run(test_realtime_publish_gating_main(my_predbat))
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
@@ -872,6 +895,357 @@ async def test_apply_controls_backoff_main(my_predbat):
             failed = True
         else:
             print("✓ Success clears the backoff and caches the applied mode")
+
+    return failed
+
+
+class MockStorage:
+    """Mock storage backend recording saves and serving a configurable per key age"""
+
+    def __init__(self, data=None, ages=None):
+        """
+        Args:
+            data: Dict of cache name to contents
+            ages: Dict of cache name to age in minutes
+        """
+        self.data = data or {}
+        self.ages = ages or {}
+        self.saved = []
+
+    async def load(self, module, filename):
+        """Return the configured cache contents for this key"""
+        return self.data.get(filename)
+
+    async def age(self, module, filename):
+        """Return the configured cache age in minutes for this key"""
+        return self.ages.get(filename)
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record the saved data and reset its age"""
+        self.saved.append({"module": module, "filename": filename, "data": data, "format": format, "expiry": expiry})
+        self.data[filename] = data
+        self.ages[filename] = 0
+        return True
+
+
+async def run_one_cycle(api, seconds=0, first=True):
+    """
+    Run a single run() cycle with everything except the static info handling mocked out
+
+    Returns:
+        tuple: (result, mock_query_plant_info, mock_query_device_info)
+    """
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock) as mock_device:
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = api.plant_info
+                                            result = await api.run(seconds=seconds, first=first)
+    return result, mock_plant, mock_device
+
+
+def build_cached_api(plant_age=None, device_age=None):
+    """
+    Build a mock API with a storage cache holding plant and device info at the given ages
+
+    Args:
+        plant_age: Age in minutes of the cached plant info, None for no cache entry
+        device_age: Age in minutes of the cached device info, None for no cache entry
+
+    Returns:
+        MockSolaxAPI instance with storage installed
+    """
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+
+    data = {}
+    ages = {}
+    if plant_age is not None:
+        data["plant_info"] = {"plant_info": [{"plantId": "plant1", "batteryCapacity": 15.0}]}
+        ages["plant_info"] = plant_age
+    if device_age is not None:
+        data["device_info"] = {
+            "device_info": {"INV1": {"deviceSn": "INV1", "deviceType": 1, "plantId": "plant1"}},
+            "plant_inverters": {"plant1": ["INV1"]},
+            "plant_batteries": {"plant1": ["BAT1"]},
+        }
+        ages["device_info"] = device_age
+
+    api.storage = MockStorage(data=data, ages=ages)
+    api.plant_info = [{"plantId": "plant1", "batteryCapacity": 15.0}]
+    return api
+
+
+async def test_static_info_cache_main(my_predbat):
+    """
+    Test that plant and device info are cached in storage and re-read based on the age of the data
+
+    Re-reading every plant and device on each restart is slow, so the hardware information is cached and
+    only re-polled once the data itself is older than its maximum age
+    """
+    failed = False
+    print("\n=== Testing static info storage cache ===")
+
+    # Test 1: Cached data still within its maximum age is restored without polling
+    print("Test 1: Fresh cache is restored without polling")
+    api = build_cached_api(plant_age=60, device_age=5)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not result:
+        print("**** ERROR: Run failed with a fresh cache ****")
+        failed = True
+    elif mock_plant.called:
+        print("**** ERROR: query_plant_info should not be called when the cached plant info is fresh ****")
+        failed = True
+    elif mock_device.called:
+        print("**** ERROR: query_device_info should not be called when the cached device info is fresh ****")
+        failed = True
+    elif api.plant_list != ["plant1"]:
+        print(f"**** ERROR: Plant list not built from the cache, got {api.plant_list} ****")
+        failed = True
+    elif api.plant_inverters != {"plant1": ["INV1"]} or api.plant_batteries != {"plant1": ["BAT1"]}:
+        print(f"**** ERROR: Device mappings not restored, got {api.plant_inverters} {api.plant_batteries} ****")
+        failed = True
+    else:
+        print("✓ Fresh cache restored without any polling")
+
+    # Test 2: Device info older than its maximum age is re-read even though the plant info is fresh
+    print("Test 2: Aged device info is re-read, fresh plant info is not")
+    api = build_cached_api(plant_age=60, device_age=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if mock_plant.called:
+        print("**** ERROR: Plant info is still fresh and should not be polled ****")
+        failed = True
+    elif not mock_device.called:
+        print("**** ERROR: Device info older than the maximum age should be re-read ****")
+        failed = True
+    elif [item["filename"] for item in api.storage.saved] != ["device_info"]:
+        print(f"**** ERROR: Only device info should be saved, got {[item['filename'] for item in api.storage.saved]} ****")
+        failed = True
+    elif api.storage.saved[-1]["expiry"] is None:
+        print("**** ERROR: Cached data must be saved with an expiry so a stale cache is discarded ****")
+        failed = True
+    elif not (timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS - 1) < api.storage.saved[-1]["expiry"] - datetime.now(timezone.utc) <= timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS)):
+        print(f"**** ERROR: Expected roughly a {SOLAX_CACHE_EXPIRY_HOURS} hour expiry, got {api.storage.saved[-1]['expiry']} ****")
+        failed = True
+    else:
+        print(f"✓ Device info re-read once older than {SOLAX_DEVICE_INFO_MAX_AGE} minutes")
+
+    # Test 3: Plant info older than its maximum age is re-read
+    print("Test 3: Aged plant info is re-read")
+    api = build_cached_api(plant_age=SOLAX_PLANT_INFO_MAX_AGE + 1, device_age=5)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not mock_plant.called:
+        print("**** ERROR: Plant info older than the maximum age should be re-read ****")
+        failed = True
+    elif mock_device.called:
+        print("**** ERROR: Device info is still fresh and should not be polled ****")
+        failed = True
+    elif "plant_info" not in [item["filename"] for item in api.storage.saved]:
+        print("**** ERROR: Refreshed plant info should be saved ****")
+        failed = True
+    else:
+        print(f"✓ Plant info re-read once older than {SOLAX_PLANT_INFO_MAX_AGE} minutes")
+
+    # Test 4: The age carries over from the cache, a restart does not restart the interval
+    print("Test 4: Device info age carries over across a restart")
+    api = build_cached_api(plant_age=60, device_age=SOLAX_DEVICE_INFO_MAX_AGE - 2)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+    if mock_device.called:
+        print("**** ERROR: Device info just under the maximum age should not be polled yet ****")
+        failed = True
+    else:
+        # Two more minutes of data age is enough to make it due, without waiting a full interval
+        api.device_info_updated = api.device_info_updated - timedelta(minutes=3)
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if not mock_device.called:
+            print("**** ERROR: Device info should be re-read once the data ages past the maximum ****")
+            failed = True
+        else:
+            print("✓ The refresh follows the age of the data, not the time since startup")
+
+    # Test 5: No cache at all falls back to polling everything
+    print("Test 5: Missing cache polls everything")
+    api = build_cached_api()
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not mock_plant.called or not mock_device.called:
+        print("**** ERROR: Without a cache both plant and device info must be polled ****")
+        failed = True
+    elif sorted(item["filename"] for item in api.storage.saved) != ["device_info", "plant_info"]:
+        print(f"**** ERROR: Both caches should be written, got {[item['filename'] for item in api.storage.saved]} ****")
+        failed = True
+    else:
+        print("✓ Missing cache falls back to polling and saves both entries")
+
+    # Test 6: With no storage configured the behaviour is unchanged
+    print("Test 6: No storage configured")
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+    api.plant_info = [{"plantId": "plant1", "batteryCapacity": 15.0}]
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not result:
+        print("**** ERROR: Run failed without storage ****")
+        failed = True
+    elif not mock_plant.called or not mock_device.called:
+        print("**** ERROR: Without storage everything must still be polled ****")
+        failed = True
+    else:
+        print("✓ Without storage the poll behaviour is unchanged")
+
+    # Test 7: A failed refresh keeps the previous data rather than dropping it
+    print("Test 7: A failed refresh keeps the previous plant info")
+    api = build_cached_api(plant_age=SOLAX_PLANT_INFO_MAX_AGE + 1, device_age=5)
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock):
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = None  # Refresh fails
+                                            result = await api.run(seconds=0, first=True)
+
+    if not result:
+        print("**** ERROR: A failed refresh should not abort the run when cached data exists ****")
+        failed = True
+    elif api.plant_list != ["plant1"]:
+        print(f"**** ERROR: The cached plant info should be kept on a failed refresh, got {api.plant_list} ****")
+        failed = True
+    else:
+        print("✓ A failed refresh keeps the cached plant info")
+
+    return failed
+
+
+async def test_realtime_publish_gating_main(my_predbat):
+    """
+    Test that realtime sensors are not published when the read failed
+
+    Publishing on a failed read would push stale values, or defaults of zero before the first successful
+    read, which corrupts the energy totals Predbat consumes
+    """
+    failed = False
+    print("\n=== Testing realtime publish gating ===")
+
+    test_plant_id = "1618699116555534337"
+
+    def build_api():
+        """Build a mock API with one inverter and one battery holding realtime data"""
+        api = MockSolaxAPI(prefix="predbat")
+        api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "batteryCapacity": 15.0, "pvCapacity": 8.5}]
+        api.plant_inverters[test_plant_id] = ["H1231231932123"]
+        api.plant_batteries[test_plant_id] = ["TP123456123123"]
+        api.device_info["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceType": 1, "plantId": test_plant_id, "ratedPower": 10.0}
+        api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
+        api.realtime_data[test_plant_id] = {"totalYield": 3250.5, "totalCharged": 1850.2, "totalDischarged": 1720.8, "totalImported": 4200.3, "totalExported": 2800.7, "totalEarnings": 485.5}
+        api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 75, "batteryRemainings": 11.25, "batteryTemperature": 18.5}
+        return api
+
+    yield_entity = f"sensor.predbat_solax_{test_plant_id}_total_yield"
+    soc_entity = f"sensor.predbat_solax_{test_plant_id}_battery_soc"
+
+    # Test 1: With no failures everything is published
+    print("Test 1: Successful reads publish")
+    api = build_api()
+    await api.publish_plant_info()
+
+    if yield_entity not in api.dashboard_items:
+        print("**** ERROR: Total yield sensor not published on a good read ****")
+        failed = True
+    elif soc_entity not in api.dashboard_items:
+        print("**** ERROR: Battery SOC sensor not published on a good read ****")
+        failed = True
+    else:
+        print("✓ Sensors published when the read succeeded")
+
+    # Test 2: A failed plant read holds back the plant totals but not the static sensors
+    print("Test 2: Failed plant read holds back the totals")
+    api = build_api()
+    api.realtime_plant_failed.add(test_plant_id)
+    await api.publish_plant_info()
+
+    if yield_entity in api.dashboard_items:
+        print("**** ERROR: Total yield published despite the plant read failing ****")
+        failed = True
+    elif f"sensor.predbat_solax_{test_plant_id}_pv_capacity" not in api.dashboard_items:
+        print("**** ERROR: Static sensors should still be published on a failed realtime read ****")
+        failed = True
+    else:
+        print("✓ Plant totals held back, static sensors still published")
+
+    # Test 3: A failed battery read holds back the battery sensors
+    print("Test 3: Failed battery read holds back the battery sensors")
+    api = build_api()
+    api.realtime_device_failed.add("TP123456123123")
+    await api.publish_plant_info()
+
+    if soc_entity in api.dashboard_items:
+        print("**** ERROR: Battery SOC published despite the battery read failing ****")
+        failed = True
+    elif f"sensor.predbat_solax_{test_plant_id}_battery_capacity" not in api.dashboard_items:
+        print("**** ERROR: Battery capacity is static and should still be published ****")
+        failed = True
+    else:
+        print("✓ Battery sensors held back on a failed battery read")
+
+    # Test 4: Per-device publishing skips the failed device only
+    print("Test 4: Per-device publishing skips only the failed device")
+    api = build_api()
+    api.realtime_device_data["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceStatus": 102, "gridPower": 100.0, "totalYield": 3250.5}
+    api.realtime_device_failed.add("H1231231932123")
+    await api.publish_device_realtime_data()
+
+    inverter_entity = f"sensor.predbat_solax_{test_plant_id}_H1231231932123_grid_power"
+    battery_entity = f"sensor.predbat_solax_{test_plant_id}_TP123456123123_battery_soc"
+    if inverter_entity in api.dashboard_items:
+        print("**** ERROR: Failed inverter device was published ****")
+        failed = True
+    elif battery_entity not in api.dashboard_items:
+        print("**** ERROR: The battery read succeeded and should still be published ****")
+        failed = True
+    else:
+        print("✓ Only the failed device is skipped")
+
+    # Test 5: A failing device read is recorded, and a later success clears it
+    print("Test 5: Failures are recorded and cleared")
+    api = build_api()
+    with patch.object(api, "fetch_single_result", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = (None, None)
+        await api.query_device_realtime_data("TP123456123123", 2)
+
+    if "TP123456123123" not in api.realtime_device_failed:
+        print("**** ERROR: A failed read should be recorded ****")
+        failed = True
+    else:
+        with patch.object(api, "fetch_single_result", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = ([{"deviceSn": "TP123456123123", "batterySOC": 80, "batteryRemainings": 12.0}], "req1")
+            await api.query_device_realtime_data("TP123456123123", 2)
+
+        if "TP123456123123" in api.realtime_device_failed:
+            print("**** ERROR: A successful read should clear the failure ****")
+            failed = True
+        else:
+            print("✓ Failures are recorded on a bad read and cleared on a good one")
 
     return failed
 
@@ -6201,6 +6575,9 @@ async def test_run_main():
     api2.initialize(client_id="test", client_secret="test", region="eu")
     api2.plant_info = [{"plantId": "plant1"}]
     api2.plant_list = ["plant1"]
+    # Static info was read moments ago, so neither poll is due yet
+    api2.plant_info_updated = datetime.now(timezone.utc)
+    api2.device_info_updated = datetime.now(timezone.utc)
 
     with patch.object(api2, "query_plant_info", new_callable=AsyncMock) as mock_query_plant:
         with patch.object(api2, "query_device_info", new_callable=AsyncMock) as mock_query_device:
