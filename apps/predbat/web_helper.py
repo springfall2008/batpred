@@ -6385,34 +6385,62 @@ def get_plan_renderer_js():
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
+            // Short explanations for each plan-table column header, condensed from the full
+            // descriptions in predbat-plan-card.md - keep these brief, a hover tooltip is not
+            // the place for the doc page's colour-coding detail.
+            const COLUMN_HEADER_HELP = {
+                time: 'Predbat plans in slots (30 minutes by default) aligned to rate change times.',
+                import: 'The import rate for this slot, in pence per kWh. Bold if a charge is planned this slot.',
+                export: 'The export rate for this slot, in pence per kWh. Bold if a discharge/export is planned this slot.',
+                state: "What the battery is doing this slot - hover a state cell for the specific reason.",
+                limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
+                pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
+                load: 'Predicted house electricity consumption for this slot, from historical data.',
+                clip: "Solar energy predicted to be lost - the inverter can't handle all the PV generated, or an export limit is set.",
+                xload: 'Extra load added externally via load_forecast settings (e.g. PredAI, PredHeat).',
+                car: 'Predicted car charging energy for this slot.',
+                iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
+                soc: 'Estimated battery state of charge at the start of this slot.',
+                cost: 'Estimated cost (or saving) for this slot.',
+                total: 'Running total cost for today so far, at the start of this slot.',
+                co2_rate: 'Estimated carbon intensity of the grid at the start of this slot.',
+                co2_total: 'Estimated cumulative carbon footprint at the start of this slot.',
+            };
+
+            function th(key, innerHtml, extraAttrs) {
+                const helpText = COLUMN_HEADER_HELP[key];
+                const titleAttr = helpText ? ` title="${escapeAttr(helpText)}"` : '';
+                return `<th${extraAttrs || ''}${titleAttr}><b>${innerHtml}</b></th>`;
+            }
+
             // Render header
             html += '<tr>';
-            html += '<th><b>Time</b></th>';
+            html += th('time', 'Time');
             const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
-            html += showDebug ? `<th><b>Import ${currencyMinor} (w/loss)</b></th>` : `<th><b>Import ${currencyMinor}</b></th>`;
-            html += showDebug ? `<th><b>Export ${currencyMinor} (w/loss)</b></th>` : `<th><b>Export ${currencyMinor}</b></th>`;
-            html += '<th colspan="2"><b>State</b></th>';
-            html += '<th><b>Limit %</b></th>';
-            html += showDebug ? '<th><b>PV kWh (10%)</b></th>' : '<th><b>PV kWh</b></th>';
-            html += showDebug ? '<th><b>Load kWh (10%)</b></th>' : '<th><b>Load kWh</b></th>';
+            html += showDebug ? th('import', `Import ${currencyMinor} (w/loss)`) : th('import', `Import ${currencyMinor}`);
+            html += showDebug ? th('export', `Export ${currencyMinor} (w/loss)`) : th('export', `Export ${currencyMinor}`);
+            html += th('state', 'State', ' colspan="2"');
+            html += th('limit', 'Limit %');
+            html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
+            html += showDebug ? th('load', 'Load kWh (10%)') : th('load', 'Load kWh');
             if (showDebug) {
-                html += '<th><b>Clip kWh</b></th>';
+                html += th('clip', 'Clip kWh');
             }
             if (showDebug && jsonData.rows.some(r => r.extra_load !== undefined)) {
-                html += '<th><b>XLoad kWh</b></th>';
+                html += th('xload', 'XLoad kWh');
             }
             if (jsonData.num_cars > 0) {
-                html += '<th><b>Car kWh</b></th>';
+                html += th('car', 'Car kWh');
             }
             if (jsonData.iboost_enable) {
-                html += '<th><b>iBoost kWh</b></th>';
+                html += th('iboost', 'iBoost kWh');
             }
-            html += '<th><b>SoC %</b></th>';
-            html += '<th><b>Cost</b></th>';
-            html += '<th><b>Total</b></th>';
+            html += th('soc', 'SoC %');
+            html += th('cost', 'Cost');
+            html += th('total', 'Total');
             if (jsonData.carbon_enable) {
-                html += '<th><b>CO2 g/kWh</b></th>';
-                html += '<th><b>CO2 kg</b></th>';
+                html += th('co2_rate', 'CO2 g/kWh');
+                html += th('co2_total', 'CO2 kg');
             }
             html += '</tr>';
 

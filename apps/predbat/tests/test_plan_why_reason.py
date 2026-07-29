@@ -401,6 +401,24 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: expected renderPlanTable to take reason_templates from the dataset it renders")
         failed = True
 
+    # --- Test 13c: plan table column headers get a hover tooltip explaining what they mean ---
+    print("Test column headers carry a title= explaining what each column means")
+    if "COLUMN_HEADER_HELP" not in renderer_js:
+        print("ERROR: expected a COLUMN_HEADER_HELP lookup for column header tooltips")
+        failed = True
+    if "function th(key, innerHtml" not in renderer_js:
+        print("ERROR: expected a th() helper wiring COLUMN_HEADER_HELP into <th> title= attributes")
+        failed = True
+    # Every column referenced by the header-rendering block must have a corresponding help entry -
+    # a silently missing key would just render no tooltip rather than fail loudly, so check directly.
+    header_start = renderer_js.index("const COLUMN_HEADER_HELP")
+    header_block_end = renderer_js.index("function th(key", header_start)
+    header_help_block = renderer_js[header_start:header_block_end]
+    for key in ["time", "import", "export", "state", "limit", "pv", "load", "clip", "xload", "car", "iboost", "soc", "cost", "total", "co2_rate", "co2_total"]:
+        if "{}:".format(key) not in header_help_block:
+            print("ERROR: COLUMN_HEADER_HELP is missing an entry for '{}'".format(key))
+            failed = True
+
     # --- Test 14: the renderer JS source has no invalid Python escape sequences ---
     # The JS regexes live inside plain (non-raw) triple-quoted Python strings, so a backslash
     # intended for JS must be doubled. A single "\{" raises SyntaxWarning today and becomes a
