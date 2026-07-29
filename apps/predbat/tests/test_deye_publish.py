@@ -489,8 +489,10 @@ def test_write_button_applies_and_is_not_stored_as_schedule():
 
     with patch.object(d, "apply_schedule", side_effect=fake_apply):
         ti.run_async(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
-    if applied != [("INV1", True)]:
-        print(f"ERROR: expected a forced apply, got {applied}")
+    # Unforced: Predbat presses this every cycle, so forcing would re-send an unchanged
+    # payload each time. Change detection decides whether a write is actually needed.
+    if applied != [("INV1", False)]:
+        print(f"ERROR: expected an unforced apply, got {applied}")
         failed = True
     if d.local_schedule.get("INV1", {}).get("charge", {}):
         print(f"ERROR: the write button must not be stored as schedule state: {d.local_schedule}")

@@ -351,6 +351,79 @@ def test_run_clears_pending_order_and_count_on_success():
     assert not failed, "test_run_clears_pending_order_and_count_on_success"
 
 
+def test_repeated_write_button_presses_do_not_resend_an_unchanged_payload():
+    """Predbat presses the write button every cycle, so it must not force a write.
+
+    Live regression: 40 button presses produced 36 byte-identical control orders across two
+    hours with nothing changing, because apply_schedule defaulted to force=True and bypassed
+    the applied-payload cache. Over the same period _reconcile_control, which is unforced,
+    correctly suppressed 119 writes — so the cache was working; only the button ignored it.
+    """
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 99.0}}
+    d.local_schedule["INV1"] = {"reserve": 14, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000, "start": "16:00", "end": "23:30"}}
+    posts = []
+
+    async def fake_post(endpoint_key, body):
+        """Record every control POST that reaches the API."""
+        posts.append(endpoint_key)
+        return {"success": True, "orderId": len(posts)}
+
+    async def fake_read(sn):
+        """Return the unchanging schedule, as the HA entities would."""
+        return d.local_schedule["INV1"]
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        with patch.object(d, "get_schedule_settings_ha", side_effect=fake_read):
+            for _ in range(5):
+                # Clear the order the previous press raised, as poll_order does on success,
+                # so the in-flight guard is not what suppresses the repeats.
+                d.pending_orders.pop("INV1", None)
+                run_async_local(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+
+    if len(posts) != 1:
+        print(f"ERROR: an unchanged schedule should be written once, got {len(posts)} writes")
+        failed = True
+    if not any("control unchanged" in m for m in d.log_messages):
+        print(f"ERROR: expected the repeats to be suppressed as unchanged: {d.log_messages}")
+        failed = True
+    assert not failed, "test_repeated_write_button_presses_do_not_resend_an_unchanged_payload"
+
+
+def test_write_button_still_writes_when_the_schedule_changes():
+    """Suppression must not swallow a genuine change."""
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    d.local_schedule["INV1"] = {"reserve": 14, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    posts = []
+
+    async def fake_post(endpoint_key, body):
+        """Record every control POST that reaches the API."""
+        posts.append(body)
+        return {"success": True, "orderId": len(posts)}
+
+    async def fake_read(sn):
+        """Return the current schedule, as the HA entities would."""
+        return d.local_schedule["INV1"]
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        with patch.object(d, "get_schedule_settings_ha", side_effect=fake_read):
+            run_async_local(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+            d.pending_orders.pop("INV1", None)
+            # A real change: a charge window opens
+            d.local_schedule["INV1"]["charge"] = {"enable": True, "soc": 90, "power": 3000, "start": "01:00", "end": "05:00"}
+            run_async_local(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+
+    if len(posts) != 2:
+        print(f"ERROR: a changed schedule must be written, got {len(posts)} writes")
+        failed = True
+    assert not failed, "test_write_button_still_writes_when_the_schedule_changes"
+
+
 def test_slot_soc_never_goes_below_the_inverter_floor():
     """Slot SOC is clamped to config/battery battLowCapacity, whatever the schedule says.
 
@@ -543,6 +616,8 @@ def run_deye_control_tests(my_predbat):
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
         ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
+        ("write_button_no_resend", test_repeated_write_button_presses_do_not_resend_an_unchanged_payload),
+        ("write_button_writes_on_change", test_write_button_still_writes_when_the_schedule_changes),
         ("slot_soc_floor", test_slot_soc_never_goes_below_the_inverter_floor),
         ("battery_reserve_min", test_battery_reserve_min_reads_the_configured_floor),
         ("control_deferred_in_flight", test_control_write_deferred_while_an_order_is_in_flight),
