@@ -708,9 +708,9 @@ class Fetch:
         prev_octopus_free_slots = self.octopus_free_slots.copy()
         prev_axle_sessions = self.axle_sessions.copy()
 
-        self.rate_import = {}
+        import_rates = {}
         self.rate_import_replicated = {}
-        self.rate_export = {}
+        export_rates = {}
         self.rate_export_replicated = {}
         self.rate_slots = []
         self.io_adjusted = {}
@@ -849,36 +849,36 @@ class Fetch:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
             # Need to take a copy, as saving sessions will repeatedly increment cached import rates
-            self.rate_import = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
+            import_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
-            self.rate_import = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
-            if not self.rate_import:
+            import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            if not import_rates:
                 self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_energidataservice_import" in self.args:
             # Energi Data Service import rates
             entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
-            self.rate_import = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
-            if not self.rate_import:
+            import_rates = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            if not import_rates:
                 self.log("Error: metric_energidataservice_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_energidataservice_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_stromligning_import_today" in self.args or "metric_stromligning_import_tomorrow" in self.args:
             # Strømligning import rates
             entity_id_today = self.get_arg("metric_stromligning_import_today", None, indirect=False)
             entity_id_tomorrow = self.get_arg("metric_stromligning_import_tomorrow", None, indirect=False)
-            self.rate_import = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
-            if not self.rate_import:
+            import_rates = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
+            if not import_rates:
                 self.log("Error: metric_stromligning_import sensors are not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_stromligning_import sensors not set correctly or no energy rates can be read", had_errors=True)
 
         # Fallback if no other rate types are set
-        if not self.rate_import:
+        if not import_rates:
             # Basic rates defined by user over time
             rate_import_dict = self.get_arg("rates_import", [], indirect=False)
             if rate_import_dict:
-                self.rate_import = self.basic_rates(rate_import_dict, "rates_import")
+                import_rates = self.basic_rates(rate_import_dict, "rates_import")
 
         # Gas rates if set
         if "metric_octopus_gas" in self.args:
@@ -925,36 +925,36 @@ class Fetch:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
             # Need to take a copy, as saving sessions will repeatedly increment cached export rates
-            self.rate_export = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
+            export_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
-            self.rate_export = self.fetch_octopus_rates(entity_id)
-            if not self.rate_export:
+            export_rates = self.fetch_octopus_rates(entity_id)
+            if not export_rates:
                 self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_energidataservice_export" in self.args:
             # Energi Data Service export rates
             entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)
-            self.rate_export = self.fetch_energidataservice_rates(entity_id)
-            if not self.rate_export:
+            export_rates = self.fetch_energidataservice_rates(entity_id)
+            if not export_rates:
                 self.log("Warning: metric_energidataservice_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_energidataservice_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_stromligning_export_today" in self.args or "metric_stromligning_export_tomorrow" in self.args:
             # Strømligning export rates
             entity_id_today = self.get_arg("metric_stromligning_export_today", None, indirect=False)
             entity_id_tomorrow = self.get_arg("metric_stromligning_export_tomorrow", None, indirect=False)
-            self.rate_export = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
-            if not self.rate_export:
+            export_rates = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
+            if not export_rates:
                 self.log("Warning: metric_stromligning_export sensors are not set correctly or no energy rates can be read")
                 self.record_status(message="Error: metric_stromligning_export sensors not set correctly or no energy rates can be read", had_errors=True)
 
         # Fallback if no other rate types are set
-        if not self.rate_export:
+        if not export_rates:
             # Basic rates defined by user over time
             rate_export_dict = self.get_arg("rates_export", [], indirect=False)
             # Allow all zero export rates, as some users have a feed-in tariff that is zero
-            self.rate_export = self.basic_rates(rate_export_dict, "rates_export")
+            export_rates = self.basic_rates(rate_export_dict, "rates_export")
 
         # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
         self.axle_sessions = fetch_axle_sessions(self)
@@ -967,44 +967,47 @@ class Fetch:
 
         # futurerate data
         futurerate = FutureRate(self)
-        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(self.rate_import, self.rate_export)
+        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(import_rates, export_rates)
 
         # Replicate and scan import rates
-        if self.rate_import:
-            self.rate_scan(self.rate_import, print=False)
+        if import_rates:
+            self.rate_scan(import_rates, print=False)
             self.rate_max_base = self.rate_max  # True peak rate before saving sessions / overrides inflate it
             self.rate_min_base = self.rate_min  # True off-peak rate before free sessions / overrides deflate it
-            self.rate_import_base, _ = self.rate_replicate(self.rate_import.copy(), {}, is_import=True)  # True import rates, gap-filled but without IO/saving/override distortion
-            self.rate_import, self.rate_import_replicated = self.rate_replicate(self.rate_import, self.io_adjusted, is_import=True)
-            self.rate_import_no_io = self.rate_import.copy()
+            self.rate_import_base, _ = self.rate_replicate(import_rates.copy(), {}, is_import=True)  # True import rates, gap-filled but without IO/saving/override distortion
+            import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
+            self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
-                self.rate_import = self.rate_add_io_slots(car_n, self.rate_import, self.octopus_slots[car_n])
-            self.load_saving_slot(self.octopus_saving_slots, export=False, rate_replicate=self.rate_import_replicated)
-            self.load_free_slot(self.octopus_free_slots, export=False, rate_replicate=self.rate_import_replicated)
-            load_axle_slot(self, self.axle_sessions, export=False, rate_replicate=self.rate_import_replicated)
-            self.rate_import = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.rate_import, self.rate_import_replicated)
-            self.rate_import = self.apply_manual_rates(self.rate_import, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
-            self.rate_scan(self.rate_import, print=True)
+                import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
+            self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
+            self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
+            load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
+            import_rates = self.basic_rates(self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", import_rates, self.rate_import_replicated)
+            import_rates = self.apply_manual_rates(import_rates, self.manual_import_rates, is_import=True, rate_replicate=self.rate_import_replicated)
+            self.rate_scan(import_rates, print=True)
         else:
             self.rate_import_no_io = {}
             self.log("Warning: No import rate data provided")
             self.record_status(message="Error: No import rate data provided", had_errors=True)
+        # Atomic publish: readers (e.g. async components) never see a half-built or transiently-empty rate_import during rebuild.
+        self.rate_import = import_rates
 
         # Replicate and scan export rates
-        if self.rate_export:
-            self.rate_scan_export(self.rate_export, print=False)
-            self.rate_export, self.rate_export_replicated = self.rate_replicate(self.rate_export, is_import=False)
-            self.rate_export_base = self.rate_export.copy()
+        if export_rates:
+            self.rate_scan_export(export_rates, print=False)
+            export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False)
+            self.rate_export_base = export_rates.copy()
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
-                self.load_saving_slot(self.octopus_saving_slots, export=True, rate_replicate=self.rate_export_replicated)
-            load_axle_slot(self, self.axle_sessions, export=True, rate_replicate=self.rate_export_replicated)
-            self.rate_export = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", self.rate_export, self.rate_export_replicated)
-            self.rate_export = self.apply_manual_rates(self.rate_export, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
-            self.rate_scan_export(self.rate_export, print=True)
+                self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
+            load_axle_slot(self, self.axle_sessions, export_rates, export=True, rate_replicate=self.rate_export_replicated)
+            export_rates = self.basic_rates(self.get_arg("rates_export_override", [], indirect=False), "rates_export_override", export_rates, self.rate_export_replicated)
+            export_rates = self.apply_manual_rates(export_rates, self.manual_export_rates, is_import=False, rate_replicate=self.rate_export_replicated)
+            self.rate_scan_export(export_rates, print=True)
         else:
             self.log("Warning: No export rate data provided")
             self.record_status(message="Error: No export rate data provided", had_errors=True)
+        self.rate_export = export_rates
 
         # Set rate thresholds
         if self.rate_import or self.rate_export:
@@ -1904,8 +1907,12 @@ class Fetch:
         curr = self.currency_symbols[1]
 
         if print:
-            # Calculate minimum forward rates only once rate replicate has run (when print is True)
-            self.rate_min_forward = self.rate_min_forward_calc(self.rate_import)
+            # Calculate minimum forward rates only once rate replicate has run (when print is True).
+            # Use the `rates` argument, not self.rate_import: during fetch's atomic rebuild self.rate_import
+            # still holds the PREVIOUS cycle's data (publish is deferred to the end of the block), so
+            # reading it here would make rate_min_forward - which drives plan.py charge/discharge economics
+            # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
+            self.rate_min_forward = self.rate_min_forward_calc(rates)
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
     def rate_scan_gas(self, rates, print=True):

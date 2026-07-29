@@ -2405,9 +2405,9 @@ class Octopus:
         except (ValueError, TypeError):
             return None
 
-    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
+    def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
         """
-        Load octopus free session slot
+        Load octopus free session slot into rate_dict (in place)
         """
         if rate_replicate is None:
             rate_replicate = {}
@@ -2436,15 +2436,15 @@ class Octopus:
                 self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        self.rate_export[minute] = rate
+                        rate_dict[minute] = rate
                     else:
-                        self.rate_import[minute] = min(rate, self.rate_import[minute])
+                        rate_dict[minute] = min(rate, rate_dict[minute])
                         self.load_scaling_dynamic[minute] = self.load_scaling_free
                     rate_replicate[minute] = "saving"
 
-    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate=None):
+    def load_saving_slot(self, octopus_saving_slots, rate_dict, export=False, rate_replicate=None):
         """
-        Load octopus saving session slot
+        Load octopus saving session slot into rate_dict (in place)
         """
         if rate_replicate is None:
             rate_replicate = {}
@@ -2476,15 +2476,11 @@ class Octopus:
             if start_minutes < (self.forecast_minutes + self.minutes_now):
                 self.log("Octopus: Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
-                    if export:
-                        if minute in self.rate_export:
-                            self.rate_export[minute] += rate
-                            rate_replicate[minute] = "saving"
-                    else:
-                        if minute in self.rate_import:
-                            self.rate_import[minute] += rate
+                    if minute in rate_dict:
+                        rate_dict[minute] += rate
+                        rate_replicate[minute] = "saving"
+                        if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
-                            rate_replicate[minute] = "saving"
 
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
@@ -2690,7 +2686,11 @@ class Octopus:
                         if octopus_slot_low_rate:
                             assumed_price = self.rate_min_base
                         else:
-                            assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+                            # Use the `rates` working dict, not self.rate_import: fetch now publishes
+                            # rate_import atomically at the end of the rebuild, so self.rate_import holds
+                            # the previous cycle's data here. (On main these were the same object, so this
+                            # is behaviour-preserving there and simply avoids the staleness this PR adds.)
+                            assumed_price = rates.get(start_minutes, self.rate_min)
 
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
