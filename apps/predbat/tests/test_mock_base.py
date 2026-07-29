@@ -131,7 +131,7 @@ def test_mock_base_state_wrapper_paths(my_predbat):
     assert base.get_state_wrapper("sensor.predbat_test", attribute="unit_of_measurement") == "kWh", "attribute lookup failed"
     assert base.get_state_wrapper("sensor.predbat_test", raw=True)["state"] == "42", "raw lookup failed"
     assert base.get_state_wrapper("sensor.predbat_missing", default="none") == "none", "missing entity should return the default"
-    assert base.get_state_wrapper("sensor.predbat_test", attribute="absent", default="dflt") == "dflt", "missing attribute should return the default"
+    assert base.get_state_wrapper("sensor.predbat_test", attribute="absent", default="fallback") == "fallback", "missing attribute should return the default"
     print("PASS: MockBase get_state_wrapper handles raw/attribute/default paths")
     return False
 
@@ -161,7 +161,7 @@ def test_mock_base_record_status_tracks_errors(my_predbat):
 def test_mock_base_no_ha_helpers(my_predbat):
     """get_ha_config returns the caller's default and get_history_wrapper returns None, matching a no-HA run."""
     base = MockBase()
-    assert base.get_ha_config("anything", "dflt") == "dflt", "get_ha_config should return the default"
+    assert base.get_ha_config("anything", "fallback") == "fallback", "get_ha_config should return the default"
     assert base.get_history_wrapper("sensor.predbat_test") is None, "get_history_wrapper should return None with no HA interface"
     print("PASS: MockBase HA helpers degrade cleanly")
     return False
