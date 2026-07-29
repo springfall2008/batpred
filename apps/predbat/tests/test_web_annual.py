@@ -472,6 +472,27 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: the tab's prose wraps, overriding Predbat's global nowrap on paragraphs")
+        # web_helper.py's page stylesheet sets `p { white-space: nowrap }`, which suits the
+        # short single-line paragraphs elsewhere in Predbat but ran every sentence on this
+        # tab off the right of the page - the warning below among them. Nothing about the
+        # markup reveals this, so it needs pinning here.
+        css = make_page(my_predbat).render_css()
+        wrap_rule = re.search(r"([^\n{]*)\{[^}]*white-space:\s*normal", css)
+        if not wrap_rule:
+            print("  ERROR: the tab must re-enable wrapping for its own paragraphs")
+            failed = True
+        else:
+            for needed in [".annual-banner", ".annual-note", ".annual-results p"]:
+                if needed not in wrap_rule.group(1):
+                    print("  ERROR: {} should be included in the wrapping override, got {!r}".format(needed, wrap_rule.group(1)))
+                    failed = True
+        # The compare table still relies on nowrap to keep its columns intact while it
+        # scrolls sideways, so the override must not have swept that away.
+        if "white-space: nowrap" not in css:
+            print("  ERROR: the compare table's own nowrap should survive the wrapping override")
+            failed = True
+
         print("Test: the Octopus import option warns against using it with an existing system")
         octopus_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
         if "do not already have solar or a battery" not in octopus_form:

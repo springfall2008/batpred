@@ -1410,6 +1410,16 @@ annualLoadPlan();
 .annual-field-wide input[type="text"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
 .annual-subgroup { margin-left: 1.5rem; }
 .annual-note { font-size: 0.85rem; opacity: 0.8; }
+/* Predbat's global stylesheet sets `p { white-space: nowrap }` (web_helper.py), which
+   suits the short single-line paragraphs elsewhere but runs every sentence of prose on
+   this tab straight off the right of the page. Re-enable wrapping for the tab's own
+   paragraphs only - deliberately not by changing the global rule, which every other
+   page depends on. Scoped to paragraphs and list items, so the compare table's own
+   nowrap (which keeps its columns intact while it scrolls) is untouched.
+   The max-width is for readability: prose set across an ultra-wide monitor is hard to
+   track from the end of one line back to the start of the next. */
+.annual-form-wrap p, .annual-results p, .annual-compare-scroll p, .annual-banner, .annual-note, .annual-error, .annual-caveats li { white-space: normal; }
+.annual-banner, .annual-error, .annual-caveats li, .annual-form-wrap > p, .annual-results > p { max-width: 80ch; }
 .annual-banner { border-left: 4px solid #D55E00; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .annual-error { border-left: 4px solid #b00020; padding: 0.5rem 0.75rem; margin-bottom: 1rem; }
 .annual-progress { margin: 1rem 0; }
