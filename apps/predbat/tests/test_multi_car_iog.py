@@ -392,10 +392,13 @@ def run_multi_car_shared_charger_exclusive_test(testname, my_predbat):
     my_predbat.car_charging_soc = [61.6, 63.0]
     my_predbat.car_charging_limit = [61.6, 67.2]
 
+    # Windows relative to minutes_now - plan_car_charging() skips windows that fall before
+    # minutes_now, so absolute offsets would go stale depending on what time the test runs.
+    now = my_predbat.minutes_now
     my_predbat.low_rates = [
-        {"start": 0, "end": 30, "average": 5.0},
-        {"start": 60, "end": 90, "average": 5.0},
-        {"start": 120, "end": 150, "average": 5.0},
+        {"start": now, "end": now + 30, "average": 5.0},
+        {"start": now + 60, "end": now + 90, "average": 5.0},
+        {"start": now + 120, "end": now + 150, "average": 5.0},
     ]
 
     my_predbat.fetch_sensor_data_car_planning()
