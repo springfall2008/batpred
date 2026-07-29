@@ -10,6 +10,7 @@
 
 import re
 import warnings
+from datetime import timedelta
 
 import web_helper
 from prediction import Prediction
@@ -78,18 +79,22 @@ def _codes(row):
 def _render(row, templates):
     """
     Mirror of the client-side renderReasonText() in web_helper.py: fill in each reason
-    entry's template with its params, join with a space. Used here to verify the code/params/
-    template contract produces the expected human-readable text end-to-end, not just that the
-    right code was picked.
+    entry's template with its params, join with a space, prefixing "Then" onto the second half
+    of a demand-before-export split. Used here to verify the code/params/template contract
+    produces the expected human-readable text end-to-end, not just that the right code was picked.
     """
-    parts = []
-    for entry in row.get("reasons", []):
+    reasons = row.get("reasons", [])
+    rendered = []
+    for entry in reasons:
         template = templates.get(entry["code"])
         if not template:
+            rendered.append("")
             continue
         text = re.sub(r"\{(\w+)\}", lambda m: str(entry["params"].get(m.group(1), m.group(0))), template)
-        parts.append(text)
-    return " ".join(parts)
+        rendered.append(text)
+    if len(reasons) == 2 and rendered[0] and rendered[1] and reasons[0]["code"].startswith("demand_before_export_"):
+        rendered[1] = "Then " + rendered[1][0].lower() + rendered[1][1:]
+    return " ".join(part for part in rendered if part)
 
 
 def run_test_plan_why_reason(my_predbat):
@@ -328,8 +333,15 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     else:
         rendered = _render(row, templates)
-        if "Until the export window starts" not in rendered or "Exporting down to" not in rendered:
-            print("ERROR: split slot tooltip should explain both halves, got: {}".format(rendered))
+        expected_split_time = (my_predbat.midnight_utc + timedelta(minutes=minutes_now + 15)).strftime("%H:%M")
+        if "Until {}".format(expected_split_time) not in rendered:
+            print("ERROR: split slot tooltip should state the exact split time, got: {}".format(rendered))
+            failed = True
+        elif "Then exporting down to" not in rendered:
+            print("ERROR: split slot tooltip should join both halves with a lowercase 'Then ', got: {}".format(rendered))
+            failed = True
+        elif "Then," in rendered:
+            print("ERROR: split slot tooltip should not put a comma after 'Then', got: {}".format(rendered))
             failed = True
         # The pre-window wording must not claim nothing is scheduled - the slot does export later
         if "no charging or exporting is scheduled" in rendered:

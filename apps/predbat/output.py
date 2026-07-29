@@ -35,9 +35,9 @@ REASON_TEMPLATES = {
     # Used for the first half of a split slot where the export window only starts partway through -
     # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
     # reasons above, which would contradict the export reason sitting alongside it in the same slot.
-    "demand_before_export_rising": "Until the export window starts partway through this slot, the battery level is expected to rise from solar generation.",
-    "demand_before_export_falling": "Until the export window starts partway through this slot, the battery is expected to discharge to cover house demand.",
-    "demand_before_export_steady": "Until the export window starts partway through this slot, the battery level is expected to stay steady.",
+    "demand_before_export_rising": "Until {split_time}, the battery level is expected to rise from solar generation.",
+    "demand_before_export_falling": "Until {split_time}, the battery is expected to discharge to cover house demand.",
+    "demand_before_export_steady": "Until {split_time}, the battery level is expected to stay steady.",
     "freeze_charge": "Freeze charging — the battery holds at the current level rather than charging further this slot (import rate {rate}p/kWh vs. the calculated {threshold}p/kWh threshold).",
     "hold_charge_at_target": "Holding — the battery is already predicted to be at or above the {target_percent}% target for this window without charging further.",
     "charge_low_rate": "Charging up to {target_percent}% at the import rate for this slot of ({rate}p/kWh).",
@@ -1327,18 +1327,19 @@ class Output:
                     start = self.export_window_best[export_window_n]["start"]
                     if start > minute:
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
+                        split_time_str = (self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M")
                         # Same near-flat tolerance as the whole-slot demand arrow above - testing
                         # soc_change_this >= 0 first would make the steady case unreachable and
                         # render a flat pre-window period as rising
                         if abs(soc_change_this) < 0.05:
                             state = " &rarr;"
-                            reason_parts.append({"code": "demand_before_export_steady", "params": {}})
+                            reason_parts.append({"code": "demand_before_export_steady", "params": {"split_time": split_time_str}})
                         elif soc_change_this >= 0:
                             state = " &nearr;"
-                            reason_parts.append({"code": "demand_before_export_rising", "params": {}})
+                            reason_parts.append({"code": "demand_before_export_rising", "params": {"split_time": split_time_str}})
                         else:
                             state = " &searr;"
-                            reason_parts.append({"code": "demand_before_export_falling", "params": {}})
+                            reason_parts.append({"code": "demand_before_export_falling", "params": {"split_time": split_time_str}})
                         state_color = "#FFFFFF"
                         show_limit = ""
                         had_state = True
