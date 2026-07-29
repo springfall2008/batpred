@@ -951,6 +951,53 @@ class Plan:
             return True
         return False
 
+    def plan_metric_current(self, end_record):
+        """Evaluate the plan currently held in self.*_best and return (metric, cost, keep, cycle, carbon, import)."""
+        metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record)
+        return metric, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh
+
+    def plan_window_snapshot(self, typ, window_n):
+        """Capture the plan fields a single-window tweak can modify, so the change can be undone."""
+        if typ == "c":
+            return {"charge_limit": self.charge_limit_best[window_n]}
+        return {
+            "export_limit": self.export_limits_best[window_n],
+            "start": self.export_window_best[window_n]["start"],
+            "start_orig": self.export_window_best[window_n].get("start_orig"),
+        }
+
+    def plan_window_restore(self, typ, window_n, snapshot):
+        """Put a window back as it was when plan_window_snapshot() captured it."""
+        if typ == "c":
+            self.charge_limit_best[window_n] = snapshot["charge_limit"]
+            return
+        window = self.export_window_best[window_n]
+        self.export_limits_best[window_n] = snapshot["export_limit"]
+        window["start"] = snapshot["start"]
+        if snapshot["start_orig"] is None:
+            window.pop("start_orig", None)
+        else:
+            window["start_orig"] = snapshot["start_orig"]
+
+    def keep_plan_change_if_improved(self, end_record, baseline, typ, window_n, snapshot):
+        """Undo a pending single-window plan change unless it improved the whole-plan metric.
+
+        optimise_charge_limit/optimise_export score their candidates against the window being turned off, not
+        against the setting the plan already holds, so a pass that writes their result back unconditionally can
+        replace a better setting chosen by an earlier pass. Re-simulating the whole plan and reverting on a
+        regression keeps such a pass monotonic - notably it stops an in-progress forced export being cancelled
+        part way through a price peak. Lower metric is better.
+
+        Returns the metric tuple to carry forward: the new one when the change is kept, the baseline when not.
+        """
+        candidate = self.plan_metric_current(end_record)
+        if candidate[0] < baseline[0]:
+            return candidate
+        if self.debug_enable:
+            self.log("Reverted tweak of {} window {} as metric {} did not improve on {}".format(typ, window_n, dp2(candidate[0]), dp2(baseline[0])))
+        self.plan_window_restore(typ, window_n, snapshot)
+        return baseline
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1833,11 +1880,13 @@ class Plan:
                 pwindow = export_window[window_n]
                 dwindow = self.export_window[0]
                 if self.minutes_now >= pwindow["start"] and self.minutes_now < pwindow["end"] and ((self.minutes_now >= dwindow["start"] and self.minutes_now < dwindow["end"]) or (dwindow["end"] == pwindow["start"])):
-                    metric -= max(0.5, self.metric_min_improvement_export)
-                    # Only relax the cost gate (further below) for an option that actually covers the current
-                    # minute. The option start is varied during optimisation, so a future-starting option is
-                    # not the in-progress export and must not receive the cost-gate commitment.
+                    # Only reward an option that actually covers the current minute. The option start is varied
+                    # during optimisation, so a future-starting option is not the in-progress export and must
+                    # receive neither the metric bonus nor the cost-gate commitment - giving both options the
+                    # same bonus cancels it out and lets "stop now, restart later in this window" win, which is
+                    # the export flapping this commitment exists to prevent.
                     if start <= self.minutes_now:
+                        metric -= max(0.5, self.metric_min_improvement_export)
                         keep_export = True
 
             # Round metric to 4 DP
@@ -2419,19 +2468,21 @@ class Plan:
         for window_n in range(len(self.charge_limit_best)):
             self.charge_window_best[window_n]["target"] = self.charge_limit_best[window_n]
 
-    def tweak_plan(self, end_record, best_metric, metric_keep):
+    def tweak_plan(self, end_record):
         """
         Tweak existing plan only
+
+        The incoming metric/keep are no longer taken from the caller: this pass re-measures the plan it is
+        handed so it can revert any window change that does not improve on it.
         """
         record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.export_window_best), 1)
         self.log("Tweak plan optimisation started")
-        best_soc = self.soc_max
-        best_cost = best_metric
-        best_keep = metric_keep
-        best_cycle = 0
-        best_carbon = 0
-        best_import = 0
+
+        # Baseline the plan we were handed so every window change below is only kept when it improves on it,
+        # leaving this pass unable to hand back a worse plan than it started with.
+        selected = self.plan_metric_current(end_record)
+
         count = 0
         window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
         for key in window_sorted:
@@ -2442,8 +2493,8 @@ class Plan:
                 if not self.allow_this_charge_window(window_n):
                     continue
 
-                window_start = self.charge_window_best[window_n]["start"]
-                best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
+                snapshot = self.plan_window_snapshot(typ, window_n)
+                self.charge_limit_best[window_n] = self.optimise_charge_limit(
                     window_n,
                     record_charge_windows,
                     self.charge_limit_best,
@@ -2451,15 +2502,15 @@ class Plan:
                     self.export_window_best,
                     self.export_limits_best,
                     end_record=end_record,
-                )
-                self.charge_limit_best[window_n] = best_soc
+                )[0]
+                selected = self.keep_plan_change_if_improved(end_record, selected, typ, window_n, snapshot)
             elif typ == "d":
-                window_start = self.export_window_best[window_n]["start"]
                 if not self.allow_this_export_window(window_n):
                     continue
 
+                snapshot = self.plan_window_snapshot(typ, window_n)
                 self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
+                best_soc, best_start = self.optimise_export(
                     window_n,
                     record_export_windows,
                     self.charge_limit_best,
@@ -2467,14 +2518,16 @@ class Plan:
                     self.export_window_best,
                     self.export_limits_best,
                     end_record=end_record,
-                )
+                )[:2]
                 self.export_limits_best[window_n] = best_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                 self.export_window_best[window_n]["start"] = best_start
+                selected = self.keep_plan_change_if_improved(end_record, selected, typ, window_n, snapshot)
             count += 1
             if count >= 8:
                 break
 
+        best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = selected
         self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
@@ -3044,6 +3097,11 @@ class Plan:
         Second pass optimisation of the charge and export windows
         """
         self.log("Second pass optimisation started")
+
+        # Baseline the plan we were handed so every window change below is only kept when it improves on it,
+        # leaving this pass unable to hand back a worse plan than it started with.
+        selected = self.plan_metric_current(self.end_record)
+
         count = 0
         window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
         for key in window_sorted:
@@ -3051,7 +3109,8 @@ class Plan:
             window_n = window_index[key]["id"]
             if typ == "c":
                 if self.allow_this_charge_window(window_n):
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_charge_limit(
+                    snapshot = self.plan_window_snapshot(typ, window_n)
+                    self.charge_limit_best[window_n] = self.optimise_charge_limit(
                         window_n,
                         record_charge_windows,
                         self.charge_limit_best,
@@ -3059,12 +3118,12 @@ class Plan:
                         self.export_window_best,
                         self.export_limits_best,
                         end_record=self.end_record,
-                    )
-                    self.charge_limit_best[window_n] = best_soc
+                    )[0]
+                    selected = self.keep_plan_change_if_improved(self.end_record, selected, typ, window_n, snapshot)
             elif typ == "d":
                 if self.allow_this_export_window(window_n):
-                    average = self.export_window_best[window_n]["average"]
-                    best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import = self.optimise_export(
+                    snapshot = self.plan_window_snapshot(typ, window_n)
+                    best_soc, best_start = self.optimise_export(
                         window_n,
                         record_export_windows,
                         self.charge_limit_best,
@@ -3072,13 +3131,16 @@ class Plan:
                         self.export_window_best,
                         self.export_limits_best,
                         end_record=self.end_record,
-                    )
+                    )[:2]
                     self.export_limits_best[window_n] = best_soc
                     self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
                     self.export_window_best[window_n]["start"] = best_start
+                    selected = self.keep_plan_change_if_improved(self.end_record, selected, typ, window_n, snapshot)
             if (count % 16) == 0:
-                self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, best_metric, dp2(best_keep), dp0(best_carbon), dp2(best_import), dp2(best_cost)))
+                self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, selected[0], dp2(selected[2]), dp0(selected[4]), dp2(selected[5]), dp2(selected[1])))
             count += 1
+
+        best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = selected
         self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
 
         self.plan_write_debug(debug_mode, "plan_pass2.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
@@ -3660,7 +3722,7 @@ class Plan:
             )
         else:
             # Tweak plan (faster)
-            best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record, best_metric, best_keep)
+            best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record)
 
         # Export more solar - enable freeze export on idle solar windows if it doesn't cost too much
         if self.export_more_solar:
