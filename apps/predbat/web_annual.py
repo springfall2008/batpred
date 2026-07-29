@@ -496,10 +496,15 @@ class AnnualPage:
         # results when the run finishes (see annualPoll). The poll runs in every open
         # tab, and a tab sitting on a half-filled form must not be reloaded out from
         # under whoever is typing in it.
+        # Wrapped so the buttons line up with the fieldset content above rather than
+        # hanging off to the left of it, and so they get some room beneath them - as bare
+        # children of the form they sat flush against the page edge and the next element.
+        text += '<div class="annual-actions">\n'
         text += '<button type="submit" id="annual-run-button" onclick="annualMarkStarted()">Run simulations</button>\n'
         # A second submit button pointed at the plain POST /annual handler via
         # formaction - the same fields, saved without starting a run.
         text += '<button type="submit" formaction="./annual" formmethod="post">Save settings</button>\n'
+        text += "</div>\n"
         text += "</form>\n</div>\n"
         return text
 
@@ -1400,6 +1405,13 @@ annualLoadPlan();
         return """<style>
 .annual-form-wrap fieldset { border: 1px solid var(--md-border, #cbd5e1); margin-bottom: 1rem; padding: 0.75rem; }
 .annual-form-wrap legend { font-weight: 600; }
+/* Every fieldset insets its content by its own border plus 0.75rem of padding, but the
+   Advanced block and the buttons are bare children of the form - so without this they
+   hang to the left of everything above them, and the buttons sit flush against the
+   bottom of the page with nothing under them. */
+.annual-form-wrap > details, .annual-actions { padding: 0 0.75rem; }
+.annual-actions { margin: 1rem 0 2rem; }
+.annual-actions button { margin-right: 0.5rem; padding: 0.4rem 0.9rem; }
 .annual-field { margin: 0.35rem 0; }
 .annual-field label { display: inline-block; min-width: 20rem; }
 /* An Octopus rates URL runs to ~130 characters and an API key to ~32, so the default

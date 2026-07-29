@@ -472,6 +472,19 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: the Advanced block and the buttons line up with the fieldsets above")
+        # Both are bare children of the form, while every fieldset insets its content by
+        # its own border plus padding - so without an explicit inset they drift left of
+        # everything above them, and the buttons sit flush against the page bottom.
+        layout_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if 'class="annual-actions"' not in layout_form:
+            print("  ERROR: the submit buttons should be wrapped so they can be aligned and spaced")
+            failed = True
+        layout_css = make_page(my_predbat).render_css()
+        if ".annual-actions" not in layout_css or ".annual-form-wrap > details" not in layout_css:
+            print("  ERROR: the Advanced block and the button row both need the fieldset inset")
+            failed = True
+
         print("Test: the tab's prose wraps, overriding Predbat's global nowrap on paragraphs")
         # web_helper.py's page stylesheet sets `p { white-space: nowrap }`, which suits the
         # short single-line paragraphs elsewhere in Predbat but ran every sentence on this
