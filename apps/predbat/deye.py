@@ -455,7 +455,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """
         if sn not in self.device_battery_config:
             return 0
-        floor = int(self._battery_config_value(sn, "reserve_min", 0))
+        try:
+            floor = int(self._battery_config_value(sn, "reserve_min", 0))
+        except (TypeError, ValueError):
+            return 0
         return floor if 0 < floor <= 100 else 0
 
     def battery_rate_max(self, sn):
