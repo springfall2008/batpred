@@ -685,6 +685,42 @@ def test_teslemetry_saving_session_spike_keeps_daily_shape():
     assert session > eve_peak, "boosted session {} must price above the real peak {}".format(session, eve_peak)
 
 
+def test_teslemetry_quantise_in_range_excluded_price_no_keyerror():
+    """Regression (Copilot review of #4367): in the <=3-distinct branch, an excluded scheduled-export
+    slot whose underlying price is WITHIN [min,max] but is not one of the non-excluded distinct prices
+    must not KeyError - its tier is overwritten by the boost, so it maps to the nearest distinct tier."""
+    from types import SimpleNamespace
+    from datetime import datetime
+
+    rate_export = {}
+    for minute in range(2880):
+        hour = (minute % 1440) // 60
+        rate_export[minute] = 5.0 if hour < 7 else 25.0  # only 2 distinct non-excluded prices -> small branch
+    for minute in range(17 * 60, 17 * 60 + 30):  # scheduled-export window: in-range unique price 15p
+        rate_export[minute] = 15.0
+
+    api = MockTeslemetryAPI()
+    api.base = SimpleNamespace(rate_import={m: 15.0 for m in range(2880)}, rate_export=rate_export, minutes_now=0, now=datetime(2026, 7, 20, 12, 0), local_tz=None, get_arg=lambda a, d=None, **k: d)
+    tariff = api.build_tariff((17 * 60, 17 * 60 + 30), now_min=12 * 60)  # must not raise
+    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
+    today = api._tesla_dow(api._local_today_weekday())
+
+    def tier_at(minute):
+        """Return the sell tier applying on today at the given minute-of-day."""
+        for tier, block in periods.items():
+            for period in block["periods"]:
+                if period["fromDayOfWeek"] <= today <= period["toDayOfWeek"]:
+                    start = period["fromHour"] * 60 + period["fromMinute"]
+                    end = (period["toHour"] * 60 + period["toMinute"]) or 1440
+                    if start <= minute < end:
+                        return tier
+        return None
+
+    assert sell[tier_at(3 * 60)] < sell[tier_at(12 * 60)]  # overnight 5p still below daytime 25p
+    assert tier_at(17 * 60 + 10) == "ON_PEAK"  # the scheduled-export slot is boosted
+
+
 def test_teslemetry_day_runs_groups_replicated_days():
     """_day_runs() itself: 6 identical days plus 1 different day collapse to 2 runs, not 7 singletons."""
     api = MockTeslemetryAPI()
@@ -1887,6 +1923,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_periods_partition_each_day()
     test_teslemetry_build_tariff_consolidates_replicated_days()
     test_teslemetry_saving_session_spike_keeps_daily_shape()
+    test_teslemetry_quantise_in_range_excluded_price_no_keyerror()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()

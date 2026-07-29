@@ -878,8 +878,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             tier_prices = {tier: value for value, tier in value_to_tier.items()}
 
             def band_of(value):
-                """Return the tier for a value, clamped so excluded-slot outliers map to the top real tier."""
-                return value_to_tier[clamp(value)]
+                """Return the tier for a value by nearest non-excluded distinct price.
+
+                An excluded (scheduled-export) slot can carry an in-range price that is not itself one
+                of the non-excluded distinct prices, so an exact lookup would KeyError; its tier is
+                overwritten by the boost anyway, so mapping to the nearest distinct price is safe.
+                """
+                target = clamp(value)
+                return value_to_tier.get(target) or value_to_tier[min(distinct, key=lambda price: abs(price - target))]
 
         else:
             width = (high - low) / len(REAL_TIERS)
