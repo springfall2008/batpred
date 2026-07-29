@@ -14,13 +14,13 @@ line (`python fox.py --key=...`). All are marked `# pragma: no cover`.
 | `axle.py` | `MockBase` | adds `config_root`, `fatal_error`, `had_errors`, `components`, `now_utc_exact`, `call_notify` |
 | `deye.py` | `MockBase` | |
 | `enphase.py` | `MockBase` | adds `fatal_error`, `had_errors` |
-| `fox.py` | `MockBase` | narrow `get_arg(key, default)` |
-| `gecloud.py` | `MockBase` | |
-| `kraken.py` | `KrakenMockBase` | takes `user_id=` |
+| `fox.py` | `MockBase` | narrow `get_arg(key, default)`; naive `midnight_utc` |
+| `gecloud.py` | `MockBase` | adds `config_root`, `plan_interval_minutes`, `ha_interface` |
+| `kraken.py` | `KrakenMockBase` | takes `user_id=`; naive `midnight_utc`; sole user of `import json` |
 | `octopus.py` | `MockBase` | adds `config_root`, `plan_interval_minutes`, `now_utc_exact`; has a `QuietMockBase` subclass |
 | `sigenergy.py` | `MockBase` | takes `readonly=`; non-mutating `dashboard_item` |
-| `solax.py` | `MockBase` | narrow `get_arg(key, default)` |
-| `solis.py` | `MockBase` | persisting `get_arg`/`set_arg` |
+| `solax.py` | `MockBase` | narrow `get_arg(key, default)`; `local_tz = timezone.utc` |
+| `solis.py` | `MockBase` | persisting `get_arg`/`set_arg`; naive `midnight_utc` |
 | `teslemetry.py` | `MockBase` | persisting `get_arg`/`set_arg` |
 
 Roughly 90% of each class is identical: `get_state_wrapper`, `set_state_wrapper`, `log`,
@@ -62,8 +62,11 @@ class, not an ABC** — being directly instantiable is the point; subclasses onl
 ### Constructor
 
 ```python
-def __init__(self, config_root="./temp_predbat", **kwargs):
+def __init__(self, config_root="./temp_predbat", local_tz=None, **kwargs):
 ```
+
+`local_tz` defaults to the machine's local timezone; `solax` passes `timezone.utc` to preserve
+its current behaviour.
 
 Sets the full superset of attributes, derived from every `self.base.*` dereference across
 `component_base.py` and the eleven modules:
@@ -124,30 +127,43 @@ Three deliberate changes, all confined to CLI-harness behaviour and output:
 3. **`set_arg` logging.** `axle` and `sigenergy` print a terser line; they adopt the common
    form that resolves the referenced entity's state. More informative, CLI-only.
 
+4. **Timezone-aware `midnight_utc`.** `fox`, `kraken` and `solis` build `midnight_utc` from a
+   naive `datetime.now()` while their `now_utc` is timezone-aware — so any
+   `now_utc - midnight_utc` arithmetic raises `TypeError: can't subtract offset-naive and
+   offset-aware datetimes`. The shared base derives `midnight_utc` from the aware `now_utc`,
+   fixing this. `sigenergy` and `solax` set neither attribute today and gain both.
+
 ### Per-module changes
 
 Each module keeps a module-level `MockBase` name so its call sites and the
 `from teslemetry import MockBase` import in `tests/test_teslemetry.py:1458` keep working.
 
-Seven modules collapse to a plain re-export:
+**Five** modules collapse to a plain re-export:
 
 ```python
-from mock_base import MockBase   # deye, enphase, fox, gecloud, solax, solis, teslemetry
+from mock_base import MockBase   # deye, enphase, fox, solis, teslemetry
 ```
 
-Three need a small subclass:
+**Five** need a small subclass:
 
 - `axle.py` — `config_root="./temp_axle"`
+- `gecloud.py` — `config_root="./temp_gecloud"` **and** `ha_interface = MockHAInterface()`,
+  which `GECloudDirect` dereferences at `gecloud.py:1037`. `MockHAInterface` is
+  gecloud-specific and stays in `gecloud.py`.
 - `octopus.py` — `config_root="./temp_octopus"`; its existing `QuietMockBase(MockBase)`
   subclass is unaffected and continues to work.
 - `sigenergy.py` — keeps its `readonly=` parameter, which pre-seeds
   `switch.predbat_set_read_only` in `self.entities`.
+- `solax.py` — `local_tz=timezone.utc`, preserving its deliberate use of UTC rather than the
+  machine's local timezone.
 
-`kraken.py` binds `KrakenMockBase = MockBase` so its `user_id=` call site is untouched (the
-`**kwargs`-into-`args` behaviour covers it).
+**One** alias: `kraken.py` binds `KrakenMockBase = MockBase` so its `user_id=` call site is
+untouched (the `**kwargs`-into-`args` behaviour covers it).
 
-Expected net: roughly 550 duplicated lines replaced by a ~110-line shared module plus ~25
-lines of subclasses.
+Total: 5 + 5 + 1 = 11 modules.
+
+Expected net: 588 duplicated lines replaced by a ~120-line shared module plus ~40 lines of
+subclasses.
 
 ## Testing
 
@@ -163,8 +179,10 @@ Per CLAUDE.md all new code needs unit tests. A new `tests/test_mock_base.py`, re
 - `dashboard_item` serialises a datetime attribute without raising (the `default=str` path)
 - `get_state_wrapper` raw / `attribute=` / default-fallback paths
 - `set_state_wrapper` accepts both `app=` and `required_unit=`
-- the three subclasses set their distinguishing state (`axle`/`octopus` `config_root`,
-  `sigenergy` `readonly=` seeding the read-only switch)
+- `midnight_utc` is timezone-aware and `now_utc - midnight_utc` does not raise
+- the five subclasses set their distinguishing state (`axle`/`gecloud`/`octopus`
+  `config_root`, `gecloud` `ha_interface`, `sigenergy` `readonly=` seeding the read-only
+  switch, `solax` `local_tz` being UTC)
 
 **Not tested:** the CLI harness functions that construct a `MockBase`
 (`test_fox_api`, `test_solis_api`, `test_axle_api`, etc.). Those are `# pragma: no cover`
@@ -177,9 +195,12 @@ is the regression check that the persistence unification preserved `teslemetry`'
 ## Verification
 
 - `./run_all` passes (output saved to a file, then grepped, per CLAUDE.md).
-- `./run_pre_commit` passes. Several modules import `json` and/or `datetime` **only** for
-  their `MockBase`; removing it will leave unused imports that Flake8 flags. Each module's
-  remaining usage must be checked before deleting an import.
+- `./run_pre_commit` passes. Audited: **`kraken.py` is the only module whose top-level
+  `import json` exists solely for its mock** — every other `json` reference in that file is
+  `response.json()` or a string literal, so the import must be deleted or Flake8 F401 fires.
+  All other modules use `json` and `datetime` outside their mock and keep their imports.
+  `sigenergy.py:2528` also has a redundant function-local `import json` that disappears with
+  the class.
 - Each refactored module still imports cleanly and its `if __name__ == "__main__"` path is
   intact.
 - 100% docstring coverage (`interrogate`) on the new module and its subclasses.
