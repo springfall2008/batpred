@@ -767,6 +767,10 @@ class SolaxAPI(ComponentBase):
             self.freeze_charge_min_soc = None
             new_min_soc = reserve_soc
 
+        # Clamp here rather than only inside set_default_work_mode, so that the mode hash, the backoff
+        # state and the log all describe the payload that is actually sent
+        new_min_soc = max(SOLAX_MIN_RESERVE_PERCENT, min(100, new_min_soc))
+
         # Only hash what is actually sent for this mode.  The freeze modes hold the battery with min_soc
         # and send no SOC target, so tracking new_target_soc there would rewrite the inverter every time
         # the battery SOC moved by 1%

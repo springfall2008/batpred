@@ -688,6 +688,23 @@ async def test_apply_controls_min_soc_main(my_predbat):
         else:
             print(f"✓ minSoc clamped up to the SolaX floor of {SOLAX_MIN_RESERVE_PERCENT}")
 
+    # Another reserve below the floor sends the same payload, so the mode hash must not change and
+    # nothing should be re-sent.  write_setting_from_event does not clamp, so out of range values do reach here
+    print("\n--- Test 2b: A different out of range reserve does not re-send ---")
+    solax_api.controls[test_plant_id]["reserve"] = 5
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: The clamped payload is unchanged so nothing should be re-sent, got {mock_send.call_count} calls ****")
+            failed = True
+        else:
+            print("✓ The mode hash tracks the clamped minSoc, so no needless rewrite")
+
     # Test 3: Freeze charge holds minSoc at the SOC the window opened at, even as the battery charges
     print("\n--- Test 3: Freeze charge holds the minSoc floor ---")
     # A charge target at the reserve is a freeze charge whatever the SOC does, so the window stays in
