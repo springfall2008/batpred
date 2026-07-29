@@ -496,73 +496,6 @@ def test_first_run_succeeds_once_telemetry_arrives():
     assert not failed, "test_first_run_succeeds_once_telemetry_arrives"
 
 
-def test_successful_run_reports_a_success_timestamp():
-    """A completed cycle must report success, or the component is judged dead.
-
-    components.is_alive() requires a success within the last 60 minutes; with no timestamp
-    ever recorded it returns False for the entire session, so every Predbat run ended
-    "Complete run status Demand with component errors: DEYE Cloud" with nothing wrong.
-    """
-    failed = False
-    d = StorageDeye(auth_method="oauth")
-    d._mock_storage = _warm_cache()
-    reported = []
-
-    async def fake_post(endpoint_key, body):
-        """Fake DEYE POST: device/latest succeeds."""
-        if endpoint_key == "device_latest":
-            return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": LIVE_DATA_LIST}]}
-        return {"success": True}
-
-    with patch.object(d, "_post", side_effect=fake_post):
-        with patch.object(d, "check_and_refresh_oauth_token", side_effect=_true):
-            with patch.object(d, "publish_data", side_effect=_noop):
-                with patch.object(d, "publish_schedule_settings_ha", side_effect=_noop_arg):
-                    with patch.object(d, "_reconcile_control", side_effect=_noop):
-                        with patch.object(d, "automatic_config", side_effect=_noop):
-                            with patch.object(d, "update_success_timestamp", side_effect=lambda: reported.append(True)):
-                                result = run_async(d.run(seconds=0, first=True))
-
-    if result is not True:
-        print(f"ERROR: expected a successful run, got {result!r}")
-        failed = True
-    if not reported:
-        print("ERROR: a successful cycle must call update_success_timestamp()")
-        failed = True
-    assert not failed, "test_successful_run_reports_a_success_timestamp"
-
-
-def test_failed_run_does_not_report_success():
-    """A cycle that bails must not report success, or a dead component would look alive."""
-    failed = False
-    d = StorageDeye(auth_method="oauth")
-    d._mock_storage = _warm_cache()
-    reported = []
-
-    async def fake_post(endpoint_key, body):
-        """Fake DEYE POST: device/latest fails, so the first cycle defers."""
-        if endpoint_key == "device_latest":
-            return {"success": False, "msg": "device offline"}
-        return {"success": True}
-
-    with patch.object(d, "_post", side_effect=fake_post):
-        with patch.object(d, "check_and_refresh_oauth_token", side_effect=_true):
-            with patch.object(d, "publish_data", side_effect=_noop):
-                with patch.object(d, "publish_schedule_settings_ha", side_effect=_noop_arg):
-                    with patch.object(d, "_reconcile_control", side_effect=_noop):
-                        with patch.object(d, "automatic_config", side_effect=_noop):
-                            with patch.object(d, "update_success_timestamp", side_effect=lambda: reported.append(True)):
-                                result = run_async(d.run(seconds=0, first=True))
-
-    if result is not False:
-        print(f"ERROR: expected the cycle to fail, got {result!r}")
-        failed = True
-    if reported:
-        print("ERROR: a failed cycle must not report success")
-        failed = True
-    assert not failed, "test_failed_run_does_not_report_success"
-
-
 def test_storage_absent_behaves_as_before():
     """With no storage component every load/save no-ops and each tier simply refreshes."""
     failed = False
@@ -727,8 +660,6 @@ def run_deye_storage_tests(my_predbat):
         ("fresh_applied_payload_suppresses", test_fresh_applied_payload_suppresses_a_redundant_write),
         ("first_fails_without_telemetry", test_first_run_fails_when_telemetry_is_unavailable),
         ("first_succeeds_with_telemetry", test_first_run_succeeds_once_telemetry_arrives),
-        ("success_timestamp_reported", test_successful_run_reports_a_success_timestamp),
-        ("no_success_on_failure", test_failed_run_does_not_report_success),
         ("storage_absent", test_storage_absent_behaves_as_before),
         ("corrupt_cache_isolated", test_corrupt_cache_only_affects_its_own_tier),
         ("shape_validation", test_shape_validation_rejects_garbage),
