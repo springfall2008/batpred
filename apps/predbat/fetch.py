@@ -1138,7 +1138,12 @@ class Fetch:
             if self.car_charging_slots[car_n]:
                 self.log("Car {} charging plan is: {}".format(car_n, self.car_charging_slots[car_n]))
 
-            if self.car_charging_planned[car_n] and self.car_charging_exclusive[car_n]:
+            # Only treat this car as "the" exclusive charging session if it actually produced a
+            # real plan - in a shared-charger multi-car setup, car_charging_planned/now can read
+            # true for every car profile sharing the same physical sensor (issue #4305), so a car
+            # with an empty plan (its SoC already at/above its own limit) shouldn't block a later
+            # car - the one actually plugged in and charging - from ever being considered.
+            if self.car_charging_planned[car_n] and self.car_charging_exclusive[car_n] and self.car_charging_slots[car_n]:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
 
