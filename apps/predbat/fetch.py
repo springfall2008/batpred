@@ -989,7 +989,7 @@ class Fetch:
             self.rate_import_no_io = {}
             self.log("Warning: No import rate data provided")
             self.record_status(message="Error: No import rate data provided", had_errors=True)
-        # Atomic publish: readers (e.g. async components) never see a half-built or empty rate_import.
+        # Atomic publish: readers (e.g. async components) never see a half-built or transiently-empty rate_import during rebuild.
         self.rate_import = import_rates
 
         # Replicate and scan export rates
