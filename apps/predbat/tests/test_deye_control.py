@@ -9,7 +9,7 @@
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
 from unittest.mock import patch
-from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS
 from tests.test_deye_api import MockDeye
 from tests.test_infra import run_async as run_async_local
 
@@ -351,6 +351,60 @@ def test_run_clears_pending_order_and_count_on_success():
     assert not failed, "test_run_clears_pending_order_and_count_on_success"
 
 
+def test_window_times_reach_the_slots_in_deye_format():
+    """A HH:MM:SS window becomes HH:MM slot times and actually produces a window.
+
+    Live regression: every control payload for two hours carried only the filler times
+    (00:00/04:00/08:00/12:00/16:00/20:00) with grid charge off everywhere — the signature of
+    build_tou_slots seeing no window at all — because Predbat was writing the window times
+    to dummy entities this component never reads.
+    """
+    failed = False
+    d = MockDeye()
+    sched = {
+        "reserve": 14,
+        "charge": {"enable": True, "soc": 95, "power": 3000, "start": "05:00:00", "end": "05:30:00"},
+        "export": {"enable": False, "soc": 0, "power": 0},
+    }
+    slots = d.build_tou_slots(sched, current_soc=40)
+    times = [s[TOU_FIELD["time"]] for s in slots]
+
+    if any(len(t) != 5 or t.count(":") != 1 for t in times):
+        print(f"ERROR: DEYE slot times must be HH:MM, got {times}")
+        failed = True
+    if "05:00" not in times:
+        print(f"ERROR: the charge window start never reached the slots: {times}")
+        failed = True
+    if not any(s[TOU_FIELD["grid_charge"]] and s[TOU_FIELD["soc"]] == 95 for s in slots):
+        print(f"ERROR: no grid-charge slot was produced for the window: {slots}")
+        failed = True
+    # The all-filler payload is exactly what the bug produced, so assert we are not back there
+    if times == TOU_FILLER_TIMES[:TOU_SLOT_COUNT]:
+        print(f"ERROR: slots are pure filler, the window was lost: {times}")
+        failed = True
+
+    # A HH:MM window still works, so a stale entity value cannot break the payload
+    sched["charge"]["start"] = "05:00"
+    sched["charge"]["end"] = "05:30"
+    if "05:00" not in [s[TOU_FIELD["time"]] for s in d.build_tou_slots(sched, current_soc=40)]:
+        print("ERROR: a HH:MM window should still resolve")
+        failed = True
+    assert not failed, "test_window_times_reach_the_slots_in_deye_format"
+
+
+def test_to_slot_time_normalisation():
+    """Schedule times are reduced to the HH:MM DEYE requires, tolerating bad input."""
+    failed = False
+    d = MockDeye()
+    cases = [("05:00:00", "05:00"), ("05:30", "05:30"), ("5:3", "05:03"), ("23:59:59", "23:59"), ("", "00:00"), (None, "00:00"), ("garbage", "00:00"), ("12", "00:00")]
+    for value, want in cases:
+        got = d._to_slot_time(value)
+        if got != want:
+            print(f"ERROR: _to_slot_time({value!r}) expected {want!r}, got {got!r}")
+            failed = True
+    assert not failed, "test_to_slot_time_normalisation"
+
+
 def test_repeated_write_button_presses_do_not_resend_an_unchanged_payload():
     """Predbat presses the write button every cycle, so it must not force a write.
 
@@ -616,6 +670,8 @@ def run_deye_control_tests(my_predbat):
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
         ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
+        ("window_times_reach_slots", test_window_times_reach_the_slots_in_deye_format),
+        ("to_slot_time", test_to_slot_time_normalisation),
         ("write_button_no_resend", test_repeated_write_button_presses_do_not_resend_an_unchanged_payload),
         ("write_button_writes_on_change", test_write_button_still_writes_when_the_schedule_changes),
         ("slot_soc_floor", test_slot_soc_never_goes_below_the_inverter_floor),

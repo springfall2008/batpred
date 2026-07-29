@@ -24,6 +24,14 @@ def test_deyecloud_inverter_def():
             "support_charge_freeze": True,
             "support_discharge_freeze": True,
             "target_soc_used_for_discharge": True,
+            # Load-bearing, not cosmetic. inverter.py replaces charge/discharge
+            # start/end_time with its own dummy sensor.predbat_<type>_<id>_* entities for
+            # ANY format other than "HH:MM:SS", discarding whatever automatic_config
+            # mapped. DEYE was the only inverter declaring "HH:MM", a value handled
+            # nowhere else in inverter.py, so Predbat wrote the window times to dummies
+            # while this component read its own untouched selects — every control payload
+            # went out with no charge or export window at all.
+            "charge_time_format": "HH:MM:SS",
         }
         for k, v in expect.items():
             if d.get(k) != v:

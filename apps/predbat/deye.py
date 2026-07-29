@@ -552,9 +552,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
                 intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
                 state = self.derive_control_state(intent, current_soc)
-                segments[window["start"]] = state
+                # Normalised to HH:MM here: these strings become DEYE slot times, and the
+                # entities they came from carry seconds.
+                segments[self._to_slot_time(window["start"])] = state
                 # After the window, return to self-use at reserve.
-                segments.setdefault(window["end"], {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None})
+                segments.setdefault(self._to_slot_time(window["end"]), {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None})
         ordered = sorted(segments.items(), key=lambda kv: kv[0])
         slots = []
         for start_time, state in ordered:
@@ -582,6 +584,23 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _to_slot_time(value):
+        """Normalise a schedule time to the HH:MM DEYE's TOU slots require.
+
+        The control entities carry HH:MM:SS because that is the format Predbat writes (see
+        INVERTER_DEF charge_time_format), but DEYE's timeUseSettingItems take HH:MM, so the
+        seconds are dropped here — at the one point a schedule time becomes a slot time.
+        """
+        text = str(value or "00:00")
+        parts = text.split(":")
+        if len(parts) < 2:
+            return "00:00"
+        try:
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        except ValueError:
+            return "00:00"
 
     @staticmethod
     def _hm_to_minutes(hm):
@@ -825,8 +844,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         )
         for direction in ("charge", "export"):
             window = local.get(direction, {})
-            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), state=window.get("start", "00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} Start", "icon": "mdi:clock-outline"}, app="deye")
-            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), state=window.get("end", "00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} End", "icon": "mdi:clock-outline"}, app="deye")
+            # HH:MM:SS to match INVERTER_DEF charge_time_format. Any other value makes
+            # Predbat replace these entities with its own dummies (inverter.py, the
+            # inv_charge_time_format != "HH:MM:SS" branch) and the window never arrives.
+            self.dashboard_item(
+                self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), state=window.get("start", "00:00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} Start", "icon": "mdi:clock-outline"}, app="deye"
+            )
+            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), state=window.get("end", "00:00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} End", "icon": "mdi:clock-outline"}, app="deye")
             self.dashboard_item(
                 self._control_name("number", sn, f"battery_schedule_{direction}_soc"),
                 state=int(window.get("soc", 0)),
@@ -856,8 +880,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         for direction in ("charge", "export"):
             schedule[direction] = {
                 "enable": self.get_state_wrapper(self._control_name("switch", sn, f"battery_schedule_{direction}_enable"), default="off") == "on",
-                "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00"),
-                "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00"),
+                "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00:00"),
+                "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00:00"),
                 "soc": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_soc"), default=0), 0)),
                 "power": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_power"), default=0), 0)),
             }
