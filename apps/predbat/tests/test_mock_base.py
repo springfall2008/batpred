@@ -167,6 +167,43 @@ def test_mock_base_no_ha_helpers(my_predbat):
     return False
 
 
+def test_mock_base_module_subclasses(my_predbat):
+    """The five subclassing modules keep their distinguishing state on top of the shared base."""
+    from axle import MockBase as AxleMockBase
+    from gecloud import MockBase as GECloudMockBase
+    from octopus import MockBase as OctopusMockBase
+    from sigenergy import MockBase as SigenergyMockBase
+    from solax import MockBase as SolaxMockBase
+
+    assert AxleMockBase().config_root == "./temp_axle", "axle config_root is wrong"
+    assert OctopusMockBase().config_root == "./temp_octopus", "octopus config_root is wrong"
+
+    gecloud_base = GECloudMockBase()
+    assert gecloud_base.config_root == "./temp_gecloud", "gecloud config_root is wrong"
+    assert gecloud_base.ha_interface is not None, "gecloud must supply a mock ha_interface"
+    assert hasattr(gecloud_base.ha_interface, "set_state_external"), "gecloud ha_interface needs set_state_external"
+
+    assert SolaxMockBase().local_tz == timezone.utc, "solax must keep using UTC"
+
+    read_only = SigenergyMockBase(readonly=True)
+    assert read_only.get_state_wrapper("switch.predbat_set_read_only") == "on", "sigenergy readonly=True should seed the switch on"
+    writable = SigenergyMockBase(readonly=False)
+    assert writable.get_state_wrapper("switch.predbat_set_read_only") == "off", "sigenergy readonly=False should seed the switch off"
+
+    print("PASS: module MockBase subclasses keep their distinguishing state")
+    return False
+
+
+def test_mock_base_kraken_alias(my_predbat):
+    """KrakenMockBase is the shared base and still accepts user_id, skipping it when None."""
+    from kraken import KrakenMockBase
+
+    assert KrakenMockBase(user_id="user-123").args.get("user_id") == "user-123", "user_id should be stored"
+    assert "user_id" not in KrakenMockBase(user_id=None).args, "a None user_id must not be stored"
+    print("PASS: KrakenMockBase preserves its user_id contract")
+    return False
+
+
 def test_mock_base_all(my_predbat):
     """Run all mock_base tests."""
     tests = [
@@ -182,6 +219,8 @@ def test_mock_base_all(my_predbat):
         ("state_wrapper_kwargs", test_mock_base_set_state_wrapper_accepts_both_kwargs, "set_state_wrapper accepts app and required_unit"),
         ("record_status", test_mock_base_record_status_tracks_errors, "record_status tracks had_errors"),
         ("ha_helpers", test_mock_base_no_ha_helpers, "HA helpers degrade cleanly"),
+        ("module_subclasses", test_mock_base_module_subclasses, "Module subclasses keep their distinguishing state"),
+        ("kraken_alias", test_mock_base_kraken_alias, "KrakenMockBase alias preserves the user_id contract"),
     ]
 
     failed = []

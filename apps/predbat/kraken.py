@@ -16,10 +16,10 @@ GraphQL schema notes (validated against live EDF/E.ON APIs):
 import aiohttp
 import asyncio
 import types as _types
-import json
 from datetime import datetime, timedelta, timezone
 
 from component_base import ComponentBase
+from mock_base import MockBase as KrakenMockBase
 
 # Auth strategy selection — OAuthMixin for SaaS OAuth, KrakenAuthMixin for local auth.
 # Both may ship in the same release package.  _KrakenAuthMixin is stored at module level
@@ -1399,64 +1399,6 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return False
 
         return True
-
-
-class KrakenMockBase:  # pragma: no cover
-    """Minimal mock base object so KrakenAPI can be driven from the command line.
-
-    Mirrors the MockBase used by fox.py — provides just enough of the Predbat base
-    interface (logging, args, dashboard publishing) for a standalone KrakenAPI run.
-    """
-
-    def __init__(self, user_id=None):
-        """Initialise the mock base, optionally seeding a Supabase user_id for OAuth."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        if user_id:
-            self.args["user_id"] = user_id
-        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            print_attrs = dict(attributes)
-            if "options" in print_attrs:
-                print_attrs["options"] = "..."
-            print(f"  Attributes: {json.dumps(print_attrs, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_kraken_api(

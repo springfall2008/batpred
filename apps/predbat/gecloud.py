@@ -21,6 +21,7 @@ import asyncio
 import json
 import random
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 
 """
 GE Cloud data download
@@ -1959,57 +1960,13 @@ class MockHAInterface:  # pragma: no cover
         print(f"Set state external {entity_id} = {state}")
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for testing"""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the GE Cloud command-line harness, with its own cache root and HA interface."""
 
     def __init__(self):
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-        self.config_root = "./temp_gecloud"
-        self.plan_interval_minutes = 30
+        """Initialise the shared mock with the GE Cloud cache root and a mock HA interface."""
+        super().__init__(config_root="./temp_gecloud")
         self.ha_interface = MockHAInterface()
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # pragma: no cover

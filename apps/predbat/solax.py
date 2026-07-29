@@ -23,6 +23,7 @@ import argparse
 import traceback
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 
 SOLAX_TIMEOUT = 20
 SOLAX_RETRIES = 5
@@ -2842,54 +2843,12 @@ class SolaxAPI(ComponentBase):
         return True
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for standalone testing"""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Solax command-line harness, which works in UTC rather than local time."""
 
     def __init__(self):
-        self.prefix = "predbat"
-        self.local_tz = timezone.utc
-        self.args = {}
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get('state', default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {
-            'state': state,
-            'attributes': attributes or {}
-        }
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if 'options' in attributes:
-                attributes['options'] = '...'
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and '.' in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and '.' in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
+        """Initialise the shared mock pinned to UTC."""
+        super().__init__(local_tz=timezone.utc)
 
 
 async def run_test_command(solax, plant_id, command, duration, next_motion, target_soc, power):  # pragma: no cover

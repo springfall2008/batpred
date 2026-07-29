@@ -83,6 +83,7 @@ except ImportError:
 
 from datetime import datetime, timedelta
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 
 
@@ -2497,52 +2498,13 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: final() complete")
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for standalone testing."""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Sigenergy command-line harness, which can pre-seed read-only mode."""
 
     def __init__(self, readonly=False):
-        """Initialise mock base."""
-        self.prefix = "predbat"
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.args = {}
-        self.entities = {}
-        # Pre-populate the read-only switch so get_state_wrapper returns the right value
-        self.entities["switch.predbat_set_read_only"] = {"state": "on" if readonly else "off"}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return entity state or default."""
-        if raw:
-            return self.entities.get(entity_id, {})
-        return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Store entity state."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print log message with timestamp."""
-        print("[{}] {}".format(datetime.now().strftime("%H:%M:%S"), message))
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and store a dashboard entity."""
-        import json
-        print("ENTITY: {} = {}".format(entity_id, state))
-        if attributes:
-            display = {k: ("..." if k == "options" else v) for k, v in attributes.items()}
-            print("  Attributes: {}".format(json.dumps(display, indent=2, default=str)))
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=False, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return arg default (mock always returns default)."""
-        return default
-
-    def set_arg(self, key, value):
-        """Print auto-config arg assignment."""
-        state = str(value)
-        print("Set arg {} = {}".format(key, state))
-
-    def update_success_timestamp(self):
-        """No-op success timestamp update."""
+        """Initialise the shared mock, seeding the read-only switch so control writes are gated."""
+        super().__init__()
+        self.entities["switch.predbat_set_read_only"] = {"state": "on" if readonly else "off", "attributes": {}}
 
 
 async def test_sigenergy_api(app_key, app_secret, base_url, system_id, test_mode, action=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, readonly=False):  # pragma: no cover
