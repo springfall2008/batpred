@@ -2686,7 +2686,11 @@ class Octopus:
                         if octopus_slot_low_rate:
                             assumed_price = self.rate_min_base
                         else:
-                            assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+                            # Use the `rates` working dict, not self.rate_import: fetch now publishes
+                            # rate_import atomically at the end of the rebuild, so self.rate_import holds
+                            # the previous cycle's data here. (On main these were the same object, so this
+                            # is behaviour-preserving there and simply avoids the staleness this PR adds.)
+                            assumed_price = rates.get(start_minutes, self.rate_min)
 
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
