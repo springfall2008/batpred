@@ -19,6 +19,7 @@ from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
+from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_execute import run_execute_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests
@@ -225,6 +226,7 @@ def main():
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
+        ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
