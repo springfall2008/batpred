@@ -1,6 +1,7 @@
 """
 Tests for GatewayMQTT component.
 """
+
 import sys
 import os
 import math
@@ -291,6 +292,7 @@ class TestInjectEntities:
         gw._last_status = None
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
+        gw._suffix_to_serial = {}  # set by automatic_config; empty = nothing bound yet
         gw._dashboard_calls = {}  # entity_id → (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
@@ -671,6 +673,97 @@ class TestInjectEntities:
         assert entity in gw._dashboard_calls
         state, _ = gw._dashboard_calls[entity]
         assert state == 6000
+
+
+class TestBoundEntitiesAreWritten:
+    """Every entity automatic_config() binds must actually be written by _inject_entities().
+
+    A bound-but-never-written entity holds whatever value it last had and silently
+    freezes — surfacing only as PredBat's clock-skew warning once the stale
+    inverter_time drifts past the threshold.
+    """
+
+    def _make_gateway(self):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.log = MagicMock()
+        gw.prefix = "predbat"
+        gw._last_status = None
+        gw._auto_configured = False
+        gw._suffix_to_serial = {}
+        gw.args = {}
+        gw._args = {}
+        gw.local_tz = pytz.timezone("Europe/London")
+        gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw._dashboard_calls = {}
+
+        def capture_set_arg(key, value):
+            gw._args[key] = value
+
+        def capture_dashboard(entity_id, state=None, attributes=None, app=None):
+            gw._dashboard_calls[entity_id] = (state, attributes)
+
+        gw.set_arg = capture_set_arg
+        gw.dashboard_item = capture_dashboard
+        return gw
+
+    def _add_inverter(self, status, serial, primary, inv_type=None):
+        inv = status.inverters.add()
+        inv.type = inv_type if inv_type is not None else pb.INVERTER_TYPE_GIVENERGY
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = True
+        inv.active = True
+        inv.battery.soc_percent = 50
+        inv.battery.capacity_wh = 9500
+        inv.battery.rate_max_w = 5000
+        return inv
+
+    def _gateway_plus_two_aios(self):
+        """Reproduces the field topology: a Gateway coordinating two primary AIOs.
+
+        Per GivTCP rules automatic_config picks the Gateway as the control target,
+        so every arg binds to the Gateway's serial suffix. The Gateway is not
+        flagged primary — firmware only sets primary on battery inverters.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_test"
+        status.firmware = "0.27.0"
+        status.timestamp = 1741789200
+        status.schema_version = 1
+        self._add_inverter(status, "GW2315G357", primary=False, inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+        self._add_inverter(status, "CH2335G421", primary=True)
+        self._add_inverter(status, "CH2432G070", primary=True)
+        return status
+
+    def test_bound_inverter_time_entity_is_written(self):
+        """The inverter_time entity bound by automatic_config must be written."""
+        gw = self._make_gateway()
+        gw._last_status = self._gateway_plus_two_aios()
+        gw.automatic_config()
+
+        bound = gw._args["inverter_time"][0]
+
+        gw._inject_entities(gw._last_status)
+
+        assert bound in gw._dashboard_calls, "automatic_config bound inverter_time to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
+
+    def test_bound_soc_entity_is_written(self):
+        """The soc_percent entity bound by automatic_config must be written."""
+        gw = self._make_gateway()
+        gw._last_status = self._gateway_plus_two_aios()
+        gw.automatic_config()
+
+        bound = gw._args["soc_percent"][0]
+
+        gw._inject_entities(gw._last_status)
+
+        assert bound in gw._dashboard_calls, "automatic_config bound soc_percent to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
 
 
 class TestDebugLogging:
@@ -4259,6 +4352,7 @@ def run_gateway_tests(my_predbat=None):
         TestInjectEntities,
         TestDebugLogging,
         TestAutomaticConfig,
+        TestBoundEntitiesAreWritten,
         TestEvTelemetry,
         TestEvAutoConfig,
         TestEvInitialize,
