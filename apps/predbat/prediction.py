@@ -588,6 +588,15 @@ class Prediction:
             pv_forecast_minute_step_flat = pv_forecast_minute_step
             load_minutes_step_flat = load_minutes_step
 
+        # PV forecast remaining from each step to the end of the forecast, used to work out how much PV a charge
+        # window still overlaps with as low power charging must be abandoned when the sun is contributing
+        pv_remaining_kwh = {}
+        if set_charge_low_power:
+            pv_remaining = 0.0
+            for minute_step in range(((self.forecast_minutes - 1) // step) * step, -1, -step):
+                pv_remaining += pv_forecast_minute_step_flat.get(minute_step, 0.0)
+                pv_remaining_kwh[minute_step] = pv_remaining
+
         # Simulate each forward minute
         minute = 0
         while minute < self.forecast_minutes:
@@ -932,6 +941,13 @@ class Prediction:
                     battery_rate_max_charge_combined = battery_rate_max_charge + min(battery_rate_max_charge_dc - battery_rate_max_charge, pv_above)
                 else:
                     battery_rate_max_charge_combined = battery_rate_max_charge
+
+                # How much PV is still to come before this charge window closes?
+                pv_window_kwh = 0.0
+                if set_charge_low_power:
+                    window_end_step = min(max(((charge_window[charge_window_n]["end"] - self.minutes_now) // step) * step, minute), self.forecast_minutes)
+                    pv_window_kwh = pv_remaining_kwh.get(minute, 0.0) - pv_remaining_kwh.get(window_end_step, 0.0)
+
                 charge_rate_now, charge_rate_now_curve = find_charge_rate(
                     minute_absolute,
                     soc,
@@ -948,6 +964,7 @@ class Prediction:
                     None,
                     battery_temperature,
                     self.battery_temperature_charge_curve,
+                    pv_window_kwh=pv_window_kwh,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
