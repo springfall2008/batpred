@@ -6348,7 +6348,7 @@ def get_plan_css():
 
     // Close dropdowns when clicking outside
     document.addEventListener("click", function(event) {
-        if (!event.target.matches('.clickable-time-cell') && !event.target.closest('.dropdown-content')) {
+        if (!event.target.matches('.clickable-time-cell') && !event.target.matches('.clickable-state-cell') && !event.target.closest('.dropdown-content')) {
             closeDropdowns();
         }
     });

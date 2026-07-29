@@ -371,6 +371,16 @@ def run_test_plan_why_reason(my_predbat):
     if 'tabindex="0"' not in renderer_js or "onkeydown" not in renderer_js:
         print("ERROR: expected the reason cell to be keyboard-focusable and keyboard-operable, not just tap/click - a bare <td onclick> isn't reachable by keyboard")
         failed = True
+    # Regression: the document-level "click outside closes the dropdown" handler (in get_plan_css(),
+    # a separate function from get_plan_renderer_js()) only whitelisted .clickable-time-cell, so
+    # opening the new reason panel (class clickable-state-cell) would have its own click event
+    # immediately re-close it via that same handler (Copilot review on #4349).
+    plan_css = web_helper.get_plan_css()
+    outside_click_start = plan_css.index("Close dropdowns when clicking outside")
+    outside_click_src = plan_css[outside_click_start : outside_click_start + 400]
+    if ".clickable-state-cell" not in outside_click_src:
+        print("ERROR: the click-outside handler doesn't whitelist .clickable-state-cell, so tapping a reason cell would open then immediately close its own panel")
+        failed = True
 
     # --- Test 13b: the read-only (History / Yesterday Without Predbat) state cells also get tooltips ---
     print("Test the non-editable state cell path also emits a title= tooltip")
