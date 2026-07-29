@@ -47,6 +47,7 @@ SOLAX_TEST_COMMANDS = [
 SOLAX_PLANT_INFO_MAX_AGE = 8 * 60  # Plant info is static, re-poll it once the data is this many minutes old
 SOLAX_DEVICE_INFO_MAX_AGE = 30  # Device info changes rarely, re-poll it once the data is this many minutes old
 SOLAX_CACHE_EXPIRY_HOURS = 24  # Cached plant and device info is discarded by the storage layer after this long
+SOLAX_INFO_RETRY_MINUTES = 5  # Wait this long before retrying a plant or device info read that failed
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
@@ -385,10 +386,13 @@ class SolaxAPI(ComponentBase):
         self.realtime_plant_failed = set()
         self.realtime_device_failed = set()
 
-        # When the plant and device info was last read, seeded from the storage cache on startup so that
-        # a restart does not re-read data that is still current
+        # When the plant and device info was last read successfully, seeded from the storage cache on
+        # startup so that a restart does not re-read data that is still current, plus when it was last
+        # attempted so that a failing read is retried at a sensible rate rather than every cycle
         self.plant_info_updated = None
+        self.plant_info_attempted = None
         self.device_info_updated = None
+        self.device_info_attempted = None
 
         # Error tracking
         self.error_count = 0
@@ -1310,20 +1314,25 @@ class SolaxAPI(ComponentBase):
             self.plant_info = result
         return result
 
-    def data_is_due(self, updated, max_age_minutes):
+    def data_is_due(self, updated, attempted, max_age_minutes):
         """
         Work out whether data needs re-reading based on how old it is
 
         Args:
-            updated: When the data was last read, or None if it never has been
+            updated: When the data was last read successfully, or None if it never has been
+            attempted: When the data was last attempted, or None if it never has been
             max_age_minutes: How old the data may be before it is re-read
 
         Returns:
             True if the data should be read now
         """
-        if updated is None:
-            return True
-        return (datetime.now(timezone.utc) - updated).total_seconds() >= max_age_minutes * 60
+        now = datetime.now(timezone.utc)
+        if updated is not None and (now - updated).total_seconds() < max_age_minutes * 60:
+            return False
+        # Run is called every few seconds, so a read that keeps failing must not be retried every cycle
+        if attempted is not None and (now - attempted).total_seconds() < SOLAX_INFO_RETRY_MINUTES * 60:
+            return False
+        return True
 
     async def load_cached_info(self, name, max_age_minutes):
         """
@@ -2739,8 +2748,9 @@ class SolaxAPI(ComponentBase):
 
         # Plant info is static, it is only re-read once the data itself has aged out
         plant_info_refreshed = False
-        if self.data_is_due(self.plant_info_updated, SOLAX_PLANT_INFO_MAX_AGE):
+        if self.data_is_due(self.plant_info_updated, self.plant_info_attempted, SOLAX_PLANT_INFO_MAX_AGE):
             self.log("SolaX API: Fetching plant information...")
+            self.plant_info_attempted = datetime.now(timezone.utc)
             result = await self.query_plant_info()
             if result is not None and self.plant_info is not None:
                 self.plant_info_updated = datetime.now(timezone.utc)
@@ -2763,18 +2773,26 @@ class SolaxAPI(ComponentBase):
         is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
 
         # Device info is re-read once the data has aged out rather than on a fixed cycle since startup
-        if self.data_is_due(self.device_info_updated, SOLAX_DEVICE_INFO_MAX_AGE):
+        if self.data_is_due(self.device_info_updated, self.device_info_attempted, SOLAX_DEVICE_INFO_MAX_AGE):
+            self.device_info_attempted = datetime.now(timezone.utc)
+            # An empty plant list means nothing was read, so it must not count as a successful refresh
+            device_info_ok = bool(self.plant_list)
             for plantID in self.plant_list:
                 self.log(f"SolaX API: Fetching device information for plant ID {plantID}...")
-                await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_INVERTER)  # Inverter
-                await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_BATTERY)  # Battery
+                for device_type in (SOLAX_DEVICE_TYPE_INVERTER, SOLAX_DEVICE_TYPE_BATTERY):
+                    if await self.query_device_info(plantID, device_type=device_type) is None:
+                        device_info_ok = False
 
                 # await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_METER)  # Meter
                 # await self.query_plant_statistics_daily(plantID)
 
-            self.device_info_updated = datetime.now(timezone.utc)
-            # Refresh the cache so that a restart can skip this read
-            await self.save_device_info()
+            if device_info_ok:
+                self.device_info_updated = datetime.now(timezone.utc)
+                # Refresh the cache so that a restart can skip this read
+                await self.save_device_info()
+            else:
+                # Do not mark a partial read as fresh, or cache it over data that was complete
+                self.log(f"Warn: SolaX API: Failed to read device information, retrying in {SOLAX_INFO_RETRY_MINUTES} minutes")
 
         if first or seconds % 60 == 0:
             for plantID in self.plant_list:
