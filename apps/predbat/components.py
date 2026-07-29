@@ -487,6 +487,7 @@ COMPONENT_LIST = {
         "class": LoadMLComponent,
         "name": "ML Load Forecaster",
         "event_filter": "predbat_load_ml_",
+        "auto_restart": True,
         "args": {
             "load_ml_enable": {"required_true": True, "config": "load_ml_enable", "default": False},
             "load_ml_source": {"required": False, "config": "load_ml_source", "default": False},
@@ -528,6 +529,7 @@ class Components:
     def __init__(self, base):
         self.components = {}
         self.component_tasks = {}
+        self.restart_tasks = {}
         self.base = base
         self.log = base.log
 
@@ -623,6 +625,18 @@ class Components:
         self.initialize(only=only, phase=2)
         for phase in (0, 1, 2):
             self.start(only=only, phase=phase)
+
+    def auto_restart(self, only):
+        """Schedule one automatic restart for an unhealthy component."""
+        if not self.can_restart(only) or not self.is_active(only):
+            return False
+        restart_task = self.restart_tasks.get(only)
+        if restart_task and restart_task.is_alive():
+            self.log(f"Info: Automatic restart already active for {only}")
+            return False
+        self.log(f"Warn: Automatically restarting unhealthy {only} component")
+        self.restart_tasks[only] = self.base.create_task(self.restart(only), name=f"{only}_auto_restart_task")
+        return True
 
     """
     Pass through events to the appropriate component

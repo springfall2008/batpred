@@ -27,6 +27,7 @@ class FakeComponents:
     def __init__(self, alive_map, calculating_map=None):
         self.alive_map = alive_map
         self.calculating_map = calculating_map or {}
+        self.auto_restart_calls = []
 
     def get_all(self):
         return list(self.alive_map.keys())
@@ -46,6 +47,10 @@ class FakeComponents:
     def get_component(self, name):
         """Return a fake component with the configured calculation state."""
         return FakeComponent(self.calculating_map.get(name, False))
+
+    def auto_restart(self, name):
+        """Record an automatic restart request."""
+        self.auto_restart_calls.append(name)
 
 
 def test_component_health_status(my_predbat):
@@ -133,6 +138,22 @@ def test_component_health_status(my_predbat):
             failed = 1
         else:
             print("OK: LoadML failure outside calculation still fails the run status")
+
+        if my_predbat.components.auto_restart_calls != ["load_ml"]:
+            print("ERROR: Non-calculating LoadML failure did not request an automatic restart: {}".format(my_predbat.components.auto_restart_calls))
+            failed = 1
+        else:
+            print("OK: Non-calculating LoadML failure requests an automatic restart")
+
+        # --- A calculating LoadML component must not be restarted ---
+        my_predbat.components = FakeComponents({"load_ml": False}, calculating_map={"load_ml": True})
+        recorded_statuses.clear()
+        my_predbat.record_final_run_status("Export", "")
+        if my_predbat.components.auto_restart_calls:
+            print("ERROR: Calculating LoadML component requested an automatic restart")
+            failed = 1
+        else:
+            print("OK: Calculating LoadML component is not automatically restarted")
 
         # --- Pre-existing error takes precedence, and is not overwritten by the component check ---
         my_predbat.had_errors = True

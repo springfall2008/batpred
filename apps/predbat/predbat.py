@@ -766,6 +766,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     component = self.components.get_component(component_name)
                     if not component.is_calculating():
                         failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                        if COMPONENT_LIST.get(component_name, {}).get("auto_restart", False):
+                            self.components.auto_restart(component_name)
                 elif is_active:
                     component_status[component_name] = "running"
                 else:
