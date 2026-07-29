@@ -1211,6 +1211,81 @@ async def test_static_info_cache_main(my_predbat):
         else:
             print("✓ A failing plant info read is rate limited too")
 
+    # Test 11: A changed device list makes the plant info suspect and forces a re-read
+    print("Test 11: A device change forces a plant info re-read")
+    # Start from a restored cache so there is a known device list to compare against, then age it out
+    api = build_cached_api(plant_age=60, device_age=5)
+    await run_one_cycle(api)
+    api.device_info_updated = api.device_info_updated - timedelta(minutes=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+    api.storage.saved = []
+
+    async def add_a_device(plant_id, device_type, device_sn=None, business_type=None):
+        """Return a battery that was not in the cached device list"""
+        if device_type == 2:
+            api.device_info["BAT_NEW"] = {"deviceSn": "BAT_NEW", "deviceType": 2, "plantId": "plant1"}
+            return [api.device_info["BAT_NEW"]]
+        return []
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", side_effect=add_a_device):
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = api.plant_info
+                                            await api.run(seconds=5, first=False)
+
+    if mock_plant.called:
+        print("**** ERROR: The cached plant info was fresh, it should not have been read on this cycle ****")
+        failed = True
+    elif api.plant_info_updated is not None or api.plant_info_attempted is not None:
+        print("**** ERROR: A device change should clear the plant info read and attempt times ****")
+        failed = True
+    else:
+        # The next cycle picks the plant info back up, without waiting for the retry interval
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if not mock_plant.called:
+            print("**** ERROR: Plant info should be re-read on the cycle after a device change ****")
+            failed = True
+        else:
+            print("✓ A changed device list forces the plant info to be re-read")
+
+    # Test 12: An unchanged device list leaves the fresh plant info alone
+    print("Test 12: An unchanged device list does not force a plant re-read")
+    api = build_cached_api(plant_age=60, device_age=5)
+    await run_one_cycle(api)
+    api.device_info_updated = api.device_info_updated - timedelta(minutes=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+    plant_updated_before = None
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock) as mock_device:
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_device.return_value = []  # Poll succeeds, nothing new
+                                            await api.run(seconds=5, first=False)
+                                            plant_updated_before = api.plant_info_updated
+
+    if plant_updated_before is None and api.plant_info_attempted is None:
+        print("**** ERROR: An unchanged device list should leave the cached plant info in place ****")
+        failed = True
+    else:
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if mock_plant.called:
+            print("**** ERROR: Plant info should not be re-read when the device list is unchanged ****")
+            failed = True
+        else:
+            print("✓ An unchanged device list leaves the plant info alone")
+
     return failed
 
 

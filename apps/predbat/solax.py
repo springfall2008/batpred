@@ -2777,6 +2777,7 @@ class SolaxAPI(ComponentBase):
             self.device_info_attempted = datetime.now(timezone.utc)
             # An empty plant list means nothing was read, so it must not count as a successful refresh
             device_info_ok = bool(self.plant_list)
+            previous_devices = set(self.device_info.keys())
             for plantID in self.plant_list:
                 self.log(f"SolaX API: Fetching device information for plant ID {plantID}...")
                 for device_type in (SOLAX_DEVICE_TYPE_INVERTER, SOLAX_DEVICE_TYPE_BATTERY):
@@ -2790,6 +2791,13 @@ class SolaxAPI(ComponentBase):
                 self.device_info_updated = datetime.now(timezone.utc)
                 # Refresh the cache so that a restart can skip this read
                 await self.save_device_info()
+
+                # Hardware changes show up in the plant record too, battery and PV capacity come from
+                # there, so a changed device list makes the plant info suspect however recently it was read
+                if previous_devices and set(self.device_info.keys()) != previous_devices:
+                    self.log("SolaX API: Device list changed, re-reading plant information")
+                    self.plant_info_updated = None
+                    self.plant_info_attempted = None
             else:
                 # Do not mark a partial read as fresh, or cache it over data that was complete
                 self.log(f"Warn: SolaX API: Failed to read device information, retrying in {SOLAX_INFO_RETRY_MINUTES} minutes")
