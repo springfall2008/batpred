@@ -38,10 +38,10 @@ REASON_TEMPLATES = {
     "demand_before_export_rising": "Until the export window starts partway through this slot, the battery level is expected to rise from solar generation.",
     "demand_before_export_falling": "Until the export window starts partway through this slot, the battery is expected to discharge to cover house demand.",
     "demand_before_export_steady": "Until the export window starts partway through this slot, the battery level is expected to stay steady.",
-    "freeze_charge": "Freeze charging — the battery holds at the current level rather than charging further this slot (import rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
+    "freeze_charge": "Freeze charging — the battery holds at the current level rather than charging further this slot (import rate {rate}p/kWh vs. the calculated {threshold}p/kWh threshold).",
     "hold_charge_at_target": "Holding — the battery is already predicted to be at or above the {target_percent}% target for this window without charging further.",
     "charge_low_rate": "Charging up to {target_percent}% at the import rate for this slot of ({rate}p/kWh).",
-    "freeze_export_below_threshold": "Freezing export — excess solar is exported to the grid (export rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
+    "freeze_export_below_threshold": "Freezing export — excess solar is exported to the grid (export rate {rate}p/kWh vs. the calculated {threshold}p/kWh threshold).",
     "hold_export_unreachable": "Export window active but not triggered — the battery isn't predicted to reach the {target_percent}% level needed to export this slot.",
     "export_high_rate": "Exporting down to {target_percent}% at the export rate of ({rate}p/kWh) using stored energy back to the grid.",
     "manual_override_charge": "You manually set this slot to charge.",
@@ -522,6 +522,21 @@ class Output:
                 state=self.rate_average,
                 attributes={"friendly_name": "Next+1 low rate cost", "state_class": "measurement", "unit_of_measurement": self.currency_symbols[1], "icon": "mdi:currency-usd"},
             )
+
+    def rate_range_text(self, rate_dict, start_minute, end_minute, fallback_value):
+        """
+        Format a rate as a single value, or a "{min}-{max}" range when the minutes from
+        start_minute to end_minute (a merged/rowspan plan cell) don't all share the same rate.
+        """
+        values = set()
+        for minute in range(start_minute, end_minute, self.plan_interval_minutes):
+            values.add(dp2(rate_dict.get(minute, 0)))
+        if not values:
+            return "{:.2f}".format(fallback_value)
+        low, high = min(values), max(values)
+        if low == high:
+            return "{:.2f}".format(low)
+        return "{:.2f}-{:.2f}".format(low, high)
 
     def adjust_symbol(self, adjust_type):
         """
@@ -1042,6 +1057,11 @@ class Output:
             rate_start = minute_timestamp
             rate_value_import = dp2(self.rate_import.get(minute, 0))
             rate_value_export = dp2(self.rate_export.get(minute, 0))
+            # Default to a single value; overridden to a "{min}-{max}" range below when this row
+            # turns out to be the first of a merged/rowspan cell whose minutes span more than one
+            # distinct rate - only the first row of a span is ever actually rendered as a tooltip.
+            rate_text_import = "{:.2f}".format(rate_value_import)
+            rate_text_export = "{:.2f}".format(rate_value_export)
             charge_window_n = -1
             export_window_n = -1
             periods_left = int((end_plan - minute + self.plan_interval_minutes - 1) / self.plan_interval_minutes)
@@ -1085,6 +1105,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.charge_window_best[charge_window_n]["end"] - minute_now_align
+                    rate_text_import = self.rate_range_text(self.rate_import, minute, charge_end_minute, rate_value_import)
                 else:
                     rowspan = 0
 
@@ -1096,6 +1117,7 @@ class Output:
                     in_span = True
                     start_span = True
                     minute_relative_end = self.export_window_best[export_window_n]["end"] - minute_now_align
+                    rate_text_export = self.rate_range_text(self.rate_export, minute, export_end_minute, rate_value_export)
                 else:
                     rowspan = 0
 
@@ -1275,7 +1297,7 @@ class Output:
                         state_color = "#EEEEEE"
                         raw_state = "FrzChrg"
                         limit_percent = soc_percent
-                        reason_parts.append({"code": "freeze_charge", "params": {"rate": "{:.2f}".format(rate_value_import), "threshold": "{:.2f}".format(import_cost_threshold)}})
+                        reason_parts.append({"code": "freeze_charge", "params": {"rate": rate_text_import, "threshold": "{:.2f}".format(import_cost_threshold)}})
                     elif limit_percent <= soc_percent_min_window:
                         state = "HoldChrg&rarr;"
                         state_color = "#34DBEB"
@@ -1285,7 +1307,7 @@ class Output:
                         state = "Chrg&nearr;"
                         state_color = "#3AEE85"
                         raw_state = "Chrg"
-                        reason_parts.append({"code": "charge_low_rate", "params": {"target_percent": limit_percent, "rate": "{:.2f}".format(rate_value_import)}})
+                        reason_parts.append({"code": "charge_low_rate", "params": {"target_percent": limit_percent, "rate": rate_text_import}})
 
                     if self.charge_window_best[charge_window_n]["start"] in self.manual_charge_times:
                         state += " &#8526;"
@@ -1338,7 +1360,7 @@ class Output:
                     state += "FrzExp&rarr;"
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
-                    reason_parts.append({"code": "freeze_export_below_threshold", "params": {"rate": "{:.2f}".format(rate_value_export), "threshold": "{:.2f}".format(export_cost_threshold)}})
+                    reason_parts.append({"code": "freeze_export_below_threshold", "params": {"rate": rate_text_export, "threshold": "{:.2f}".format(export_cost_threshold)}})
                 elif limit < 100:
                     if not had_state:
                         state = ""
@@ -1354,7 +1376,7 @@ class Output:
                     else:
                         state += "Exp&searr;"
                         raw_state = "Exp"
-                        reason_parts.append({"code": "export_high_rate", "params": {"target_percent": dp2(target), "rate": "{:.2f}".format(rate_value_export)}})
+                        reason_parts.append({"code": "export_high_rate", "params": {"target_percent": dp2(target), "rate": rate_text_export}})
                     show_limit = str(dp2(target))
                     raw_state_target = str(dp2(target))
 

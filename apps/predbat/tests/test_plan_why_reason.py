@@ -248,6 +248,39 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     my_predbat.manual_export_times = []
 
+    # --- Test 8b: merged/rowspan export cell shows a rate range, not just the first slot's rate ---
+    print("Test merged export cell reason shows a rate range")
+    span_window = [{"start": minutes_now, "end": minutes_now + 90, "average": 20.0}]
+    my_predbat.export_window_best = span_window
+    my_predbat.export_limits_best = [50.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)  # 90%, well above the 50% target
+    my_predbat.rate_export[minutes_now] = 15.0
+    my_predbat.rate_export[minutes_now + 30] = 25.0
+    my_predbat.rate_export[minutes_now + 60] = 20.0
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["export_high_rate"]:
+        print("ERROR: merged export reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"].get("rate") != "15.00-25.00":
+        print("ERROR: merged export rate range unexpected: {}".format(row["reasons"][0]["params"]))
+        failed = True
+    elif "15.00-25.00" not in _render(row, templates):
+        print("ERROR: merged export rendered text missing the rate range: {}".format(_render(row, templates)))
+        failed = True
+
+    # A single-slot window (no merge) must still show a plain single value, not a spurious range.
+    print("Test single-slot export cell reason still shows a single rate, not a range")
+    my_predbat.export_window_best = window
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or "-" in row["reasons"][0]["params"].get("rate", ""):
+        print("ERROR: single-slot export rate should not be a range: {}".format(row and row["reasons"][0]["params"]))
+        failed = True
+    my_predbat.rate_export[minutes_now] = 5.0
+    my_predbat.rate_export[minutes_now + 30] = 5.0
+    my_predbat.rate_export[minutes_now + 60] = 5.0
+
     # --- Test 9: Demand (no charge or export window active) ---
     print("Test Demand default reason")
     my_predbat.export_window_best = []
