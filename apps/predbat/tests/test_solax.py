@@ -12,7 +12,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 import json
-from solax import SolaxAPI, SOLAX_MIN_RESERVE_PERCENT
+from solax import SolaxAPI, SOLAX_MIN_RESERVE_PERCENT, SOLAX_CONTROL_RETRY_BACKOFF, SOLAX_CONTROL_RETRY_MAX
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -33,6 +33,10 @@ class MockSolaxAPI(SolaxAPI):
         self.dashboard_items = {}
         self.current_mode_hash = None
         self.current_mode_hash_timestamp = None
+        self.freeze_charge_min_soc = None  # Held minSoc floor while freeze charge is active
+        self.failed_mode_hash = None  # Backoff state for a mode the inverter rejected
+        self.failed_mode_retry_time = None
+        self.failed_mode_count = 0
         self.args = {}  # Configuration arguments
         self.plant_list = []  # List of plant IDs
         self.automatic = False  # Automatic config flag
@@ -87,12 +91,14 @@ class MockSolaxAPI(SolaxAPI):
         """Mock update_success_timestamp method"""
         pass
 
-    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse"):
+    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse", min_soc=SOLAX_MIN_RESERVE_PERCENT):
         """Mock set_default_work_mode - calls set_work_mode (which can be mocked in tests)"""
         self.set_default_work_mode_called = True
         self.last_work_mode = mode
+        self.last_min_soc = min_soc
+        min_soc = max(SOLAX_MIN_RESERVE_PERCENT, min(100, min_soc))
         # Call set_work_mode (tests can mock this)
-        success = await self.set_work_mode(mode, sn_list, 10, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
+        success = await self.set_work_mode(mode, sn_list, min_soc, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
         if success:
             self.log(f"SolaX API: Set default work mode to {mode} for device {sn_list}")
         else:
@@ -155,7 +161,10 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_write_setting_from_event(my_predbat))
         failed |= asyncio.run(test_fetch_controls_main(my_predbat))
         failed |= asyncio.run(test_apply_controls_main(my_predbat))
+        failed |= asyncio.run(test_apply_controls_min_soc_main(my_predbat))
+        failed |= asyncio.run(test_apply_controls_backoff_main(my_predbat))
         failed |= asyncio.run(test_publish_plant_info_main(my_predbat))
+        failed |= asyncio.run(test_publish_plant_info_capacity_floor_main(my_predbat))
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
@@ -250,13 +259,16 @@ async def test_apply_controls(solax_api, test_plant_id):
         else:
             # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
             first_call_endpoint = mock_send.call_args_list[0][0][0]
-            # Verify second call is self_consume_mode (self_consume/charge_or_discharge_mode endpoint)
+            # Verify second call hands control back to the inverter (exit_vpp_mode endpoint)
             second_call_endpoint = mock_send.call_args_list[1][0][0]
             if "batch_set_spontaneity_self_use" not in first_call_endpoint:
                 print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
                 failed = True
-            elif "self_consume/charge_or_discharge_mode" not in second_call_endpoint:
-                print(f"**** ERROR: Second call not self_consume_mode, got {second_call_endpoint} ****")
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
+                failed = True
+            elif mock_send.call_args_list[0][0][1].get("minSoc") != 10:
+                print(f"**** ERROR: Eco mode should write the reserve as minSoc 10, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
                 failed = True
             else:
                 print(f"✓ ECO mode applied correctly at 12:00")
@@ -357,7 +369,7 @@ async def test_apply_controls(solax_api, test_plant_id):
         mock_send.return_value = True
 
         # Set hash from previous charge call
-        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360))  # 06:00 = 360 minutes
+        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360, 10))  # 06:00 = 360 minutes, minSoc 10
         solax_api.current_mode_hash_timestamp = test_time
 
         result = await solax_api.apply_controls(test_plant_id)
@@ -382,7 +394,7 @@ async def test_apply_controls(solax_api, test_plant_id):
 
         # Hash timestamp is 16 minutes old (> 15 minute threshold)
         old_timestamp = test_time - timedelta(minutes=16)
-        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360))
+        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360, 10))
         solax_api.current_mode_hash_timestamp = old_timestamp
 
         result = await solax_api.apply_controls(test_plant_id)
@@ -419,13 +431,13 @@ async def test_apply_controls(solax_api, test_plant_id):
         else:
             # Verify first call is set_default_work_mode (selfuse)
             first_call_endpoint = mock_send.call_args_list[0][0][0]
-            # Verify second call is self_consume_mode
+            # Verify second call hands control back to the inverter
             second_call_endpoint = mock_send.call_args_list[1][0][0]
             if "batch_set_spontaneity_self_use" not in first_call_endpoint:
                 print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
                 failed = True
-            elif "self_consume/charge_or_discharge_mode" not in second_call_endpoint:
-                print(f"**** ERROR: Second call not self_consume_mode, got {second_call_endpoint} ****")
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
                 failed = True
             else:
                 print(f"✓ ECO mode correctly applied when charge disabled at 03:00")
@@ -455,13 +467,16 @@ async def test_apply_controls(solax_api, test_plant_id):
         else:
             # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
             first_call_endpoint = mock_send.call_args_list[0][0][0]
-            # Verify second call is self_consume_charge_only_mode
+            # Verify second call hands control back to the inverter, the freeze is held by minSoc
             second_call_endpoint = mock_send.call_args_list[1][0][0]
             if "batch_set_spontaneity_self_use" not in first_call_endpoint:
                 print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
                 failed = True
-            elif "self_consume/charge_only_mode" not in second_call_endpoint:
-                print(f"**** ERROR: Second call not self_consume_charge_only_mode, got {second_call_endpoint} ****")
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
+                failed = True
+            elif mock_send.call_args_list[0][0][1].get("minSoc") != 50:
+                print(f"**** ERROR: Freeze charge should hold minSoc at the current SOC 50, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
                 failed = True
             else:
                 print(f"✓ Freeze charge mode applied correctly at 03:00 (target_soc == current_soc)")
@@ -527,7 +542,7 @@ async def test_apply_controls(solax_api, test_plant_id):
             print("**** ERROR: No API calls made - charge window not detected after midnight ****")
             failed = True
         else:
-            # Charge mode sends soc_target_control_mode; eco mode sends self_consume/charge_or_discharge_mode
+            # Charge mode sends soc_target_control_mode; eco mode sends exit_vpp_mode
             calls_str = " ".join(str(c) for c in mock_send.call_args_list)
             if "soc_target_control_mode" not in calls_str:
                 print(f"**** ERROR: Expected soc_target_control_mode (charge mode) after midnight, got: {calls_str} ****")
@@ -584,11 +599,279 @@ async def test_apply_controls(solax_api, test_plant_id):
             if "soc_target_control_mode" in calls_str:
                 print(f"**** ERROR: Expected eco mode at 06:00 (after window end), got charge mode: {calls_str} ****")
                 failed = True
-            elif "charge_or_discharge_mode" not in calls_str:
-                print(f"**** ERROR: Expected eco mode (charge_or_discharge_mode) at 06:00, got: {calls_str} ****")
+            elif "exit_vpp_mode" not in calls_str:
+                print(f"**** ERROR: Expected eco mode (exit_vpp_mode) at 06:00, got: {calls_str} ****")
                 failed = True
             else:
                 print(f"✓ After midnight-spanning window end (06:00) correctly uses eco mode")
+
+    return failed
+
+
+async def make_apply_controls_api():
+    """
+    Build a mock SolaX API instance with one inverter and a 15 kWh battery at 50% SOC
+
+    Returns:
+        tuple: (solax_api, test_plant_id)
+    """
+    solax_api = MockSolaxAPI(prefix="predbat")
+    test_plant_id = "1618699116555534337"
+
+    solax_api.plant_inverters[test_plant_id] = ["H1231231932123"]
+    solax_api.plant_batteries[test_plant_id] = ["TP123456123123"]
+    solax_api.device_info["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceType": 1, "plantId": test_plant_id, "ratedPower": 10.0}
+    solax_api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
+    solax_api.plant_info = [{"plantId": test_plant_id, "batteryCapacity": 15.0}]
+    solax_api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 50, "batteryRemainings": 7.5}
+
+    return solax_api, test_plant_id
+
+
+async def test_apply_controls_min_soc_main(my_predbat):
+    """
+    Test the minSoc written by each control mode
+
+    Idle and the freeze modes are held by the work mode minSoc rather than a VPP mode, so minSoc must
+    follow the configured reserve, and must hold at the current SOC while freeze charge is active
+    """
+    from datetime import datetime as dt_class
+
+    failed = False
+    solax_api, test_plant_id = await make_apply_controls_api()
+
+    # Reserve of 25%, no active windows so that eco mode is selected
+    solax_api.controls[test_plant_id] = {
+        "reserve": 25,
+        "charge": {"start_time": "02:00:00", "end_time": "06:00:00", "enable": False, "target_soc": 95, "rate": 5000},
+        "export": {"start_time": "16:00:00", "end_time": "20:00:00", "enable": False, "target_soc": 15, "rate": 4500},
+    }
+    test_time = datetime.now(solax_api.local_tz).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    # Test 1: Eco mode writes the configured reserve as minSoc, it must not be hard coded
+    print("\n--- Test 1: Eco mode minSoc follows the reserve ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        work_mode_payload = mock_send.call_args_list[0][0][1]
+        if work_mode_payload.get("minSoc") != 25:
+            print(f"**** ERROR: Expected minSoc 25 from the reserve, got {work_mode_payload.get('minSoc')} ****")
+            failed = True
+        elif work_mode_payload.get("chargeFromGridEnable") != 0:
+            print(f"**** ERROR: Eco mode must not enable grid charging, got {work_mode_payload.get('chargeFromGridEnable')} ****")
+            failed = True
+        elif "exit_vpp_mode" not in mock_send.call_args_list[1][0][0]:
+            print(f"**** ERROR: Second call not exit_vpp_mode, got {mock_send.call_args_list[1][0][0]} ****")
+            failed = True
+        else:
+            print("✓ Eco mode writes the reserve as minSoc and exits VPP mode")
+
+    # Test 2: A reserve below the SolaX floor is clamped up
+    print("\n--- Test 2: minSoc clamped to the SolaX floor ---")
+    solax_api.controls[test_plant_id]["reserve"] = 1
+    solax_api.current_mode_hash = None
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        min_soc = mock_send.call_args_list[0][0][1].get("minSoc")
+        if min_soc != SOLAX_MIN_RESERVE_PERCENT:
+            print(f"**** ERROR: Expected minSoc clamped to {SOLAX_MIN_RESERVE_PERCENT}, got {min_soc} ****")
+            failed = True
+        else:
+            print(f"✓ minSoc clamped up to the SolaX floor of {SOLAX_MIN_RESERVE_PERCENT}")
+
+    # Another reserve below the floor sends the same payload, so the mode hash must not change and
+    # nothing should be re-sent.  write_setting_from_event does not clamp, so out of range values do reach here
+    print("\n--- Test 2b: A different out of range reserve does not re-send ---")
+    solax_api.controls[test_plant_id]["reserve"] = 5
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: The clamped payload is unchanged so nothing should be re-sent, got {mock_send.call_count} calls ****")
+            failed = True
+        else:
+            print("✓ The mode hash tracks the clamped minSoc, so no needless rewrite")
+
+    # Test 3: Freeze charge holds minSoc at the SOC the window opened at, even as the battery charges
+    print("\n--- Test 3: Freeze charge holds the minSoc floor ---")
+    # A charge target at the reserve is a freeze charge whatever the SOC does, so the window stays in
+    # freeze charge as PV charges the battery
+    solax_api.controls[test_plant_id]["reserve"] = 10
+    solax_api.controls[test_plant_id]["charge"] = {"start_time": "11:00:00", "end_time": "14:00:00", "enable": True, "target_soc": 10, "rate": 5000}
+    solax_api.current_mode_hash = None
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_args_list[0][0][1].get("minSoc") != 50:
+            print(f"**** ERROR: Expected freeze charge minSoc 50, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
+            failed = True
+        elif "exit_vpp_mode" not in mock_send.call_args_list[1][0][0]:
+            print(f"**** ERROR: Freeze charge second call not exit_vpp_mode, got {mock_send.call_args_list[1][0][0]} ****")
+            failed = True
+        else:
+            print("✓ Freeze charge writes the current SOC as minSoc and exits VPP mode")
+
+    # PV charges the battery to 60%, the floor must not be chased upwards and so nothing is re-sent
+    solax_api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 60, "batteryRemainings": 9.0}
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: Freeze charge floor should not be rewritten as the battery charges, got {mock_send.call_count} calls ****")
+            failed = True
+        else:
+            print("✓ Freeze charge floor is not chased upwards while the battery charges")
+
+    # Test 4: Leaving freeze charge releases the floor back to the reserve
+    print("\n--- Test 4: Leaving freeze charge releases the floor ---")
+    solax_api.controls[test_plant_id]["charge"]["enable"] = False
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        min_soc = mock_send.call_args_list[0][0][1].get("minSoc")
+        if min_soc != 10:
+            print(f"**** ERROR: Expected minSoc released back to the reserve 10, got {min_soc} ****")
+            failed = True
+        elif solax_api.freeze_charge_min_soc is not None:
+            print(f"**** ERROR: Freeze charge floor should be cleared, got {solax_api.freeze_charge_min_soc} ****")
+            failed = True
+        else:
+            print("✓ Leaving freeze charge releases minSoc back to the reserve")
+
+    return failed
+
+
+async def test_apply_controls_backoff_main(my_predbat):
+    """
+    Test that a control mode the inverter rejects backs off instead of retrying every cycle
+    """
+    from datetime import datetime as dt_class
+
+    failed = False
+    solax_api, test_plant_id = await make_apply_controls_api()
+
+    solax_api.controls[test_plant_id] = {
+        "reserve": 10,
+        "charge": {"start_time": "02:00:00", "end_time": "06:00:00", "enable": False, "target_soc": 95, "rate": 5000},
+        "export": {"start_time": "16:00:00", "end_time": "20:00:00", "enable": False, "target_soc": 15, "rate": 4500},
+    }
+    test_time = datetime.now(solax_api.local_tz).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    # Test 1: A failing mode records a retry time rather than caching the mode hash
+    print("\n--- Test 1: Failure records a backoff ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if solax_api.current_mode_hash is not None:
+            print("**** ERROR: A failed mode must not be cached as applied ****")
+            failed = True
+        elif solax_api.failed_mode_count != 1:
+            print(f"**** ERROR: Expected failure count 1, got {solax_api.failed_mode_count} ****")
+            failed = True
+        elif solax_api.failed_mode_retry_time != test_time + timedelta(seconds=SOLAX_CONTROL_RETRY_BACKOFF):
+            print(f"**** ERROR: Expected retry time {SOLAX_CONTROL_RETRY_BACKOFF}s ahead, got {solax_api.failed_mode_retry_time} ****")
+            failed = True
+        else:
+            print(f"✓ Failed mode backs off for {SOLAX_CONTROL_RETRY_BACKOFF} seconds")
+
+    # Test 2: The next cycle inside the backoff window issues nothing
+    print("\n--- Test 2: No retry inside the backoff window ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=65)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: Expected no API calls inside the backoff window, got {mock_send.call_count} ****")
+            failed = True
+        else:
+            print("✓ No API calls while backed off")
+
+    # Test 3: A different mode is tried immediately, the inverter may well accept it
+    print("\n--- Test 3: A different mode is not held back ---")
+    solax_api.controls[test_plant_id]["charge"] = {"start_time": "11:00:00", "end_time": "14:00:00", "enable": True, "target_soc": 95, "rate": 5000}
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=70)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if not mock_send.call_count:
+            print("**** ERROR: A different mode should be attempted immediately ****")
+            failed = True
+        elif solax_api.failed_mode_count != 1:
+            print(f"**** ERROR: A different mode should restart the backoff at 1, got {solax_api.failed_mode_count} ****")
+            failed = True
+        else:
+            print("✓ A different mode is attempted immediately and restarts the backoff")
+
+    # Test 4: Repeated failures of the same mode back off exponentially up to the cap
+    print("\n--- Test 4: Backoff grows and is capped ---")
+    solax_api.failed_mode_count = 20  # Far beyond the cap
+    solax_api.failed_mode_retry_time = test_time
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=75)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        expected = test_time + timedelta(seconds=75 + SOLAX_CONTROL_RETRY_MAX)
+        if solax_api.failed_mode_retry_time != expected:
+            print(f"**** ERROR: Expected backoff capped at {SOLAX_CONTROL_RETRY_MAX}s, got {solax_api.failed_mode_retry_time} ****")
+            failed = True
+        else:
+            print(f"✓ Backoff is capped at {SOLAX_CONTROL_RETRY_MAX} seconds")
+
+    # Test 5: Success clears the backoff state
+    print("\n--- Test 5: Success clears the backoff ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=SOLAX_CONTROL_RETRY_MAX + 120)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if solax_api.failed_mode_hash is not None or solax_api.failed_mode_count:
+            print(f"**** ERROR: Success should clear the backoff, got hash {solax_api.failed_mode_hash} count {solax_api.failed_mode_count} ****")
+            failed = True
+        elif solax_api.current_mode_hash is None:
+            print("**** ERROR: Success should cache the applied mode ****")
+            failed = True
+        else:
+            print("✓ Success clears the backoff and caches the applied mode")
 
     return failed
 
@@ -628,6 +911,21 @@ async def test_write_setting_from_event(my_predbat):
         failed = True
     else:
         print(f"✓ Reserve setting updated to {new_value}")
+
+    # Test 1b: A value outside the range the entity advertises is clamped rather than stored as given,
+    # a service call can bypass the min and max that the number entity publishes
+    await solax_api.number_event(entity_id, 1)
+    if solax_api.controls[test_plant_id]["reserve"] != SOLAX_MIN_RESERVE_PERCENT:
+        print(f"**** ERROR: Reserve below the floor should clamp to {SOLAX_MIN_RESERVE_PERCENT}, got {solax_api.controls[test_plant_id]['reserve']} ****")
+        failed = True
+    else:
+        await solax_api.number_event(entity_id, 150)
+        if solax_api.controls[test_plant_id]["reserve"] != 100:
+            print(f"**** ERROR: Reserve above the maximum should clamp to 100, got {solax_api.controls[test_plant_id]['reserve']} ****")
+            failed = True
+        else:
+            print(f"✓ Out of range reserve clamped to {SOLAX_MIN_RESERVE_PERCENT}-100")
+    await solax_api.number_event(entity_id, new_value)  # Restore for the tests below
 
     # Test 2: Invalid entity ID format
     invalid_entity_id = "number.invalid_format"
@@ -970,6 +1268,63 @@ async def test_publish_plant_info_main(my_predbat):
     }
 
     return await test_publish_plant_info(solax_api, test_plant_id, test_plant_name)
+
+
+async def test_publish_plant_info_capacity_floor_main(my_predbat):
+    """
+    Test the published battery capacity is never below the measured energy remaining
+
+    The plant capacity is a nominal figure from the SolaX portal and is often rounded down, so a nearly
+    full battery can report more energy remaining than the nominal capacity (soc_kw > soc_max in Predbat)
+    """
+    failed = False
+
+    # Create mock SolaX API instance
+    solax_api = MockSolaxAPI(prefix="predbat")
+    test_plant_id = "1618699116555534337"
+
+    # Nominal capacity of 6.0 kWh, but the pack is really 6.16 kWh and is 99% full
+    solax_api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "pvCapacity": 4.0, "batteryCapacity": 6.0}]
+    solax_api.plant_inverters[test_plant_id] = ["H4502AI4634062"]
+    solax_api.plant_batteries[test_plant_id] = ["TP123456123123"]
+    solax_api.device_info["H4502AI4634062"] = {"deviceSn": "H4502AI4634062", "deviceType": 1, "plantId": test_plant_id, "ratedPower": 5.0}
+    solax_api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
+    solax_api.realtime_data[test_plant_id] = {}
+    solax_api.realtime_device_data["TP123456123123"] = {"batterySOC": 99, "batteryTemperature": 30.0, "batteryRemainings": 6.1}
+
+    await solax_api.publish_plant_info()
+
+    soc_entity = f"sensor.{solax_api.prefix}_solax_{test_plant_id}_battery_soc"
+    capacity_entity = f"sensor.{solax_api.prefix}_solax_{test_plant_id}_battery_capacity"
+    battery_soc = solax_api.dashboard_items.get(soc_entity, {}).get("state")
+    battery_capacity = solax_api.dashboard_items.get(capacity_entity, {}).get("state")
+
+    if battery_soc != 6.1:
+        print(f"**** ERROR: Battery SOC incorrect. Expected 6.1, got {battery_soc} ****")
+        failed = True
+    elif battery_capacity != 6.1:
+        print(f"**** ERROR: Battery capacity should be floored at the current SOC 6.1, got {battery_capacity} ****")
+        failed = True
+    elif solax_api.dashboard_items[soc_entity]["attributes"]["soc_max"] != 6.1:
+        print(f"**** ERROR: soc_max attribute should match the published capacity, got {solax_api.dashboard_items[soc_entity]['attributes']['soc_max']} ****")
+        failed = True
+    else:
+        print("✓ Battery capacity floored at the current SOC when the nominal capacity is lower")
+
+    # A nominal capacity above the current SOC must be left alone
+    solax_api.realtime_device_data["TP123456123123"]["batteryRemainings"] = 3.0
+    solax_api.realtime_device_data["TP123456123123"]["batterySOC"] = 50
+    solax_api.dashboard_items = {}
+    await solax_api.publish_plant_info()
+
+    battery_capacity = solax_api.dashboard_items.get(capacity_entity, {}).get("state")
+    if battery_capacity != 6.0:
+        print(f"**** ERROR: Battery capacity should be the nominal 6.0, got {battery_capacity} ****")
+        failed = True
+    else:
+        print("✓ Nominal battery capacity is used when it is above the current SOC")
+
+    return failed
 
 
 async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
