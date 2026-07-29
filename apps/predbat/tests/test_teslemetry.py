@@ -685,24 +685,6 @@ def test_teslemetry_saving_session_spike_keeps_daily_shape():
     assert session > eve_peak, "boosted session {} must price above the real peak {}".format(session, eve_peak)
 
 
-def test_teslemetry_side_rates_returns_snapshot_copy():
-    """_side_rates returns an independent copy, not the live base dict, so a concurrent rebuild of
-    rate_export on Predbat's worker thread cannot tear the values the quantiser reads across its
-    many per-slot lookups."""
-    from types import SimpleNamespace
-
-    api = MockTeslemetryAPI()
-    live = {minute: 10.0 for minute in range(2880)}
-    api.base = SimpleNamespace(rate_import={}, rate_export=live, minutes_now=0, now=None, local_tz=None, get_arg=lambda a, d=None, **k: d)
-    snapshot = api._side_rates("export")
-    assert snapshot == live and snapshot is not live  # same content, different object
-    live[0] = 999.0  # simulate a concurrent in-place mutation mid-rebuild
-    assert snapshot[0] == 10.0  # the snapshot is unaffected
-    # An empty/absent base rate dict yields {} (flat fallback), not a crash.
-    api.base.rate_export = {}
-    assert api._side_rates("export") == {}
-
-
 def test_teslemetry_day_runs_groups_replicated_days():
     """_day_runs() itself: 6 identical days plus 1 different day collapse to 2 runs, not 7 singletons."""
     api = MockTeslemetryAPI()
@@ -1905,7 +1887,6 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_build_tariff_periods_partition_each_day()
     test_teslemetry_build_tariff_consolidates_replicated_days()
     test_teslemetry_saving_session_spike_keeps_daily_shape()
-    test_teslemetry_side_rates_returns_snapshot_copy()
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()

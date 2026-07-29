@@ -1103,20 +1103,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return self._assemble_tariff(code, buy_charges, buy_periods, sell_charges, sell_periods)
 
     def _side_rates(self, kind):
-        """Return an atomic snapshot copy of the base rate dict for 'import'/'export', or {} when none.
+        """Return the base rate dict for 'import'/'export', or {} when no base is wired (tests/fallback).
 
-        Copies the dict rather than returning the live reference: Predbat rebuilds rate_import/
-        rate_export on an AppDaemon worker thread (update_pred -> fetch) while this component reads
-        them from its asyncio task, with no lock. A single dict() copy is atomic under the GIL, so the
-        quantiser works from one consistent snapshot instead of a mix of pre/post-rebuild (or
-        mid-saving-session-merge) values across its ~96 per-slot lookups. A snapshot taken during the
-        brief rebuild window may be empty, which falls back to a flat tariff for that cycle and
-        self-corrects on the next - far better than quantising a half-updated dict.
+        Reads the live reference: fetch publishes rate_import/rate_export atomically (built into a
+        local and assigned once), so a reader always sees a complete dict, never a half-built one.
         """
         base = getattr(self, "base", None)
         if base is None:
             return {}
-        return dict(getattr(base, "rate_import" if kind == "import" else "rate_export", {}) or {})
+        return getattr(base, "rate_import" if kind == "import" else "rate_export", {}) or {}
 
     def _assemble_tariff(self, code, buy_charges, buy_periods, sell_charges, sell_periods):
         """Assemble the top-level tariff_content_v2 dict from prebuilt buy/sell charge + period blocks."""
