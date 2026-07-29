@@ -41,7 +41,7 @@ REASON_TEMPLATES = {
     "freeze_charge": "Freeze charging — the battery holds at the current level rather than charging further this slot (import rate {rate}p/kWh vs. the calculated {threshold}p/kWh threshold).",
     "hold_charge_at_target": "Holding — the battery is already predicted to be at or above the {target_percent}% target for this window without charging further.",
     "charge_low_rate": "Charging up to {target_percent}% at the import rate for this slot of ({rate}p/kWh).",
-    "freeze_export_below_threshold": "Freezing export — excess solar is exported to the grid (export rate {rate}p/kWh vs. the calculated {threshold}p/kWh threshold).",
+    "freeze_export": "Freezing export — solar surplus passes straight to the grid, but it's not worth discharging the battery to sell more this slot.",
     "hold_export_unreachable": "Export window active but not triggered — the battery isn't predicted to reach the {target_percent}% level needed to export this slot.",
     "export_high_rate": "Exporting down to {target_percent}% at the export rate of ({rate}p/kWh) using stored energy back to the grid.",
     "manual_override_charge": "You manually set this slot to charge.",
@@ -1360,7 +1360,7 @@ class Output:
                     state += "FrzExp&rarr;"
                     raw_state = "FrzExp"
                     show_limit = ""  # suppress displaying the limit (of 99) when freeze exporting as its a meaningless number
-                    reason_parts.append({"code": "freeze_export_below_threshold", "params": {"rate": rate_text_export, "threshold": "{:.2f}".format(export_cost_threshold)}})
+                    reason_parts.append({"code": "freeze_export", "params": {}})
                 elif limit < 100:
                     if not had_state:
                         state = ""

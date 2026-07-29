@@ -223,10 +223,10 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.export_limits_best = [99]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or _codes(row) != ["freeze_export_below_threshold"]:
+    if row is None or _codes(row) != ["freeze_export"]:
         print("ERROR: FrzExp reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif set(row["reasons"][0]["params"]) != {"rate", "threshold"}:
+    elif row["reasons"][0]["params"] != {}:
         print("ERROR: FrzExp params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
     elif "Freezing export" not in _render(row, templates):
