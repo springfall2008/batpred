@@ -581,6 +581,10 @@ class SolaxAPI(ComponentBase):
             except ValueError:
                 self.log(f"SolaX API: Invalid number value {value} for {entity_id}")
                 return
+            # Clamp to the range the entity advertises, a service call can set a value outside it and
+            # the entity would then disagree with what is sent to the inverter
+            if min_value is not None and max_value is not None:
+                value = max(min_value, min(max_value, value))
         self.controls[plant_id][field] = value
         self.log(f"SolaX API: Updated control for plant {plant_id}, field {field} to {value}")
         await self.publish_controls()

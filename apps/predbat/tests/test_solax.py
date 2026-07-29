@@ -912,6 +912,21 @@ async def test_write_setting_from_event(my_predbat):
     else:
         print(f"✓ Reserve setting updated to {new_value}")
 
+    # Test 1b: A value outside the range the entity advertises is clamped rather than stored as given,
+    # a service call can bypass the min and max that the number entity publishes
+    await solax_api.number_event(entity_id, 1)
+    if solax_api.controls[test_plant_id]["reserve"] != SOLAX_MIN_RESERVE_PERCENT:
+        print(f"**** ERROR: Reserve below the floor should clamp to {SOLAX_MIN_RESERVE_PERCENT}, got {solax_api.controls[test_plant_id]['reserve']} ****")
+        failed = True
+    else:
+        await solax_api.number_event(entity_id, 150)
+        if solax_api.controls[test_plant_id]["reserve"] != 100:
+            print(f"**** ERROR: Reserve above the maximum should clamp to 100, got {solax_api.controls[test_plant_id]['reserve']} ****")
+            failed = True
+        else:
+            print(f"✓ Out of range reserve clamped to {SOLAX_MIN_RESERVE_PERCENT}-100")
+    await solax_api.number_event(entity_id, new_value)  # Restore for the tests below
+
     # Test 2: Invalid entity ID format
     invalid_entity_id = "number.invalid_format"
     await solax_api.number_event(invalid_entity_id, 30)
