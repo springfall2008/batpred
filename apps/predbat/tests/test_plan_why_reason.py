@@ -282,6 +282,22 @@ def run_test_plan_why_reason(my_predbat):
     if row is None or "-" in row["reasons"][0]["params"].get("rate", ""):
         print("ERROR: single-slot export rate should not be a range: {}".format(row and row["reasons"][0]["params"]))
         failed = True
+
+    # A minute within the merged span missing from rate_export must fall back to the row's own
+    # known rate, not silently default to 0 (regression: rate_range_text originally defaulted a
+    # missing minute to 0 rather than the fallback_value it was given, which could widen a range
+    # to a spurious "0.00-20.00" - Copilot review finding on PR #4362).
+    print("Test merged export cell falls back to the row's own rate for a missing minute, not 0")
+    my_predbat.export_window_best = span_window
+    my_predbat.rate_export[minutes_now] = 20.0
+    my_predbat.rate_export[minutes_now + 60] = 20.0
+    del my_predbat.rate_export[minutes_now + 30]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["reasons"][0]["params"].get("rate") != "20.00":
+        print("ERROR: merged export rate with a missing minute unexpected: {}".format(row and row["reasons"][0]["params"]))
+        failed = True
+    my_predbat.export_window_best = window
     my_predbat.rate_export[minutes_now] = 5.0
     my_predbat.rate_export[minutes_now + 30] = 5.0
     my_predbat.rate_export[minutes_now + 60] = 5.0
