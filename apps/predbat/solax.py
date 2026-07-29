@@ -44,6 +44,10 @@ SOLAX_TEST_COMMANDS = [
     "work_mode_selfuse",
     "work_mode_feedin",
 ]
+SOLAX_PLANT_INFO_MAX_AGE = 8 * 60  # Plant info is static, re-poll it once the data is this many minutes old
+SOLAX_DEVICE_INFO_MAX_AGE = 30  # Device info changes rarely, re-poll it once the data is this many minutes old
+SOLAX_CACHE_EXPIRY_HOURS = 24  # Cached plant and device info is discarded by the storage layer after this long
+SOLAX_INFO_RETRY_MINUTES = 5  # Wait this long before retrying a plant or device info read that failed
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
@@ -377,6 +381,18 @@ class SolaxAPI(ComponentBase):
         self.realtime_data = {}
         self.realtime_device_data = {}
         self.controls = {}
+
+        # Which plants and devices failed their most recent realtime poll, stale data is not republished
+        self.realtime_plant_failed = set()
+        self.realtime_device_failed = set()
+
+        # When the plant and device info was last read successfully, seeded from the storage cache on
+        # startup so that a restart does not re-read data that is still current, plus when it was last
+        # attempted so that a failing read is retried at a sensible rate rather than every cycle
+        self.plant_info_updated = None
+        self.plant_info_attempted = None
+        self.device_info_updated = None
+        self.device_info_attempted = None
 
         # Error tracking
         self.error_count = 0
@@ -1298,6 +1314,106 @@ class SolaxAPI(ComponentBase):
             self.plant_info = result
         return result
 
+    def data_is_due(self, updated, attempted, max_age_minutes):
+        """
+        Work out whether data needs re-reading based on how old it is
+
+        Args:
+            updated: When the data was last read successfully, or None if it never has been
+            attempted: When the data was last attempted, or None if it never has been
+            max_age_minutes: How old the data may be before it is re-read
+
+        Returns:
+            True if the data should be read now
+        """
+        now = datetime.now(timezone.utc)
+        if updated is not None and (now - updated).total_seconds() < max_age_minutes * 60:
+            return False
+        # Run is called every few seconds, so a read that keeps failing must not be retried every cycle
+        if attempted is not None and (now - attempted).total_seconds() < SOLAX_INFO_RETRY_MINUTES * 60:
+            return False
+        return True
+
+    async def load_cached_info(self, name, max_age_minutes):
+        """
+        Load one static info cache entry if it is still within its maximum age
+
+        Args:
+            name: Cache entry name
+            max_age_minutes: How old the cached data may be before it is treated as missing
+
+        Returns:
+            tuple: (data, updated) where data is None when there is nothing usable to restore
+        """
+        if not self.storage:
+            return None, None
+
+        cached = await self.storage.load("solax", name)
+        if not isinstance(cached, dict) or not cached:
+            self.log(f"SolaX API: No {name} in the storage cache, will poll")
+            return None, None
+
+        age = await self.storage.age("solax", name)
+        if age is None or age >= max_age_minutes:
+            self.log("SolaX API: Cached {} is stale (age {}), will poll".format(name, "{:.1f} minutes".format(age) if age is not None else "unknown"))
+            return None, None
+
+        self.log(f"SolaX API: Restored {name} from the storage cache (age {age:.1f} minutes)")
+        return cached, datetime.now(timezone.utc) - timedelta(minutes=age)
+
+    async def load_static_info(self):
+        """
+        Restore the plant and device info from the storage cache
+
+        Plant and device info describe the hardware and barely change, so a restart can reuse whatever is
+        still within its maximum age rather than re-reading it all from the cloud.  The recorded read time
+        comes from the cache age, so data that is already close to expiry is re-polled promptly.
+        """
+        plant_cached, plant_updated = await self.load_cached_info("plant_info", SOLAX_PLANT_INFO_MAX_AGE)
+        if plant_cached and plant_cached.get("plant_info"):
+            self.plant_info = plant_cached["plant_info"]
+            self.plant_info_updated = plant_updated
+
+        device_cached, device_updated = await self.load_cached_info("device_info", SOLAX_DEVICE_INFO_MAX_AGE)
+        if device_cached and device_cached.get("device_info"):
+            self.device_info = device_cached["device_info"]
+            self.plant_inverters = device_cached.get("plant_inverters", {})
+            self.plant_batteries = device_cached.get("plant_batteries", {})
+            self.device_info_updated = device_updated
+
+    async def save_plant_info(self):
+        """
+        Save the plant info to the storage cache
+
+        Returns:
+            True on success, False if there is no storage or the save failed
+        """
+        if not self.storage:
+            return False
+        expiry = datetime.now(timezone.utc) + timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS)
+        return await self.storage.save("solax", "plant_info", {"plant_info": self.plant_info}, format="json", expiry=expiry)
+
+    async def save_device_info(self):
+        """
+        Save the device info and its plant mappings to the storage cache
+
+        Returns:
+            True on success, False if there is no storage or the save failed
+        """
+        if not self.storage:
+            return False
+        return await self.storage.save(
+            "solax",
+            "device_info",
+            {
+                "device_info": self.device_info,
+                "plant_inverters": self.plant_inverters,
+                "plant_batteries": self.plant_batteries,
+            },
+            format="json",
+            expiry=datetime.now(timezone.utc) + timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS),
+        )
+
     async def query_device_info(self, plant_id, device_type, device_sn=None, business_type=None):
         """
         Query device information with pagination support
@@ -1665,8 +1781,10 @@ class SolaxAPI(ComponentBase):
         if result is not None and len(result) > 0:
             # One result per device SN
             self.realtime_device_data[sn] = result[0]
+            self.realtime_device_failed.discard(sn)
             self.log(f"SolaX API: Retrieved real-time data for device SN {sn} {result[0]}")
             return result
+        self.realtime_device_failed.add(sn)
         return None
 
     def is_a1_hybrid_g2(self, device_sn):
@@ -2120,8 +2238,12 @@ class SolaxAPI(ComponentBase):
         # Per-plant accumulators for the load-power calculation (second pass below)
         plant_save = {}  # plant_id -> {"grid": W, "pv": W, "battery": W, "inverter_sn": sn, "friendly_name": name}
 
-        # Publish per-device realtime data
+        # Publish per-device realtime data, skipping any device that was not read on this cycle so that
+        # its sensors keep their previous values rather than being republished from stale data
         for device_sn, realtime in self.realtime_device_data.items():
+            if device_sn in self.realtime_device_failed:
+                self.log(f"Warn: SolaX API: No realtime data read for device {device_sn}, keeping the previous sensor values")
+                continue
             device = self.device_info.get(device_sn, {})
             device_type = device.get("deviceType")
             plant_id = device.get("plantId", "unknown").lower().replace(" ", "_")
@@ -2407,31 +2529,51 @@ class SolaxAPI(ComponentBase):
             battery_temp = self.get_battery_temperature(plant_id)
             charge_discharge_power = self.get_charge_discharge_power_battery(plant_id)
 
-            # Battery SOC
-            self.dashboard_item(
-                f"sensor.{self.prefix}_solax_{plant_id}_battery_soc",
-                state=battery_soc,
-                attributes={
-                    "friendly_name": f"SolaX {plant_name} Battery SOC",
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy",
-                    "state_class": "measurement",
-                    "soc_max": battery_soc_max,
-                },
-                app="solax",
-            )
-            # Battery Charge/Discharge Power
-            self.dashboard_item(
-                f"sensor.{self.prefix}_solax_{plant_id}_battery_charge_discharge_power",
-                state=charge_discharge_power,
-                attributes={
-                    "friendly_name": f"SolaX {plant_name} Battery Charge/Discharge Power",
-                    "unit_of_measurement": "W",
-                    "device_class": "power",
-                    "state_class": "measurement",
-                },
-                app="solax",
-            )
+            # The battery sensors come from the device realtime data, so hold them back when a battery
+            # failed its last read rather than republishing stale values
+            battery_ok = not any(device_sn in self.realtime_device_failed for device_sn in self.plant_batteries.get(plant_id, []))
+
+            if battery_ok:
+                # Battery SOC
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_battery_soc",
+                    state=battery_soc,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Battery SOC",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "state_class": "measurement",
+                        "soc_max": battery_soc_max,
+                    },
+                    app="solax",
+                )
+                # Battery Charge/Discharge Power
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_battery_charge_discharge_power",
+                    state=charge_discharge_power,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Battery Charge/Discharge Power",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+                # Battery temperature sensor
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_battery_temperature",
+                    state=battery_temp,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Battery Temperature",
+                        "unit_of_measurement": "°C",
+                        "device_class": "temperature",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+            else:
+                self.log(f"Warn: SolaX API: No battery realtime data read for plant {plant_id}, keeping the previous battery sensor values")
+
             # Battery SOC max sensor
             self.dashboard_item(
                 f"sensor.{self.prefix}_solax_{plant_id}_battery_capacity",
@@ -2440,19 +2582,6 @@ class SolaxAPI(ComponentBase):
                     "friendly_name": f"SolaX {plant_name} Battery Capacity",
                     "unit_of_measurement": "kWh",
                     "device_class": "energy",
-                    "state_class": "measurement",
-                },
-                app="solax",
-            )
-
-            # Battery temperature sensor
-            self.dashboard_item(
-                f"sensor.{self.prefix}_solax_{plant_id}_battery_temperature",
-                state=battery_temp,
-                attributes={
-                    "friendly_name": f"SolaX {plant_name} Battery Temperature",
-                    "unit_of_measurement": "°C",
-                    "device_class": "temperature",
                     "state_class": "measurement",
                 },
                 app="solax",
@@ -2497,9 +2626,12 @@ class SolaxAPI(ComponentBase):
                 app="solax",
             )
 
-            # Publish realtime data if available
+            # Publish realtime data, but only when this cycle actually read it.  Publishing on a failed
+            # read would push stale totals, or zeros before the first successful read
             realtime_plant_id = plant.get("plantId")
-            if realtime_plant_id and realtime_plant_id in self.realtime_data:
+            if realtime_plant_id and realtime_plant_id in self.realtime_plant_failed:
+                self.log(f"Warn: SolaX API: No realtime data read for plant {realtime_plant_id}, keeping the previous sensor values")
+            elif realtime_plant_id and realtime_plant_id in self.realtime_data:
                 realtime = self.realtime_data[realtime_plant_id]
 
                 # Total Yield sensor
@@ -2611,14 +2743,27 @@ class SolaxAPI(ComponentBase):
             True on success, False on failure
         """
         if first:
-            # Fetch plant information on startup
-            self.log("SolaX API: Fetching plant information...")
-            await self.query_plant_info()
+            # Reuse whatever hardware information is still current, a restart then avoids re-reading it all
+            await self.load_static_info()
 
-            if self.plant_info is None:
+        # Plant info is static, it is only re-read once the data itself has aged out
+        plant_info_refreshed = False
+        if self.data_is_due(self.plant_info_updated, self.plant_info_attempted, SOLAX_PLANT_INFO_MAX_AGE):
+            self.log("SolaX API: Fetching plant information...")
+            self.plant_info_attempted = datetime.now(timezone.utc)
+            result = await self.query_plant_info()
+            if result is not None and self.plant_info is not None:
+                self.plant_info_updated = datetime.now(timezone.utc)
+                plant_info_refreshed = True
+                await self.save_plant_info()
+            elif self.plant_info is None:
                 self.log("Warn: SolaX API: Failed to fetch plant information")
                 return False
+            else:
+                # A refresh that fails keeps whatever was read before rather than dropping the plants
+                self.log("Warn: SolaX API: Failed to refresh plant information, keeping the previous data")
 
+        if first or plant_info_refreshed:
             self.plant_list = [plant.get('plantId') for plant in self.plant_info]
             if self.plant_sn_filter:
                 self.plant_list = [pid for pid in self.plant_list if pid in self.plant_sn_filter]
@@ -2627,19 +2772,43 @@ class SolaxAPI(ComponentBase):
         # Check readonly mode
         is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
 
-        if first or seconds % (30 * 60) == 0:
-            # Periodic plant info refresh every 30 minutes
+        # Device info is re-read once the data has aged out rather than on a fixed cycle since startup
+        if self.data_is_due(self.device_info_updated, self.device_info_attempted, SOLAX_DEVICE_INFO_MAX_AGE):
+            self.device_info_attempted = datetime.now(timezone.utc)
+            # An empty plant list means nothing was read, so it must not count as a successful refresh
+            device_info_ok = bool(self.plant_list)
+            previous_devices = set(self.device_info.keys())
             for plantID in self.plant_list:
                 self.log(f"SolaX API: Fetching device information for plant ID {plantID}...")
-                await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_INVERTER)  # Inverter
-                await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_BATTERY)  # Battery
+                for device_type in (SOLAX_DEVICE_TYPE_INVERTER, SOLAX_DEVICE_TYPE_BATTERY):
+                    if await self.query_device_info(plantID, device_type=device_type) is None:
+                        device_info_ok = False
 
                 # await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_METER)  # Meter
                 # await self.query_plant_statistics_daily(plantID)
 
+            if device_info_ok:
+                self.device_info_updated = datetime.now(timezone.utc)
+                # Refresh the cache so that a restart can skip this read
+                await self.save_device_info()
+
+                # Hardware changes show up in the plant record too, battery and PV capacity come from
+                # there, so a changed device list makes the plant info suspect however recently it was read
+                if previous_devices and set(self.device_info.keys()) != previous_devices:
+                    self.log("SolaX API: Device list changed, re-reading plant information")
+                    self.plant_info_updated = None
+                    self.plant_info_attempted = None
+            else:
+                # Do not mark a partial read as fresh, or cache it over data that was complete
+                self.log(f"Warn: SolaX API: Failed to read device information, retrying in {SOLAX_INFO_RETRY_MINUTES} minutes")
+
         if first or seconds % 60 == 0:
             for plantID in self.plant_list:
-                await self.query_plant_realtime_data(plantID)
+                # Note what failed to read, those sensors are not republished from stale data below
+                if await self.query_plant_realtime_data(plantID) is None:
+                    self.realtime_plant_failed.add(plantID)
+                else:
+                    self.realtime_plant_failed.discard(plantID)
                 await self.query_device_realtime_data_all(plantID)
 
         # Fetch controls first time only
