@@ -3888,6 +3888,8 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
+        elif not compare_list:
+            text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
@@ -3904,6 +3906,8 @@ chart.render();
                 series_7d.append({"name": name, "data": rolling, "chart_type": "line", "stroke_width": "2"})
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
+        elif not compare_list:
+            pass  # Already explained by the "No tariffs configured" message above
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
