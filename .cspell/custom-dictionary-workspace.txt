@@ -300,8 +300,10 @@ njpwerner
 nobat
 nocharge
 nodischarge
+noopener
 nord
 nordpool
+noreferrer
 nosc
 nrgheat
 numpy

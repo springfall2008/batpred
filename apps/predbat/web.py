@@ -3889,7 +3889,7 @@ chart.render();
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
         elif not compare_list:
-            text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank">Compare Energy Tariff</a> for how to add some to apps.yaml</h2><br>'
+            text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
