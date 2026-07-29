@@ -498,6 +498,42 @@ def test_write_button_applies_and_is_not_stored_as_schedule():
     assert not failed, "test_write_button_applies_and_is_not_stored_as_schedule"
 
 
+def test_reserve_entity_echoes_the_written_value_even_below_the_floor():
+    """The reserve entity must echo exactly what Predbat wrote, floor or no floor.
+
+    Predbat writes this entity then reads it back to confirm (write_and_poll_value), so
+    republishing a clamped value can never match what was written and would retry until it
+    gave up — the same "didn't complete got 0.0" failure this component already had. The
+    floor is enforced at the API boundary in build_dynamic_payload instead, which is what
+    actually protects the battery.
+    """
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    d.device_battery_config = {"INV1": {"battLowCapacity": 14}}
+    entity = "number.predbat_deye_inv1_battery_schedule_reserve"
+    import tests.test_infra as ti
+
+    async def fake_apply(sn, schedule, current_soc, force=False):
+        """Stand in for the live control write."""
+        return True
+
+    # A below-floor write is echoed verbatim so the read-back matches
+    with patch.object(d, "apply_dynamic_control", side_effect=fake_apply):
+        ti.run_async(d.number_event(entity, 4))
+    if d.published.get(entity) != 4:
+        print(f"ERROR: expected the entity to echo 4, got {d.published.get(entity)!r}")
+        failed = True
+
+    # ...but the payload that reaches the inverter is still lifted to the floor
+    socs = [s["soc"] for s in d.build_dynamic_payload("INV1", d.local_schedule["INV1"], 50)["timeUseSettingItems"]]
+    if any(s < 14 for s in socs):
+        print(f"ERROR: the payload must still respect the 14% floor: {socs}")
+        failed = True
+    assert not failed, "test_reserve_entity_echoes_the_written_value_even_below_the_floor"
+
+
 def test_reserve_write_is_republished():
     """A reserve change is pushed to the inverter and republished for the read-back."""
     failed = False
@@ -559,6 +595,7 @@ def run_deye_publish_tests(my_predbat):
         ("control_writes_republished", test_control_entity_writes_are_republished),
         ("write_button_not_stored", test_write_button_applies_and_is_not_stored_as_schedule),
         ("reserve_republished", test_reserve_write_is_republished),
+        ("reserve_echoes_written", test_reserve_entity_echoes_the_written_value_even_below_the_floor),
         ("unknown_entity_ignored", test_unrelated_entity_does_not_corrupt_schedule),
     ]:
         try:
