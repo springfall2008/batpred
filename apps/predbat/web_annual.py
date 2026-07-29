@@ -206,8 +206,15 @@ class AnnualPage:
         if battery_kwh > 0:
             config["battery"]["size_kwh"] = battery_kwh
 
+        # combine=True for the same reason as soc_max above, and it bites even harder here:
+        # inverter_limit and export_limit are sensor_lists in APPS_SCHEMA, so a value is a
+        # LIST even on a single-inverter system - a plain 3.6 kW inverter reads as [3600].
+        # Without combine, get_arg()'s float-default coercion fails on the list, is caught
+        # internally, and returns the 0.0 default, so every real system silently fell back
+        # to the example 5 kW rather than showing its own limits. Summing is what the model
+        # wants: two 3.6 kW inverters can move 7.2 kW between them.
         for arg_name, field, divisor in [("inverter_limit", "inverter_kw", 1000.0), ("export_limit", "export_limit_kw", 1000.0)]:
-            watts = self._arg(arg_name, 0.0) or 0
+            watts = self._arg(arg_name, 0.0, combine=True) or 0
             try:
                 watts = float(watts)
             except (TypeError, ValueError):
@@ -215,9 +222,19 @@ class AnnualPage:
             if watts > 0:
                 config["battery"][field] = round(watts / divisor, 2)
 
-        inverter_type = self._arg("inverter_type", None)
-        if inverter_type:
-            config["battery"]["hybrid"] = True
+        # Read the real setting rather than inferring it. This used to set hybrid whenever
+        # an inverter_type was present at all, which is true of every configured system -
+        # so an AC-coupled setup was modelled as hybrid, letting the plan charge the
+        # battery straight from DC PV that in reality has to go out through the inverter
+        # and back in.
+        #
+        # Taken off the instance attribute rather than through _arg(): inverter_hybrid is
+        # a CONFIG_ITEMS switch whose value lives in an entity, not in apps.yaml, so
+        # get_arg() ignores args entirely for it and always returns the default. This is
+        # the same attribute the planner itself runs on (set in fetch.py). Defaults to
+        # True for an instance that has not fetched its config yet, matching the switch's
+        # own default.
+        config["battery"]["hybrid"] = bool(getattr(self.base, "inverter_hybrid", True))
 
         # indirect=False: these values are URLs, full of literal dots, which get_arg()'s
         # default indirect=True would otherwise treat as a Home Assistant entity id to look

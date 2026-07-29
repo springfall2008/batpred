@@ -181,6 +181,52 @@ def test_web_annual(my_predbat):
         if config["battery"]["size_kwh"] != 12.5:
             print("  ERROR: a multi-inverter soc_max should be summed to a total capacity, got {}".format(config["battery"]["size_kwh"]))
             failed = True
+
+        print("Test: a single inverter's limits are read, not silently replaced by the example 5 kW")
+        # inverter_limit and export_limit are sensor_lists too, so even ONE inverter stores
+        # a list: a 3.6 kW inverter is [3600]. Without combine=True the float coercion
+        # failed, get_arg returned its 0.0 default, and every real system fell back to the
+        # example 5 kW while appearing to have been read from the user's own setup.
+        my_predbat.args["inverter_limit"] = [3600]
+        my_predbat.args["export_limit"] = [3600]
+        config = make_page(my_predbat).prefill_config()
+        if config["battery"]["inverter_kw"] != 3.6:
+            print("  ERROR: a [3600] inverter_limit should read as 3.6 kW, got {}".format(config["battery"]["inverter_kw"]))
+            failed = True
+        if config["battery"]["export_limit_kw"] != 3.6:
+            print("  ERROR: a [3600] export_limit should read as 3.6 kW, got {}".format(config["battery"]["export_limit_kw"]))
+            failed = True
+
+        print("Test: an AC-coupled system is not prefilled as hybrid")
+        # This used to be inferred from inverter_type being present, which is true of every
+        # configured system - so an AC-coupled setup was modelled as hybrid, letting the
+        # plan charge the battery straight from DC PV that really has to make a round trip
+        # through the inverter.
+        # Set on the instance, not in args: inverter_hybrid is a CONFIG_ITEMS switch whose
+        # value lives in an entity, so get_arg() ignores args for it entirely and would
+        # return the default whatever we put there - a test written against args would
+        # pass without testing anything.
+        saved_hybrid = my_predbat.inverter_hybrid
+        try:
+            my_predbat.inverter_hybrid = False
+            if make_page(my_predbat).prefill_config()["battery"]["hybrid"] is not False:
+                print("  ERROR: an AC-coupled inverter should prefill as AC coupled, not hybrid")
+                failed = True
+            my_predbat.inverter_hybrid = True
+            if make_page(my_predbat).prefill_config()["battery"]["hybrid"] is not True:
+                print("  ERROR: a hybrid inverter should prefill as hybrid")
+                failed = True
+        finally:
+            my_predbat.inverter_hybrid = saved_hybrid
+
+        print("Test: multiple inverters' limits are summed")
+        my_predbat.args["inverter_limit"] = [3600, 3600]
+        config = make_page(my_predbat).prefill_config()
+        if config["battery"]["inverter_kw"] != 7.2:
+            print("  ERROR: two 3.6 kW inverters should total 7.2 kW, got {}".format(config["battery"]["inverter_kw"]))
+            failed = True
+        my_predbat.args.pop("inverter_limit", None)
+        my_predbat.args.pop("export_limit", None)
         if not page.is_configured():
             print("  ERROR: a multi-inverter battery should count as configured")
             failed = True
