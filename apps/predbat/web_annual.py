@@ -504,6 +504,10 @@ class AnnualPage:
         # A second submit button pointed at the plain POST /annual handler via
         # formaction - the same fields, saved without starting a run.
         text += '<button type="submit" formaction="./annual" formmethod="post">Save settings</button>\n'
+        # Discards the saved configuration and rebuilds it from the live instance, so it
+        # confirms first - there is no undo, and someone who has spent a while tuning a
+        # setup would not thank us for wiping it on a stray click.
+        text += '<button type="submit" formaction="./annual_reset" formmethod="post" class="annual-secondary" onclick="return confirm(\'Reset the configuration to your Predbat settings and the standard defaults? Anything you have changed here will be lost.\');">Reset to defaults</button>\n'
         text += "</div>\n"
         text += "</form>\n</div>\n"
         return text
@@ -808,6 +812,23 @@ class AnnualPage:
         if not error:
             self.save_config(config)
         return await self.html_annual(request, error=error, config=config)
+
+    async def html_annual_reset(self, request):
+        """Discard the saved configuration and rebuild it from the live instance.
+
+        "Default" here means ``prefill_config()``, not the bare example: it reads
+        whatever this Predbat knows - solar arrays, battery and inverter sizes, tariff
+        URLs, region, Octopus credentials - and fills only the gaps with the example UK
+        system. So on a configured instance this resets to *your* setup rather than to a
+        stranger's, which is the point of offering it.
+
+        The result is saved, not merely displayed: a reset the user has to remember to
+        confirm with Save would leave the old configuration on disk and running, which is
+        the opposite of what the button says it does.
+        """
+        config = self.prefill_config()
+        self.save_config(config)
+        return await self.html_annual(request, config=config)
 
     async def html_annual_run(self, request):
         """Validate, save, and spawn the run."""
@@ -1410,8 +1431,12 @@ annualLoadPlan();
    hang to the left of everything above them, and the buttons sit flush against the
    bottom of the page with nothing under them. */
 .annual-form-wrap > details, .annual-actions { padding: 0 0.75rem; }
-.annual-actions { margin: 1rem 0 2rem; }
+.annual-actions { margin-top: 1rem; }
 .annual-actions button { margin-right: 0.5rem; padding: 0.4rem 0.9rem; }
+/* PADDING, not a margin on the buttons: a bottom margin on the last child collapses
+   straight out through the container and produces no visible gap at all, which is why
+   the buttons still sat hard against the bottom of the page. */
+.annual-form-wrap, .annual-results, .annual-compare-scroll { padding-bottom: 3rem; }
 .annual-field { margin: 0.35rem 0; }
 .annual-field label { display: inline-block; min-width: 20rem; }
 /* An Octopus rates URL runs to ~130 characters and an API key to ~32, so the default

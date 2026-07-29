@@ -422,6 +422,7 @@ class WebInterface(ComponentBase):
         """
         app.router.add_get("/annual", self.annual_page.html_annual)
         app.router.add_post("/annual", self.annual_page.html_annual_post)
+        app.router.add_post("/annual_reset", self.annual_page.html_annual_reset)
         app.router.add_post("/annual_run", self.annual_page.html_annual_run)
         app.router.add_get("/annual_status", self.annual_page.html_annual_status)
         app.router.add_post("/annual_cancel", self.annual_page.html_annual_cancel)

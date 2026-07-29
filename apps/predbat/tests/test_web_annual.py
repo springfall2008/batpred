@@ -472,6 +472,49 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: reset restores the live instance's settings, not a stranger's")
+        # "Default" means prefill_config(), which reads this Predbat's own solar, battery
+        # and tariff before filling gaps with the example - so on a configured instance
+        # resetting must land on the user's system, not the generic UK one.
+        saved_args = dict(my_predbat.args)
+        try:
+            my_predbat.args["soc_max"] = 12.5
+            reset_page = make_page(my_predbat)
+            reset_page.save_config({"battery": {"size_kwh": 99.0}, "solar": [{"kwp": 99.0}], "load": {"annual_kwh": 99}, "tariff": {"rates_import": [{"rate": 99.0}]}})
+            response = asyncio.run(reset_page.html_annual_reset(FakeRequest()))
+            # Assert on the FIELDS, not a substring of the page: searching the whole
+            # document for "99" matches `z-index: 9999` in Predbat's own header CSS and
+            # passes regardless of what reset did.
+            battery_field = re.search(r'id="battery_size_kwh"[^>]*value="([^"]*)"', response.text)
+            solar_field = re.search(r'id="solar_kwp_0"[^>]*value="([^"]*)"', response.text)
+            if not battery_field or float(battery_field.group(1)) != 12.5:
+                print("  ERROR: reset should restore the live instance's battery size, got {}".format(battery_field and battery_field.group(1)))
+                failed = True
+            if not solar_field or float(solar_field.group(1)) == 99.0:
+                print("  ERROR: reset should discard the saved solar size, got {}".format(solar_field and solar_field.group(1)))
+                failed = True
+            # Saved, not just shown: a reset the user must remember to confirm with Save
+            # would leave the old configuration on disk and still running.
+            if float((reset_page.load_config().get("battery") or {}).get("size_kwh", 0)) != 12.5:
+                print("  ERROR: reset should persist, got {}".format(reset_page.load_config().get("battery")))
+                failed = True
+        finally:
+            my_predbat.args.clear()
+            my_predbat.args.update(saved_args)
+
+        print("Test: the reset button confirms before discarding, and is not the run button")
+        reset_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        reset_button = re.search(r"<button[^>]*annual_reset[^>]*>.*?</button>", reset_form, re.S)
+        if not reset_button:
+            print("  ERROR: the form should offer a reset button")
+            failed = True
+        elif "confirm(" not in reset_button.group(0):
+            print("  ERROR: reset discards the saved config with no undo, so it must confirm first")
+            failed = True
+        elif "annualMarkStarted" in reset_button.group(0):
+            print("  ERROR: reset must not mark the tab as having started a run")
+            failed = True
+
         print("Test: the Advanced block and the buttons line up with the fieldsets above")
         # Both are bare children of the form, while every fieldset insets its content by
         # its own border plus padding - so without an explicit inset they drift left of
