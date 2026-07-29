@@ -129,6 +129,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._saved_ratings = None  # signature of the ratings last written, to skip no-op saves
+        self._soc_floor_warned = set()
         self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, 0.0)
         # auth_method defaults to app_credentials, but an injected access token with no
         # developer app credentials can only be oauth — and in app_credentials mode
@@ -446,6 +447,21 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 return round(configured_ah * volts / 1000.0, 2)
         return self.device_capacity.get(sn, 0.0)
 
+    def battery_reserve_min(self, sn):
+        """Return the inverter's own minimum SOC floor in percent, or 0 when unknown.
+
+        config/battery reports this as battLowCapacity (14 on the live 3-phase hybrid).
+        It is the floor the installer configured on the inverter, so Predbat must never
+        ask for a slot SOC below it.
+        """
+        if sn not in self.device_battery_config:
+            return 0
+        try:
+            floor = int(self._battery_config_value(sn, "reserve_min", 0))
+        except (TypeError, ValueError):
+            return 0
+        return floor if 0 < floor <= 100 else 0
+
     def battery_rate_max(self, sn):
         """Return the battery's maximum charge rate in W, for Predbat's battery_rate_max.
 
@@ -617,6 +633,24 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             now_minutes = self._now_minutes()
         slots = self.build_tou_slots(schedule, current_soc)
         active = self._active_state(schedule, current_soc, now_minutes)
+        # Final guard: never ask the battery to go below the floor its own installer
+        # settings declare (config/battery battLowCapacity). Predbat's control entities
+        # start at 0 and only reach their real value once it has written them, so without
+        # this the first control write of a cycle sends slot SOC 0 to a pack whose floor is
+        # 14%. Applied here, at the last step, so no other caller can bypass it.
+        floor = self.battery_reserve_min(sn)
+        if floor > 0:
+            lifted = False
+            for slot in slots:
+                if slot.get(TOU_FIELD["soc"], 0) < floor:
+                    slot[TOU_FIELD["soc"]] = floor
+                    lifted = True
+            # Say so once per serial. Routine before Predbat has written the reserve, but a
+            # persistent complaint means Predbat is planning below the inverter's floor —
+            # usually battery_min_soc not being mapped, which is worth surfacing.
+            if lifted and sn not in self._soc_floor_warned:
+                self._soc_floor_warned.add(sn)
+                self.log(f"Info: DEYE {sn} raising requested slot SOC to the inverter's {floor}% floor (config/battery battLowCapacity)")
         return {
             "deviceSn": sn,
             "workMode": active["work_mode"],
@@ -777,9 +811,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     async def publish_schedule_settings_ha(self, sn):
         """Publish the charge/export schedule control entities for one inverter."""
         local = self.local_schedule.get(sn, {})
+        # Deliberately NOT clamped to the inverter floor. This entity is Predbat's control
+        # surface: it writes a value then reads it back to confirm (write_and_poll_value),
+        # so publishing anything other than what was written guarantees a mismatch and a
+        # retry storm. The floor is enforced at the API boundary instead, in
+        # build_dynamic_payload, which is what actually protects the battery.
         reserve = int(local.get("reserve", 0))
         self.dashboard_item(
-            self._control_name("number", sn, "battery_schedule_reserve"), state=reserve, attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"DEYE {sn} Battery Schedule Reserve", "icon": "mdi:gauge"}, app="deye"
+            self._control_name("number", sn, "battery_schedule_reserve"),
+            state=reserve,
+            attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"DEYE {sn} Battery Schedule Reserve", "icon": "mdi:gauge"},
+            app="deye",
         )
         for direction in ("charge", "export"):
             window = local.get(direction, {})
@@ -877,6 +919,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """
         schedule = self.local_schedule.setdefault(sn, {})
         if entity_id.endswith("battery_schedule_reserve"):
+            # Stored exactly as written; the floor is applied at the API boundary so the
+            # read-back Predbat performs always matches what it wrote.
             schedule["reserve"] = int(self._as_float(value, 0))
             return True
         direction = "charge" if "_charge_" in entity_id else ("export" if "_export_" in entity_id else None)
@@ -1284,6 +1328,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
 
         if first and self.automatic:
             await self.automatic_config()
+
+        # Report the cycle as successful. components.is_alive() requires a success within
+        # the last 60 minutes, and with no timestamp ever recorded it returns False for the
+        # whole session — so every Predbat run ended "Complete run status ... with component
+        # errors: DEYE Cloud" despite nothing having failed.
+        self.update_success_timestamp()
         return True
 
     async def _reconcile_control(self):
