@@ -1159,7 +1159,7 @@ class SolarAPI(ComponentBase):
             raw_peak_kw = raw_exceeds_ceiling_peak * 60 / self.plan_interval_minutes
             ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
             self.log(
-                "Warn: PV Calibration: Raw forecast exceeds the array ceiling in {} slots (peak {}kW vs {}kW ceiling) - check kwp and pv_scaling (currently {}), forecast is being clipped to the ceiling".format(
+                "Warn: SolarAPI: PV Calibration: Raw forecast exceeds the array ceiling in {} slots (peak {}kW vs {}kW ceiling) - check kwp and pv_scaling (currently {}), forecast is being clipped to the ceiling".format(
                     raw_exceeds_ceiling_slots, dp2(raw_peak_kw), dp2(ceiling_kw), self.pv_scaling
                 )
             )

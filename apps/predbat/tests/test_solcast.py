@@ -3476,7 +3476,7 @@ def test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat):
     captured = []
     test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=3.0, raw_kw=5.0, hist_kw=0.0, captured_log=captured)
     try:
-        raw_exceeds_warnings = [m for m in captured if m.startswith("Warn:") and "kwp" in m and "pv_scaling" in m]
+        raw_exceeds_warnings = [m for m in captured if "Raw forecast exceeds the array ceiling" in m and "kwp" in m and "pv_scaling" in m]
         if not raw_exceeds_warnings:
             print(f"ERROR: Expected a raw-forecast-exceeds-ceiling warning naming kwp and pv_scaling, got none. Captured: {captured}")
             failed = True
@@ -3502,7 +3502,7 @@ def test_pv_calibration_raw_within_ceiling_no_warning(my_predbat):
     captured = []
     test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0, captured_log=captured)
     try:
-        raw_exceeds_warnings = [m for m in captured if m.startswith("Warn:") and "kwp" in m and "pv_scaling" in m]
+        raw_exceeds_warnings = [m for m in captured if "Raw forecast exceeds the array ceiling" in m and "kwp" in m and "pv_scaling" in m]
         if raw_exceeds_warnings:
             print(f"ERROR: Did not expect a raw-forecast-exceeds-ceiling warning, got {raw_exceeds_warnings}")
             failed = True
