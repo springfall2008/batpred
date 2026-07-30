@@ -3062,7 +3062,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
     return failed
 
 
-def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5):
+def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5, captured_log=None):
     """Run pv_calibration with a controlled history.
 
     Builds days_back past days that each generated hist_kw for one hour while the recorded
@@ -3070,6 +3070,10 @@ def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5):
     matching window. Today's raw forecast is deliberately allowed to differ from the
     historical forecast level - that is what lets the adjusted value exceed the observed
     peak and so exercise the cap.
+
+    If captured_log is given a list, solar.log is replaced with a function that appends every
+    message logged during pv_calibration to it, so callers can assert on warnings emitted
+    while the cap is applied. Defaults to None, which leaves solar.log untouched.
 
     Returns (test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end). The caller
     owns the returned test_api and must call cleanup() on it.
@@ -3111,6 +3115,14 @@ def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5):
 
     base.minute_data_import_export = mock_minute_import_export
     solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    if captured_log is not None:
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI during pv_calibration."""
+            captured_log.append(message)
+
+        solar.log = capture_log
 
     total_minutes = 4 * 24 * 60
     pv_m = {m: (raw_kw / 60.0) if gen_start <= m < gen_end else 0.0 for m in range(total_minutes)}
@@ -3439,6 +3451,60 @@ def test_pv_calibration_no_history_ceiling_clips_raw(my_predbat):
             failed = True
         if worst_slot < expected_cap * 0.99:
             print("ERROR: planner slot total {} is below the ceiling {} - expected the ceiling to bind and clip the raw forecast".format(worst_slot, expected_cap))
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat):
+    """
+    When the raw forecast alone (before calibration is even applied) exceeds the array
+    ceiling, a distinct config-facing warning must be emitted, separate from the general
+    capped-slots log, so users know to check kwp/pv_scaling rather than assume calibration
+    scaled too hard.
+
+    Same shape as test_pv_calibration_no_history_ceiling_clips_raw: no observed history,
+    max_kwh=3.0, raw forecast 5 kW -> ceiling_slot = 1.2 * 3.0 = 3.6 kW, well below the raw
+    forecast, so every generating slot trips the warning.
+    """
+    print("  - test_pv_calibration_raw_exceeds_ceiling_warns")
+    failed = False
+
+    captured = []
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=3.0, raw_kw=5.0, hist_kw=0.0, captured_log=captured)
+    try:
+        raw_exceeds_warnings = [m for m in captured if m.startswith("Warn:") and "kwp" in m and "pv_scaling" in m]
+        if not raw_exceeds_warnings:
+            print(f"ERROR: Expected a raw-forecast-exceeds-ceiling warning naming kwp and pv_scaling, got none. Captured: {captured}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_raw_within_ceiling_no_warning(my_predbat):
+    """
+    A normal scenario where the raw forecast stays within the array ceiling must NOT emit the
+    raw-exceeds-ceiling warning, otherwise the warning becomes noise on every install and users
+    stop reading the Warnings tab.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 4 kW -> ceiling = max(1.2 * 4.0, 2.0) = 4.8
+    kW, comfortably above the 3 kW raw forecast.
+    """
+    print("  - test_pv_calibration_raw_within_ceiling_no_warning")
+    failed = False
+
+    captured = []
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0, captured_log=captured)
+    try:
+        raw_exceeds_warnings = [m for m in captured if m.startswith("Warn:") and "kwp" in m and "pv_scaling" in m]
+        if raw_exceeds_warnings:
+            print(f"ERROR: Did not expect a raw-forecast-exceeds-ceiling warning, got {raw_exceeds_warnings}")
             failed = True
 
     finally:
@@ -4470,6 +4536,8 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_no_history_ceiling_clips_raw(my_predbat)
+    failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)
+    failed |= test_pv_calibration_raw_within_ceiling_no_warning(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)
     failed |= test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat)

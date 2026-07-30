@@ -1120,12 +1120,17 @@ class SolarAPI(ComponentBase):
         observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
         ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
         capped_slots = 0
+        raw_exceeds_ceiling_slots = 0
+        raw_exceeds_ceiling_peak = 0
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             raw_value = 0
             for offset in range(0, self.plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
                 raw_value += pv_forecast_minute.get(minute + offset, 0)
+            if raw_value > ceiling_slot:
+                raw_exceeds_ceiling_slots += 1
+                raw_exceeds_ceiling_peak = max(raw_exceeds_ceiling_peak, raw_value)
             capped_data = min(ceiling_slot, max(observed_slot, raw_value))
             pv_estimateCL[minute] = dp4(min(pv_value, capped_data))
             pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
@@ -1143,6 +1148,21 @@ class SolarAPI(ComponentBase):
         if capped_slots:
             ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
             self.log("SolarAPI: PV Calibration: Capped {} slots to the array ceiling ({}kW observed peak, {}kW ceiling)".format(capped_slots, dp2(max_pv_power_hist), dp2(ceiling_kw)))
+
+        if raw_exceeds_ceiling_slots:
+            # The raw forecast (before any calibration scaling) already exceeds the array
+            # ceiling on its own - distinct from the capped_slots log above, which can also
+            # fire when calibration scaling alone pushes an otherwise-sane raw forecast over
+            # the ceiling. This is a config problem: either kwp is under-declared, or
+            # pv_scaling has been raised to compensate for an under-declared kwp, which is
+            # the wrong knob.
+            raw_peak_kw = raw_exceeds_ceiling_peak * 60 / self.plan_interval_minutes
+            ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
+            self.log(
+                "Warn: PV Calibration: Raw forecast exceeds the array ceiling in {} slots (peak {}kW vs {}kW ceiling) - check kwp and pv_scaling (currently {}), forecast is being clipped to the ceiling".format(
+                    raw_exceeds_ceiling_slots, dp2(raw_peak_kw), dp2(ceiling_kw), self.pv_scaling
+                )
+            )
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
