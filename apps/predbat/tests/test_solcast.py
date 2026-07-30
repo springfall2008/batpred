@@ -169,6 +169,7 @@ class TestSolarAPI:
             forecast_solar=None,
             forecast_solar_max_age=4,
             forecast_solar_open_meteo_backup=False,
+            forecast_solar_open_meteo_first=False,
             pv_forecast_today=None,
             pv_forecast_tomorrow=None,
             pv_forecast_d3=None,
@@ -1820,6 +1821,219 @@ def test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(
         if len(forecast_calls) == 0:
             print("ERROR: Expected Forecast.Solar API call, got none")
             failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_used_when_set(my_predbat):
+    """
+    When forecast_solar_open_meteo_first is True, Open-Meteo is used as the primary
+    source and forecast.solar is not called at all.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_used_when_set")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        # Both sources would succeed - Open-Meteo must win and forecast.solar must not be called
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance": [500.0, 600.0, 550.0],
+                    "temperature_2m": [25.0, 25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00", "2025-06-15T14:00"],
+                    "global_tilted_irradiance_member01": [400.0, 480.0, 440.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        open_meteo_calls = [r for r in test_api.request_log if "open-meteo.com" in r["url"]]
+        if len(open_meteo_calls) == 0:
+            print("ERROR: Expected Open-Meteo API call when open_meteo_first is set, got none")
+            failed = True
+
+        forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if len(forecast_calls) != 0:
+            print(f"ERROR: Expected no forecast.solar calls when Open-Meteo succeeds, got {len(forecast_calls)}")
+            failed = True
+
+        if f"sensor.{test_api.mock_base.prefix}_pv_today" not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today sensor to be published from Open-Meteo primary")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat):
+    """
+    When forecast_solar_open_meteo_first is True and Open-Meteo returns no data,
+    fetch_pv_forecast falls back to forecast.solar.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        # Open-Meteo fails
+        test_api.set_mock_response("api.open-meteo.com", {"error": "server error"}, 500)
+        test_api.set_mock_response("ensemble-api.open-meteo.com", {"error": "server error"}, 500)
+        # forecast.solar succeeds
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if len(forecast_calls) == 0:
+            print("ERROR: Expected forecast.solar fallback call when Open-Meteo fails, got none")
+            failed = True
+
+        if f"sensor.{test_api.mock_base.prefix}_pv_today" not in test_api.dashboard_items:
+            print("ERROR: Expected pv_today sensor to be published after forecast.solar fallback")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat):
+    """
+    When forecast_solar_open_meteo_first is False the existing ordering is unchanged:
+    forecast.solar is primary and Open-Meteo is not called.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_ignored_when_unset")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = False
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_calls = [r for r in test_api.request_log if "forecast.solar" in r["url"]]
+        if len(forecast_calls) == 0:
+            print("ERROR: Expected forecast.solar to remain primary when open_meteo_first is False")
+            failed = True
+
+        open_meteo_calls = [r for r in test_api.request_log if "open-meteo.com" in r["url"]]
+        if len(open_meteo_calls) != 0:
+            print(f"ERROR: Expected no Open-Meteo calls when open_meteo_first is False, got {len(open_meteo_calls)}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat):
+    """
+    A forecast_solar entry with azimuth_zero_south True must reach the Open-Meteo request
+    with the azimuth unconverted. A regression here would silently mis-orient every array.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 54.81306, "longitude": -1.38647, "declination": 32, "azimuth": 85, "azimuth_zero_south": True, "kwp": 6.44}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00"],
+                    "global_tilted_irradiance": [500.0, 600.0],
+                    "temperature_2m": [25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {"hourly": {"time": ["2025-06-15T12:00", "2025-06-15T13:00"], "global_tilted_irradiance_member01": [400.0, 480.0]}},
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_urls = [r["url"] for r in test_api.request_log if "api.open-meteo.com" in r["url"]]
+        if not forecast_urls:
+            print("ERROR: Expected an Open-Meteo forecast request, got none")
+            failed = True
+        for url in forecast_urls:
+            if "azimuth=85" not in url:
+                print(f"ERROR: Expected azimuth=85 (unconverted) in Open-Meteo URL, got {url}")
+                failed = True
 
     finally:
         test_api.cleanup()
@@ -3708,6 +3922,10 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_forecast_solar(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_on_failure(my_predbat)
     failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_used_when_set(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
 
     # 15-minute resolution tests

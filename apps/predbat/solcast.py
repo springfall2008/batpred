@@ -55,6 +55,7 @@ class SolarAPI(ComponentBase):
         forecast_solar,
         forecast_solar_max_age,
         forecast_solar_open_meteo_backup,
+        forecast_solar_open_meteo_first,
         pv_forecast_today,
         pv_forecast_tomorrow,
         pv_forecast_d3,
@@ -71,6 +72,7 @@ class SolarAPI(ComponentBase):
         self.forecast_solar = forecast_solar
         self.forecast_solar_max_age = forecast_solar_max_age
         self.forecast_solar_open_meteo_backup = forecast_solar_open_meteo_backup
+        self.forecast_solar_open_meteo_first = forecast_solar_open_meteo_first
         self.pv_forecast_today = pv_forecast_today
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
@@ -1215,7 +1217,16 @@ class SolarAPI(ComponentBase):
         max_kwh = 9999
         using_ha_data = False
 
-        if self.forecast_solar:
+        if self.forecast_solar and self.forecast_solar_open_meteo_first:
+            self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API (primary, Forecast Solar fallback)")
+            primary_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=primary_configs)
+            divide_by = 30.0
+            create_pv10 = True
+            if not pv_forecast_data:
+                self.log("Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar")
+                pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+        elif self.forecast_solar:
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
