@@ -616,10 +616,20 @@ class GECloudDirect(ComponentBase):
         device_ha_names = {regname_to_ha(registers[key].get("name", "")) for key in registers}
         has_charge_power = "battery_charge_power" in device_ha_names
         has_discharge_power = "battery_discharge_power" in device_ha_names
+        # Predbat drives the export target register itself (discharge_target_soc, the DC discharge
+        # lower SoC limit) and tracks the minimum reserve SoC there, so leave that one alone rather
+        # than resetting it and fighting adjust_force_export.
+        discharge_target = self.get_arg("discharge_target_soc", default=None, indirect=False)
+        if not isinstance(discharge_target, list):
+            discharge_target = [discharge_target] if discharge_target else []
+        discharge_target = {str(entity).lower() for entity in discharge_target if entity}
         for key in registers:
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
+
+            if "number.{}_gecloud_{}_{}".format(self.prefix, device, ha_name).lower() in discharge_target:
+                continue
 
             if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name) or ("lower_soc_percent_limit" in ha_name):
                 if not value or value > 4:

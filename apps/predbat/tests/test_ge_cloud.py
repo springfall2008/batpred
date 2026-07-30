@@ -87,7 +87,7 @@ class MockGECloudDirect(GECloudDirect):
         """Mock dashboard_item - tracks calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
-    def get_arg(self, name, default=None):
+    def get_arg(self, name, default=None, **kwargs):
         """Mock get_arg"""
         return self.config_args.get(name, default)
 
@@ -238,6 +238,7 @@ def test_ge_cloud(my_predbat=None):
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
         ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
+        ("enable_defaults_skip_target", _test_enable_default_options_skips_discharge_target, "Enable defaults skips the discharge target register"),
         ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
         ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
         ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
@@ -3375,6 +3376,71 @@ def _test_hybrid_detection(my_predbat):
         return 0
 
     return run_async(test())
+
+
+def _test_enable_default_options_skips_discharge_target(my_predbat):
+    """enable_default_options must not reset the register Predbat drives as discharge_target_soc"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.settings = {"test123": {}, "other456": {}}
+
+        write_calls = []
+
+        async def mock_write(device, key, value):
+            write_calls.append({"device": device, "key": key, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        # Predbat drives the DC discharge 1 lower SoC limit on test123 as the export target
+        ge_cloud.config_args["discharge_target_soc"] = ["number.predbat_gecloud_test123_dc_discharge_1_lower_soc_percent_limit"]
+
+        # The configured export target register must be left alone
+        registers = {100: {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+        if write_calls:
+            print("ERROR: Expected no write to the configured discharge target register, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: enable_default_options should report no change when only the discharge target matched")
+            return 1
+        if registers[100]["value"] != 50:
+            print("ERROR: Discharge target register value should be untouched, got {}".format(registers[100]["value"]))
+            return 1
+
+        # Other lower SoC registers on the same device are still reset to 4%
+        write_calls.clear()
+        registers = {101: {"name": "Export_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+        if len(write_calls) != 1 or write_calls[0]["value"] != 4:
+            print("ERROR: Expected Export_SOC_Percent_Limit to still be reset to 4, got {}".format(write_calls))
+            return 1
+
+        # The same register on a device Predbat is not driving is still reset to 4%
+        write_calls.clear()
+        registers = {100: {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("other456", registers)
+        if len(write_calls) != 1 or write_calls[0]["value"] != 4:
+            print("ERROR: Expected the register on other456 to still be reset to 4, got {}".format(write_calls))
+            return 1
+
+        # With no discharge target configured (inverter lacks the feature) the reset still applies
+        ge_cloud.config_args["discharge_target_soc"] = None
+        write_calls.clear()
+        registers = {100: {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+        if len(write_calls) != 1 or write_calls[0]["value"] != 4:
+            print("ERROR: Expected the reset to apply when no discharge target is configured, got {}".format(write_calls))
+            return 1
+
+        return 0
+
+    return asyncio.run(test())
 
 
 def _test_enable_default_options(my_predbat):

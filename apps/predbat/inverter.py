@@ -2491,8 +2491,11 @@ class Inverter:
             else:
                 self.log("Warn: Inverter {} unable write export end time as neither REST or discharge_end_time are set".format(self.id))
 
-        # REST export target, always set to minimum
+        # Export target, always set to the minimum reserve. This must track the reserve in *both*
+        # directions - a target left below the minimum reserve SoC (e.g. GE Cloud resets it to 4%)
+        # lets the inverter drain the battery past the reserve between Predbat cycles.
         if force_export:
+            target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
                 if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
                     current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
@@ -2501,8 +2504,8 @@ class Inverter:
                     except (ValueError, TypeError) as e:
                         current = 0
 
-                    if current > self.reserve_percent:
-                        self.rest_setDischargeTarget(int(self.reserve_percent))
+                    if current != target_soc:
+                        self.rest_setDischargeTarget(target_soc)
                     else:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
@@ -2511,8 +2514,8 @@ class Inverter:
                     current = float(current)
                 except (ValueError, TypeError) as e:
                     current = 0
-                if current > self.reserve_percent:
-                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id, required_unit="%"), int(self.reserve_percent))
+                if current != target_soc:
+                    self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id, required_unit="%"), target_soc)
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
 
