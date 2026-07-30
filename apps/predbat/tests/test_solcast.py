@@ -2974,13 +2974,19 @@ def test_pv_calibration_partial_history(my_predbat):
 
 def test_pv_calibration_capped_data_clamp(my_predbat):
     """
-    Test that the capped_data clamp in pv_calibration correctly limits the
-    calibrated slot estimates when max historical power is lower than the forecast.
+    Test the per-slot cap in pv_calibration.
 
-    Setup: Historical power is 1 kW max; forecast is 3 kW max; max_kwh panel
-    limit is 2 kW.  After calibration the capped_data should be
-    min(max(1, 3), 2) * plan_interval / 60 per slot, and every pv_estimateCL
-    value written back into pv_forecast_data must be ≤ capped_data * divide_by.
+    Setup: observed peak is 1 kW, the raw forecast is 3 kW, and max_kwh (declared array
+    capacity) is 2 kW. The h0 forecast history is empty so calibration is disabled and the
+    adjusted values equal the raw forecast.
+
+    cap = min(ceiling, max(observed_slot, raw_slot))
+        = min(max(1.2 * 2.0, 1.0), max(1.0, 3.0))
+        = min(2.4, 3.0)
+        = 2.4 kW  ->  2.4 * plan_interval / 60 per slot
+
+    The 1.2 * max_kwh ceiling is what binds here. Note the cap is ABOVE the observed peak
+    of 1 kW: a dull week must not suppress a sunny day's forecast.
     """
     print("  - test_pv_calibration_capped_data_clamp")
     failed = False
@@ -3032,10 +3038,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
         max_kwh = 2.0  # panel peak output cap in kW
         adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
-        # capped_data = min(max(max_pv_power_hist, max_pv_power_forecast), max_kwh) * plan_interval / 60
-        # max_pv_power_hist ≈ 1 kW (per minute), max_pv_power_forecast ≈ 3/60 kW per minute
-        # The cap applied per-slot is min(max_kwh, max_hist_or_forecast) / 60 * plan_interval
-        expected_cap = max_kwh / 60 * plan_interval  # max_kwh limits here
+        expected_cap = 1.2 * max_kwh / 60 * plan_interval  # the 1.2 * max_kwh ceiling binds here
 
         for entry in adj_data:
             cl = entry.get("pv_estimateCL", None)
@@ -3044,6 +3047,190 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
                 failed = True
                 break
 
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5):
+    """Run pv_calibration with a controlled history.
+
+    Builds days_back past days that each generated hist_kw for one hour while the recorded
+    h0 forecast said hist_forecast_kw, then offers a raw forecast of raw_kw for today's
+    matching window. Today's raw forecast is deliberately allowed to differ from the
+    historical forecast level - that is what lets the adjusted value exceed the observed
+    peak and so exercise the cap.
+
+    Returns (test_api, adj_m, adj_data, plan_interval, gen_start, gen_end). The caller owns
+    the returned test_api and must call cleanup() on it.
+    """
+    gen_start = 600
+    gen_end = 660
+    test_api = create_test_solar_api()
+    solar = test_api.solar
+    base = test_api.mock_base
+    plan_interval = base.plan_interval_minutes
+    minutes_now = base.minutes_now
+
+    # Cumulative pv_today kWh keyed by minutes-ago, hist_kw for one hour each past day
+    hist = {}
+    for day_idx in range(days_back):
+        day = day_idx + 1
+        midnight_ago = day * 1440 + minutes_now
+        for step in range(0, 24 * 60, 5):
+            minute_ago = midnight_ago - step
+            if minute_ago < 0:
+                continue
+            if step < gen_start:
+                cumulative = 0.0
+            elif step < gen_end:
+                cumulative = hist_kw * (step - gen_start) / 60.0
+            else:
+                cumulative = hist_kw
+            hist[minute_ago] = cumulative
+
+    # Recorded h0 forecast history for the same windows
+    pv_forecast_hist = {}
+    for day_num in range(1, days_back + 1):
+        for m_of_day in range(gen_start, gen_end):
+            pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = float(hist_forecast_kw)
+
+    def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+        """Return the synthetic pv_today history."""
+        return dict(_hist) if key == "pv_today" else {}
+
+    base.minute_data_import_export = mock_minute_import_export
+    solar.get_history_wrapper = lambda entity_id, days, required=False: []
+
+    total_minutes = 4 * 24 * 60
+    pv_m = {m: (raw_kw / 60.0) if gen_start <= m < gen_end else 0.0 for m in range(total_minutes)}
+    pv_m10 = dict(pv_m)
+
+    midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+    pv_data = []
+    for slot in range(gen_start, gen_end, plan_interval):
+        ts = midnight + timedelta(minutes=slot)
+        pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": raw_kw * plan_interval / 60.0})
+
+    with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
+        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+
+    return test_api, adj_m, adj_data, plan_interval, gen_start, gen_end
+
+
+def _max_slot_cl(adj_data):
+    """Return the largest pv_estimateCL written back into the forecast entries."""
+    values = [e.get("pv_estimateCL", 0) for e in adj_data if e.get("pv_estimateCL", None) is not None]
+    return max(values) if values else 0
+
+
+def test_pv_calibration_cap_allows_raw_forecast_above_observed(my_predbat):
+    """
+    The cap must never clip below a slot's own pre-scaling forecast.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 4 kW.
+    ceiling = max(1.2 * 4.0, 2.0) = 4.8;  cap = min(4.8, max(2.0, 3.0)) = 3.0 kW.
+
+    The old formula gave min(4.0, 2.0) = 2.0 kW, clipping the raw forecast to two thirds
+    of what the forecast itself predicted - so a dull week suppressed the next sunny day.
+    """
+    print("  - test_pv_calibration_cap_allows_raw_forecast_above_observed")
+    failed = False
+
+    test_api, adj_m, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0)
+    try:
+        expected_cap = 3.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        if got > expected_cap * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds expected cap {}".format(got, expected_cap))
+            failed = True
+        # And it must not be clipped down to the old, lower observed-peak cap
+        old_cap = 2.0 / 60 * plan_interval
+        if got <= old_cap * 1.01:
+            print("ERROR: pv_estimateCL {} was clipped to the old observed-peak cap {} - the raw forecast floor is not being applied".format(got, old_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_ceiling_binds_at_headroom(my_predbat):
+    """
+    When the raw forecast exceeds the array's physical ceiling, the 1.2 * max_kwh headroom binds.
+
+    Observed peak 2 kW, raw forecast 10 kW, max_kwh 4 kW.
+    ceiling = max(1.2 * 4.0, 2.0) = 4.8;  cap = min(4.8, max(2.0, 10.0)) = 4.8 kW.
+    """
+    print("  - test_pv_calibration_cap_ceiling_binds_at_headroom")
+    failed = False
+
+    test_api, adj_m, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=10.0, hist_kw=2.0)
+    try:
+        expected_cap = 1.2 * 4.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        if got > expected_cap * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds the 1.2 * max_kwh ceiling {}".format(got, expected_cap))
+            failed = True
+        if got < expected_cap * 0.99:
+            print("ERROR: pv_estimateCL {} is below the ceiling {} - expected the ceiling to bind".format(got, expected_cap))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_never_clips_observed_generation(my_predbat):
+    """
+    An under-declared kwp must not cause the cap to clip below measured generation.
+
+    A user declares 2 kW but the array demonstrably produced 6 kW.
+    ceiling = max(1.2 * 2.0, 6.0) = 6.0;  cap = min(6.0, max(6.0, 1.0)) = 6.0 kW.
+
+    The old formula gave min(2.0, 6.0) = 2.0 kW - a third of what the meter recorded.
+    """
+    print("  - test_pv_calibration_cap_never_clips_observed_generation")
+    failed = False
+
+    test_api, adj_m, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=2.0, raw_kw=1.0, hist_kw=6.0)
+    try:
+        observed_slot = 6.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        # The calibrated value is scaled up towards the observed level and must not be
+        # clipped below it by the under-declared max_kwh.
+        old_cap = 2.0 / 60 * plan_interval
+        if got <= old_cap * 1.01:
+            print("ERROR: pv_estimateCL {} was clipped to the under-declared max_kwh cap {}".format(got, old_cap))
+            failed = True
+        if got > observed_slot * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds the observed peak {}".format(got, observed_slot))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_pv_calibration_cap_applies_without_declared_capacity(my_predbat):
+    """
+    Solcast and HA-sensor users have max_kwh = 9999, so the ceiling term is inert and the
+    cap reduces to max(observed_slot, raw_slot). It must still limit scaling above that.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 9999.
+    ceiling is effectively unbounded;  cap = max(2.0, 3.0) = 3.0 kW.
+    """
+    print("  - test_pv_calibration_cap_applies_without_declared_capacity")
+    failed = False
+
+    test_api, adj_m, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=9999, raw_kw=3.0, hist_kw=2.0)
+    try:
+        expected_cap = 3.0 / 60 * plan_interval
+        got = _max_slot_cl(adj_data)
+        if got > expected_cap * 1.01:
+            print("ERROR: pv_estimateCL {} exceeds expected cap {} with max_kwh 9999".format(got, expected_cap))
+            failed = True
     finally:
         test_api.cleanup()
 
@@ -4128,6 +4315,10 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_power_conversion(my_predbat)
     failed |= test_pv_calibration_sparse_recent_history_no_crash(my_predbat)
     failed |= test_pv_calibration_capped_data_clamp(my_predbat)
+    failed |= test_pv_calibration_cap_allows_raw_forecast_above_observed(my_predbat)
+    failed |= test_pv_calibration_cap_ceiling_binds_at_headroom(my_predbat)
+    failed |= test_pv_calibration_cap_never_clips_observed_generation(my_predbat)
+    failed |= test_pv_calibration_cap_applies_without_declared_capacity(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)

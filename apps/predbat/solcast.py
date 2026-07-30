@@ -1094,23 +1094,33 @@ class SolarAPI(ComponentBase):
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        # The after scaling cap will be applied, but remember that the input data is
-        # When we have a valid observed peak (from history or forecast history) cap to the lower of
-        # the inverter rating and that observed peak. With no valid history (e.g. all days excluded
-        # as "down days") the observed peak is 0 - fall back to the inverter rating alone, otherwise
-        # the cap would zero out the entire calibrated/10/90 forecast.
-        observed_cap = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
-        max_kwh_cap = max_kwh / 60 * self.plan_interval_minutes
-        if observed_cap > 0:
-            capped_data = min(max_kwh_cap, observed_cap)
-        else:
-            capped_data = max_kwh_cap
+        # Cap the calibrated forecast so calibration cannot scale it above what the array can
+        # physically produce. The ceiling is the declared array capacity (max_kwh, which is
+        # kwp * efficiency - NOT the inverter rating) plus 20% headroom, since cloud-edge
+        # enhancement and cool cells briefly push an array above its nameplate. The ceiling is
+        # never below the observed peak: measured generation is direct evidence and beats a
+        # declared figure, which is often understated (users enter the inverter size, or one
+        # string of two).
+        #
+        # Within that ceiling each slot is allowed up to the larger of the observed peak and
+        # that slot's own pre-scaling forecast, so the cap only ever limits scaling upwards and
+        # never clips the raw forecast itself - otherwise a dull week would suppress the first
+        # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
+        # can never fall below observed generation.
+        #
+        # max_pv_power_forecast is deliberately NOT used here: it is read back from the
+        # published pv_forecast_h0 sensor, whose state is this same capped output, so including
+        # it made the cap depend on its own previous result.
+        observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
+        ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
+            raw_value = 0
             for offset in range(0, self.plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
-            # Force timezone to UTC
-            pv_estimateCL[minute] = dp4(min(pv_value, capped_data))  # Clamp to max_kwh scaled to 30 minute slots
+                raw_value += pv_forecast_minute.get(minute + offset, 0)
+            capped_data = min(ceiling_slot, max(observed_slot, raw_value))
+            pv_estimateCL[minute] = dp4(min(pv_value, capped_data))
             pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
             pv_estimate90[minute] = dp4(min(pv_value * best_day_scaling, capped_data))
 
