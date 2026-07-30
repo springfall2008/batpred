@@ -360,6 +360,22 @@ class AnnualPage:
             text += '<div class="annual-banner">Predbat isn\'t configured yet — these are <strong>example values</strong>, edit them to match your home.</div>\n'
 
         text += '<form action="./annual_run" method="post" id="annualform">\n'
+        # The actions sit at the TOP of the form, directly under the tabs, so Run is
+        # reachable without scrolling past every fieldset - and so the progress bar that
+        # appears on pressing it is in view rather than below the fold. The progress area
+        # is emitted here, inside the form, purely so it sits immediately under the
+        # buttons that start it.
+        text += '<div class="annual-actions">\n'
+        text += '<button type="submit" id="annual-run-button" onclick="annualMarkStarted()">Run simulations</button>\n'
+        # A second submit button pointed at the plain POST /annual handler via
+        # formaction - the same fields, saved without starting a run.
+        text += '<button type="submit" formaction="./annual" formmethod="post">Save settings</button>\n'
+        # Discards the saved configuration and rebuilds it from the live instance, so it
+        # confirms first - there is no undo, and someone who has spent a while tuning a
+        # setup would not thank us for wiping it on a stray click.
+        text += '<button type="submit" formaction="./annual_reset" formmethod="post" class="annual-secondary" onclick="return confirm(\'Reset the configuration to your Predbat settings and the standard defaults? Anything you have changed here will be lost.\');">Reset to defaults</button>\n'
+        text += "</div>\n"
+        text += self.render_progress()
 
         text += "<fieldset><legend>Location</legend>\n"
         text += self._text_field("postcode", "Postcode", location.get("postcode", ""))
@@ -528,19 +544,6 @@ class AnnualPage:
         # results when the run finishes (see annualPoll). The poll runs in every open
         # tab, and a tab sitting on a half-filled form must not be reloaded out from
         # under whoever is typing in it.
-        # Wrapped so the buttons line up with the fieldset content above rather than
-        # hanging off to the left of it, and so they get some room beneath them - as bare
-        # children of the form they sat flush against the page edge and the next element.
-        text += '<div class="annual-actions">\n'
-        text += '<button type="submit" id="annual-run-button" onclick="annualMarkStarted()">Run simulations</button>\n'
-        # A second submit button pointed at the plain POST /annual handler via
-        # formaction - the same fields, saved without starting a run.
-        text += '<button type="submit" formaction="./annual" formmethod="post">Save settings</button>\n'
-        # Discards the saved configuration and rebuilds it from the live instance, so it
-        # confirms first - there is no undo, and someone who has spent a while tuning a
-        # setup would not thank us for wiping it on a stray click.
-        text += '<button type="submit" formaction="./annual_reset" formmethod="post" class="annual-secondary" onclick="return confirm(\'Reset the configuration to your Predbat settings and the standard defaults? Anything you have changed here will be lost.\');">Reset to defaults</button>\n'
-        text += "</div>\n"
         text += "</form>\n</div>\n"
         return text
 
@@ -799,7 +802,6 @@ class AnnualPage:
         text += self.render_css()
         text += self.render_nav("config")
         text += self.render_form(config, errors=error)
-        text += self.render_progress()
         text += self.render_script()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -1513,7 +1515,9 @@ annualLoadPlan();
    hang to the left of everything above them, and the buttons sit flush against the
    bottom of the page with nothing under them. */
 .annual-form-wrap > details, .annual-actions { padding: 0 0.75rem; }
-.annual-actions { margin-top: 1rem; }
+/* The actions sit directly under the tabs, so the margin is below them, separating them
+   from the fieldsets - not above, where it would push them away from the nav. */
+.annual-actions { margin-bottom: 1rem; }
 .annual-actions button { margin-right: 0.5rem; padding: 0.4rem 0.9rem; }
 /* PADDING, not a margin on the buttons: a bottom margin on the last child collapses
    straight out through the container and produces no visible gap at all, which is why

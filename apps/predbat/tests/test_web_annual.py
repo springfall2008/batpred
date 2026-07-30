@@ -518,6 +518,25 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: the buttons and progress bar sit above the fields, not below them")
+        # Run should be reachable without scrolling past every fieldset, and the progress
+        # bar it reveals has to be in view rather than below the fold.
+        top_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        above_fields = top_form.split("<fieldset>")[0]
+        for expected in ['class="annual-actions"', 'id="annual-progress"']:
+            if expected not in above_fields:
+                print("  ERROR: {} should appear before the first fieldset, not after it".format(expected))
+                failed = True
+        # Ordered buttons-then-progress: the bar belongs directly under the control that
+        # starts it.
+        if above_fields.index('class="annual-actions"') > above_fields.index('id="annual-progress"'):
+            print("  ERROR: the progress bar should sit under the buttons, not above them")
+            failed = True
+        # Still inside the form, or the submit buttons would no longer submit it.
+        if above_fields.index("<form") > above_fields.index('class="annual-actions"'):
+            print("  ERROR: the buttons must stay inside the form to submit it")
+            failed = True
+
         print("Test: every page carries the What If title")
         # In render_nav rather than the three handlers, so they cannot drift apart - a
         # title on two pages out of three is the failure this guards.
