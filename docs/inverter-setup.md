@@ -1694,14 +1694,13 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
         # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
         #
-        # charge_cut_off_state_of_charge is pinned once here too, mirroring the Freeze Charging
-        # side above - to current SoC plus a small margin, not hardcoded to 0. This isn't fixing a
-        # vendor-confirmed bug the way the discharge side is (Sigenergy's acknowledgement was
-        # specifically about the discharge cut-off), but 0 is always below current SoC by exactly
-        # the same structural shape as the confirmed bug, so if the underlying mechanism turns out
-        # to be symmetric, hardcoding 0 would silently force extra discharge/export on every single
-        # Freeze Discharging session. Pinning to current SoC costs nothing - it still fully blocks
-        # charging either way - so there's no reason to take the risk.
+        # charge_cut_off_state_of_charge is left as a simple hardcoded 0 here, unlike the
+        # discharge cut-off above. A mirrored bug (SoC above charge_cut_off forcing extra
+        # discharge/export) was considered - 0 is always below current SoC by the same
+        # structural shape as the confirmed discharge-side bug - but it was never
+        # vendor-confirmed, and 0 has been in real use across the wider community template
+        # for months without anyone reporting the kind of dramatic, easily-noticed symptom
+        # a real mirrored bug would produce. Kept simple rather than adding unproven complexity.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
@@ -1710,8 +1709,8 @@ Add the following automations to `automations.yaml` (or configure via the UI):
             - action: number.set_value
               target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
-              data_template:
-                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(0)) + 1, 100] | min }}"
+              data:
+                value: 0
             - action: number.set_value
               target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
@@ -1793,6 +1792,8 @@ e.g. 18kW roughly corresponds to an 80A supply.
 *Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even with **grid_import_limitation** set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
 
 The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (1 percentage point) below the pinned value exists purely to stop ordinary sensor-reading noise from being mistaken for a real deficit and triggering an unnecessary (if small) import to "correct" it - the underlying mechanism only ever corrects upward, so noise is not self-cancelling: a reading that dips low costs a real, if tiny, import; a reading that reads high costs nothing. Without the margin, that asymmetry nets out as pure unnecessary cost over a long session.
+
+The margin is clamped at 0 (`[value, 0] | max`) rather than allowed to go negative. This isn't just tidiness: `discharge_cut_off_state_of_charge` is an unsigned 16-bit Modbus register on the wire, and the integration's own write encoding has no guard against a negative value - it would silently wrap around into a huge, nonsensical raw value rather than being rejected. At very low SoC (below the margin) an unclamped template could produce exactly that.
 
 See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and the wider [Sigenergy setup discussion](https://github.com/springfall2008/batpred/issues/2077) for the full investigation, including a more advanced (currently experimental, untested) variant that ratchets the target up in response to confirmed solar surplus over each period rather than using a fixed one-off value.
 
