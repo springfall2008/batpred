@@ -5697,6 +5697,41 @@ def get_plan_css():
         z-index: 2000;
     }
 
+    .clickable-state-cell {
+        cursor: pointer;
+        position: relative;
+        transition: background-color 0.2s;
+        z-index: 1;
+    }
+
+    .clickable-state-cell:has(.dropdown-content[style*="display: block"]) {
+        z-index: 2000;
+    }
+
+    .clickable-state-cell:hover {
+        filter: brightness(0.9);
+    }
+
+    .clickable-state-cell:focus-visible {
+        outline: 2px solid #2196F3;
+        outline-offset: -2px;
+    }
+
+    body.dark-mode .clickable-state-cell:hover {
+        filter: brightness(1.2);
+    }
+
+    .reason-text {
+        font-size: 13px;
+        line-height: 1.4;
+        color: #333;
+        max-width: 260px;
+    }
+
+    body.dark-mode .reason-text {
+        color: #eee;
+    }
+
     .clickable-time-cell:hover {
         filter: brightness(0.9);
     }
@@ -6313,7 +6348,7 @@ def get_plan_css():
 
     // Close dropdowns when clicking outside
     document.addEventListener("click", function(event) {
-        if (!event.target.matches('.clickable-time-cell') && !event.target.closest('.dropdown-content')) {
+        if (!event.target.matches('.clickable-time-cell') && !event.target.matches('.clickable-state-cell') && !event.target.closest('.dropdown-content')) {
             closeDropdowns();
         }
     });
@@ -6755,17 +6790,45 @@ def get_plan_renderer_js():
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
         const colspanAttr = row.split ? '' : ' colspan=2';
-        const titleAttr = reasonTitleAttr(row, templates);
+        // reasonText is needed raw (not just as a title= attribute) for reasonCellAttrs() below,
+        // which also uses it for the tap/focus panel content - templates comes from the dataset
+        // being rendered (jsonData.reason_templates), not window.planData, so History/Yesterday
+        // views look up against their own template table rather than the plan view's.
+        const reasonText = renderReasonText(row.reasons, templates);
+        // Keep both title= (free instant hover for desktop/mouse) and the tap/focus panel below
+        // (for touch and keyboard, neither of which can trigger a hover state at all) - the two
+        // never fire together in practice, since a touch interaction can't trigger :hover/title
+        // in the first place, so there's nothing to reconcile between them.
+        const titleAttr = reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
 
-        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}"${titleAttr}>`;
+        function reasonCellAttrs(extraClass) {
+            if (!reasonText) {
+                return { clickAttrs: extraClass ? ` class="${extraClass}"` : '', panel: '' };
+            }
+            const dropdownId = `reasonDropdown_${dropdownCounter++}`;
+            const classAttr = `clickable-state-cell${extraClass ? ' ' + extraClass : ''}`;
+            // tabindex + onkeydown make this reachable and operable by keyboard, not just tap -
+            // a bare onclick on a <td> (the existing pattern used for time/rate cell dropdowns)
+            // is mouse/touch-only, since <td> isn't focusable by default.
+            const keydown = `if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleForceDropdown('${dropdownId}')}`;
+            return {
+                clickAttrs: ` onclick="toggleForceDropdown('${dropdownId}')" onkeydown="${keydown}" tabindex="0" role="button" aria-label="Why this slot" class="${classAttr}"`,
+                panel: `<div class="dropdown"><div id="${dropdownId}" class="dropdown-content"><div class="reason-text">${escapeAttr(reasonText)}</div></div></div>`,
+            };
+        }
+
+        const first = reasonCellAttrs(overrideClass);
+        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor}${first.clickAttrs}${titleAttr}>`;
         html += row.state_text || '';
+        html += first.panel;
         html += '</td>';
 
         // Second state cell if split - same combined reason text as the first half, since
         // row.reasons is a single list covering both halves of a split (e.g. charging and
         // freeze-exporting in the same slot), not two separately-attributed sentences.
         if (row.split && row.state2_text) {
-            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${titleAttr}>${row.state2_text}</td>`;
+            const second = reasonCellAttrs('');
+            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${second.clickAttrs}${titleAttr}>${row.state2_text}${second.panel}</td>`;
         }
 
         return html;
