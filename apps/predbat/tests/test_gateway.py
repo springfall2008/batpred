@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytz
 import gateway_status_pb2 as pb
+from gateway import _STARTUP_WAIT_TICKS
 
 import importlib.util
 
@@ -2995,6 +2996,9 @@ class TestGatewayUnitControlBinding:
         gw.args = {}
         gw._args = {}
         gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw._configured_ev_chargers = frozenset()
 
         def capture_set_arg(key, value):
             gw._args[key] = value
@@ -3198,6 +3202,56 @@ class TestGatewayUnitControlBinding:
         gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"]).SerializeToString())
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"][0] == "select.predbat_gateway_47g077_charge_slot1_start"
+
+    def test_api_started_only_set_once_auto_config_has_completed(self):
+        """api_started must not become visible before automatic_config has wired up the args.
+
+        ComponentManager.start() polls api_started from the *main* thread while the MQTT
+        listener runs in the component's own thread, so setting the flag on receipt of the
+        first telemetry frame — before automatic_config() — lets PredBat startup continue
+        with num_inverters / soc_percent unset.
+        """
+        gw = self._make_handler_gateway()
+        seen = {}
+        real_config = gw.automatic_config
+
+        def watched_config():
+            seen["api_started_during_config"] = gw.api_started
+            return real_config()
+
+        gw.automatic_config = watched_config
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+
+        assert seen["api_started_during_config"] is False, "api_started was set before auto-config ran"
+        assert gw._auto_configured
+        assert gw.api_started is True
+
+    def test_api_started_stays_false_when_auto_config_aborts(self):
+        """A serial filter that matches nothing aborts auto-config, so the API is not started.
+
+        The run() startup path still releases the component after its timeout, but the
+        telemetry path must not declare the component started with no inverter args set.
+        """
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["CH0000X000"]
+
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+
+    def test_api_started_set_on_later_frame_that_needs_no_reconfigure(self):
+        """Once configured, a steady-state frame that triggers no re-config still starts the API."""
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["CH0000X000"]
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw.api_started is False
+
+        # Filter corrected (as a restart would do) — the next frame configures and starts.
+        gw.gateway_inverter_serial = []
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw._auto_configured
+        assert gw.api_started is True
 
     # ------------------------------------------------------------------
     # EMS and AC3 topologies
@@ -3589,13 +3643,14 @@ class TestRunStartupWait:
         return asyncio.run(coro)
 
     def test_returns_true_without_sleeping_when_flag_already_set(self):
-        """When _first_connection_attempted is pre-set, run() returns True without sleeping."""
+        """When both startup conditions are pre-set, run() returns True without sleeping."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch, AsyncMock
 
         gw = self._make_gateway()
         gw._first_connection_attempted = True
+        gw._auto_configured = True
 
         async def run_test():
             async def fake_mqtt_loop():
@@ -3611,7 +3666,7 @@ class TestRunStartupWait:
         assert sleep_count == 0
 
     def test_returns_true_after_flag_set_on_first_sleep(self):
-        """run() exits the wait loop as soon as the flag is set, after a single sleep."""
+        """run() exits the wait loop as soon as the flags are set, after a single sleep."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch
@@ -3622,7 +3677,9 @@ class TestRunStartupWait:
         async def run_test():
             async def fake_sleep(t):
                 sleep_count[0] += 1
-                gw._first_connection_attempted = True  # Simulates MQTT loop completing first attempt
+                # Simulates the MQTT loop connecting and the first telemetry arriving
+                gw._first_connection_attempted = True
+                gw._auto_configured = True
 
             async def fake_mqtt_loop():
                 pass
@@ -3659,7 +3716,9 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 120  # 60 * 2 iterations of 0.5s each = 60s total
+        # The connection and auto-config waits share one budget, so a dead broker stalls
+        # startup for the budget once, not once per wait.
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS
         warn_logged = any("Warn" in str(c) and "not yet complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when the first connection attempt times out"
 
@@ -3716,32 +3775,73 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 60 * 2  # 60 * 2 iterations of 0.5s each = 60s total
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS  # Whole startup budget consumed
         warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when auto-config times out"
 
-    def test_auto_config_wait_skipped_when_not_connected(self):
-        """When connection failed, auto-config wait is skipped entirely."""
+    def test_auto_config_wait_still_runs_when_first_attempt_failed(self):
+        """A failed *first* connection attempt must not skip the auto-config wait.
+
+        The MQTT loop retries with backoff in the background, so a transient broker
+        failure at startup is usually followed by a connection and telemetry within the
+        60s window. Returning immediately declares the component started with no
+        inverter args set.
+        """
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import patch
 
         gw = self._make_gateway()
         gw._first_connection_attempted = True
-        # _mqtt_connected stays False (connection failed)
+        # _mqtt_connected stays False (first attempt failed)
+        sleep_count = [0]
 
         async def run_test():
+            async def fake_sleep(t):
+                sleep_count[0] += 1
+                # Reconnect succeeds and the first telemetry arrives.
+                gw._mqtt_connected = True
+                gw._auto_configured = True
+
             async def fake_mqtt_loop():
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch("asyncio.sleep", side_effect=fake_sleep):
                 result = await gw.run(0, True)
-            return result, mock_sleep.call_count
+            return result
 
-        result, sleep_count = self._run(run_test())
+        result = self._run(run_test())
         assert result is True
-        assert sleep_count == 0  # No sleeps: connection-wait breaks immediately, auto-config skipped
+        assert sleep_count[0] == 1  # One sleep in the auto-config wait loop
+
+    def test_auto_config_wait_times_out_when_broker_never_reachable(self):
+        """A broker that never comes up still releases startup after the 60s cap."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+        sleep_count = [0]
+
+        async def run_test():
+            async def fast_sleep(t):
+                sleep_count[0] += 1  # Never connects, never auto-configures
+
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS  # Whole startup budget consumed
+        warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
+        assert warn_logged, "Expected a Warn log when auto-config times out"
 
 
 class TestSetChargeSlotPayload:
@@ -4353,6 +4453,7 @@ def run_gateway_tests(my_predbat=None):
         TestDebugLogging,
         TestAutomaticConfig,
         TestBoundEntitiesAreWritten,
+        TestGatewayUnitControlBinding,
         TestEvTelemetry,
         TestEvAutoConfig,
         TestEvInitialize,
