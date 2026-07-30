@@ -518,6 +518,41 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: arrays can be added and removed, keeping what was already typed")
+        array_page = make_page(my_predbat)
+        array_base = valid_postdata()
+        added = asyncio.run(array_page.html_annual_array(FakeRequest(dict(array_base, array_op="add")))).text
+        if added.count("Remove array") != 2:
+            print("  ERROR: adding should give two arrays, got {}".format(added.count("Remove array")))
+            failed = True
+
+        two_arrays = dict(array_base)
+        two_arrays.update({"solar_kwp_1": "3.0", "solar_declination_1": "35", "solar_azimuth_1": "90", "solar_mode_1": "kwp", "solar_efficiency_1": "0.95"})
+        removed = asyncio.run(array_page.html_annual_array(FakeRequest(dict(two_arrays, array_op="remove:0")))).text
+        if removed.count("Remove array") != 1:
+            print("  ERROR: removing should leave one array, got {}".format(removed.count("Remove array")))
+            failed = True
+        # The RIGHT one goes, and the survivor keeps its own values - an off-by-one here
+        # would silently delete the wrong array and look like it worked.
+        if 'value="3.0"' not in removed or 'value="5.6"' in removed:
+            print("  ERROR: removing array 1 should drop 5.6 and keep 3.0, got neither")
+            failed = True
+
+        print("Test: every array can be removed, which is a valid battery-only run")
+        emptied = asyncio.run(array_page.html_annual_array(FakeRequest(dict(array_base, array_op="remove:0")))).text
+        if "Remove array" in emptied or "model the battery on its own" not in emptied:
+            print("  ERROR: removing the last array should leave none and say so")
+            failed = True
+
+        print("Test: a malformed array operation is ignored rather than raising")
+        # The value comes off a form post, so it is not to be trusted.
+        for bad_op in ["remove:abc", "remove:99", "remove:-1", "nonsense", ""]:
+            try:
+                asyncio.run(array_page.html_annual_array(FakeRequest(dict(array_base, array_op=bad_op))))
+            except Exception as error:
+                print("  ERROR: array_op={!r} raised {}".format(bad_op, type(error).__name__))
+                failed = True
+
         print("Test: the buttons and progress bar sit above the fields, not below them")
         # Run should be reachable without scrolling past every fieldset, and the progress
         # bar it reveals has to be in view rather than below the fold.

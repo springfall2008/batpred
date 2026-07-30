@@ -345,7 +345,13 @@ class AnnualPage:
         entered it - losing their input on a validation failure would be worse
         than the failure.
         """
-        solar = config.get("solar") or [{}]
+        # An ABSENT solar key means "not configured yet", so offer one blank array to fill
+        # in. An explicitly EMPTY list means the user removed them all, which is a valid
+        # battery-only run - collapsing the two with `or [{}]` made it impossible to get
+        # to zero arrays through the form.
+        solar = config.get("solar")
+        if solar is None:
+            solar = [{}]
         battery = config.get("battery") or {}
         load = config.get("load") or {}
         tariff = config.get("tariff") or {}
@@ -400,8 +406,17 @@ class AnnualPage:
             text += "</div>\n"
             text += self._number_field("solar_declination_{}".format(index), "Pitch", array.get("declination", 35), suffix="degrees")
             text += self._number_field("solar_azimuth_{}".format(index), "Azimuth (180 = south)", array.get("azimuth", 180), suffix="degrees")
+            # Add and remove go through the server rather than cloning markup in JS: an
+            # array block is a mode select, two toggled rows and a matching efficiency
+            # field over in Advanced, and keeping a JS clone in step with all of that
+            # would rot. Submitting re-renders from config_from_post, so everything
+            # already typed survives and the arrays renumber themselves.
+            text += '<button type="submit" formaction="./annual_array" formmethod="post" name="array_op" value="remove:{}" class="annual-secondary">Remove array {}</button>\n'.format(index, index + 1)
             text += "</div>\n"
+        if not solar:
+            text += '<p class="annual-note">No solar arrays — the run will model the battery on its own.</p>\n'
         text += '<p class="annual-note" id="annual-solar-total"></p>\n'
+        text += '<button type="submit" formaction="./annual_array" formmethod="post" name="array_op" value="add" class="annual-secondary">Add another array</button>\n'
         text += "</fieldset>\n"
 
         text += "<fieldset><legend>Battery</legend>\n"
@@ -879,6 +894,40 @@ class AnnualPage:
             settings = resolve_costs(None)
         costs = build_costs(number("total_kwp"), number("battery_kwh"), settings)
         return web.json_response(costs)
+
+    async def html_annual_array(self, request):
+        """Add or remove a solar array and re-render the form.
+
+        Goes through the server rather than cloning markup in JavaScript: an array block
+        is a mode select, two toggled rows and a matching efficiency field in Advanced,
+        and a JS clone would have to be kept in step with all of it. Rebuilding from
+        ``config_from_post`` keeps everything already typed and renumbers the arrays for
+        free.
+
+        Deliberately does NOT save. Adding a row is a half-finished edit like any other -
+        the new array has no size yet - and writing it to disk would persist a
+        configuration that cannot be run. Save settings and Run simulations are both
+        right there.
+        """
+        postdata = await request.post()
+        config = self.config_from_post(postdata)
+        operation = str(postdata.get("array_op", ""))
+        arrays = list(config.get("solar") or [])
+
+        if operation == "add":
+            # Orientation defaults only - size is left blank so it is obvious which array
+            # still needs filling in, rather than quietly running at a made-up 5 kWp.
+            arrays.append({"declination": 35, "azimuth": 180, "efficiency": 0.95})
+        elif operation.startswith("remove:"):
+            try:
+                index = int(operation.split(":", 1)[1])
+            except (TypeError, ValueError):
+                index = -1
+            if 0 <= index < len(arrays):
+                arrays.pop(index)
+
+        config["solar"] = arrays
+        return await self.html_annual(request, config=config)
 
     async def html_annual_reset(self, request):
         """Discard the saved configuration and rebuild it from the live instance.

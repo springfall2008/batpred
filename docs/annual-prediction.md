@@ -212,6 +212,13 @@ home"). When your own setup supplies a battery or a solar array, the banner is a
 the fields it can read are the real ones; any remaining gaps still use the same example
 values, so the form is always complete rather than partially blank.
 
+**Add another array** and **Remove array** under **Solar** change how many roof aspects
+are modelled, for a house with panels facing more than one way. Both re-render the form
+with everything you have already typed still in place, and the arrays renumber
+themselves. Removing every array is allowed and gives a battery-only run — the form says
+so rather than leaving you wondering whether it took. Neither button saves: like any
+other edit, the change is yours until you press **Save settings** or **Run simulations**.
+
 The **Tariff** dropdown lists a curated set of built-in Octopus products (Agile, Cosy,
 Flux, Intelligent Go and so on) plus, if your `apps.yaml` has a `compare_list`, your own
 entries from it — a user entry with the same id as a built-in replaces it rather than
