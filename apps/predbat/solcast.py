@@ -1132,9 +1132,16 @@ class SolarAPI(ComponentBase):
                 raw_exceeds_ceiling_slots += 1
                 raw_exceeds_ceiling_peak = max(raw_exceeds_ceiling_peak, raw_value)
             capped_data = min(ceiling_slot, max(observed_slot, raw_value))
-            pv_estimateCL[minute] = dp4(min(pv_value, capped_data))
-            pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
-            pv_estimate90[minute] = dp4(min(pv_value * best_day_scaling, capped_data))
+            # Derive all three published series from the capped P50 so they agree with the
+            # planner series built below from the (also capped) pv_forecast_minute_adjusted.
+            # pv_estimate10 needs no min(..., capped_data): worst_day_scaling is clamped to at
+            # most 1.0 above, so capped_p50 * worst_day_scaling <= capped_p50 <= capped_data
+            # always holds. pv_estimate90 keeps the clamp because best_day_scaling can exceed
+            # 1.0, so the optimistic case can genuinely exceed the physical ceiling.
+            capped_p50 = min(pv_value, capped_data)
+            pv_estimateCL[minute] = dp4(capped_p50)
+            pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
+            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, capped_data))
 
             # Apply the same cap to the per-minute data the planner consumes. Scale rather than
             # clamp per minute: capped_data is kWh per plan interval, not per minute.

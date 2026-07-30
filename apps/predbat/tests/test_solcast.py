@@ -3333,6 +3333,58 @@ def test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50(my_predbat):
     return failed
 
 
+def test_pv_calibration_cap_published_pv10_matches_planner(my_predbat):
+    """
+    The published pv_estimate10 sensor value must agree with the planner's own P10 series.
+
+    Regression test: pv_estimate10 was computed from the pre-cap P50 slot total (pv_value)
+    with its own min(..., capped_data) clamp, while the planner's pv_forecast_minute10 is
+    built later from the already-capped/scaled-down pv_forecast_minute_adjusted. In any slot
+    where the cap binds and worst_day_scaling is not exactly 1.0 the two diverge - worked
+    example from the fix: pv_value=10, capped_data=3, worst_day_scaling=0.7 gave a published
+    value of min(10*0.7, 3) = 3.0 vs a planner value of 3*0.7 = 2.1.
+
+    _cap_scenario gives every historical day identical hist_kw/hist_forecast_kw, so the
+    per-day actual/forecast ratio is the same for every day and worst_day_scaling always
+    collapses to exactly 1.0 (either directly, since worst == average, or via the final
+    min(..., 1.0) clamp when the ratio is high enough to saturate average_day_scaling at
+    2.0) - confirmed empirically, and at exactly 1.0 the bug is invisible because
+    min(pv_value, capped_data) * 1.0 == min(pv_value, capped_data). To get a worst_day_scaling
+    that actually differs from 1.0 with this fixture, use days_back=1: hist_days < 3 disables
+    calibration entirely (slot_adjustment and total_adjustment forced to 1.0, so pv_value
+    equals the raw forecast) and worst_day_scaling falls back to the fixed 0.7 used when
+    calibration is disabled. Pairing that with a raw forecast that exceeds the array ceiling
+    (raw_kw=10.0, max_kwh=4.0, as in test_pv_calibration_cap_ceiling_binds_at_headroom) still
+    makes the cap bind, so both conditions needed to expose the divergence are present.
+    """
+    print("  - test_pv_calibration_cap_published_pv10_matches_planner")
+    failed = False
+
+    test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=10.0, hist_kw=2.0, days_back=1)
+    try:
+        midnight = datetime(2025, 6, 15, 0, 0, 0, tzinfo=pytz.utc)
+        checked_any = False
+        for slot in range(gen_start, gen_end, plan_interval):
+            ts = midnight + timedelta(minutes=slot)
+            period_start = ts.strftime("%Y-%m-%dT%H:%M:%S+0000")
+            entry = next((e for e in adj_data if e.get("period_start") == period_start), None)
+            if entry is None or entry.get("pv_estimate10") is None:
+                continue
+            published_p10 = entry["pv_estimate10"]
+            planner_p10 = sum(adj_m10.get(slot + offset, 0) for offset in range(plan_interval))
+            checked_any = True
+            if abs(published_p10 - planner_p10) > 0.01:
+                print("ERROR: published pv_estimate10 {} at slot {} does not match planner pv_forecast_minute10 total {}".format(published_p10, slot, planner_p10))
+                failed = True
+        if not checked_any:
+            print("ERROR: no pv_estimate10 entries were found to compare - test scenario did not exercise the cap")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_no_history_not_zeroed(my_predbat):
     """
     Regression test: when there is no valid historical data (e.g. all days excluded as
@@ -4534,6 +4586,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_cap_applies_without_declared_capacity(my_predbat)
     failed |= test_pv_calibration_cap_applied_to_planner_data(my_predbat)
     failed |= test_pv_calibration_cap_pv10_never_exceeds_cap_or_p50(my_predbat)
+    failed |= test_pv_calibration_cap_published_pv10_matches_planner(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_no_history_ceiling_clips_raw(my_predbat)
     failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)
