@@ -1581,6 +1581,13 @@ annualLoadPlan();
 .annual-field.annual-field-wide label { display: block; min-width: 0; margin-bottom: 0.15rem; }
 .annual-field-wide input[type="text"] { width: 100%; max-width: 60rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9rem; }
 .annual-subgroup { margin-left: 1.5rem; }
+/* Each array is its own block. Without this the Remove button of one array sat directly
+   against the "Array N" heading of the next, reading as though it belonged to the array
+   below it rather than the one above. */
+.annual-array { padding-bottom: 0.75rem; margin-bottom: 1rem; border-bottom: 1px dashed var(--md-border, #cbd5e1); }
+.annual-array:last-of-type { border-bottom: 0; margin-bottom: 0.5rem; }
+.annual-array > strong { display: block; margin-bottom: 0.5rem; }
+.annual-array button { margin-top: 0.75rem; }
 .annual-note { font-size: 0.85rem; opacity: 0.8; }
 /* Predbat's global stylesheet sets `p { white-space: nowrap }` (web_helper.py), which
    suits the short single-line paragraphs elsewhere but runs every sentence of prose on
