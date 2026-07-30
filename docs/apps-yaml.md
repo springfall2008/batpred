@@ -1598,6 +1598,31 @@ When the fallback is active, Predbat derives the Open-Meteo request from the sam
   forecast_solar_open_meteo_backup: true
 ```
 
+### Using Open-Meteo as the primary source
+
+Setting `forecast_solar_open_meteo_first: true` reverses the order: Predbat fetches from Open-Meteo
+first and only calls Forecast.solar if Open-Meteo returns no data. Your existing `forecast_solar`
+entries are reused as-is, so no other configuration changes are needed. If you also have an
+`open_meteo_forecast` section, that is used instead, which lets you apply Open-Meteo-specific
+options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+  forecast_solar_open_meteo_first: true
+```
+
+While Open-Meteo is succeeding, Forecast.solar is not called at all, so no Forecast.solar API quota
+is consumed.
+
+Note that PV calibration compares the last seven days of recorded forecasts against actual
+generation. After changing the source, that history still holds values from the previous source, so
+the calibration scaling factor takes up to seven days to settle. Predbat logs a warning when the
+source changes. Do not judge the accuracy of the new source until the settling period has passed.
+
 ## Open-Meteo Solar Forecast
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.

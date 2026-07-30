@@ -154,6 +154,11 @@ The efficiency relates to the aging of your panels, 0.95 is for newer systems bu
 The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
 The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Forecast.solar convention (0=South, -90=East, 90=West, ±180=North) rather than the default Predbat convention (0=North). When True, Predbat passes the value straight to the API without conversion.
 
+Setting `forecast_solar_open_meteo_first: true` makes Predbat use Open-Meteo as the primary forecast
+source and fall back to Forecast.solar only if Open-Meteo returns no data. Your existing
+`forecast_solar` settings are reused unchanged. See the Open-Meteo section in
+[apps-yaml.md](apps-yaml.md) for details.
+
 ```yaml
   forecast_solar:
     - postcode: SW1A 2AB
