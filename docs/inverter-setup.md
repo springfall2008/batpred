@@ -1654,6 +1654,13 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
         #  power above the house load, the excess solar will be used to charge the battery
         # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
+        #
+        # discharge_cut_off_state_of_charge is pinned to the *current* battery SoC here, not a
+        # hardcoded value. Sigenergy has confirmed this is needed due to a firmware bug: if this is
+        # set above current SoC, the inverter actively imports from grid to reach it - even with
+        # grid_import_limitation at 0 below. See the note after this automation, and the
+        # "Freeze Charging discharge cut-off tracking" automation further down, which keeps this
+        # pinned continuously (not just on mode change) for long Freeze Charging sessions.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
@@ -1667,8 +1674,8 @@ Add the following automations to `automations.yaml` (or configure via the UI):
             - action: number.set_value
               target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
-              data:
-                value: 100
+              data_template:
+                value: "{{ states('sensor.sigen_plant_battery_state_of_charge') | float(100) }}"
             - action: number.set_value
               target:
                 entity_id: number.sigen_plant_grid_import_limitation
@@ -1681,6 +1688,10 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
         #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
         # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
+        #
+        # charge_cut_off_state_of_charge is left hardcoded at 0 here, unlike the discharge cut-off
+        # above - 0 is always at or below current SoC (SoC can't be negative), so it can't trigger
+        # the same "target above current value" firmware bug regardless of how SoC drifts.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
@@ -1728,20 +1739,20 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               data:
                 value: 100
 
-  - id: automation_sigen_ess_max_charging_limit_input_number_action
-    alias: Predbat max charging limit action
-    description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
-    triggers:
-    - trigger: state
-      entity_id: input_number.charge_rate
-    actions:
-    - action: number.set_value
-      target:
-        entity_id: number.sigen_plant_ess_max_charging_limit
-      data:
-        value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
-          states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
-    mode: single
+- id: automation_sigen_ess_max_charging_limit_input_number_action
+  alias: Predbat max charging limit action
+  description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
+  triggers:
+  - trigger: state
+    entity_id: input_number.charge_rate
+  actions:
+  - action: number.set_value
+    target:
+      entity_id: number.sigen_plant_ess_max_charging_limit
+    data:
+      value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
+        states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
+  mode: single
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
   alias: Predbat max discharging limit action
@@ -1757,6 +1768,35 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       value: '{{ [(states(''input_number.discharge_rate'') | float / 1000) | round(2),
         states(''sensor.sigen_inverter_ess_rated_discharging_power'') | float] | min}}'
   mode: single
+
+- id: predbat_freeze_charging_discharge_cutoff_tracking
+  alias: Predbat Freeze Charging discharge cut-off tracking
+  description: >
+    The main automation above only re-pins discharge_cut_off_state_of_charge to current SoC when
+    predbat_requested_mode *changes*. If SoC drifts down during a long Freeze Charging session
+    (house load exceeding solar - the situation Freeze Charging exists for), the pin goes stale
+    and reopens the gap that causes the inverter to import from grid to close it (see the firmware
+    bug note below). grid_import_limitation is not a reliable backstop against this either. This
+    automation re-pins continuously as SoC drifts, so the gap can't reopen.
+  triggers:
+    - trigger: state
+      entity_id: sensor.sigen_plant_battery_state_of_charge
+  conditions:
+    - condition: state
+      entity_id: input_select.predbat_requested_mode
+      state: "Freeze Charging"
+    - condition: template
+      value_template: >
+        {{ trigger.to_state.state not in ['unknown', 'unavailable'] and
+           (states('number.sigen_plant_ess_discharge_cut_off_state_of_charge') | float(-1))
+           != (trigger.to_state.state | float(-2)) }}
+  actions:
+    - action: number.set_value
+      target:
+        entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+      data:
+        value: "{{ trigger.to_state.state | float(100) }}"
+  mode: single
 ```
 
 *Note:* Some Sigenergy Predbat users have reported that their Sigenergy modbus integration has created some of the entities that Predbat requires with different names
@@ -1768,6 +1808,8 @@ so you may need to adapt the above automations and `apps.yaml` (or rename your e
 
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
+
+*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even with **grid_import_limitation** set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned to current SoC at all times during Freeze Charging, as the automations above do. See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and the wider [Sigenergy setup discussion](https://github.com/springfall2008/batpred/issues/2077) for the full investigation.
 
 ## Sigenergy Cloud
 
