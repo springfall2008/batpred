@@ -55,6 +55,7 @@ class SolarAPI(ComponentBase):
         forecast_solar,
         forecast_solar_max_age,
         forecast_solar_open_meteo_backup,
+        forecast_solar_open_meteo_first,
         pv_forecast_today,
         pv_forecast_tomorrow,
         pv_forecast_d3,
@@ -71,6 +72,7 @@ class SolarAPI(ComponentBase):
         self.forecast_solar = forecast_solar
         self.forecast_solar_max_age = forecast_solar_max_age
         self.forecast_solar_open_meteo_backup = forecast_solar_open_meteo_backup
+        self.forecast_solar_open_meteo_first = forecast_solar_open_meteo_first
         self.pv_forecast_today = pv_forecast_today
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
@@ -1201,6 +1203,20 @@ class SolarAPI(ComponentBase):
             app="solar",
         )
 
+    async def log_source_change(self, source):
+        """Warn when the configured solar forecast source changes so the PV calibration settling period is visible."""
+        if not source:
+            return
+        if not self.storage:
+            return
+        stored = await self.storage.load("solcast", "active_forecast_source")
+        previous = stored.get("source") if isinstance(stored, dict) else None
+        if previous == source:
+            return
+        if previous:
+            self.log("Warn: SolarAPI: Configured solar forecast source changed from {} to {}, PV calibration will settle over the next 7 days".format(previous, source))
+        await self.storage.save("solcast", "active_forecast_source", {"source": source}, format="json", expiry=None)
+
     async def fetch_pv_forecast(self):
         """
         Fetch the PV Forecast data from Solcast
@@ -1212,14 +1228,26 @@ class SolarAPI(ComponentBase):
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
         create_pv10 = False
+        configured_source = None
         max_kwh = 9999
         using_ha_data = False
 
-        if self.forecast_solar:
+        if self.forecast_solar and self.forecast_solar_open_meteo_first:
+            self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API (primary, Forecast Solar fallback)")
+            primary_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=primary_configs)
+            divide_by = 30.0
+            create_pv10 = True
+            configured_source = "open_meteo"
+            if not pv_forecast_data:
+                self.log("Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar")
+                pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+        elif self.forecast_solar:
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
+            configured_source = "forecast_solar"
             if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
                 self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
                 backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
@@ -1229,13 +1257,16 @@ class SolarAPI(ComponentBase):
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
+            configured_source = "open_meteo"
         elif self.solcast_host and self.solcast_api_key:
             self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
+            configured_source = "solcast"
         else:
             self.log("SolarAPI: Using Solcast integration from inside HA for solar forecast")
             using_ha_data = True
+            configured_source = "ha_sensors"
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -1265,6 +1296,8 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
+            await self.log_source_change(configured_source)
+
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
             # by examining the time difference between consecutive entries.
             # This ensures 15-minute resolution data is handled correctly.
