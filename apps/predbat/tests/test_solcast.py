@@ -19,6 +19,7 @@ import pytz
 import aiohttp
 
 from solcast import SolarAPI
+from solar_model import convert_azimuth
 from storage import StorageLocalFiles
 from tests.test_infra import run_async, create_aiohttp_mock_response
 
@@ -284,9 +285,9 @@ def test_convert_azimuth(my_predbat):
         ]
 
         for solcast_az, expected in test_cases:
-            result = test_api.solar.convert_azimuth(solcast_az)
+            result = convert_azimuth(solcast_az)
             if result != expected:
-                print(f"ERROR: convert_azimuth({solcast_az}) = {result}, expected {expected}")
+                print("ERROR: convert_azimuth({}) = {}, expected {}".format(solcast_az, result, expected))
                 failed = True
     finally:
         test_api.cleanup()

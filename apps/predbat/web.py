@@ -74,6 +74,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from web_annual import AnnualPage
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
@@ -304,6 +305,8 @@ class WebInterface(ComponentBase):
         # Plugin registration system
         self.registered_endpoints = []
 
+        self.annual_page = AnnualPage(self)
+
     def register_endpoint(self, path, handler, method="GET"):
         """
         Register a new endpoint with the web interface
@@ -406,6 +409,26 @@ class WebInterface(ComponentBase):
                 results[day_str] = dp2(total / count)
         return results
 
+    def _register_annual_routes(self, app):
+        """Register the Annual tab's routes on ``app``.
+
+        Split out from start() so a test can register these onto a bare aiohttp
+        Application and assert they exist, without booting a real TCP listener -
+        the constructor for that Application performs no network I/O of its own.
+        """
+        app.router.add_get("/annual", self.annual_page.html_annual)
+        app.router.add_post("/annual", self.annual_page.html_annual_post)
+        app.router.add_post("/annual_reset", self.annual_page.html_annual_reset)
+        app.router.add_post("/annual_array", self.annual_page.html_annual_array)
+        app.router.add_get("/annual_cost_preview", self.annual_page.html_annual_cost_preview)
+        app.router.add_post("/annual_run", self.annual_page.html_annual_run)
+        app.router.add_get("/annual_status", self.annual_page.html_annual_status)
+        app.router.add_post("/annual_cancel", self.annual_page.html_annual_cancel)
+        app.router.add_get("/annual_download", self.annual_page.html_annual_download)
+        app.router.add_get("/annual_plan", self.annual_page.html_annual_plan)
+        app.router.add_get("/annual_view", self.annual_page.html_annual_view)
+        app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -433,6 +456,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        self._register_annual_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
@@ -484,6 +508,12 @@ class WebInterface(ComponentBase):
             if count % 60 == 0:
                 self.update_success_timestamp()
             count += 1
+
+        # Otherwise a restart mid-run leaves the annual engine's child process
+        # orphaned - burning a CPU core for up to several minutes with nothing left
+        # tracking it - while the fresh AnnualPage created on the next start() reports
+        # idle and would happily let a second run be started alongside it.
+        await self.annual_page.job.cancel()
         await runner.cleanup()
 
         self.api_started = False
