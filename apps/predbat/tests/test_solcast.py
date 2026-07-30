@@ -3047,6 +3047,15 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
                 failed = True
                 break
 
+        # The raw forecast (3 kW) exceeds the observed peak (1 kW), so the new cap must
+        # land on the 1.2 * max_kwh ceiling (2.4 kW), not on the old, lower observed-peak
+        # cap of 1 kW - a test that only checks the upper bound would pass under both the
+        # old and new formulas and so would not pin this fix.
+        got_max = _max_slot_cl(adj_data)
+        if got_max < expected_cap * 0.99:
+            print("ERROR: pv_estimateCL {} is below the expected cap {} - the raw forecast floor is not being applied".format(got_max, expected_cap))
+            failed = True
+
     finally:
         test_api.cleanup()
 
@@ -3230,6 +3239,9 @@ def test_pv_calibration_cap_applies_without_declared_capacity(my_predbat):
         got = _max_slot_cl(adj_data)
         if got > expected_cap * 1.01:
             print("ERROR: pv_estimateCL {} exceeds expected cap {} with max_kwh 9999".format(got, expected_cap))
+            failed = True
+        if got < expected_cap * 0.99:
+            print("ERROR: pv_estimateCL {} is below the expected cap {} - the raw forecast floor is not being applied with max_kwh 9999".format(got, expected_cap))
             failed = True
     finally:
         test_api.cleanup()
