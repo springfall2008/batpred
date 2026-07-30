@@ -39,7 +39,7 @@ If the **switch.predbat_set_read_only** is set to On then this prevents Predbat 
 Predbat will continue making and updating its prediction plan every 10 minutes (by default), but no inverter changes will be made.
 This is useful if you want to override what Predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works before turning it on 'in anger'.
 
-**Note:** _Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
+**Note:** _Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting. This reset write happens even when you are turning read-only **on** - it's a deliberate one-off action to hand control back to the inverter's own native scheduling, not a violation of read-only mode. Depending on your inverter, actually reverting to native behaviour after this write can take some time, not necessarily immediately. If you've set inverter values manually (e.g. directly via your inverter's own app) that you want left alone, be aware this reset will overwrite them the moment you enable read-only._
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/43faa962-6b8a-495a-88f8-f762aa1d55b8)
 
