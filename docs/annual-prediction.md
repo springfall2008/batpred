@@ -1,4 +1,4 @@
-# Annual prediction
+# What If Annual Prediction
 
 The annual prediction tool projects a year of household electricity costs using the
 real Predbat planning engine. For each month it reports four scenarios:
@@ -173,8 +173,8 @@ therefore Predbat's advantage — is understated.
 
 ## Using the web interface
 
-The Predbat web UI has an **Annual** tab alongside Dash, Plan, Entities, Charts and
-Compare. Unlike the rest of the UI it needs neither Home Assistant nor a configured
+The Predbat web UI has a **WhatIf** tab alongside Dash, Plan, Entities, Charts and
+Compare. Its pages are titled **What If Annual Prediction**. Unlike the rest of the UI it needs neither Home Assistant nor a configured
 Predbat instance — it is the tool a prospective buyer reaches for before they have
 installed anything, as well as the quick option for an existing user.
 
@@ -237,7 +237,7 @@ A run takes roughly one to three minutes with the default two samples per month,
 to six minutes with a car configured (each sampled day is planned twice — with and
 without a charging session — to work out how often the car overflows the cheap window).
 Once started it shows a progress bar with the current step and elapsed time, and it keeps
-running on the server if you navigate away or close the tab — come back to the Annual tab
+running on the server if you navigate away or close the tab — come back to the WhatIf tab
 later and the same run is still there, or already finished. The progress area appears on
 all three pages, not just Configure, so switching to Results or Compare mid-run does not
 lose sight of it. Only one run is active at a time: submitting **Run** again while one is

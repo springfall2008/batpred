@@ -793,7 +793,7 @@ class AnnualPage:
         if config is None:
             config = self.load_config()
 
-        text = self.web.get_header("Predbat Annual")
+        text = self.web.get_header("Predbat What If")
         text += "<body>\n"
         text += self.render_css()
         text += self.render_nav("config")
@@ -806,7 +806,7 @@ class AnnualPage:
     async def html_annual_view(self, request):
         """Render the results viewer for one stored run."""
         self.web.default_page = "./annual_view"
-        text = self.web.get_header("Predbat Annual")
+        text = self.web.get_header("Predbat What If")
         text += "<body>\n"
         text += self.render_css()
         text += self.render_nav("view")
@@ -825,7 +825,7 @@ class AnnualPage:
         self.web.default_page = "./annual_compare"
         storage = self._storage()
         runs = await backfill_summaries(storage, await list_runs(storage))
-        text = self.web.get_header("Predbat Annual")
+        text = self.web.get_header("Predbat What If")
         text += "<body>\n"
         text += self.render_css()
         text += self.render_nav("compare")
@@ -1484,10 +1484,15 @@ annualLoadPlan();
         return "<td>{}</td>\n".format(html.escape("{:.1f} years".format(years), quote=True))
 
     def render_nav(self, current):
-        """Return the tab strip, marking the current page and disabling the end arrows."""
+        """Return the page title and tab strip, marking the current page and disabling the end arrows.
+
+        The title lives here rather than in each of the three handlers so all three carry
+        the same one - the nav is already the piece every page shares.
+        """
         names = [name for name, _, _ in self.NAV_PAGES]
         position = names.index(current) if current in names else 0
-        text = '<div class="annual-nav">\n'
+        text = "<h1>What If Annual Prediction</h1>\n"
+        text += '<div class="annual-nav">\n'
         previous = self.NAV_PAGES[position - 1][2] if position > 0 else None
         text += '<a class="annual-nav-arrow{}" href="{}">&#9664;</a>\n'.format("" if previous else " annual-nav-disabled", previous or "#")
         for name, label, href in self.NAV_PAGES:

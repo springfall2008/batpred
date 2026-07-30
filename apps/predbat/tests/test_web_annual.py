@@ -518,6 +518,14 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: every page carries the What If title")
+        # In render_nav rather than the three handlers, so they cannot drift apart - a
+        # title on two pages out of three is the failure this guards.
+        for page_name in ["config", "view", "compare"]:
+            if "What If Annual Prediction" not in make_page(my_predbat).render_nav(page_name):
+                print("  ERROR: the {} page should carry the What If title".format(page_name))
+                failed = True
+
         print("Test: the form shows a live cost estimate and offers quote overrides")
         cost_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
         if 'id="annual-cost-estimate"' not in cost_form:
