@@ -1553,6 +1553,85 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_discharge_target_tracks_reserve(test_name, ha, inv, dummy_rest):
+    """
+    Regression test: the export target SoC must track the minimum reserve SoC in both directions.
+
+    The export target register (GE 'DC Discharge 1 Lower SoC Limit', discharge_target_soc) is the
+    inverter side backstop that stops a timed export draining the battery below the reserve. Predbat
+    used to only pull it *down* to reserve_percent and left any lower value alone, so a target parked
+    below the minimum reserve SoC (GE Cloud writes 4% in enable_default_options) was never corrected
+    and the battery could discharge past the user's minimum reserve between Predbat cycles.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_reserve_percent = inv.reserve_percent
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+
+    start_time = "03:33:00"
+    end_time = "04:44:00"
+    ts = datetime.strptime(start_time, "%H:%M:%S")
+    te = datetime.strptime(end_time, "%H:%M:%S")
+
+    def setup_entity_case(current_target, reserve_percent):
+        """Prepare the entity (non REST) path with a given starting target and reserve."""
+        inv.rest_data = None
+        inv.rest_api = None
+        inv.reserve_percent = reserve_percent
+        ha.dummy_items["select.discharge_start_time"] = start_time
+        ha.dummy_items["select.discharge_end_time"] = end_time
+        ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+        ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "on"
+        ha.dummy_items["number.discharge_target_soc"] = current_target
+        ha.dummy_items["select.inverter_mode"] = "Timed Export"
+        ha.dummy_items["switch.inverter_button"] = "off"
+
+    try:
+        # Case 1: target parked below the reserve must be raised up to the reserve
+        setup_entity_case(current_target=4, reserve_percent=20)
+        inv.adjust_force_export(True, ts, te)
+        if float(ha.get_state("number.discharge_target_soc")) != 20:
+            print("ERROR: {}: export target below reserve should be raised to 20, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
+            failed = True
+
+        # Case 2: target above the reserve must still be pulled down to the reserve
+        setup_entity_case(current_target=50, reserve_percent=20)
+        inv.adjust_force_export(True, ts, te)
+        if float(ha.get_state("number.discharge_target_soc")) != 20:
+            print("ERROR: {}: export target above reserve should be lowered to 20, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
+            failed = True
+
+        # Case 3: same correction on the REST v3 path
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.reserve_percent = 20
+        inv.rest_data = {
+            "Control": {"Enable_Discharge_Schedule": "on", "Mode": "Timed Export"},
+            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
+            "raw": {"invertor": {"discharge_target_soc_1": 4}},
+        }
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+        polled = copy.deepcopy(inv.rest_data)
+        polled["raw"]["invertor"]["discharge_target_soc_1"] = 20
+        dummy_rest.queue_rest_data(polled)
+
+        inv.adjust_force_export(True, ts, te)
+        if inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"] != 20:
+            print("ERROR: {}: REST export target below reserve should be raised to 20, got {}".format(test_name, inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"]))
+            failed = True
+    finally:
+        inv.reserve_percent = saved_reserve_percent
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+
+    return failed
+
+
 def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     """
     Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
@@ -2670,6 +2749,11 @@ charge_start_service:
 
     # Regression test: GS_fb00 H M format must write time entities and press button even when times are unchanged
     failed |= test_force_export_unchanged_times_HM_format("force_export_unchanged_HM_format", ha, inv)
+    if failed:
+        return failed
+
+    # Regression test: export target SoC must track the minimum reserve SoC in both directions
+    failed |= test_discharge_target_tracks_reserve("discharge_target_tracks_reserve", ha, inv, dummy_rest)
     if failed:
         return failed
 
