@@ -155,7 +155,7 @@ from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer, test_config_item_range_clamp, test_config_item_step_min_max_types_consistent
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
-from tests.test_validate_config import test_validate_config
+from tests.test_validate_config import test_validate_config, test_validate_config_retry
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
 from tests.test_plan_why_reason import run_test_plan_why_reason
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
@@ -392,6 +392,7 @@ def main():
         ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
+        ("validate_config_retry", test_validate_config_retry, "Config validation retry-after-failure tests (#4379)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         ("config_item_range_clamp", test_config_item_range_clamp, "Config item min/max range clamp tests", False),
         ("config_item_step_min_max_types", test_config_item_step_min_max_types_consistent, "Config item step/min/max type consistency tests", False),
