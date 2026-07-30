@@ -1011,8 +1011,14 @@ class SolarAPI(ComponentBase):
         worst_day_scaling = dp4(worst_day_scaling / average_day_scaling)
         best_day_scaling = dp4(best_day_scaling / average_day_scaling)
 
-        # Clamp best and worst day scaling factors to sensible values
-        worst_day_scaling = max(worst_day_scaling, 0.3)
+        # Clamp best and worst day scaling factors to sensible values. worst_day_scaling is a
+        # "worst day relative to average" multiplier, so it is semantically incoherent above
+        # 1.0 - and capping it there also guarantees pv_forecast_minute10 (which is derived
+        # from the already-capped P50 series by multiplying by this factor, see create_pv10
+        # below) can never exceed P50 or the per-slot cap. average_day_scaling is hard-clamped
+        # to 2.0 above, so when every day's actual/forecast ratio exceeds 2.0 the division below
+        # would otherwise leave worst_day_scaling > 1.0.
+        worst_day_scaling = min(max(worst_day_scaling, 0.3), 1.0)
         best_day_scaling = min(best_day_scaling, 2.0)
         if not enabled_calibration:
             worst_day_scaling = 0.7
@@ -1094,25 +1100,76 @@ class SolarAPI(ComponentBase):
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        # The after scaling cap will be applied, but remember that the input data is
-        # When we have a valid observed peak (from history or forecast history) cap to the lower of
-        # the inverter rating and that observed peak. With no valid history (e.g. all days excluded
-        # as "down days") the observed peak is 0 - fall back to the inverter rating alone, otherwise
-        # the cap would zero out the entire calibrated/10/90 forecast.
-        observed_cap = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
-        max_kwh_cap = max_kwh / 60 * self.plan_interval_minutes
-        if observed_cap > 0:
-            capped_data = min(max_kwh_cap, observed_cap)
-        else:
-            capped_data = max_kwh_cap
+        # Cap the calibrated forecast so calibration cannot scale it above what the array can
+        # physically produce. The ceiling is the declared array capacity (max_kwh, which is
+        # kwp * efficiency - NOT the inverter rating) plus 20% headroom, since cloud-edge
+        # enhancement and cool cells briefly push an array above its nameplate. The ceiling is
+        # never below the observed peak: measured generation is direct evidence and beats a
+        # declared figure, which is often understated (users enter the inverter size, or one
+        # string of two).
+        #
+        # Within that ceiling each slot is allowed up to the larger of the observed peak and
+        # that slot's own pre-scaling forecast, so the cap only ever limits scaling upwards and
+        # never clips the raw forecast itself - otherwise a dull week would suppress the first
+        # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
+        # can never fall below observed generation.
+        #
+        # max_pv_power_forecast is deliberately NOT used here: it is read back from the
+        # published pv_forecast_h0 sensor, whose state is this same capped output, so including
+        # it made the cap depend on its own previous result.
+        observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
+        ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
+        capped_slots = 0
+        raw_exceeds_ceiling_slots = 0
+        raw_exceeds_ceiling_peak = 0
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
+            raw_value = 0
             for offset in range(0, self.plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
-            # Force timezone to UTC
-            pv_estimateCL[minute] = dp4(min(pv_value, capped_data))  # Clamp to max_kwh scaled to 30 minute slots
-            pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
-            pv_estimate90[minute] = dp4(min(pv_value * best_day_scaling, capped_data))
+                raw_value += pv_forecast_minute.get(minute + offset, 0)
+            if raw_value > ceiling_slot:
+                raw_exceeds_ceiling_slots += 1
+                raw_exceeds_ceiling_peak = max(raw_exceeds_ceiling_peak, raw_value)
+            capped_data = min(ceiling_slot, max(observed_slot, raw_value))
+            # Derive all three published series from the capped P50 so they agree with the
+            # planner series built below from the (also capped) pv_forecast_minute_adjusted.
+            # pv_estimate10 needs no min(..., capped_data): worst_day_scaling is clamped to at
+            # most 1.0 above, so capped_p50 * worst_day_scaling <= capped_p50 <= capped_data
+            # always holds. pv_estimate90 keeps the clamp because best_day_scaling can exceed
+            # 1.0, so the optimistic case can genuinely exceed the physical ceiling.
+            capped_p50 = min(pv_value, capped_data)
+            pv_estimateCL[minute] = dp4(capped_p50)
+            pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
+            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, capped_data))
+
+            # Apply the same cap to the per-minute data the planner consumes. Scale rather than
+            # clamp per minute: capped_data is kWh per plan interval, not per minute.
+            if pv_value > capped_data and pv_value > 0:
+                scale_down = capped_data / pv_value
+                for offset in range(0, self.plan_interval_minutes, 1):
+                    if (minute + offset) in pv_forecast_minute_adjusted:
+                        pv_forecast_minute_adjusted[minute + offset] = dp4(pv_forecast_minute_adjusted[minute + offset] * scale_down)
+                capped_slots += 1
+
+        if capped_slots:
+            ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
+            self.log("SolarAPI: PV Calibration: Capped {} slots to the array ceiling ({}kW observed peak, {}kW ceiling)".format(capped_slots, dp2(max_pv_power_hist), dp2(ceiling_kw)))
+
+        if raw_exceeds_ceiling_slots:
+            # The raw forecast (before any calibration scaling) already exceeds the array
+            # ceiling on its own - distinct from the capped_slots log above, which can also
+            # fire when calibration scaling alone pushes an otherwise-sane raw forecast over
+            # the ceiling. This is a config problem: either kwp is under-declared, or
+            # pv_scaling has been raised to compensate for an under-declared kwp, which is
+            # the wrong knob.
+            raw_peak_kw = raw_exceeds_ceiling_peak * 60 / self.plan_interval_minutes
+            ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
+            self.log(
+                "Warn: SolarAPI: PV Calibration: Raw forecast exceeds the array ceiling in {} slots (peak {}kW vs {}kW ceiling) - check kwp and pv_scaling (currently {}), forecast is being clipped to the ceiling".format(
+                    raw_exceeds_ceiling_slots, dp2(raw_peak_kw), dp2(ceiling_kw), self.pv_scaling
+                )
+            )
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
