@@ -55,15 +55,15 @@ def test_predict_pv_power_matches_input_regardless_of_plan_interval(my_predbat):
 
     # my_predbat is a shared fixture reused by every test module in the suite - save everything
     # this test mutates and restore it afterwards so later tests (e.g. model_kernel, which assumes
-    # the 30-minute default) aren't left running against a stale plan_interval_minutes.
-    original_plan_interval_minutes = my_predbat.plan_interval_minutes
-    original_forecast_minutes = my_predbat.forecast_minutes
-    original_end_record = my_predbat.end_record
-    original_pv_forecast_minute = getattr(my_predbat, "pv_forecast_minute", None)
-    original_pv_forecast_minute10 = getattr(my_predbat, "pv_forecast_minute10", None)
-    original_load_minutes_step = getattr(my_predbat, "load_minutes_step", None)
-    original_load_minutes_step10 = getattr(my_predbat, "load_minutes_step10", None)
-    original_prediction = getattr(my_predbat, "prediction", None)
+    # the 30-minute default) aren't left running against a stale plan_interval_minutes. Some of
+    # these (load_minutes_step*, prediction) aren't set until a real update_pred() cycle or
+    # calculate_plan() runs, so on a fresh fixture they may not exist as attributes at all -
+    # restoring them to None in that case would still leave the fixture in a worse state than
+    # before (an attribute that exists but is None, instead of not existing), so track presence
+    # and delete rather than assign None when the attribute was absent to begin with.
+    attrs_to_restore = ["plan_interval_minutes", "forecast_minutes", "end_record", "pv_forecast_minute", "pv_forecast_minute10", "load_minutes_step", "load_minutes_step10", "prediction"]
+    had_attr = {name: hasattr(my_predbat, name) for name in attrs_to_restore}
+    original_value = {name: getattr(my_predbat, name, None) for name in attrs_to_restore if had_attr[name]}
 
     try:
         flat_pv_kw = 4.0
@@ -78,14 +78,14 @@ def test_predict_pv_power_matches_input_regardless_of_plan_interval(my_predbat):
             else:
                 print("  plan_interval_minutes={}: predict_pv_power={}kW (expected {}kW) - OK".format(plan_interval_minutes, sample, flat_pv_kw))
     finally:
-        my_predbat.plan_interval_minutes = original_plan_interval_minutes
-        my_predbat.forecast_minutes = original_forecast_minutes
-        my_predbat.end_record = original_end_record
-        my_predbat.pv_forecast_minute = original_pv_forecast_minute
-        my_predbat.pv_forecast_minute10 = original_pv_forecast_minute10
-        my_predbat.load_minutes_step = original_load_minutes_step
-        my_predbat.load_minutes_step10 = original_load_minutes_step10
-        my_predbat.prediction = original_prediction
+        for name in attrs_to_restore:
+            if had_attr[name]:
+                setattr(my_predbat, name, original_value[name])
+            else:
+                try:
+                    delattr(my_predbat, name)
+                except AttributeError:
+                    pass
 
     if failed:
         print("Test: predict_pv_power_matches_input_regardless_of_plan_interval FAILED")
