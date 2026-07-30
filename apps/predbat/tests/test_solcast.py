@@ -3249,6 +3249,38 @@ def test_pv_calibration_cap_applies_without_declared_capacity(my_predbat):
     return failed
 
 
+def test_pv_calibration_cap_applied_to_planner_data(my_predbat):
+    """
+    The cap must reach the data the planner uses, not just the published sensor attributes.
+
+    pv_calibration returns pv_forecast_minute_adjusted, which the planner consumes. Summed
+    over a slot it must respect the same cap as pv_estimateCL, otherwise the optimiser plans
+    against PV output the array cannot produce.
+
+    Observed peak 2 kW, raw forecast 3 kW, max_kwh 4 kW -> cap = 3.0 kW per slot equivalent.
+    """
+    print("  - test_pv_calibration_cap_applied_to_planner_data")
+    failed = False
+
+    test_api, adj_m, adj_data, plan_interval, gen_start, gen_end = _cap_scenario(max_kwh=4.0, raw_kw=3.0, hist_kw=2.0)
+    try:
+        expected_cap = 3.0 / 60 * plan_interval
+        worst_slot = 0
+        for slot in range(gen_start, gen_end, plan_interval):
+            slot_sum = sum(adj_m.get(slot + offset, 0) for offset in range(plan_interval))
+            worst_slot = max(worst_slot, slot_sum)
+        if worst_slot > expected_cap * 1.01:
+            print("ERROR: planner slot total {} exceeds the cap {} - the cap is not reaching pv_forecast_minute_adjusted".format(worst_slot, expected_cap))
+            failed = True
+        if worst_slot <= 0:
+            print("ERROR: planner slot total is {} - the scenario produced no forecast to cap".format(worst_slot))
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_no_history_not_zeroed(my_predbat):
     """
     Regression test: when there is no valid historical data (e.g. all days excluded as
@@ -4331,6 +4363,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_cap_ceiling_binds_at_headroom(my_predbat)
     failed |= test_pv_calibration_cap_never_clips_observed_generation(my_predbat)
     failed |= test_pv_calibration_cap_applies_without_declared_capacity(my_predbat)
+    failed |= test_pv_calibration_cap_applied_to_planner_data(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_partial_history(my_predbat)
     failed |= test_pv_calibration_synthetic_values(my_predbat)

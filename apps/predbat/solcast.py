@@ -1113,6 +1113,7 @@ class SolarAPI(ComponentBase):
         # it made the cap depend on its own previous result.
         observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
         ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
+        capped_slots = 0
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             raw_value = 0
@@ -1123,6 +1124,18 @@ class SolarAPI(ComponentBase):
             pv_estimateCL[minute] = dp4(min(pv_value, capped_data))
             pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
             pv_estimate90[minute] = dp4(min(pv_value * best_day_scaling, capped_data))
+
+            # Apply the same cap to the per-minute data the planner consumes. Scale rather than
+            # clamp per minute: capped_data is kWh per plan interval, not per minute.
+            if pv_value > capped_data and pv_value > 0:
+                scale_down = capped_data / pv_value
+                for offset in range(0, self.plan_interval_minutes, 1):
+                    if (minute + offset) in pv_forecast_minute_adjusted:
+                        pv_forecast_minute_adjusted[minute + offset] = dp4(pv_forecast_minute_adjusted[minute + offset] * scale_down)
+                capped_slots += 1
+
+        if capped_slots:
+            self.log("SolarAPI: PV Calibration: Capped {} slots to the array ceiling ({}kW observed peak, {}kW ceiling)".format(capped_slots, dp2(max_pv_power_hist), dp2(max(1.2 * max_kwh, max_pv_power_hist))))
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
