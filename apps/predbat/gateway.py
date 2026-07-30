@@ -553,7 +553,7 @@ class GatewayMQTT(ComponentBase):
             # PredBat's startup race ahead of auto-config.
             await self._startup_wait(ticks, lambda: self._auto_configured)
             if not self._auto_configured and not self.api_stop:
-                self.log(f"Warn: GatewayMQTT: Auto-config not complete after {_STARTUP_WAIT_SECONDS:.0f}s — gateway device may be offline, continuing startup")
+                self.log(f"Warn: GatewayMQTT: Auto-config not complete after {_STARTUP_WAIT_SECONDS:.0f}s — gateway device may be offline or MQTT broker unreachable, continuing startup")
             return True
 
         # Housekeeping on subsequent runs
