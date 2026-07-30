@@ -185,7 +185,7 @@ DEYE_TELEMETRY_NEGATE = ("grid_power",)
 # the same device/latest dataList.
 #
 # The mapping is confirmed by DEYE's own daily figures balancing exactly:
-#   DailyConsumption 12.80 = DailyActiveProduction 4.50 + DailyEnergyPurchased 7.00
+#   DailyConsumption 12.80 = DailyActiveProduction 4.50 + DailyEnergyPurchased 7.00 - DailyGridFeedIn 0.00
 #                            + (DailyDischargingEnergy 4.10 - DailyChargingEnergy 2.80)
 # which only holds if ActiveProduction is PV generation alone, excluding battery discharge.
 #
