@@ -104,6 +104,41 @@ def test_annual_costs(my_predbat):
         except ValueError:
             pass
 
+    print("Test: a quote replaces the modelled cost for that part of the system")
+    quoted = resolve_costs({"quoted_pv_gbp": 7000.0, "quoted_battery_gbp": 4200.0})
+    costs = build_costs(5.0, 9.5, quoted)
+    if not close(costs["pv_gbp"], 7000.0) or not close(costs["battery_gbp"], 4200.0) or not close(costs["total_gbp"], 11200.0):
+        print("  ERROR: quotes should replace both modelled costs, got {}".format(costs))
+        failed = True
+    if not costs["pv_quoted"] or not costs["battery_quoted"]:
+        print("  ERROR: a quoted figure should be flagged so the UI can label it, got {}".format(costs))
+        failed = True
+
+    print("Test: each side is quoted independently, so one quote does not discard the other estimate")
+    # Someone quoted for a battery but not for panels should keep the modelled PV cost,
+    # rather than having to choose between a real figure and an estimate.
+    half = build_costs(5.0, 9.5, resolve_costs({"quoted_battery_gbp": 4200.0}))
+    if not close(half["battery_gbp"], 4200.0):
+        print("  ERROR: the battery quote should be used, got {}".format(half))
+        failed = True
+    if not close(half["pv_gbp"], pv_cost_gbp(5.0, resolve_costs(None))):
+        print("  ERROR: with no PV quote the PV cost should still be modelled, got {}".format(half))
+        failed = True
+    if half["pv_quoted"] or not half["battery_quoted"]:
+        print("  ERROR: only the battery should be marked as quoted, got {}".format(half))
+        failed = True
+
+    print("Test: a zero quote means 'not quoted', not 'free'")
+    unquoted = build_costs(5.0, 9.5, resolve_costs({"quoted_pv_gbp": 0, "quoted_battery_gbp": 0}))
+    if unquoted["pv_gbp"] <= 0 or unquoted["battery_gbp"] <= 0 or unquoted["pv_quoted"] or unquoted["battery_quoted"]:
+        print("  ERROR: a zero quote should fall back to the model, got {}".format(unquoted))
+        failed = True
+
+    print("Test: a quoted PV price drops the £/kWp note, which no longer describes it")
+    if build_costs(5.0, 9.5, quoted)["pv_rate_gbp_per_kwp"] != 0.0:
+        print("  ERROR: a quoted PV cost has no modelled rate to quote alongside it")
+        failed = True
+
     print("Test: payback divides capital by the annual saving")
     row = payback_row(10000.0, 1000.0)
     if not row["pays_back"] or not close(row["years"], 10.0):

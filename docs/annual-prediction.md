@@ -274,10 +274,12 @@ of that download (see [Debugging a run](#debugging-a-run)).
 The Compare page lists every stored run in one table, newest first, so you do not have
 to hold numbers in your head while flipping the Results selector back and forth. Each
 row is: run (label, linking to that run in the Results page), solar size, battery size,
-import tariff, cost with Predbat, saving versus no system, and three payback columns —
-PV only, PV + battery, and + Predbat. The row for the run the Results page is currently
-showing is highlighted. Nine columns is wide, so the table scrolls sideways inside its
-own container rather than widening the whole page.
+system cost, import tariff, cost with Predbat, saving versus no system, and three payback
+columns — PV only, PV + battery, and + Predbat. A system cost that came from a quote you
+entered rather than from the cost model is marked "quoted", so the two are never confused.
+The row for the run the Results page is currently showing is highlighted. Ten columns is
+wide, so the table scrolls sideways inside its own container rather than widening the
+whole page.
 
 **A dash in this table means the figure could not be computed — it is not a zero.**
 This is the distinction the table turns on, so it is worth being explicit about it:
@@ -385,6 +387,23 @@ All seven of these — the three PV band rates, `pv_minimum_gbp`, `battery_insta
 `battery_per_kwh_gbp` and `predbat_annual_gbp` below — are editable under **Advanced** on
 the web form, or `annual.costs` in the config file, if your own quotes differ from the
 published medians.
+
+### If you have a real quote
+
+A quote beats any model of one. `quoted_pv_gbp` and `quoted_battery_gbp` (both £0 by
+default, meaning "no quote") replace the estimate for that part of the system. They sit on
+the configuration page rather than under **Advanced**, because a real figure is the most
+useful thing you can tell the tool.
+
+They are held separately, and either can be used on its own: quoted for a battery but not
+for panels, the battery uses your figure and the solar stays modelled. That split is not
+cosmetic — the PV-only payback needs the PV capital by itself, and a single whole-system
+figure cannot be divided back into its parts. Anything priced from a quote is labelled as
+such in the results and on the comparison page, so an estimate is never passed off as a
+real price.
+
+The configuration page shows the estimated install cost as you type, updating from the
+same cost model the run itself uses.
 
 `predbat_annual_gbp` (default £0) is different from the other six: it is a **recurring**
 yearly cost, not a one-off capital cost, and it is not added to the install price. Predbat

@@ -26,7 +26,7 @@ import yaml
 from aiohttp import web
 
 from annual import AnnualConfigError, validate_config
-from annual_costs import DEFAULT_COSTS
+from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
 from annual_store import backfill_summaries, list_runs, load_plan, load_run, save_run
 from tariff_catalogue import CUSTOM_ID, merged_catalogue
@@ -488,6 +488,18 @@ class AnnualPage:
         text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", 60.0), suffix="p/day")
         text += "</fieldset>\n"
 
+        # The estimate is filled in by JavaScript from ./annual_cost_preview rather than
+        # rendered here, so it tracks the solar and battery fields as they are typed. The
+        # figure comes from the same annual_costs model the run itself uses - see
+        # html_annual_cost_preview for why it is fetched rather than recomputed in JS.
+        costs_config = config.get("costs") or {}
+        text += "<fieldset><legend>System cost</legend>\n"
+        text += '<p class="annual-note" id="annual-cost-estimate">Estimating…</p>\n'
+        text += '<p class="annual-note">Estimated from typical UK install prices. If you have a real quote, enter it below and it will be used instead — leave a box at 0 to keep the estimate for that part.</p>\n'
+        text += self._number_field("cost_quoted_pv_gbp", "Quoted price for the solar", costs_config.get("quoted_pv_gbp", 0), suffix="£")
+        text += self._number_field("cost_quoted_battery_gbp", "Quoted price for the battery", costs_config.get("quoted_battery_gbp", 0), suffix="£")
+        text += "</fieldset>\n"
+
         text += "<details><summary>Advanced</summary>\n"
         text += self._number_field("year", "Year to model (blank for the most recent complete year)", config.get("year"))
         text += self._number_field("samples_per_month", "Days sampled per month", config.get("samples_per_month", 2), step="1")
@@ -496,7 +508,9 @@ class AnnualPage:
         text += self._number_field("pv10_derate_fallback", "P10 fallback derate", config.get("pv10_derate_fallback", 0.7))
         for index, array in enumerate(solar):
             text += self._number_field("solar_efficiency_{}".format(index), "Array {} efficiency".format(index + 1), array.get("efficiency", 0.95))
-        costs_config = config.get("costs") or {}
+        # The two quote fields are deliberately NOT here - a real quote is the most useful
+        # thing a user can tell us, so it belongs on the page rather than behind Advanced.
+        # These are the model's own parameters, which most people never touch.
         for key, label in [
             ("battery_install_gbp", "Battery install cost"),
             ("battery_per_kwh_gbp", "Battery cost per kWh"),
@@ -829,6 +843,39 @@ class AnnualPage:
         if not error:
             self.save_config(config)
         return await self.html_annual(request, error=error, config=config)
+
+    async def html_annual_cost_preview(self, request):
+        """Return the estimated install cost for a system size, as JSON for the live form.
+
+        Exists so the form can show a running cost without the cost model being
+        reimplemented in JavaScript. Duplicating it there would put the band
+        interpolation, the minimum install price and the quote overrides in two places
+        that would drift apart - the same hazard the prediction kernel carries a written
+        parity rule about. This keeps ``annual_costs`` the only implementation.
+
+        Every parameter is optional and anything unparseable is treated as absent, since
+        the query string arrives straight off a keystroke: a half-typed "3." must produce
+        a sensible answer rather than a 500.
+        """
+
+        def number(name):
+            """Return one query parameter as a float, or 0.0 if it is absent or malformed."""
+            try:
+                return float(request.query.get(name, "") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        overrides = {}
+        for name in ["quoted_pv_gbp", "quoted_battery_gbp"]:
+            value = number(name)
+            if value > 0:
+                overrides[name] = value
+        try:
+            settings = resolve_costs(overrides)
+        except ValueError:
+            settings = resolve_costs(None)
+        costs = build_costs(number("total_kwp"), number("battery_kwh"), settings)
+        return web.json_response(costs)
 
     async def html_annual_reset(self, request):
         """Discard the saved configuration and rebuild it from the live instance.
@@ -1341,7 +1388,9 @@ annualLoadPlan();
             return '<div class="annual-compare-scroll"><p>No runs have been stored yet — run some simulations to compare them here.</p></div>\n'
 
         text = '<div class="annual-compare-scroll">\n<table class="comparison-table annual-compare">\n'
-        text += "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>Tariff</th><th>Cost with Predbat</th><th>Saving vs no system</th>" "<th>PV only pays back in</th><th>PV + battery pays back in</th><th>With Predbat pays back in</th></tr>\n"
+        text += (
+            "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>System cost</th><th>Tariff</th><th>Cost with Predbat</th><th>Saving vs no system</th>" "<th>PV only pays back in</th><th>PV + battery pays back in</th><th>With Predbat pays back in</th></tr>\n"
+        )
         for run in runs:
             text += self._render_compare_row(run, selected_id)
         text += "</table>\n</div>\n"
@@ -1363,6 +1412,16 @@ annualLoadPlan();
         text += '<td><a href="./annual_view?run={}">{}</a></td>\n'.format(html.escape(run_id, quote=True), html.escape(label, quote=True))
         text += "<td>{}</td>\n".format(self._compare_number(summary.get("total_kwp"), " kWp"))
         text += "<td>{}</td>\n".format(self._compare_number(summary.get("battery_kwh"), " kWh"))
+        # A payback period means little without the outlay it is repaying, so the price
+        # sits beside it. Marked when it came from a real quote rather than the model.
+        total_gbp = summary.get("total_gbp")
+        if isinstance(total_gbp, (int, float)):
+            price = "£{:,.0f}".format(total_gbp)
+            if summary.get("quoted"):
+                price += ' <span class="annual-note" title="From a quote you entered, not the cost model">quoted</span>'
+        else:
+            price = "—"
+        text += "<td>{}</td>\n".format(price)
         tariff = summary.get("tariff")
         text += "<td>{}</td>\n".format(html.escape(str(tariff), quote=True) if tariff else "—")
         text += "<td>{}</td>\n".format(self._compare_money(summary.get("cost_with_predbat_p")))
@@ -1535,6 +1594,8 @@ function annualSolarModeChanged(index) {
   document.getElementById('solar-kwp-row-' + index).style.display = (mode === 'panels') ? 'none' : 'block';
   document.getElementById('solar-panels-row-' + index).style.display = (mode === 'panels') ? 'block' : 'none';
   annualUpdateSolarTotal();
+  // Switching kWp/panels changes the total, so the cost estimate has to follow.
+  annualCostPreviewSoon();
 }
 function annualUpdateSolarTotal() {
   var totalKwp = 0, totalPanels = 0, allPanels = true, index = 0;
@@ -1559,10 +1620,68 @@ function annualUpdateSolarTotal() {
     ? 'Total: ' + totalKwp.toFixed(2) + ' kWp across ' + totalPanels + ' panels'
     : 'Total: ' + totalKwp.toFixed(2) + ' kWp';
 }
+function annualSolarTotalKwp() {
+  var total = 0, index = 0;
+  while (document.getElementById('solar_mode_' + index)) {
+    if (document.getElementById('solar_mode_' + index).value === 'panels') {
+      total += (parseFloat(document.getElementById('solar_panels_' + index).value) || 0) * (parseFloat(document.getElementById('solar_panel_watts_' + index).value) || 0) / 1000;
+    } else {
+      total += parseFloat(document.getElementById('solar_kwp_' + index).value) || 0;
+    }
+    index += 1;
+  }
+  return total;
+}
+function annualFieldValue(id) {
+  var field = document.getElementById(id);
+  return field ? (parseFloat(field.value) || 0) : 0;
+}
+// Asks the server for the estimate rather than recomputing the cost model here: the band
+// interpolation, the minimum install price and the quote overrides live in annual_costs
+// and must not be reimplemented in JavaScript, where the two copies would drift.
+var annualCostTimer = null;
+function annualCostPreview() {
+  var note = document.getElementById('annual-cost-estimate');
+  if (!note) { return; }
+  var params = new URLSearchParams({
+    total_kwp: annualSolarTotalKwp(),
+    battery_kwh: annualFieldValue('battery_size_kwh'),
+    quoted_pv_gbp: annualFieldValue('cost_quoted_pv_gbp'),
+    quoted_battery_gbp: annualFieldValue('cost_quoted_battery_gbp')
+  });
+  fetch('./annual_cost_preview?' + params.toString()).then(function (r) {
+    if (!r.ok) { throw new Error('preview failed'); }
+    return r.json();
+  }).then(function (costs) {
+    var money = function (value) { return '£' + Math.round(value).toLocaleString(); };
+    var pv = costs.pv_gbp > 0 ? ('solar ' + money(costs.pv_gbp) + (costs.pv_quoted ? ' (quoted)' : (costs.pv_rate_gbp_per_kwp > 0 ? ' at ' + money(costs.pv_rate_gbp_per_kwp) + '/kWp' : ''))) : '';
+    var bat = costs.battery_gbp > 0 ? ('battery ' + money(costs.battery_gbp) + (costs.battery_quoted ? ' (quoted)' : '')) : '';
+    var parts = [pv, bat].filter(function (part) { return part; });
+    note.textContent = costs.total_gbp > 0
+      ? 'Estimated install cost ' + money(costs.total_gbp) + (parts.length ? ' — ' + parts.join(', ') : '')
+      : 'No solar or battery configured, so there is nothing to cost.';
+  }).catch(function () {
+    note.textContent = 'Could not work out the install cost.';
+  });
+}
+function annualCostPreviewSoon() {
+  // Debounced: this fires on every keystroke in a size or quote field, and one request
+  // per character would be wasteful for a figure nobody reads mid-word.
+  if (annualCostTimer) { clearTimeout(annualCostTimer); }
+  annualCostTimer = setTimeout(annualCostPreview, 300);
+}
 document.addEventListener('input', function (event) {
-  if (event.target && /^solar_(kwp|panels|panel_watts)_/.test(event.target.id)) { annualUpdateSolarTotal(); }
+  if (!event.target || !event.target.id) { return; }
+  if (/^solar_(kwp|panels|panel_watts)_/.test(event.target.id)) {
+    annualUpdateSolarTotal();
+    annualCostPreviewSoon();
+  }
+  if (event.target.id === 'battery_size_kwh' || event.target.id === 'cost_quoted_pv_gbp' || event.target.id === 'cost_quoted_battery_gbp') {
+    annualCostPreviewSoon();
+  }
 });
 annualUpdateSolarTotal();
+annualCostPreview();
 // sessionStorage is per-tab, which is exactly the scope wanted: the tab that pressed
 // Run remembers it across the POST re-render, and no other tab sees the flag.
 function annualMarkStarted() {

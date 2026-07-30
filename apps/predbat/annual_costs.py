@@ -32,6 +32,13 @@ DEFAULT_COSTS = {
     # Predbat itself. Zero when self-hosted; the hosted version is expected to charge
     # around 100 a year. RECURRING, not capital - see payback_row().
     "predbat_annual_gbp": 0.0,
+    # A real quote, which beats any model of one. Zero means "no quote" rather than "free"
+    # - a genuine zero-pound quote is not a thing, and treating 0 as unset matches how
+    # soc_max and the inverter limits are read elsewhere. Held separately for PV and
+    # battery because the PV-only payback needs the PV capital on its own: a single
+    # whole-system figure cannot be split back apart.
+    "quoted_pv_gbp": 0.0,
+    "quoted_battery_gbp": 0.0,
 }
 
 # Midpoints of the 0-4, 4-10 and 10-50 kWp bands the rates above are medians of.
@@ -113,13 +120,26 @@ def battery_cost_gbp(size_kwh, settings):
 
 def build_costs(total_kwp, battery_kwh, settings):
     """Return the capital cost breakdown for a system of this size."""
-    pv = pv_cost_gbp(total_kwp, settings)
-    battery = battery_cost_gbp(battery_kwh, settings)
+    # A quote beats the model. Each side is overridden independently, so someone who has
+    # been quoted for a battery but not for panels gets their real figure for the battery
+    # and the estimate for the PV, rather than having to choose between them.
+    #
+    # A quote is honoured even where the modelled cost would be zero - if you have been
+    # quoted for a battery, you are getting a battery, whatever the size field currently
+    # says.
+    quoted_pv = float(settings.get("quoted_pv_gbp", 0) or 0)
+    quoted_battery = float(settings.get("quoted_battery_gbp", 0) or 0)
+    pv = quoted_pv if quoted_pv > 0 else pv_cost_gbp(total_kwp, settings)
+    battery = quoted_battery if quoted_battery > 0 else battery_cost_gbp(battery_kwh, settings)
     return {
         "pv_gbp": round(pv, 2),
         "battery_gbp": round(battery, 2),
         "total_gbp": round(pv + battery, 2),
-        "pv_rate_gbp_per_kwp": round(pv_rate_gbp_per_kwp(total_kwp or 0, settings), 2) if (total_kwp or 0) > 0 else 0.0,
+        # So the UI can label a real quote as such rather than presenting it as an
+        # estimate, and can leave the £/kWp note off a figure it does not describe.
+        "pv_quoted": quoted_pv > 0,
+        "battery_quoted": quoted_battery > 0,
+        "pv_rate_gbp_per_kwp": round(pv_rate_gbp_per_kwp(total_kwp or 0, settings), 2) if (total_kwp or 0) > 0 and quoted_pv <= 0 else 0.0,
         "total_kwp": round(float(total_kwp or 0), 3),
         "battery_kwh": round(float(battery_kwh or 0), 3),
     }

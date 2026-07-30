@@ -518,6 +518,54 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: a basic-rates config should re-select its own catalogue entry")
             failed = True
 
+        print("Test: the form shows a live cost estimate and offers quote overrides")
+        cost_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if 'id="annual-cost-estimate"' not in cost_form:
+            print("  ERROR: the form should carry a live install-cost readout")
+            failed = True
+        for field in ['name="cost_quoted_pv_gbp"', 'name="cost_quoted_battery_gbp"']:
+            if field not in cost_form:
+                print("  ERROR: the form should offer {}".format(field))
+                failed = True
+        # A real quote is the most useful thing a user can give us, so it belongs on the
+        # page rather than behind the Advanced toggle with the model's own parameters.
+        before_advanced = cost_form.split("<details><summary>Advanced")[0]
+        if "cost_quoted_pv_gbp" not in before_advanced:
+            print("  ERROR: the quote fields should be on the page, not hidden under Advanced")
+            failed = True
+
+        print("Test: a submitted quote reaches the config")
+        quote_post = valid_postdata()
+        quote_post["cost_quoted_pv_gbp"] = "7000"
+        quote_post["cost_quoted_battery_gbp"] = "4200"
+        quote_config = make_page(my_predbat).config_from_post(quote_post)
+        if quote_config.get("costs", {}).get("quoted_pv_gbp") != 7000 or quote_config.get("costs", {}).get("quoted_battery_gbp") != 4200:
+            print("  ERROR: submitted quotes should reach the config, got {}".format(quote_config.get("costs")))
+            failed = True
+        validate_config(quote_config)
+
+        print("Test: the cost preview endpoint uses the real model and honours a quote")
+        preview = asyncio.run(make_page(my_predbat).html_annual_cost_preview(FakeRequest(query={"total_kwp": "5.0", "battery_kwh": "9.5"})))
+        modelled = json.loads(preview.text)
+        if abs(modelled["battery_gbp"] - 3350.0) > 0.01 or modelled["pv_quoted"]:
+            print("  ERROR: the preview should use the cost model, got {}".format(modelled))
+            failed = True
+        quoted_preview = asyncio.run(make_page(my_predbat).html_annual_cost_preview(FakeRequest(query={"total_kwp": "5.0", "battery_kwh": "9.5", "quoted_pv_gbp": "7000"})))
+        quoted_body = json.loads(quoted_preview.text)
+        if abs(quoted_body["pv_gbp"] - 7000.0) > 0.01 or not quoted_body["pv_quoted"]:
+            print("  ERROR: the preview should honour a quote, got {}".format(quoted_body))
+            failed = True
+
+        print("Test: the preview survives a half-typed number rather than 500ing")
+        # It fires on every keystroke, so "3." and "" both arrive in the normal course of
+        # someone typing a size.
+        for query in [{"total_kwp": "3."}, {"total_kwp": ""}, {"total_kwp": "abc"}, {"battery_kwh": "-"}, {}]:
+            try:
+                asyncio.run(make_page(my_predbat).html_annual_cost_preview(FakeRequest(query=query)))
+            except Exception as error:
+                print("  ERROR: preview raised {} for {}".format(type(error).__name__, query))
+                failed = True
+
         print("Test: reset restores the live instance's settings, not a stranger's")
         # "Default" means prefill_config(), which reads this Predbat's own solar, battery
         # and tariff before filling gaps with the example - so on a configured instance
@@ -1644,6 +1692,7 @@ def test_web_annual_pages(my_predbat):
             "summary": {
                 "total_kwp": 5.6,
                 "battery_kwh": 9.5,
+                "total_gbp": 12250.0,
                 "tariff": "Agile",
                 "cost_with_predbat_p": 66000.0,
                 "saving_vs_none_p": 114000.0,
@@ -1658,6 +1707,8 @@ def test_web_annual_pages(my_predbat):
             "summary": {
                 "total_kwp": 12.0,
                 "battery_kwh": 20.0,
+                "total_gbp": 25400.0,
+                "quoted": True,
                 "tariff": "Cosy",
                 "cost_with_predbat_p": 40000.0,
                 "saving_vs_none_p": 140000.0,
@@ -1703,6 +1754,19 @@ def test_web_annual_pages(my_predbat):
                     print("  ERROR: the {} row should not show {}'s figures, got {}".format(label_fragment, unexpected, row))
                     failed = True
 
+        print("Test: the system price is shown beside the payback, and a quote is labelled")
+        # A payback period means little without the outlay it repays, which is why the
+        # price column exists at all.
+        if "£12,250" not in data_rows[0]:
+            print("  ERROR: the Agile row should show its £12,250 system cost, got {}".format(data_rows[0]))
+            failed = True
+        if "£25,400" not in data_rows[1] or "quoted" not in data_rows[1]:
+            print("  ERROR: the Cosy row should show £25,400 marked as quoted, got {}".format(data_rows[1]))
+            failed = True
+        if "quoted" in data_rows[0]:
+            print("  ERROR: a modelled cost must not be labelled as a quote, got {}".format(data_rows[0]))
+            failed = True
+
         print("Test: cost and saving render as pounds, not raw pence (an off-by-100 would ship green otherwise)")
         if "£660.00" not in data_rows[0]:
             print("  ERROR: cost_with_predbat_p=66000.0p should render as £660.00 on the Agile row, got {}".format(data_rows[0]))
@@ -1739,11 +1803,20 @@ def test_web_annual_pages(my_predbat):
             },
         }
     ]
-    unknown_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", page.render_compare(unknown_run, "unknown-figures"), re.S) if "<th>" not in row][0]
+    unknown_table = page.render_compare(unknown_run, "unknown-figures")
+    unknown_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", unknown_table, re.S) if "<th>" not in row][0]
     unknown_cells = re.findall(r"<td[^>]*>(.*?)</td>", unknown_row, re.S)
-    # Cell order: label, Solar, Battery, Tariff, Cost, Saving, then three payback cells.
-    for index, field in [(1, "total_kwp"), (2, "battery_kwh"), (4, "cost_with_predbat_p"), (5, "saving_vs_none_p")]:
-        cell = unknown_cells[index].strip()
+    # Cells are located by their COLUMN HEADING rather than a hard-coded index: adding a
+    # column (the system price was added after this test was written) silently shifts
+    # every index along, and the assertions then check the wrong cells while still
+    # passing or failing for the wrong reason.
+    headings = re.findall(r"<th[^>]*>(.*?)</th>", unknown_table, re.S)
+    for heading, field in [("Solar", "total_kwp"), ("Battery", "battery_kwh"), ("Cost with Predbat", "cost_with_predbat_p"), ("Saving vs no system", "saving_vs_none_p")]:
+        if heading not in headings:
+            print("  ERROR: the compare table should have a {} column, got {}".format(heading, headings))
+            failed = True
+            continue
+        cell = unknown_cells[headings.index(heading)].strip()
         if cell != "—":
             print("  ERROR: an unknown {} should render as a dash, got {!r} in cell {}".format(field, cell, unknown_cells))
             failed = True
@@ -1827,9 +1900,12 @@ def test_web_annual_pages(my_predbat):
     else:
         corrupt_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", corrupt_html, re.S) if "<th>" not in row][0]
         corrupt_cells = re.findall(r"<td[^>]*>(.*?)</td>", corrupt_row, re.S)
-        # Cell order: label, Solar, Battery, Tariff, Cost, Saving, pv_only, pv_battery, pv_battery_predbat.
-        if corrupt_cells[6].strip() != "—":
-            print("  ERROR: a non-numeric pv_only years should render as a dash, got {!r}".format(corrupt_cells[6]))
+        # Located by heading, not a fixed index - adding a column shifts every index and
+        # would leave this checking the wrong cell.
+        corrupt_headings = re.findall(r"<th[^>]*>(.*?)</th>", corrupt_html, re.S)
+        pv_only_cell = corrupt_cells[corrupt_headings.index("PV only pays back in")].strip() if "PV only pays back in" in corrupt_headings else ""
+        if pv_only_cell != "—":
+            print("  ERROR: a non-numeric pv_only years should render as a dash, got {!r}".format(pv_only_cell))
             failed = True
         if "17.8" in corrupt_cells[6]:
             print("  ERROR: a non-numeric years must not be formatted as though it were a float, got {!r}".format(corrupt_cells[6]))

@@ -104,6 +104,11 @@ def build_summary(results, config):
     return {
         "total_kwp": costs.get("total_kwp"),
         "battery_kwh": costs.get("battery_kwh"),
+        # What the system was reckoned to cost, so the compare table can show the price
+        # beside the payback - a payback period means little without knowing the outlay
+        # it is repaying. None rather than 0 when the run predates costs entirely.
+        "total_gbp": costs.get("total_gbp"),
+        "quoted": bool(costs.get("pv_quoted") or costs.get("battery_quoted")),
         "tariff": _describe_tariff((config or {}).get("tariff") or {}),
         "cost_with_predbat_p": predbat,
         "saving_vs_none_p": (baseline - predbat) if (baseline is not None and predbat is not None) else None,
