@@ -77,6 +77,18 @@ with the field named in the error, rather than left to fail as a 404 partway thr
 run. Choosing **Custom** reveals the URL fields, pre-filled with whichever tariff you were
 looking at, so hand-entering one starts from something rather than from nothing.
 
+**Tariff without PV or a battery** sets what the no-PV/battery comparison is priced on,
+and defaults to the price cap. This matters more than it looks: a household with no system
+would not be on a battery tariff, because the cheap overnight rates those offer are only
+worth having once you have somewhere to put the energy. Pricing the counterfactual on your
+own smart tariff therefore credits it with a saving it could never have had, and
+understates what the system is worth. It applies to the no-PV/battery scenario only —
+every other scenario uses your main tariff.
+
+One simplification to know about: both are charged the **main tariff's standing charge**,
+so if the two tariffs differ there, that difference is not included in the savings or
+payback.
+
 Every field the [configuration file](#advanced-the-configuration-file) accepts has a form equivalent, including the
 manual-usage/Octopus-consumption choice under **Load** and the year, sample count and P10
 fallback derate under **Advanced**. **Save settings** stores the configuration without
@@ -145,6 +157,10 @@ This is the distinction the table turns on, so it is worth being explicit about 
   **does not pay back** in words, never a number — that is a different fact from
   "unavailable" and the table keeps the two apart rather than collapsing them onto
   the same dash.
+
+Each row has a **Delete** button, which asks for confirmation first — a deleted run
+cannot be recovered, only re-run. Deleting removes the run's stored results and any
+captured plans as well as its row, so it leaves nothing behind.
 
 Each row reads only that run's own stored summary, never the live form and never
 another run's figures, so the columns are guaranteed to describe the system named at
@@ -407,6 +423,12 @@ annual:
     export_octopus_url: "..."
     dno_region: "A"              # required when a URL contains {dno_region}
     standing_charge_p_per_day: 60.0
+
+  baseline_tariff:               # priced for the no-PV/battery scenario only
+    rates_import:                # defaults to the Ofgem price cap
+      - rate: 26.11
+    rates_export:
+      - rate: 4.1
 
   samples_per_month: 2
   debug: false                   # keep each sampled day's plan, see Debugging a run

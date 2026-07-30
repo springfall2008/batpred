@@ -309,3 +309,28 @@ async def backfill_summaries(storage, runs):
     if filled:
         await storage.save(STORAGE_MODULE, INDEX_NAME, runs, format="json")
     return runs
+
+
+async def delete_run(storage, run_id):
+    """Remove one run entirely - its document, its captured plans and its index entry.
+
+    Reuses the same discard path eviction uses, so a run the user deletes leaves no more
+    behind than one that aged out of the ring: the document and every plan key are
+    expired, not merely unlinked from the index. Storage has no ``delete`` method on the
+    real component, which is why discarding is overwrite-with-expiry rather than removal.
+
+    Returns True when a run was found and removed, False when the id matched nothing -
+    so the caller can tell "deleted" from "already gone" rather than reporting success
+    for a run that was never there.
+    """
+    if not storage or not run_id:
+        return False
+
+    index = await list_runs(storage)
+    entry = next((existing for existing in index if existing.get("id") == run_id), None)
+    if entry is None:
+        return False
+
+    await _discard_run(storage, run_id, entry.get("plan_keys"))
+    await storage.save(STORAGE_MODULE, INDEX_NAME, [existing for existing in index if existing.get("id") != run_id], format="json")
+    return True

@@ -20,7 +20,7 @@ from aiohttp import web as aiohttp_web
 
 from annual import AnnualConfigError, validate_config
 from annual_store import list_runs, load_run, save_run
-from tariff_catalogue import CUSTOM_ID
+from tariff_catalogue import CUSTOM_ID, PRICE_CAP_IMPORT_P
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage, _json_for_script
 
@@ -579,6 +579,48 @@ def test_web_annual_form(my_predbat):
             if "What If Annual Prediction" not in make_page(my_predbat).render_nav(page_name):
                 print("  ERROR: the {} page should carry the What If title".format(page_name))
                 failed = True
+
+        print("Test: the no-PV/battery scenario gets its own tariff, defaulting to the price cap")
+        # A household with no system is not on a battery tariff, so pricing the
+        # counterfactual on one credits it with a saving it could never have had.
+        baseline_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if 'name="baseline_tariff_id"' not in baseline_form:
+            print("  ERROR: the form should offer a separate baseline tariff")
+            failed = True
+        baseline_select = re.search(r'<select id="baseline_tariff_id".*?</select>', baseline_form, re.S)
+        if not baseline_select:
+            print("  ERROR: the baseline tariff dropdown should render")
+            failed = True
+        else:
+            # Custom is a hand-entered URL, which makes no sense for "what would they
+            # otherwise be on".
+            if 'value="{}"'.format(CUSTOM_ID) in baseline_select.group(0):
+                print("  ERROR: Custom should not be offered as a baseline tariff")
+                failed = True
+            if not re.search(r'value="cap_seg"[^>]*selected', baseline_select.group(0)):
+                print("  ERROR: the baseline should default to the price cap, got {}".format(baseline_select.group(0)[:200]))
+                failed = True
+
+        print("Test: a chosen baseline tariff reaches the config and validates")
+        baseline_post = valid_postdata()
+        baseline_post["baseline_tariff_id"] = "cap_seg"
+        baseline_config = make_page(my_predbat).config_from_post(baseline_post)
+        if not (baseline_config.get("baseline_tariff") or {}).get("rates_import"):
+            print("  ERROR: the chosen baseline tariff should reach the config, got {}".format(baseline_config.get("baseline_tariff")))
+            failed = True
+        validated = validate_config(baseline_config)
+        if not (validated.get("baseline_tariff") or {}).get("rates_import"):
+            print("  ERROR: the baseline tariff should survive validation, got {}".format(validated.get("baseline_tariff")))
+            failed = True
+
+        print("Test: an unrecognised baseline id falls back to the default rather than inventing rates")
+        stale_post = valid_postdata()
+        stale_post["baseline_tariff_id"] = "no-such-tariff"
+        stale_validated = validate_config(make_page(my_predbat).config_from_post(stale_post))
+        cap_rate = (stale_validated["baseline_tariff"].get("rates_import") or [{}])[0].get("rate")
+        if cap_rate != PRICE_CAP_IMPORT_P:
+            print("  ERROR: an unknown baseline id should fall back to the price cap, got {}".format(cap_rate))
+            failed = True
 
         print("Test: the form shows a live cost estimate and offers quote overrides")
         cost_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())

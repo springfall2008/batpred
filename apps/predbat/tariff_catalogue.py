@@ -24,6 +24,22 @@ PASSTHROUGH_KEYS = ["rates_import", "rates_export"]
 # The dropdown's escape hatch: leaves the URL fields blank for a hand-entered tariff
 CUSTOM_ID = "custom"
 
+# What a household with no PV and no battery is assumed to be on. Named here so the form
+# and the engine's own default cannot drift apart.
+BASELINE_DEFAULT_ID = "cap_seg"
+
+# Ofgem price cap, 1 July - 30 September 2026, direct debit, England/Scotland/Wales,
+# including VAT. Named rather than repeated so the next cap change is a one-line edit.
+# Source: https://www.ofgem.gov.uk/information-consumers/energy-advice-households/energy-price-cap-unit-rates-and-standing-charges
+PRICE_CAP_IMPORT_P = 26.11
+PRICE_CAP_STANDING_CHARGE_P = 57.19
+
+# A typical FIXED Smart Export Guarantee rate. Fixed SEG offers sit around 3-8p/kWh in
+# mid-2026, so this is deliberately at the conservative end - the smart export tariffs
+# that pay far more are separate entries in this catalogue, and a household on the price
+# cap is not on one of them.
+SEG_EXPORT_P = 4.1
+
 _OCTOPUS = "https://api.octopus.energy/v1/products"
 
 # The two Octopus flat-rate export products offered against each import tariff below.
@@ -42,11 +58,11 @@ _OUTGOING_FIXED = "{}/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VA
 _OUTGOING_PRIME = "{}/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS)
 
 BUILTIN_TARIFFS = [
-    {"id": "cap_seg", "name": "Price cap import / SEG export", "rates_import": [{"rate": 24.86}], "rates_export": [{"rate": 4.1}]},
+    {"id": "cap_seg", "name": "Price cap import / SEG export", "rates_import": [{"rate": PRICE_CAP_IMPORT_P}], "rates_export": [{"rate": SEG_EXPORT_P}]},
     {
         "id": "eon_next_drive",
         "name": "Eon Next Drive import / Fixed export",
-        "rates_import": [{"rate": 6.7, "start": "00:00:00", "end": "07:00:00"}, {"rate": 24.86, "start": "07:00:00", "end": "00:00:00"}],
+        "rates_import": [{"rate": 6.7, "start": "00:00:00", "end": "07:00:00"}, {"rate": PRICE_CAP_IMPORT_P, "start": "07:00:00", "end": "00:00:00"}],
         "rates_export": [{"rate": 16.5}],
     },
     {

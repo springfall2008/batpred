@@ -12,7 +12,7 @@
 import asyncio
 import datetime
 
-from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, list_runs, load_plan, load_run, save_run
+from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, delete_run, list_runs, load_plan, load_run, save_run
 from tests.test_infra import run_async
 
 
@@ -448,5 +448,45 @@ def test_annual_store(my_predbat):
     if any(storage.store.get(key) is not None for key in keys_before):
         print("  ERROR: an evicted run's plan keys should be discarded too")
         failed = True
+
+    print("Test: deleting a run removes its document, its plans and its index entry")
+    storage = FakeStorage()
+    debug_doc = {
+        "annual": {"scenarios": {"no_pvbat": {"cost_p": 10.0}, "with_predbat": {"cost_p": 5.0}}, "months_included": 12},
+        "months": [{"month": 1, "status": "ok", "plans": [{"day": "2025-01-08", "leg": "single", "scenarios": {"with_predbat": {"rows": [1]}}}]}],
+    }
+    asyncio.run(save_run(storage, debug_doc, {}, "doomed"))
+    asyncio.run(save_run(storage, sample_results(1), sample_config(), "keeper"))
+    plan_keys = [key for key in storage.store if "doomed" in str(key) and "plans" in str(key)]
+    if not plan_keys:
+        print("  ERROR: the fixture should have produced plan keys to delete")
+        failed = True
+
+    if asyncio.run(delete_run(storage, "doomed")) is not True:
+        print("  ERROR: deleting a stored run should report success")
+        failed = True
+    if [entry["id"] for entry in asyncio.run(list_runs(storage))] != ["keeper"]:
+        print("  ERROR: only the deleted run should leave the index, got {}".format(asyncio.run(list_runs(storage))))
+        failed = True
+    if asyncio.run(load_run(storage, "doomed")) is not None:
+        print("  ERROR: a deleted run's document should no longer load")
+        failed = True
+    # Dropping it from the index alone would leave the plans orphaned - unreachable, but
+    # still occupying storage that nothing will ever clean up.
+    if any(storage.store.get(key) is not None for key in plan_keys):
+        print("  ERROR: a deleted run's plan keys should be discarded too, got {}".format(plan_keys))
+        failed = True
+    if asyncio.run(load_run(storage, "keeper")) is None:
+        print("  ERROR: deleting one run must not touch another")
+        failed = True
+
+    print("Test: deleting an unknown run reports failure rather than pretending it worked")
+    if asyncio.run(delete_run(storage, "never-existed")) is not False:
+        print("  ERROR: deleting a run that was never there should return False")
+        failed = True
+    for bad in [None, ""]:
+        if asyncio.run(delete_run(storage, bad)) is not False:
+            print("  ERROR: delete_run({!r}) should return False".format(bad))
+            failed = True
 
     return failed

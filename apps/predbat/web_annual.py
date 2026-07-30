@@ -28,8 +28,8 @@ from aiohttp import web
 from annual import AnnualConfigError, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
-from annual_store import backfill_summaries, list_runs, load_plan, load_run, save_run
-from tariff_catalogue import CUSTOM_ID, merged_catalogue
+from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
+from tariff_catalogue import BASELINE_DEFAULT_ID, CUSTOM_ID, PRICE_CAP_IMPORT_P, PRICE_CAP_STANDING_CHARGE_P, SEG_EXPORT_P, merged_catalogue
 from web_helper import get_plan_css, get_plan_renderer_js
 
 # Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
@@ -52,7 +52,7 @@ DEFAULT_CONFIG = {
     "solar": [{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}],
     "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
     "load": {"annual_kwh": 3800, "shape": "flat", "car_charging_kwh": 0, "car_rate_kw": 7.4},
-    "tariff": {"rates_import": [{"rate": 24.86}], "rates_export": [{"rate": 4.1}], "standing_charge_p_per_day": 60.0},
+    "tariff": {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}], "rates_export": [{"rate": SEG_EXPORT_P}], "standing_charge_p_per_day": PRICE_CAP_STANDING_CHARGE_P},
     "samples_per_month": 2,
 }
 
@@ -338,6 +338,29 @@ class AnnualPage:
             name=name, label=label, wide=" annual-field-wide" if wide else "", value=html.escape(str(value), quote=True) if value is not None else ""
         )
 
+    @staticmethod
+    def _selected_tariff_id(tariff, catalogue):
+        """Return the catalogue id matching this tariff, or Custom, or None if it is empty.
+
+        A hand-entered URL matches no catalogue entry, which is what Custom means, so it
+        is the fallback rather than leaving the dropdown showing the first entry.
+
+        Basic-rates entries are matched on their RATES, not a URL: several catalogue
+        entries ("Price cap import / SEG export", "Eon Next Drive") carry no URL at all,
+        and matching on URL alone left the dropdown showing the wrong tariff for them.
+        """
+        tariff = tariff or {}
+        current_import_url = tariff.get("import_octopus_url")
+        current_rates = tariff.get("rates_import")
+        if not current_import_url and not current_rates:
+            return None
+        for entry in catalogue:
+            if current_import_url and entry.get("import_octopus_url") == current_import_url:
+                return entry["id"]
+            if not current_import_url and entry.get("rates_import") == current_rates:
+                return entry["id"]
+        return CUSTOM_ID
+
     def render_form(self, config, errors=None):
         """Return the configuration form as HTML, populated from ``config``.
 
@@ -479,25 +502,7 @@ class AnnualPage:
         text += "<fieldset><legend>Tariff</legend>\n"
         text += '<div class="annual-field"><label for="tariff_id">Tariff</label><select id="tariff_id" name="tariff_id" onchange="annualTariffChanged()">\n'
         catalogue = self.catalogue()
-        current_import_url = tariff.get("import_octopus_url")
-        current_rates = tariff.get("rates_import")
-        # A hand-entered URL (no matching catalogue entry) is what Custom means, so it
-        # is the fallback selection rather than leaving the dropdown on its first entry.
-        #
-        # Basic-rates entries are matched on their rates, not a URL: several catalogue
-        # entries ("Price cap import / SEG export", "Eon Next Drive") carry no URL at
-        # all, and matching on URL alone left the dropdown showing the first entry in
-        # the list rather than the tariff the config actually holds.
-        selected_id = None
-        if current_import_url or current_rates:
-            selected_id = CUSTOM_ID
-            for entry in catalogue:
-                if current_import_url and entry.get("import_octopus_url") == current_import_url:
-                    selected_id = entry["id"]
-                    break
-                if not current_import_url and entry.get("rates_import") == current_rates:
-                    selected_id = entry["id"]
-                    break
+        selected_id = self._selected_tariff_id(tariff, catalogue)
         for entry in catalogue:
             text += '<option value="{}" data-import="{}" data-export="{}" {}>{}</option>\n'.format(
                 html.escape(entry["id"], quote=True),
@@ -516,7 +521,19 @@ class AnnualPage:
         text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""), wide=True)
         text += "</div>\n"
         text += self._text_field("tariff_dno_region", "Octopus region letter", tariff.get("dno_region", ""))
-        text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", 60.0), suffix="p/day")
+        baseline = config.get("baseline_tariff") or {}
+        # Falls back to the price cap when the config carries no baseline - a config
+        # saved before this existed, or a fresh prefill. Matches validate_config's own
+        # default, so what the form shows is what a run would actually use.
+        baseline_id = self._selected_tariff_id(baseline, catalogue) or BASELINE_DEFAULT_ID
+        text += '<div class="annual-field"><label for="baseline_tariff_id">Tariff without PV or a battery</label><select id="baseline_tariff_id" name="baseline_tariff_id">\n'
+        for entry in catalogue:
+            if entry["id"] == CUSTOM_ID:
+                continue
+            text += '<option value="{}" {}>{}</option>\n'.format(html.escape(entry["id"], quote=True), "selected" if entry["id"] == baseline_id else "", html.escape(entry["name"], quote=True))
+        text += "</select></div>\n"
+        text += '<p class="annual-note">Used only for the no-PV/battery comparison. Someone with no system would not be on a battery tariff, so pricing that scenario on one credits it with a saving it could never have had. The price cap is the sensible default.</p>\n'
+        text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", PRICE_CAP_STANDING_CHARGE_P), suffix="p/day")
         text += "</fieldset>\n"
 
         # The estimate is filled in by JavaScript from ./annual_cost_preview rather than
@@ -678,6 +695,17 @@ class AnnualPage:
             tariff["rates_import"] = DEFAULT_CONFIG["tariff"]["rates_import"]
             tariff["rates_export"] = DEFAULT_CONFIG["tariff"]["rates_export"]
         config["tariff"] = tariff
+
+        # The baseline is chosen from the catalogue only - it answers "what would they
+        # otherwise be on", so a hand-entered URL has no place in it. An unrecognised id
+        # is left out entirely, and validate_config then supplies the price-cap default
+        # rather than this silently inventing rates.
+        baseline_id = value("baseline_tariff_id")
+        if baseline_id and baseline_id != CUSTOM_ID:
+            for entry in self.catalogue():
+                if entry.get("id") == baseline_id:
+                    config["baseline_tariff"] = {key: copy.deepcopy(entry[key]) for key in ["import_octopus_url", "export_octopus_url", "rates_import", "rates_export"] if entry.get(key)}
+                    break
 
         if value("year"):
             config["year"] = numeric("year")
@@ -894,6 +922,17 @@ class AnnualPage:
             settings = resolve_costs(None)
         costs = build_costs(number("total_kwp"), number("battery_kwh"), settings)
         return web.json_response(costs)
+
+    async def html_annual_delete(self, request):
+        """Delete one stored run and return to the comparison table.
+
+        Redirects rather than rendering in place so a refresh cannot re-post the
+        deletion - by then the run is gone, and the second attempt would report a
+        failure for something that already succeeded.
+        """
+        postdata = await request.post()
+        await delete_run(self._storage(), str(postdata.get("run", "")))
+        raise web.HTTPFound("./annual_compare")
 
     async def html_annual_array(self, request):
         """Add or remove a solar array and re-render the form.
@@ -1441,7 +1480,8 @@ annualLoadPlan();
 
         text = '<div class="annual-compare-scroll">\n<table class="comparison-table annual-compare">\n'
         text += (
-            "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>System cost</th><th>Tariff</th><th>Cost with Predbat</th><th>Saving vs no system</th>" "<th>PV only pays back in</th><th>PV + battery pays back in</th><th>With Predbat pays back in</th></tr>\n"
+            "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>System cost</th><th>Tariff</th><th>Cost with Predbat</th><th>Saving vs no system</th>"
+            "<th>PV only pays back in</th><th>PV + battery pays back in</th><th>With Predbat pays back in</th><th></th></tr>\n"
         )
         for run in runs:
             text += self._render_compare_row(run, selected_id)
@@ -1482,6 +1522,13 @@ annualLoadPlan();
         payback_reason = summary.get("payback_reason")
         for key in ["pv_only", "pv_battery", "pv_battery_predbat"]:
             text += self._render_payback_cell(payback_years, payback_reason, key)
+        # Its own little form: a button cannot post on its own, and wrapping the whole
+        # table in one form would make every row's button submit the same run id.
+        # Confirms first - a deleted run cannot be recovered, only re-run.
+        text += '<td><form action="./annual_delete" method="post" class="annual-delete">'
+        text += '<input type="hidden" name="run" value="{}">'.format(html.escape(run_id, quote=True))
+        text += '<button type="submit" class="annual-secondary" onclick="return confirm(\'Delete this run? It cannot be recovered - you would have to run the simulation again.\');">Delete</button>'
+        text += "</form></td>\n"
         text += "</tr>\n"
         return text
 

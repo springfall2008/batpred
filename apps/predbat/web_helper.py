@@ -7963,6 +7963,36 @@ menuLinks.forEach(link => {
     }
 });
 
+// Second pass: a sub-page belongs to its parent menu entry.
+// Some pages are sub-pages of a menu item and have no entry of their own - /annual_view
+// and /annual_compare both live under the ./annual tab. Without this they matched
+// nothing and fell through to the default below, which highlighted Dashboard while the
+// user was plainly on another tab.
+//
+// Only runs when the first pass found no exact match, so a page that DOES have its own
+// entry can never be captured by a shorter one - /apps_editor keeps its own highlight
+// rather than lighting up /apps. The longest matching prefix wins for the same reason.
+if (!activeFound && menuLinks.length > 0) {
+    let bestLink = null;
+    let bestLength = 0;
+    menuLinks.forEach(link => {
+        const linkPath = new URL(link.href).pathname;
+        const cleanLinkPath = linkPath.endsWith('/') ? linkPath.slice(0, -1) : linkPath;
+        const cleanCurrentPage = currentPage.endsWith('/') ? currentPage.slice(0, -1) : currentPage;
+        // Require a separator so /annual matches /annual_view but /app never matches
+        // /apps - a bare prefix would capture unrelated pages that merely start alike.
+        if (cleanLinkPath.length > bestLength &&
+            (cleanCurrentPage.startsWith(cleanLinkPath + '_') || cleanCurrentPage.startsWith(cleanLinkPath + '/'))) {
+            bestLink = link;
+            bestLength = cleanLinkPath.length;
+        }
+    });
+    if (bestLink) {
+        bestLink.classList.add('active');
+        activeFound = true;
+    }
+}
+
 // If no active item was found, set default
 if (!activeFound && menuLinks.length > 0) {
     const defaultLink = menuLinks[0]; // Set first menu item as default
