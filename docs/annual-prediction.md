@@ -390,17 +390,25 @@ published medians.
 
 ### If you have a real quote
 
-A quote beats any model of one. `quoted_pv_gbp` and `quoted_battery_gbp` (both £0 by
-default, meaning "no quote") replace the estimate for that part of the system. They sit on
-the configuration page rather than under **Advanced**, because a real figure is the most
-useful thing you can tell the tool.
+A quote beats any model of one. `quoted_pv_gbp` (**solar only**) and `quoted_total_gbp`
+(**solar and battery together**), both £0 by default meaning "no quote", replace the
+estimate. They sit on the configuration page rather than under **Advanced**, because a
+real figure is the most useful thing you can tell the tool.
 
-They are held separately, and either can be used on its own: quoted for a battery but not
-for panels, the battery uses your figure and the solar stays modelled. That split is not
-cosmetic — the PV-only payback needs the PV capital by itself, and a single whole-system
-figure cannot be divided back into its parts. Anything priced from a quote is labelled as
-such in the results and on the comparison page, so an estimate is never passed off as a
-real price.
+They are deliberately *solar-only* and *whole-system* rather than solar and battery
+separately, because that is the shape real quotes come in — an installer prices the
+installation, and nobody is handed a battery-only figure to copy out. **The battery cost
+is taken as the difference between the two**, so a single whole-system quote can be
+entered as it stands with no arithmetic.
+
+Either can be used on its own. Give only the whole-system price and the solar stays
+modelled, which is what the PV-only payback is worked out from; give only the solar price
+and the battery stays modelled. If a whole-system quote comes in below the solar figure
+beside it the battery is held at zero rather than going negative — a contradiction only
+you can resolve, but not one that should produce a total disagreeing with its own parts.
+
+Anything priced from a quote is labelled as such in the results and on the comparison
+page, so an estimate is never passed off as a real price.
 
 The configuration page shows the estimated install cost as you type, updating from the
 same cost model the run itself uses.

@@ -531,7 +531,7 @@ def test_web_annual_form(my_predbat):
         if 'id="annual-cost-estimate"' not in cost_form:
             print("  ERROR: the form should carry a live install-cost readout")
             failed = True
-        for field in ['name="cost_quoted_pv_gbp"', 'name="cost_quoted_battery_gbp"']:
+        for field in ['name="cost_quoted_pv_gbp"', 'name="cost_quoted_total_gbp"']:
             if field not in cost_form:
                 print("  ERROR: the form should offer {}".format(field))
                 failed = True
@@ -545,9 +545,9 @@ def test_web_annual_form(my_predbat):
         print("Test: a submitted quote reaches the config")
         quote_post = valid_postdata()
         quote_post["cost_quoted_pv_gbp"] = "7000"
-        quote_post["cost_quoted_battery_gbp"] = "4200"
+        quote_post["cost_quoted_total_gbp"] = "11200"
         quote_config = make_page(my_predbat).config_from_post(quote_post)
-        if quote_config.get("costs", {}).get("quoted_pv_gbp") != 7000 or quote_config.get("costs", {}).get("quoted_battery_gbp") != 4200:
+        if quote_config.get("costs", {}).get("quoted_pv_gbp") != 7000 or quote_config.get("costs", {}).get("quoted_total_gbp") != 11200:
             print("  ERROR: submitted quotes should reach the config, got {}".format(quote_config.get("costs")))
             failed = True
         validate_config(quote_config)

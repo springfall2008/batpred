@@ -495,9 +495,10 @@ class AnnualPage:
         costs_config = config.get("costs") or {}
         text += "<fieldset><legend>System cost</legend>\n"
         text += '<p class="annual-note" id="annual-cost-estimate">Estimating…</p>\n'
-        text += '<p class="annual-note">Estimated from typical UK install prices. If you have a real quote, enter it below and it will be used instead — leave a box at 0 to keep the estimate for that part.</p>\n'
-        text += self._number_field("cost_quoted_pv_gbp", "Quoted price for the solar", costs_config.get("quoted_pv_gbp", 0), suffix="£")
-        text += self._number_field("cost_quoted_battery_gbp", "Quoted price for the battery", costs_config.get("quoted_battery_gbp", 0), suffix="£")
+        text += '<p class="annual-note">Estimated from typical UK install prices. If you have a real quote, enter it below and it will be used instead — leave a box at 0 to keep the estimate.</p>\n'
+        text += '<p class="annual-note">Most quotes cover the whole installation, so the second box is usually the one you want. The battery price is taken as the difference between the two, and the solar-only figure is what the PV-only payback is worked out from — leave it at 0 and that row uses the estimate instead.</p>\n'
+        text += self._number_field("cost_quoted_pv_gbp", "Quoted price for solar only", costs_config.get("quoted_pv_gbp", 0), suffix="£")
+        text += self._number_field("cost_quoted_total_gbp", "Quoted price for solar &amp; battery", costs_config.get("quoted_total_gbp", 0), suffix="£")
         text += "</fieldset>\n"
 
         text += "<details><summary>Advanced</summary>\n"
@@ -866,7 +867,7 @@ class AnnualPage:
                 return 0.0
 
         overrides = {}
-        for name in ["quoted_pv_gbp", "quoted_battery_gbp"]:
+        for name in ["quoted_pv_gbp", "quoted_total_gbp"]:
             value = number(name)
             if value > 0:
                 overrides[name] = value
@@ -1652,7 +1653,7 @@ function annualCostPreview() {
     total_kwp: annualSolarTotalKwp(),
     battery_kwh: annualFieldValue('battery_size_kwh'),
     quoted_pv_gbp: annualFieldValue('cost_quoted_pv_gbp'),
-    quoted_battery_gbp: annualFieldValue('cost_quoted_battery_gbp')
+    quoted_total_gbp: annualFieldValue('cost_quoted_total_gbp')
   });
   fetch('./annual_cost_preview?' + params.toString()).then(function (r) {
     if (!r.ok) { throw new Error('preview failed'); }
@@ -1681,7 +1682,7 @@ document.addEventListener('input', function (event) {
     annualUpdateSolarTotal();
     annualCostPreviewSoon();
   }
-  if (event.target.id === 'battery_size_kwh' || event.target.id === 'cost_quoted_pv_gbp' || event.target.id === 'cost_quoted_battery_gbp') {
+  if (event.target.id === 'battery_size_kwh' || event.target.id === 'cost_quoted_pv_gbp' || event.target.id === 'cost_quoted_total_gbp') {
     annualCostPreviewSoon();
   }
 });

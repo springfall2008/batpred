@@ -104,32 +104,61 @@ def test_annual_costs(my_predbat):
         except ValueError:
             pass
 
-    print("Test: a quote replaces the modelled cost for that part of the system")
-    quoted = resolve_costs({"quoted_pv_gbp": 7000.0, "quoted_battery_gbp": 4200.0})
+    print("Test: solar-only and whole-system quotes replace the modelled costs")
+    quoted = resolve_costs({"quoted_pv_gbp": 7000.0, "quoted_total_gbp": 11200.0})
     costs = build_costs(5.0, 9.5, quoted)
-    if not close(costs["pv_gbp"], 7000.0) or not close(costs["battery_gbp"], 4200.0) or not close(costs["total_gbp"], 11200.0):
-        print("  ERROR: quotes should replace both modelled costs, got {}".format(costs))
+    if not close(costs["pv_gbp"], 7000.0) or not close(costs["total_gbp"], 11200.0):
+        print("  ERROR: both quotes should be used as given, got {}".format(costs))
+        failed = True
+    # The battery is the REMAINDER, so a user with one whole-system quote does no sums.
+    if not close(costs["battery_gbp"], 4200.0):
+        print("  ERROR: the battery should be the difference between the two quotes, got {}".format(costs))
         failed = True
     if not costs["pv_quoted"] or not costs["battery_quoted"]:
         print("  ERROR: a quoted figure should be flagged so the UI can label it, got {}".format(costs))
         failed = True
 
-    print("Test: each side is quoted independently, so one quote does not discard the other estimate")
-    # Someone quoted for a battery but not for panels should keep the modelled PV cost,
-    # rather than having to choose between a real figure and an estimate.
-    half = build_costs(5.0, 9.5, resolve_costs({"quoted_battery_gbp": 4200.0}))
-    if not close(half["battery_gbp"], 4200.0):
-        print("  ERROR: the battery quote should be used, got {}".format(half))
+    print("Test: a whole-system quote alone still leaves the PV-only payback on the modelled solar")
+    # The common case: one quote for the installation, nothing broken out for solar.
+    whole = build_costs(5.0, 9.5, resolve_costs({"quoted_total_gbp": 11200.0}))
+    modelled_pv = pv_cost_gbp(5.0, resolve_costs(None))
+    if not close(whole["pv_gbp"], modelled_pv):
+        print("  ERROR: with no solar-only quote the PV cost should still be modelled, got {}".format(whole))
         failed = True
-    if not close(half["pv_gbp"], pv_cost_gbp(5.0, resolve_costs(None))):
-        print("  ERROR: with no PV quote the PV cost should still be modelled, got {}".format(half))
+    if not close(whole["total_gbp"], 11200.0) or not close(whole["battery_gbp"], 11200.0 - modelled_pv):
+        print("  ERROR: the total should be the quote and the battery its remainder, got {}".format(whole))
         failed = True
-    if half["pv_quoted"] or not half["battery_quoted"]:
-        print("  ERROR: only the battery should be marked as quoted, got {}".format(half))
+    if whole["pv_quoted"]:
+        print("  ERROR: the solar was not quoted here and must not be labelled as such, got {}".format(whole))
+        failed = True
+
+    print("Test: a solar-only quote alone still leaves the battery modelled")
+    solar_only = build_costs(5.0, 9.5, resolve_costs({"quoted_pv_gbp": 7000.0}))
+    if not close(solar_only["pv_gbp"], 7000.0) or not close(solar_only["battery_gbp"], battery_cost_gbp(9.5, resolve_costs(None))):
+        print("  ERROR: a solar-only quote should leave the battery modelled, got {}".format(solar_only))
+        failed = True
+
+    print("Test: a whole-system quote below the solar figure cannot make the battery negative")
+    # A contradiction only the user can resolve, but it must not produce a negative cost
+    # or a total that disagrees with its own parts.
+    contradictory = build_costs(5.0, 9.5, resolve_costs({"quoted_pv_gbp": 9000.0, "quoted_total_gbp": 8000.0}))
+    if contradictory["battery_gbp"] < 0:
+        print("  ERROR: the battery cost must not go negative, got {}".format(contradictory))
+        failed = True
+    if not close(contradictory["total_gbp"], contradictory["pv_gbp"] + contradictory["battery_gbp"]):
+        print("  ERROR: the total must always equal its parts, got {}".format(contradictory))
+        failed = True
+
+    print("Test: a retired battery-only quote key is ignored rather than rejected or misread")
+    # An earlier revision asked for a battery-only price. A config saved against it must
+    # still load, and must NOT have that figure read as a whole-system total.
+    legacy = build_costs(5.0, 9.5, resolve_costs({"quoted_battery_gbp": 4200.0}))
+    if not close(legacy["pv_gbp"], modelled_pv) or legacy["battery_quoted"]:
+        print("  ERROR: the retired key should be ignored entirely, got {}".format(legacy))
         failed = True
 
     print("Test: a zero quote means 'not quoted', not 'free'")
-    unquoted = build_costs(5.0, 9.5, resolve_costs({"quoted_pv_gbp": 0, "quoted_battery_gbp": 0}))
+    unquoted = build_costs(5.0, 9.5, resolve_costs({"quoted_pv_gbp": 0, "quoted_total_gbp": 0}))
     if unquoted["pv_gbp"] <= 0 or unquoted["battery_gbp"] <= 0 or unquoted["pv_quoted"] or unquoted["battery_quoted"]:
         print("  ERROR: a zero quote should fall back to the model, got {}".format(unquoted))
         failed = True

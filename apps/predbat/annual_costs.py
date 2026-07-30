@@ -34,12 +34,22 @@ DEFAULT_COSTS = {
     "predbat_annual_gbp": 0.0,
     # A real quote, which beats any model of one. Zero means "no quote" rather than "free"
     # - a genuine zero-pound quote is not a thing, and treating 0 as unset matches how
-    # soc_max and the inverter limits are read elsewhere. Held separately for PV and
-    # battery because the PV-only payback needs the PV capital on its own: a single
-    # whole-system figure cannot be split back apart.
+    # soc_max and the inverter limits are read elsewhere.
+    #
+    # Solar-only and solar-plus-battery, NOT solar and battery separately: a real quote is
+    # almost always for the whole installation, and nobody is handed a battery-only price
+    # to copy out. The battery is the remainder of the two, so a user with one whole-system
+    # quote can enter it directly and still get a PV-only payback out of the modelled solar
+    # figure, without doing any arithmetic themselves.
     "quoted_pv_gbp": 0.0,
-    "quoted_battery_gbp": 0.0,
+    "quoted_total_gbp": 0.0,
 }
+
+# Accepted in a stored config but ignored: an earlier revision asked for a battery-only
+# price here. Rejecting it outright would make a config saved against that revision fail
+# to load, and silently reading it as a whole-system total would be worse - it would treat
+# a battery price as if it covered the solar too, and understate the system.
+_RETIRED_COST_KEYS = ("quoted_battery_gbp",)
 
 # Midpoints of the 0-4, 4-10 and 10-50 kWp bands the rates above are medians of.
 PV_RATE_ANCHORS_KWP = (2.0, 7.0, 30.0)
@@ -61,6 +71,8 @@ def resolve_costs(raw):
     if not isinstance(raw, dict):
         raise ValueError("annual.costs must be a mapping")
     for key, value in raw.items():
+        if key in _RETIRED_COST_KEYS:
+            continue
         if key not in DEFAULT_COSTS:
             raise ValueError("annual.costs.{} is not a recognised cost setting".format(key))
         try:
@@ -120,17 +132,24 @@ def battery_cost_gbp(size_kwh, settings):
 
 def build_costs(total_kwp, battery_kwh, settings):
     """Return the capital cost breakdown for a system of this size."""
-    # A quote beats the model. Each side is overridden independently, so someone who has
-    # been quoted for a battery but not for panels gets their real figure for the battery
-    # and the estimate for the PV, rather than having to choose between them.
+    # A quote beats the model, and the two quotes are independent: a whole-system price on
+    # its own still leaves the PV-only payback resting on the modelled solar figure, and a
+    # solar-only price on its own still leaves the battery modelled.
     #
-    # A quote is honoured even where the modelled cost would be zero - if you have been
-    # quoted for a battery, you are getting a battery, whatever the size field currently
-    # says.
+    # The battery is always the REMAINDER of the two rather than a figure of its own,
+    # because that is the shape real quotes come in - one price for the installation, and
+    # sometimes a separate one for solar alone. Deriving it means a user with a single
+    # whole-system quote does no arithmetic.
     quoted_pv = float(settings.get("quoted_pv_gbp", 0) or 0)
-    quoted_battery = float(settings.get("quoted_battery_gbp", 0) or 0)
+    quoted_total = float(settings.get("quoted_total_gbp", 0) or 0)
     pv = quoted_pv if quoted_pv > 0 else pv_cost_gbp(total_kwp, settings)
-    battery = quoted_battery if quoted_battery > 0 else battery_cost_gbp(battery_kwh, settings)
+    if quoted_total > 0:
+        # max(0, ...) guards a whole-system quote that comes in under the solar figure
+        # beside it - a contradiction only the user can resolve, but one that must not
+        # produce a negative battery cost and a total that disagrees with its own parts.
+        battery = max(0.0, quoted_total - pv)
+    else:
+        battery = battery_cost_gbp(battery_kwh, settings)
     return {
         "pv_gbp": round(pv, 2),
         "battery_gbp": round(battery, 2),
@@ -138,7 +157,7 @@ def build_costs(total_kwp, battery_kwh, settings):
         # So the UI can label a real quote as such rather than presenting it as an
         # estimate, and can leave the £/kWp note off a figure it does not describe.
         "pv_quoted": quoted_pv > 0,
-        "battery_quoted": quoted_battery > 0,
+        "battery_quoted": quoted_total > 0,
         "pv_rate_gbp_per_kwp": round(pv_rate_gbp_per_kwp(total_kwp or 0, settings), 2) if (total_kwp or 0) > 0 and quoted_pv <= 0 else 0.0,
         "total_kwp": round(float(total_kwp or 0), 3),
         "battery_kwh": round(float(battery_kwh or 0), 3),
