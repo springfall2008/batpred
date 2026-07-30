@@ -2118,6 +2118,117 @@ def test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat):
     return failed
 
 
+def test_fetch_pv_forecast_source_change_warning_steady_state(my_predbat):
+    """
+    Two consecutive identical fetch cycles must not repeat the source-change warning.
+    fetch_pv_forecast runs every plan interval, so a warning that re-fires on every steady-state
+    cycle instead of only on a genuine configuration change would flood the log and the web UI's
+    Warnings tab.
+    """
+    print("  - test_fetch_pv_forecast_source_change_warning_steady_state")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = False
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        captured = []
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI."""
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+            captured.clear()
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_second_run = [m for m in captured if "forecast source changed" in m]
+        if changed_second_run:
+            print(f"ERROR: Expected no source-change warning on a second identical cycle, got {changed_second_run}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_transient_fallback_no_warning(my_predbat):
+    """
+    A same-cycle fallback (Open-Meteo fails, Forecast.solar covers it) must not warn about a
+    source change: the configured/intended source is still Open-Meteo, only the data used this
+    cycle happened to come from Forecast.solar. Warning here would be a false alarm for every
+    transient Open-Meteo blip.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_transient_fallback_no_warning")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+
+        # Simulate a prior cycle having already settled on Open-Meteo as the configured source,
+        # so this run exercises the same-cycle-fallback path rather than the no-previous-source
+        # case, which would never warn regardless of the fix.
+        run_async(test_api.solar.storage.save("solcast", "active_forecast_source", {"source": "open_meteo"}, format="json", expiry=None))
+
+        # Open-Meteo fails this cycle only
+        test_api.set_mock_response("api.open-meteo.com", {"error": "server error"}, 500)
+        test_api.set_mock_response("ensemble-api.open-meteo.com", {"error": "server error"}, 500)
+        # Forecast.solar fallback succeeds
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        captured = []
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI."""
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed = [m for m in captured if "forecast source changed" in m]
+        if changed:
+            print(f"ERROR: A same-cycle fallback must not warn about a source change, got {changed}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_fetch_pv_forecast_ha_sensors(my_predbat):
     """
     Integration test: fetch_pv_forecast using HA sensors (Solcast integration).
@@ -4004,6 +4115,8 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat)
+    failed |= test_fetch_pv_forecast_source_change_warning_steady_state(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_transient_fallback_no_warning(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
 
     # 15-minute resolution tests

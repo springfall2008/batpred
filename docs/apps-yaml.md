@@ -1602,9 +1602,9 @@ When the fallback is active, Predbat derives the Open-Meteo request from the sam
 
 Setting `forecast_solar_open_meteo_first: true` reverses the order: Predbat fetches from Open-Meteo
 first and only calls Forecast.solar if Open-Meteo returns no data. Your existing `forecast_solar`
-entries are reused as-is, so no other configuration changes are needed. If you also have an
-`open_meteo_forecast` section, that is used instead, which lets you apply Open-Meteo-specific
-options such as `shading_factors`.
+per-array entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency) are reused
+as-is. If you also have an `open_meteo_forecast` section, that is used instead, which lets you apply
+Open-Meteo-specific options such as `shading_factors`.
 
 ```yaml
   forecast_solar:
@@ -1617,6 +1617,13 @@ options such as `shading_factors`.
 
 While Open-Meteo is succeeding, Forecast.solar is not called at all, so no Forecast.solar API quota
 is consumed.
+
+Note that `forecast_solar_max_age` is not reused while this flag is set — it only applies to the
+Forecast.solar path. The refresh interval instead comes from `open_meteo_forecast_max_age`
+(default 4 hours).
+
+If `forecast_solar_open_meteo_backup` is also set to true, it has no effect: `forecast_solar_open_meteo_first`
+already makes Open-Meteo the primary source, so there is nothing left for the backup setting to do.
 
 Note that PV calibration compares the last seven days of recorded forecasts against actual
 generation. After changing the source, that history still holds values from the previous source, so
