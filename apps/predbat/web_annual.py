@@ -29,7 +29,17 @@ from annual import AnnualConfigError, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
 from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
-from tariff_catalogue import BASELINE_DEFAULT_ID, CUSTOM_ID, PRICE_CAP_IMPORT_P, PRICE_CAP_STANDING_CHARGE_P, SEG_EXPORT_P, merged_catalogue
+from tariff_catalogue import (
+    BASELINE_DEFAULT_EXPORT_ID,
+    BASELINE_DEFAULT_IMPORT_ID,
+    CUSTOM_ID,
+    NO_EXPORT_ID,
+    PRICE_CAP_IMPORT_P,
+    PRICE_CAP_STANDING_CHARGE_P,
+    SEG_EXPORT_P,
+    merged_export_catalogue,
+    merged_import_catalogue,
+)
 from web_helper import get_plan_css, get_plan_renderer_js
 
 # Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
@@ -281,9 +291,13 @@ class AnnualPage:
         """
         return self._arg("octopus_api_key", None, indirect=False), self._arg("octopus_api_account", None, indirect=False)
 
-    def catalogue(self):
-        """Return the tariff dropdown entries: built-ins merged with the user's own."""
-        return merged_catalogue(self._arg("compare_list", None))
+    def import_catalogue(self):
+        """Return the import tariff dropdown entries: built-ins merged with the user's own."""
+        return merged_import_catalogue(self._arg("compare_list", None))
+
+    def export_catalogue(self):
+        """Return the export tariff dropdown entries: built-ins merged with the user's own."""
+        return merged_export_catalogue(self._arg("compare_list", None))
 
     def _config_path(self):
         """Return the path of the saved annual configuration."""
@@ -339,27 +353,59 @@ class AnnualPage:
         )
 
     @staticmethod
-    def _selected_tariff_id(tariff, catalogue):
-        """Return the catalogue id matching this tariff, or Custom, or None if it is empty.
+    def _selected_side_id(tariff, catalogue, url_key, rates_key):
+        """Return the catalogue id matching one side of this tariff, Custom, or None if unset.
 
         A hand-entered URL matches no catalogue entry, which is what Custom means, so it
         is the fallback rather than leaving the dropdown showing the first entry.
 
         Basic-rates entries are matched on their RATES, not a URL: several catalogue
-        entries ("Price cap import / SEG export", "Eon Next Drive") carry no URL at all,
+        entries ("Price cap", "Eon Next Drive", "No export payment") carry no URL at all,
         and matching on URL alone left the dropdown showing the wrong tariff for them.
+
+        Matching each side against its own list is also what makes a saved tariff
+        round-trip correctly. The single paired dropdown this replaced matched on the
+        import URL alone, so "Agile / Prime" and "Agile / Fixed" were indistinguishable
+        and a saved config reloaded as whichever appeared first in the list.
         """
         tariff = tariff or {}
-        current_import_url = tariff.get("import_octopus_url")
-        current_rates = tariff.get("rates_import")
-        if not current_import_url and not current_rates:
+        current_url = tariff.get(url_key)
+        current_rates = tariff.get(rates_key)
+        if not current_url and not current_rates:
             return None
         for entry in catalogue:
-            if current_import_url and entry.get("import_octopus_url") == current_import_url:
+            if current_url and entry.get(url_key) == current_url:
                 return entry["id"]
-            if not current_import_url and entry.get("rates_import") == current_rates:
+            if not current_url and entry.get(rates_key) == current_rates:
                 return entry["id"]
         return CUSTOM_ID
+
+    @staticmethod
+    def _tariff_select(name, label, catalogue, selected_id, url_key):
+        """Return one tariff dropdown as HTML.
+
+        The URL each entry carries rides along in ``data-url`` so picking Custom can
+        start from the tariff that was on screen rather than from an empty box.
+        """
+        text = '<div class="annual-field"><label for="{name}">{label}</label><select id="{name}" name="{name}" onchange="annualTariffChanged(\'{name}\')">\n'.format(name=name, label=label)
+        for entry in catalogue:
+            text += '<option value="{}" data-url="{}" {}>{}</option>\n'.format(
+                html.escape(entry["id"], quote=True),
+                html.escape(entry.get(url_key, ""), quote=True),
+                "selected" if entry["id"] == selected_id else "",
+                html.escape(entry["name"], quote=True),
+            )
+        return text + "</select></div>\n"
+
+    @classmethod
+    def _selected_import_id(cls, tariff, catalogue):
+        """Return the import catalogue id matching this tariff, or Custom, or None if unset."""
+        return cls._selected_side_id(tariff, catalogue, "import_octopus_url", "rates_import")
+
+    @classmethod
+    def _selected_export_id(cls, tariff, catalogue):
+        """Return the export catalogue id matching this tariff, or Custom, or None if unset."""
+        return cls._selected_side_id(tariff, catalogue, "export_octopus_url", "rates_export")
 
     def render_form(self, config, errors=None):
         """Return the configuration form as HTML, populated from ``config``.
@@ -500,24 +546,26 @@ class AnnualPage:
         text += "</fieldset>\n"
 
         text += "<fieldset><legend>Tariff</legend>\n"
-        text += '<div class="annual-field"><label for="tariff_id">Tariff</label><select id="tariff_id" name="tariff_id" onchange="annualTariffChanged()">\n'
-        catalogue = self.catalogue()
-        selected_id = self._selected_tariff_id(tariff, catalogue)
-        for entry in catalogue:
-            text += '<option value="{}" data-import="{}" data-export="{}" {}>{}</option>\n'.format(
-                html.escape(entry["id"], quote=True),
-                html.escape(entry.get("import_octopus_url", ""), quote=True),
-                html.escape(entry.get("export_octopus_url", ""), quote=True),
-                "selected" if entry["id"] == selected_id else "",
-                html.escape(entry["name"], quote=True),
-            )
-        text += "</select></div>\n"
-        # The URL boxes belong to Custom alone. The dropdown is authoritative for every
-        # other entry (see config_from_post), so leaving them on screen for a built-in
+        # Import and export are picked separately so any combination can be modelled -
+        # including an import tariff paired with no export payment at all, which is what
+        # a household without an export agreement is actually on.
+        import_catalogue = self.import_catalogue()
+        export_catalogue = self.export_catalogue()
+        selected_import = self._selected_import_id(tariff, import_catalogue)
+        # A tariff carrying no export source at all means export is not paid for, which is
+        # a real selection rather than an absent one. Stated explicitly so the default does
+        # not rest on "No export payment" happening to be first in the list.
+        selected_export = self._selected_export_id(tariff, export_catalogue) or NO_EXPORT_ID
+        text += self._tariff_select("tariff_import_id", "Import tariff", import_catalogue, selected_import, "import_octopus_url")
+        # The URL box belongs to Custom alone. The dropdown is authoritative for every
+        # other entry (see config_from_post), so leaving it on screen for a built-in
         # tariff invites someone to edit a value that is then ignored - and worse, used
         # to look like the selection when it no longer matches it.
-        text += '<div id="tariff-custom-urls" style="display:{}">\n'.format("block" if selected_id == CUSTOM_ID else "none")
+        text += '<div id="tariff-custom-import" style="display:{}">\n'.format("block" if selected_import == CUSTOM_ID else "none")
         text += self._text_field("tariff_import_url", "Import rates URL", tariff.get("import_octopus_url", ""), wide=True)
+        text += "</div>\n"
+        text += self._tariff_select("tariff_export_id", "Export tariff", export_catalogue, selected_export, "export_octopus_url")
+        text += '<div id="tariff-custom-export" style="display:{}">\n'.format("block" if selected_export == CUSTOM_ID else "none")
         text += self._text_field("tariff_export_url", "Export rates URL", tariff.get("export_octopus_url", ""), wide=True)
         text += "</div>\n"
         text += self._text_field("tariff_dno_region", "Octopus region letter", tariff.get("dno_region", ""))
@@ -525,14 +573,16 @@ class AnnualPage:
         # Falls back to the price cap when the config carries no baseline - a config
         # saved before this existed, or a fresh prefill. Matches validate_config's own
         # default, so what the form shows is what a run would actually use.
-        baseline_id = self._selected_tariff_id(baseline, catalogue) or BASELINE_DEFAULT_ID
-        text += '<div class="annual-field"><label for="baseline_tariff_id">Tariff without PV or a battery</label><select id="baseline_tariff_id" name="baseline_tariff_id">\n'
-        for entry in catalogue:
+        baseline_id = self._selected_import_id(baseline, import_catalogue) or BASELINE_DEFAULT_IMPORT_ID
+        text += '<div class="annual-field"><label for="baseline_tariff_id">Import tariff without PV or a battery</label><select id="baseline_tariff_id" name="baseline_tariff_id">\n'
+        for entry in import_catalogue:
             if entry["id"] == CUSTOM_ID:
                 continue
             text += '<option value="{}" {}>{}</option>\n'.format(html.escape(entry["id"], quote=True), "selected" if entry["id"] == baseline_id else "", html.escape(entry["name"], quote=True))
         text += "</select></div>\n"
-        text += '<p class="annual-note">Used only for the no-PV/battery comparison. Someone with no system would not be on a battery tariff, so pricing that scenario on one credits it with a saving it could never have had. The price cap is the sensible default.</p>\n'
+        # Import only, deliberately: with no PV and no battery there is nothing to export,
+        # so an export tariff for this scenario would be a control that changes no figure.
+        text += '<p class="annual-note">Used only for the no-PV/battery comparison, which has nothing to export - so only the import side applies. Someone with no system would not be on a battery tariff, so pricing that scenario on one credits it with a saving it could never have had. The price cap is the sensible default.</p>\n'
         text += self._number_field("tariff_standing_charge", "Standing charge", tariff.get("standing_charge_p_per_day", PRICE_CAP_STANDING_CHARGE_P), suffix="p/day")
         text += "</fieldset>\n"
 
@@ -672,20 +722,25 @@ class AnnualPage:
         # below then silently ran the run at the price-cap default instead of the tariff
         # named in the dropdown - a different set of rates to the one on screen.
         tariff = {"standing_charge_p_per_day": numeric("tariff_standing_charge", 0)}
-        selected_tariff = value("tariff_id") or CUSTOM_ID
-        if selected_tariff != CUSTOM_ID:
-            for entry in self.catalogue():
-                if entry.get("id") != selected_tariff:
+        for field, catalogue, url_key, rates_key, url_field in [
+            ("tariff_import_id", self.import_catalogue(), "import_octopus_url", "rates_import", "tariff_import_url"),
+            ("tariff_export_id", self.export_catalogue(), "export_octopus_url", "rates_export", "tariff_export_url"),
+        ]:
+            selected = value(field) or CUSTOM_ID
+            if selected == CUSTOM_ID:
+                if value(url_field):
+                    tariff[url_key] = value(url_field)
+                continue
+            for entry in catalogue:
+                if entry.get("id") != selected:
                     continue
-                for key in ["import_octopus_url", "export_octopus_url", "rates_import", "rates_export"]:
-                    if entry.get(key):
+                for key in [url_key, rates_key]:
+                    # `is not None` rather than truthiness: "No export payment" is
+                    # rates_export [{"rate": 0.0}], a perfectly real selection, and a
+                    # rate of zero must not be dropped here as if nothing were chosen.
+                    if entry.get(key) is not None:
                         tariff[key] = copy.deepcopy(entry[key])
                 break
-        else:
-            if value("tariff_import_url"):
-                tariff["import_octopus_url"] = value("tariff_import_url")
-            if value("tariff_export_url"):
-                tariff["export_octopus_url"] = value("tariff_export_url")
 
         if value("tariff_dno_region"):
             tariff["dno_region"] = value("tariff_dno_region")
@@ -702,9 +757,17 @@ class AnnualPage:
         # rather than this silently inventing rates.
         baseline_id = value("baseline_tariff_id")
         if baseline_id and baseline_id != CUSTOM_ID:
-            for entry in self.catalogue():
+            for entry in self.import_catalogue():
                 if entry.get("id") == baseline_id:
-                    config["baseline_tariff"] = {key: copy.deepcopy(entry[key]) for key in ["import_octopus_url", "export_octopus_url", "rates_import", "rates_export"] if entry.get(key)}
+                    baseline = {key: copy.deepcopy(entry[key]) for key in ["import_octopus_url", "rates_import"] if entry.get(key)}
+                    # The scenario exports nothing, so this export side is inert - it is
+                    # carried only so the baseline tariff has the same shape as any other
+                    # and AnnualTariff has a defined export source rather than none.
+                    for export_entry in self.export_catalogue():
+                        if export_entry["id"] == BASELINE_DEFAULT_EXPORT_ID:
+                            baseline.update({key: copy.deepcopy(export_entry[key]) for key in ["export_octopus_url", "rates_export"] if export_entry.get(key)})
+                            break
+                    config["baseline_tariff"] = baseline
                     break
 
         if value("year"):
@@ -1061,6 +1124,10 @@ class AnnualPage:
         rates = tariff.get(rates_key)
         if isinstance(rates, list) and rates:
             values = [entry.get("rate") for entry in rates if isinstance(entry, dict) and entry.get("rate") is not None]
+            # "flat 0p" is accurate but reads like a missing figure. Naming the choice
+            # keeps a deliberate no-export run distinguishable from a broken one.
+            if values and set(values) == {0} and rates_key == "rates_export":
+                return "no export payment", ""
             if values and len(set(values)) == 1:
                 return "flat {}p".format(values[0]), ""
             if values:
@@ -1689,16 +1756,22 @@ table.annual-compare { white-space: nowrap; }
     def render_script(self):
         """Return the polling and tariff-picker script."""
         return """<script>
-function annualTariffChanged() {
-  var select = document.getElementById('tariff_id');
+function annualTariffChanged(field) {
+  // Import and export are independent, so each select drives only its own URL box.
+  var sides = {
+    'tariff_import_id': ['tariff_import_url', 'tariff-custom-import'],
+    'tariff_export_id': ['tariff_export_url', 'tariff-custom-export']
+  };
+  var side = sides[field];
+  if (!side) { return; }
+  var select = document.getElementById(field);
   var option = select.options[select.selectedIndex];
-  // The URL boxes belong to Custom alone - every other entry is taken from the
-  // catalogue server-side, so showing editable boxes for one would offer an edit that
-  // is then ignored. They are still populated, so switching to Custom starts from the
-  // tariff you were looking at rather than from nothing.
-  document.getElementById('tariff_import_url').value = option.getAttribute('data-import') || '';
-  document.getElementById('tariff_export_url').value = option.getAttribute('data-export') || '';
-  var custom = document.getElementById('tariff-custom-urls');
+  // The URL box belongs to Custom alone - every other entry is taken from the catalogue
+  // server-side, so showing an editable box for one would offer an edit that is then
+  // ignored. It is still populated, so switching to Custom starts from the tariff you
+  // were looking at rather than from nothing.
+  document.getElementById(side[0]).value = option.getAttribute('data-url') || '';
+  var custom = document.getElementById(side[1]);
   if (custom) { custom.style.display = (select.value === 'custom') ? 'block' : 'none'; }
 }
 function annualCancel() { fetch('./annual_cancel', {method: 'POST'}); }

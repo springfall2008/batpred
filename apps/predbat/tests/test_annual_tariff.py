@@ -774,4 +774,75 @@ def test_annual_tariff(my_predbat):
         print("  ERROR: tariff D's own export rate expected 30.0, got {} - if this is 5.0 instead, tariff D was served tariff C's cached current-rates pattern".format(d_export.get(0)))
         failed = True
 
+    print("Test: a mixed tariff prices each side from its own source")
+
+    # Import and export are selected independently in the web UI, so "basic-rate import
+    # with a downloaded export tariff" (price cap import + Octopus Outgoing Prime, say)
+    # is an ordinary choice. rates_for used to gate BOTH sides on one
+    # `self.import_url or self.export_url` test: this config took the URL branch, found
+    # no import rows to stamp, and priced the whole year's import at zero - a plausible
+    # looking run that was silently free. Asserting on the VALUES, not just presence,
+    # is what makes that failure visible.
+    async def mixed_export_fetch(url):
+        """Serve a flat 12p export payload for the export URL; no import URL is ever requested."""
+        return {"results": [{"value_inc_vat": 12.0, "valid_from": "2025-03-01T00:00:00Z", "valid_to": None}], "next": None}
+
+    mixed_config = {"rates_import": [{"rate": 26.11}], "export_octopus_url": "https://example.com/mixed/export/", "standing_charge_p_per_day": 57.19}
+    mixed = AnnualTariff(mixed_config, log=print, predbat=my_predbat, fetch_json=mixed_export_fetch, timezone="Europe/London")
+    if not asyncio.run(mixed.fetch_month(2025, 3)):
+        print("  ERROR: a basic-rate import with a downloaded export should be a usable month")
+        failed = True
+    mixed_import, mixed_export = mixed.rates_for(pytz.utc.localize(datetime(2025, 3, 10)), 24 * 60)
+    if len(mixed_import) < 24 * 60:
+        print("  ERROR: expected a full day of import rates from the basic pattern, got {} minutes".format(len(mixed_import)))
+        failed = True
+    if abs(mixed_import.get(0, -1) - 26.11) > 0.01:
+        print("  ERROR: import should come from rates_import (26.11p), got {} - zero or missing means the basic import was ignored because export had a URL".format(mixed_import.get(0)))
+        failed = True
+    if abs(mixed_export.get(0, -1) - 12.0) > 0.01:
+        print("  ERROR: export should come from the downloaded URL (12.0p), got {}".format(mixed_export.get(0)))
+        failed = True
+
+    print("Test: the mirror image - a downloaded import with a basic-rate export")
+
+    async def mixed_import_fetch(url):
+        """Serve a flat 30p import payload for the import URL."""
+        return {"results": [{"value_inc_vat": 30.0, "valid_from": "2025-03-01T00:00:00Z", "valid_to": None}], "next": None}
+
+    mirror_config = {"import_octopus_url": "https://example.com/mirror/import/", "rates_export": [{"rate": 4.1}], "standing_charge_p_per_day": 0.0}
+    mirror = AnnualTariff(mirror_config, log=print, predbat=my_predbat, fetch_json=mixed_import_fetch, timezone="Europe/London")
+    if not asyncio.run(mirror.fetch_month(2025, 3)):
+        print("  ERROR: a downloaded import with a basic-rate export should be a usable month")
+        failed = True
+    mirror_import, mirror_export = mirror.rates_for(pytz.utc.localize(datetime(2025, 3, 10)), 24 * 60)
+    if abs(mirror_import.get(0, -1) - 30.0) > 0.01:
+        print("  ERROR: import should come from the downloaded URL (30.0p), got {}".format(mirror_import.get(0)))
+        failed = True
+    if abs(mirror_export.get(0, -1) - 4.1) > 0.01:
+        print("  ERROR: export should come from rates_export (4.1p), got {} - missing means the basic export was ignored because import had a URL".format(mirror_export.get(0)))
+        failed = True
+
+    print("Test: a deliberate zero export rate is priced, not left unrated")
+    # "No export payment" is a flat 0p rate. Every minute must be stamped 0, not left
+    # absent: an absent rate reads as "unknown" to the caller rather than "unpaid", and
+    # it must not raise the unpaid-export caveat, which is for a download that failed.
+    zero_config = {"rates_import": [{"rate": 26.11}], "rates_export": [{"rate": 0.0}], "standing_charge_p_per_day": 0.0}
+    zero = AnnualTariff(zero_config, log=print, predbat=my_predbat, timezone="Europe/London")
+    if not asyncio.run(zero.fetch_month(2025, 3)):
+        print("  ERROR: a zero export rate should still be a usable month")
+        failed = True
+    zero_import, zero_export = zero.rates_for(pytz.utc.localize(datetime(2025, 3, 10)), 24 * 60)
+    if len(zero_export) < 24 * 60:
+        print("  ERROR: expected a full day of export rates stamped at zero, got {} minutes".format(len(zero_export)))
+        failed = True
+    if set(zero_export.values()) != {0.0}:
+        print("  ERROR: every export minute should be 0p, got values {}".format(sorted(set(zero_export.values()))[:5]))
+        failed = True
+    if abs(zero_import.get(0, -1) - 26.11) > 0.01:
+        print("  ERROR: import should be unaffected by a zero export, got {}".format(zero_import.get(0)))
+        failed = True
+    if zero.unpaid_export_months:
+        print("  ERROR: a deliberate zero export must not raise the unpaid-export caveat, got {}".format(zero.unpaid_export_months))
+        failed = True
+
     return failed

@@ -64,26 +64,42 @@ themselves. Removing every array is allowed and gives a battery-only run — the
 so rather than leaving you wondering whether it took. Neither button saves: like any
 other edit, the change is yours until you press **Save settings** or **Run simulations**.
 
-The **Tariff** dropdown lists a curated set of built-in Octopus products (Agile, Cosy,
-Flux, Intelligent Go and so on) plus, if your `apps.yaml` has a `compare_list`, your own
-entries from it — a user entry with the same id as a built-in replaces it rather than
-appearing twice. **The dropdown is what runs.** Picking an entry takes that tariff's
-rates straight from the catalogue, whether it is defined by an Octopus URL or by a fixed
-rate structure; the URL fields appear only when you choose **Custom**, because that is
-the only case where what you type in them is used. If the chosen URL contains
-`{dno_region}` (as the Octopus product codes do),
-the **Octopus region letter** field is required; leaving it blank is rejected up front,
-with the field named in the error, rather than left to fail as a 404 partway through the
-run. Choosing **Custom** reveals the URL fields, pre-filled with whichever tariff you were
-looking at, so hand-entering one starts from something rather than from nothing.
+**Import tariff** and **Export tariff** are chosen separately, so any combination can be
+modelled — Agile import with a fixed export deal, the price cap with Octopus Outgoing
+Prime, or anything else you want to try. Each dropdown lists a curated set of built-in
+products (Agile, Cosy, Flux, Intelligent Go, Outgoing Fixed, Outgoing Prime, Agile
+Outgoing and so on) plus, if your `apps.yaml` has a `compare_list`, your own entries from
+it — a user entry with the same id as a built-in replaces it rather than appearing twice.
+A `compare_list` entry defining both sides is offered in both dropdowns; one defining
+only an import is offered only as an import.
 
-**Tariff without PV or a battery** sets what the no-PV/battery comparison is priced on,
+**No export payment** is the export option for a home with no export agreement, and
+prices export at 0p rather than leaving it unpriced. If your tariff has no export source
+at all this is what the dropdown shows, because it is the accurate description of that
+situation rather than a missing setting. It is also the right choice for a physical
+zero-export (G99) limitation: unpaid export and curtailed export both earn nothing, so
+the costs come out the same, though the reported export kWh will still show the surplus
+leaving the house.
+
+**The dropdowns are what run.** Picking an entry takes that tariff's rates straight from
+the catalogue, whether it is defined by an Octopus URL or by a fixed rate structure. Each
+URL field appears only when you choose **Custom** for that side, because that is the only
+case where what you type in it is used — and the two sides are independent, so a custom
+import leaves the export box alone. If a chosen URL contains `{dno_region}` (as the
+Octopus product codes do), the **Octopus region letter** field is required; leaving it
+blank is rejected up front, with the field named in the error, rather than left to fail
+as a 404 partway through the run. Choosing **Custom** reveals that side's URL field,
+pre-filled with whichever tariff you were looking at, so hand-entering one starts from
+something rather than from nothing.
+
+**Import tariff without PV or a battery** sets what the no-PV/battery comparison is priced on,
 and defaults to the price cap. This matters more than it looks: a household with no system
 would not be on a battery tariff, because the cheap overnight rates those offer are only
 worth having once you have somewhere to put the energy. Pricing the counterfactual on your
 own smart tariff therefore credits it with a saving it could never have had, and
 understates what the system is worth. It applies to the no-PV/battery scenario only —
-every other scenario uses your main tariff.
+every other scenario uses your main tariff. Only the import side is offered, because a
+home with no PV and no battery has nothing to export.
 
 One simplification to know about: both are charged the **main tariff's standing charge**,
 so if the two tariffs differ there, that difference is not included in the savings or
