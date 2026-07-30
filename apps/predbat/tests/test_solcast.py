@@ -2041,6 +2041,83 @@ def test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_pred
     return failed
 
 
+def test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat):
+    """
+    Switching the active forecast source emits a warning so the 7-day PV calibration
+    settling period is visible in the log rather than silently skewing the scaling factor.
+    """
+    print("  - test_fetch_pv_forecast_open_meteo_first_logs_source_change")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{"latitude": 51.5, "longitude": -0.1, "declination": 30, "azimuth": 0, "kwp": 3.0}]
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            "api.open-meteo.com",
+            {
+                "hourly": {
+                    "time": ["2025-06-15T12:00", "2025-06-15T13:00"],
+                    "global_tilted_irradiance": [500.0, 600.0],
+                    "temperature_2m": [25.0, 25.0],
+                    "wind_speed_10m": [1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            "ensemble-api.open-meteo.com",
+            {"hourly": {"time": ["2025-06-15T12:00", "2025-06-15T13:00"], "global_tilted_irradiance_member01": [400.0, 480.0]}},
+        )
+        test_api.set_mock_response(
+            "forecast.solar",
+            {
+                "result": {"watts": {"2025-06-15T12:00:00+0000": 500, "2025-06-15T12:30:00+0000": 600}},
+                "message": {"info": {"time": "2025-06-15T11:30:00+0000"}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            """Create a mock aiohttp session."""
+            return test_api.mock_aiohttp_session()
+
+        # MockBase.log only prints, so capture messages by replacing the copied log reference.
+        # ComponentBase copies base.log onto the component, so this override is local to the test.
+        captured = []
+
+        def capture_log(message, quiet=True):
+            """Capture a log message emitted by SolarAPI."""
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        # First run on forecast.solar establishes the stored source, no warning expected
+        test_api.solar.forecast_solar_open_meteo_first = False
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_first_run = [m for m in captured if "forecast source changed" in m]
+        if changed_first_run:
+            print(f"ERROR: Did not expect a source change warning on the first run, got {changed_first_run}")
+            failed = True
+
+        # Second run flips to Open-Meteo - a warning is expected
+        captured.clear()
+        test_api.solar.forecast_solar_open_meteo_first = True
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_second_run = [m for m in captured if "forecast source changed" in m]
+        if not changed_second_run:
+            print("ERROR: Expected a source change warning after switching to Open-Meteo, got none")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
 def test_fetch_pv_forecast_ha_sensors(my_predbat):
     """
     Integration test: fetch_pv_forecast using HA sensors (Solcast integration).
@@ -3926,6 +4003,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat)
     failed |= test_fetch_pv_forecast_ha_sensors(my_predbat)
 
     # 15-minute resolution tests
