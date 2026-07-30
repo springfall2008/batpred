@@ -1214,7 +1214,7 @@ class SolarAPI(ComponentBase):
         if previous == source:
             return
         if previous:
-            self.log("Warn: SolarAPI: Solar forecast source changed from {} to {}, PV calibration will settle over the next 7 days".format(previous, source))
+            self.log("Warn: SolarAPI: Configured solar forecast source changed from {} to {}, PV calibration will settle over the next 7 days".format(previous, source))
         await self.storage.save("solcast", "active_forecast_source", {"source": source}, format="json", expiry=None)
 
     async def fetch_pv_forecast(self):
