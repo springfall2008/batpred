@@ -1011,8 +1011,14 @@ class SolarAPI(ComponentBase):
         worst_day_scaling = dp4(worst_day_scaling / average_day_scaling)
         best_day_scaling = dp4(best_day_scaling / average_day_scaling)
 
-        # Clamp best and worst day scaling factors to sensible values
-        worst_day_scaling = max(worst_day_scaling, 0.3)
+        # Clamp best and worst day scaling factors to sensible values. worst_day_scaling is a
+        # "worst day relative to average" multiplier, so it is semantically incoherent above
+        # 1.0 - and capping it there also guarantees pv_forecast_minute10 (which is derived
+        # from the already-capped P50 series by multiplying by this factor, see create_pv10
+        # below) can never exceed P50 or the per-slot cap. average_day_scaling is hard-clamped
+        # to 2.0 above, so when every day's actual/forecast ratio exceeds 2.0 the division below
+        # would otherwise leave worst_day_scaling > 1.0.
+        worst_day_scaling = min(max(worst_day_scaling, 0.3), 1.0)
         best_day_scaling = min(best_day_scaling, 2.0)
         if not enabled_calibration:
             worst_day_scaling = 0.7
@@ -1135,7 +1141,8 @@ class SolarAPI(ComponentBase):
                 capped_slots += 1
 
         if capped_slots:
-            self.log("SolarAPI: PV Calibration: Capped {} slots to the array ceiling ({}kW observed peak, {}kW ceiling)".format(capped_slots, dp2(max_pv_power_hist), dp2(max(1.2 * max_kwh, max_pv_power_hist))))
+            ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
+            self.log("SolarAPI: PV Calibration: Capped {} slots to the array ceiling ({}kW observed peak, {}kW ceiling)".format(capped_slots, dp2(max_pv_power_hist), dp2(ceiling_kw)))
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
