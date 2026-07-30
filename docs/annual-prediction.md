@@ -44,10 +44,12 @@ and a saved link both behave.
 The form prefills from your live Predbat setup wherever it can: location, solar arrays,
 battery capacity and inverter/export limits, and any Octopus import/export tariff URLs
 and DNO region already configured. If your `octopus_api_key` and `octopus_api_account`
-are both set, they are filled in too and **Import from Octopus** is selected, since your
-real metered consumption models the year far better than the synthetic profile. Only a
-complete pair counts — a key with no account cannot download anything, so an incomplete
-one is ignored rather than offered as a run that would fail partway through.
+are both set, those two boxes are filled in too, so choosing **Import from Octopus** is a
+click rather than a paste. Only a complete pair counts — a key with no account cannot
+download anything, so an incomplete one is left blank rather than offered as a run that
+would fail partway through. The load source itself always starts on **Enter my usage**:
+the Octopus option reads your import meter, which is only sound for a home with no solar
+or battery fitted, so it is never selected for you.
 
 Anything it cannot determine — most commonly the
 whole form, on an instance with no battery and no solar array configured — falls back to
@@ -135,8 +137,12 @@ follows the completion.
 
 ### The results view
 
-The Results page shows an annual totals table, the chart below it, a month-by-month
-breakdown and the run's caveats. One thing carries over unchanged from how
+The Results page shows what this run used, an annual totals table, the chart below it, a
+month-by-month breakdown and the run's caveats. "What this run used" is read from the
+run's own stored settings rather than from the form, so switching the selector to a run
+made on a different system relabels every figure with that system's settings. It names
+all three tariffs — baseline, import and export — because a saving quoted without the
+baseline it is measured from cannot be checked. One thing carries over unchanged from how
 the engine reports it, and matters for reading the numbers correctly: a month with
 `status: unavailable` is left out of the chart and the totals — it is never drawn as a
 zero-cost bar or counted as a free month.
@@ -154,12 +160,19 @@ of that download (see [Debugging a run](#debugging-a-run)).
 The Compare page lists every stored run in one table, newest first, so you do not have
 to hold numbers in your head while flipping the Results selector back and forth. Each
 row is: run (label, linking to that run in the Results page), solar size, battery size,
-system cost, import tariff, cost with Predbat, saving versus no system, and three payback
-columns — PV only, PV + battery, and + Predbat. A system cost that came from a quote you
-entered rather than from the cost model is marked "quoted", so the two are never confused.
-The row for the run the Results page is currently showing is highlighted. Ten columns is
-wide, so the table scrolls sideways inside its own container rather than widening the
-whole page.
+system cost, the run's three tariffs, cost with Predbat, saving versus no system, and
+three payback columns — PV only, PV + battery, and + Predbat. A system cost that came
+from a quote you entered rather than from the cost model is marked "quoted", so the two
+are never confused. The row for the run the Results page is currently showing is
+highlighted. Thirteen columns is wide, so the table scrolls sideways inside its own
+container rather than widening the whole page.
+
+The three tariff columns are **Baseline**, **Import** and **Export**, in that order —
+the baseline first because it is what the other two are being judged against, so the row
+reads "instead of this, on these, it costs this". Each names the tariff as the dropdown
+that chose it does, including your own `compare_list` tariffs; a hand-entered URL that
+matches no entry shows its Octopus product code instead. A run stored before a tariff
+was recorded shows a dash for it.
 
 **A dash in this table means the figure could not be computed — it is not a zero.**
 This is the distinction the table turns on, so it is worth being explicit about it:

@@ -20,7 +20,7 @@ from aiohttp import web as aiohttp_web
 
 from annual import AnnualConfigError, validate_config
 from annual_store import list_runs, load_run, save_run
-from tariff_catalogue import CUSTOM_ID, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
+from tariff_catalogue import CUSTOM_ID, EXPORT_TARIFFS, IMPORT_TARIFFS, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage, _json_for_script
 
@@ -418,46 +418,55 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: the annual kWh value should appear in the form")
             failed = True
 
-        print("Test: a configured Octopus key and account prefill, select the Octopus source, and still validate")
-        # _validate_load treats octopus and annual_kwh as mutually exclusive, so a prefill
-        # that merely ADDED the octopus block to the default load would render fine and
-        # then fail the moment it was run. Validating here is the assertion that matters.
+        print("Test: a configured Octopus key and account fill the fields but do NOT select the Octopus source")
+        # The Octopus source reads the IMPORT meter, and on a home that already has solar
+        # or a battery that meter has had the existing system's self-consumption and
+        # discharge subtracted from every reading - which is why the form carries a banner
+        # warning against using it there. Selecting it automatically for anyone with
+        # credentials in apps.yaml therefore picked exactly the wrong source for a
+        # configured Predbat, which by definition has a battery or an array. Predicted
+        # consumption is always the default; the credentials still prefill so switching to
+        # Octopus is one click rather than a paste.
         my_predbat.args["octopus_api_key"] = "sk_live_exampleKey123"
         my_predbat.args["octopus_api_account"] = "A-1234ABCD"
         octopus_page = make_page(my_predbat)
         octopus_config = octopus_page.prefill_config()
-        if (octopus_config.get("load") or {}).get("octopus", {}).get("api_key") != "sk_live_exampleKey123":
-            print("  ERROR: a configured Octopus API key should prefill, got {}".format(octopus_config.get("load")))
+        if "octopus" in (octopus_config.get("load") or {}):
+            print("  ERROR: configured Octopus credentials must not select the Octopus load source, got {}".format(octopus_config.get("load")))
             failed = True
-        if (octopus_config.get("load") or {}).get("octopus", {}).get("account_id") != "A-1234ABCD":
-            print("  ERROR: a configured Octopus account should prefill, got {}".format(octopus_config.get("load")))
-            failed = True
-        if "annual_kwh" in (octopus_config.get("load") or {}):
-            print("  ERROR: the prefilled octopus load must not also carry annual_kwh - they are mutually exclusive")
+        if (octopus_config.get("load") or {}).get("annual_kwh") != DEFAULT_CONFIG["load"]["annual_kwh"]:
+            print("  ERROR: the prefill should keep the predicted-consumption load, got {}".format(octopus_config.get("load")))
             failed = True
         try:
             validate_config(octopus_config)
         except Exception as error:
-            print("  ERROR: an Octopus-prefilled config must validate, got {}".format(error))
+            print("  ERROR: the prefilled config must validate, got {}".format(error))
             failed = True
         octopus_form = octopus_page.render_form(octopus_config)
-        if not re.search(r'value="octopus"[^>]*checked', octopus_form):
-            print("  ERROR: the Octopus radio should be selected when a key and account are configured")
+        if re.search(r'value="octopus"[^>]*checked', octopus_form):
+            print("  ERROR: the Octopus radio must not be selected just because credentials are configured")
             failed = True
-        # The manual inputs must still show usable values, so switching the radio back
-        # does not present an empty form.
+        if not re.search(r'value="manual"[^>]*checked', octopus_form):
+            print("  ERROR: the predicted-consumption radio should be the selected default")
+            failed = True
+        # The credentials still reach the boxes, so choosing Octopus does not mean pasting
+        # a key in by hand.
+        if "sk_live_exampleKey123" not in octopus_form or "A-1234ABCD" not in octopus_form:
+            print("  ERROR: configured Octopus credentials should still prefill the fields")
+            failed = True
         if 'id="load_annual_kwh"' not in octopus_form or 'value=""' in octopus_form.split('id="load_annual_kwh"')[1][:80]:
             print("  ERROR: the manual consumption field should still show a default value")
             failed = True
 
-        print("Test: a key without an account (or the reverse) does not select the Octopus source")
-        # An incomplete pair cannot download anything, so offering it would only produce
-        # a run that fails partway through.
+        print("Test: a key without an account (or the reverse) does not prefill the credential fields")
+        # An incomplete pair cannot download anything, so showing half of it would only
+        # produce a run that fails partway through.
         my_predbat.args["octopus_api_key"] = "sk_live_exampleKey123"
         my_predbat.args.pop("octopus_api_account", None)
-        partial_config = make_page(my_predbat).prefill_config()
-        if "octopus" in (partial_config.get("load") or {}):
-            print("  ERROR: an API key with no account must not select the Octopus source")
+        partial_page = make_page(my_predbat)
+        partial_form = partial_page.render_form(partial_page.prefill_config())
+        if "sk_live_exampleKey123" in partial_form:
+            print("  ERROR: an API key with no account must not prefill the credential fields")
             failed = True
         my_predbat.args.pop("octopus_api_key", None)
 
@@ -1409,9 +1418,15 @@ def sample_run_results():
             "solar": [{"kwp": 5.6, "declination": 35, "azimuth": 180}],
             "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
             "load": {"annual_kwh": 3800, "shape": "night", "car_charging_kwh": 3000, "car_rate_kw": 7.4},
+            # Templated, with dno_region beside them: results["config"] is the RAW config
+            # (annual.py stores self.config["raw"]), and AnnualTariff substitutes the
+            # region at fetch time without writing it back. A pre-substituted URL here
+            # would not be what a real run stores, and would quietly stop matching the
+            # catalogue that names it.
             "tariff": {
-                "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/",
-                "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-A/standard-unit-rates/",
+                "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/",
+                "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-{dno_region}/standard-unit-rates/",
+                "dno_region": "A",
                 "standing_charge_p_per_day": 60.0,
             },
             "samples_per_month": 2,
@@ -1475,10 +1490,33 @@ def test_web_annual_results(my_predbat):
 
     print("Test: a run states the key settings it actually used")
     details = page._render_run_details(results)
-    for expected in ["5.6 kWp", "9.5 kWh", "AGILE-24-10-01", "OUTGOING-PRIME-FIX-12M-26-06-23", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "Octopus Outgoing Prime", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
         if expected not in details:
             print("  ERROR: the run details should state {}, got {}".format(expected, details))
             failed = True
+    # The full URL stays as the cell's title for anyone checking the exact endpoint - the
+    # catalogue name replaces the product code on screen, it does not hide the source.
+    for expected in ["AGILE-24-10-01", "OUTGOING-PRIME-FIX-12M-26-06-23"]:
+        if expected not in details:
+            print("  ERROR: the run details should keep {} as the cell's title, got {}".format(expected, details))
+            failed = True
+
+    print("Test: the run details name the baseline tariff the saving is measured against")
+    # Without it the page states a saving but not what it is a saving FROM, which cannot
+    # be checked - and the compare table beside it does show the baseline.
+    baseline_run = copy.deepcopy(results)
+    baseline_run["config"]["baseline_tariff"] = {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}]}
+    baseline_details = page._render_run_details(baseline_run)
+    if "Baseline tariff" not in baseline_details or "Price cap" not in baseline_details:
+        print("  ERROR: the run details should name the baseline tariff, got {}".format(baseline_details))
+        failed = True
+
+    print("Test: a run that recorded no baseline omits the row rather than inventing one")
+    no_baseline = copy.deepcopy(results)
+    no_baseline["config"].pop("baseline_tariff", None)
+    if "Baseline tariff" in page._render_run_details(no_baseline):
+        print("  ERROR: a run with no stored baseline should not show a baseline row")
+        failed = True
 
     print("Test: the details describe the RUN's own config, not the live form")
     # The selector can show a run from a completely different system; labelling it with
@@ -1888,6 +1926,16 @@ def test_web_annual_pages(my_predbat):
         failed = True
 
     print("Test: the compare table lists every run with its own figures")
+
+    def catalogue_entry(entries, entry_id):
+        """Return one built-in catalogue entry by id, so fixtures cannot drift from it."""
+        return [entry for entry in entries if entry["id"] == entry_id][0]
+
+    agile = catalogue_entry(IMPORT_TARIFFS, "agile")
+    cosy = catalogue_entry(IMPORT_TARIFFS, "cosy")
+    price_cap = catalogue_entry(IMPORT_TARIFFS, "price_cap")
+    outgoing_fixed = catalogue_entry(EXPORT_TARIFFS, "outgoing_fixed")
+    no_export = catalogue_entry(EXPORT_TARIFFS, NO_EXPORT_ID)
     runs = [
         {
             "id": "20260728-0900",
@@ -1895,12 +1943,15 @@ def test_web_annual_pages(my_predbat):
             # this test used a label like "9.5 kWh battery, 5.6 kWp, Agile", which meant
             # the Solar/Battery assertions below were satisfied by the label text alone -
             # deleting the Solar/Battery <td> cells outright would still have passed.
-            "label": "System Alpha, Agile",
+            # It carries no tariff name either, for the same reason: the three tariff
+            # cells must be doing the work, not the label.
+            "label": "System Alpha",
             "summary": {
                 "total_kwp": 5.6,
                 "battery_kwh": 9.5,
                 "total_gbp": 12250.0,
-                "tariff": "Agile",
+                "tariff": {"import_octopus_url": agile["import_octopus_url"], "export_octopus_url": outgoing_fixed["export_octopus_url"]},
+                "baseline_tariff": {"rates_import": price_cap["rates_import"]},
                 "cost_with_predbat_p": 66000.0,
                 "saving_vs_none_p": 114000.0,
                 "payback_years": {"pv_only": 17.8, "pv_battery": 13.61, "pv_battery_predbat": 11.78},
@@ -1910,13 +1961,14 @@ def test_web_annual_pages(my_predbat):
         },
         {
             "id": "20260728-0800",
-            "label": "System Beta, Cosy",
+            "label": "System Beta",
             "summary": {
                 "total_kwp": 12.0,
                 "battery_kwh": 20.0,
                 "total_gbp": 25400.0,
                 "quoted": True,
-                "tariff": "Cosy",
+                "tariff": {"import_octopus_url": cosy["import_octopus_url"], "rates_export": no_export["rates_export"]},
+                "baseline_tariff": {"rates_import": price_cap["rates_import"]},
                 "cost_with_predbat_p": 40000.0,
                 "saving_vs_none_p": 140000.0,
                 "payback_years": {"pv_only": 9.1, "pv_battery": 8.2, "pv_battery_predbat": 7.0},
@@ -1926,10 +1978,92 @@ def test_web_annual_pages(my_predbat):
         },
     ]
     table = page.render_compare(runs, "20260728-0900")
-    for expected in ["5.6 kWp", "9.5 kWh", "Agile", "13.6", "12 kWp", "20 kWh", "Cosy", "8.2"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "13.6", "12 kWp", "20 kWh", "Octopus Cosy", "8.2"]:
         if expected not in table:
             print("  ERROR: the compare table should show {}, got {}".format(expected, table))
             failed = True
+
+    print("Test: the compare table has a column each for the baseline, import and export tariffs")
+    # One "Tariff" column could not describe a run once import and export became
+    # independent choices: two runs differing only in their export deal looked
+    # identical, and the baseline the saving is measured against was invisible.
+    header = re.search(r"<tr[^>]*>.*?</tr>", table, re.S).group(0)
+    for heading in ["Baseline", "Import", "Export"]:
+        if "<th>{}</th>".format(heading) not in header:
+            print("  ERROR: the compare table should have a {} column, got {}".format(heading, header))
+            failed = True
+    if "<th>Tariff</th>" in header:
+        print("  ERROR: the single Tariff column should have been replaced by the three, got {}".format(header))
+        failed = True
+
+    print("Test: the tariff cells show the catalogue's own names, on the run that used them")
+    alpha_row, beta_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", table, re.S) if "<th>" not in row]
+    for row, label, expected_names, unexpected_names in [
+        (alpha_row, "System Alpha", ["Price cap", "Octopus Agile", "Octopus Outgoing Fixed"], ["Octopus Cosy", "No export payment"]),
+        (beta_row, "System Beta", ["Price cap", "Octopus Cosy", "No export payment"], ["Octopus Agile", "Octopus Outgoing Fixed"]),
+    ]:
+        for name in expected_names:
+            if name not in row:
+                print("  ERROR: the {} row should name {}, got {}".format(label, name, row))
+                failed = True
+        for name in unexpected_names:
+            if name in row:
+                print("  ERROR: the {} row should not carry {}, got {}".format(label, name, row))
+                failed = True
+
+    print("Test: a tariff that matches no catalogue entry falls back to something readable, not a blank")
+    # A hand-entered URL, or a compare_list entry the user has since deleted. The
+    # product code is the part of a 130-character URL anyone recognises.
+    odd = [
+        {
+            "id": "odd",
+            "label": "System Delta",
+            "summary": {
+                "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL-24/electricity-tariffs/x/", "rates_export": [{"rate": 15.0}]},
+                "baseline_tariff": {},
+                "payback_years": {},
+            },
+        }
+    ]
+    odd_table = page.render_compare(odd, "odd")
+    if "MY-OWN-DEAL-24" not in odd_table:
+        print("  ERROR: an unmatched import URL should fall back to its product code, got {}".format(odd_table))
+        failed = True
+    if "flat 15.0p" not in odd_table:
+        print("  ERROR: an unmatched export rate should be described rather than blanked, got {}".format(odd_table))
+        failed = True
+
+    print("Test: a run stored before the tariff fields renders as dashes rather than raising")
+    # backfill_summaries normally refreshes these, but it skips a run whose document has
+    # gone; the table must still draw rather than 500 the whole compare page.
+    legacy = [{"id": "legacy", "label": "System Epsilon", "summary": {"total_kwp": 4.0, "tariff": "Agile", "payback_years": {}}}]
+    legacy_table = page.render_compare(legacy, "legacy")
+    if "System Epsilon" not in legacy_table:
+        print("  ERROR: a legacy summary should still render its row, got {}".format(legacy_table))
+        failed = True
+
+    print("Test: the compare table's own compare_list tariffs are named, not reduced to a rate")
+    # The reason naming happens here rather than in annual_store: only the web layer can
+    # read compare_list, so a name computed at save time would be blind to the user's
+    # own tariffs.
+    my_predbat.args["compare_list"] = [{"id": "mine", "name": "My works deal", "rates_import": [{"rate": 11.11}]}]
+    mine = [{"id": "mine-run", "label": "System Zeta", "summary": {"tariff": {"rates_import": [{"rate": 11.11}]}, "baseline_tariff": {}, "payback_years": {}}}]
+    if "My works deal" not in make_page(my_predbat).render_compare(mine, "mine-run"):
+        print("  ERROR: a compare_list tariff should be named in the compare table")
+        failed = True
+    my_predbat.args.pop("compare_list", None)
+
+    print("Test: only the data cells are held on one line, so the headers can wrap and the columns shrink")
+    # nowrap on the whole table forced every column to at least its header width on one
+    # line - "PV + battery pays back in" is ~24 characters holding open a column whose
+    # data is "4.2 years". Thirteen columns of that scrolled far further than they needed.
+    css = page.render_css()
+    if "table.annual-compare th" not in css.replace("\n", " "):
+        print("  ERROR: the compare table's headers should be allowed to wrap")
+        failed = True
+    if "table.annual-compare { white-space: nowrap; }" in css:
+        print("  ERROR: nowrap must not apply to the whole compare table, or the headers cannot wrap")
+        failed = True
 
     print("Test: each run's figures land in its OWN row, not merely somewhere in the table")
     # A per-table substring check (above) cannot tell "each run got its own row" apart
@@ -1945,8 +2079,8 @@ def test_web_annual_pages(my_predbat):
         failed = True
     else:
         row_expectations = [
-            ("System Alpha, Agile", ["5.6 kWp", "9.5 kWh", "Agile", "13.6"], ["Cosy", "8.2", "12 kWp", "20 kWh"]),
-            ("System Beta, Cosy", ["12 kWp", "20 kWh", "Cosy", "8.2"], ["Agile", "13.6", "5.6 kWp", "9.5 kWh"]),
+            ("System Alpha", ["5.6 kWp", "9.5 kWh", "Octopus Agile", "13.6"], ["Octopus Cosy", "8.2", "12 kWp", "20 kWh"]),
+            ("System Beta", ["12 kWp", "20 kWh", "Octopus Cosy", "8.2"], ["Octopus Agile", "13.6", "5.6 kWp", "9.5 kWh"]),
         ]
         for row, (label_fragment, must_contain, must_not_contain) in zip(data_rows, row_expectations):
             if label_fragment not in row:

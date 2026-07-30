@@ -37,6 +37,7 @@ from tariff_catalogue import (
     PRICE_CAP_IMPORT_P,
     PRICE_CAP_STANDING_CHARGE_P,
     SEG_EXPORT_P,
+    match_entry,
     merged_export_catalogue,
     merged_import_catalogue,
 )
@@ -262,21 +263,16 @@ class AnnualPage:
         if dno_region:
             config["tariff"]["dno_region"] = dno_region
 
-        api_key, account_id = self._octopus_from_args()
-        if api_key and account_id:
-            # Both are needed to download consumption - a key without an account (or the
-            # reverse) cannot fetch anything, so only a complete pair is worth offering.
-            # Selecting the Octopus source as well as filling the fields is the point:
-            # this user has real metered consumption available, which models their year
-            # far better than the synthetic annual-kWh profile the default falls back to.
-            #
-            # Replaces the load block rather than adding to it: _validate_load treats
-            # octopus and annual_kwh/car_charging_kwh as mutually exclusive (the metered
-            # series already includes car charging, so carrying both would double-count
-            # it) and rejects a config holding both. render_form falls back to
-            # DEFAULT_CONFIG for the manual inputs, so they still show sensible values if
-            # the user switches the radio back to "Enter my usage".
-            config["load"] = {"octopus": {"api_key": str(api_key), "account_id": str(account_id)}, "shape": config["load"].get("shape", "flat")}
+        # The load source is deliberately NOT prefilled from the Octopus credentials, even
+        # when a complete pair is configured. Octopus gives us the IMPORT meter - what was
+        # bought from the grid - and on a home that already has solar or a battery, that
+        # system's self-consumption and discharge have already been subtracted from every
+        # reading; modelling a system on top counts the same saving twice. The form says so
+        # in its own banner. Anyone whose apps.yaml holds Octopus credentials is by
+        # definition a configured Predbat with a battery or an array, so auto-selecting it
+        # picked the one source that is wrong for them. Predicted consumption stays the
+        # default and the choice is left to the user; render_form still fills the key and
+        # account boxes from these args, so switching is a click rather than a paste.
 
         return config
 
@@ -356,29 +352,18 @@ class AnnualPage:
     def _selected_side_id(tariff, catalogue, url_key, rates_key):
         """Return the catalogue id matching one side of this tariff, Custom, or None if unset.
 
-        A hand-entered URL matches no catalogue entry, which is what Custom means, so it
-        is the fallback rather than leaving the dropdown showing the first entry.
-
-        Basic-rates entries are matched on their RATES, not a URL: several catalogue
-        entries ("Price cap", "Eon Next Drive", "No export payment") carry no URL at all,
-        and matching on URL alone left the dropdown showing the wrong tariff for them.
-
-        Matching each side against its own list is also what makes a saved tariff
-        round-trip correctly. The single paired dropdown this replaced matched on the
-        import URL alone, so "Agile / Prime" and "Agile / Fixed" were indistinguishable
-        and a saved config reloaded as whichever appeared first in the list.
+        The matching itself is ``tariff_catalogue.match_entry``, shared with the compare
+        table so the dropdown and the table cannot describe the same tariff differently.
+        What is added here is the dropdown's own two special cases: None for a side that
+        was never set, so the caller can leave the select alone, and Custom for one that
+        matches no entry - a hand-entered URL is exactly what Custom means, and falling
+        back to it beats leaving the dropdown showing the first entry in the list.
         """
         tariff = tariff or {}
-        current_url = tariff.get(url_key)
-        current_rates = tariff.get(rates_key)
-        if not current_url and not current_rates:
+        if not tariff.get(url_key) and not tariff.get(rates_key):
             return None
-        for entry in catalogue:
-            if current_url and entry.get(url_key) == current_url:
-                return entry["id"]
-            if not current_url and entry.get(rates_key) == current_rates:
-                return entry["id"]
-        return CUSTOM_ID
+        entry = match_entry(catalogue, tariff, url_key, rates_key)
+        return entry["id"] if entry else CUSTOM_ID
 
     @staticmethod
     def _tariff_select(name, label, catalogue, selected_id, url_key):
@@ -1036,9 +1021,13 @@ class AnnualPage:
 
         "Default" here means ``prefill_config()``, not the bare example: it reads
         whatever this Predbat knows - solar arrays, battery and inverter sizes, tariff
-        URLs, region, Octopus credentials - and fills only the gaps with the example UK
-        system. So on a configured instance this resets to *your* setup rather than to a
-        stranger's, which is the point of offering it.
+        URLs, region - and fills only the gaps with the example UK system. So on a
+        configured instance this resets to *your* setup rather than to a stranger's,
+        which is the point of offering it.
+
+        The load source is the exception: a reset always returns it to predicted
+        consumption rather than the Octopus import meter, which is only sound for a home
+        with no solar or battery fitted. See ``prefill_config()``.
 
         The result is saved, not merely displayed: a reset the user has to remember to
         confirm with Save would leave the old configuration on disk and running, which is
@@ -1134,6 +1123,34 @@ class AnnualPage:
                 return "{} rates, {}p to {}p".format(len(values), min(values), max(values)), ""
         return "not set", ""
 
+    @classmethod
+    def _name_tariff_side(cls, catalogue, tariff, url_key, rates_key):
+        """Return (display text, title) naming one side of a tariff from the catalogue.
+
+        The catalogue's own name first - "Octopus Agile", "Price cap", "No export
+        payment" - because that is the wording the user picked on the form, and it is
+        the only thing that can describe an entry carrying no URL to parse. The user's
+        own ``compare_list`` tariffs are named too, which is precisely why this happens
+        here rather than at save time: only the web layer can read ``compare_list``.
+
+        A side matching nothing - a hand-entered URL, or a ``compare_list`` entry since
+        deleted - falls through to ``_describe_tariff_side``, which digs out whatever is
+        readable rather than leaving the cell blank.
+
+        The full URL is still carried as the title in both cases, so naming a tariff
+        never hides which endpoint it actually priced against.
+        """
+        tariff = tariff or {}
+        entry = match_entry(catalogue, tariff, url_key, rates_key)
+        if entry:
+            return html.escape(entry["name"], quote=True), html.escape(str(tariff.get(url_key) or ""), quote=True)
+        return cls._describe_tariff_side(tariff, url_key, rates_key)
+
+    @staticmethod
+    def _tariff_cell(value, title):
+        """Return one tariff cell's HTML, wrapped in a title only when there is one to show."""
+        return '<span title="{}">{}</span>'.format(title, value) if title else value
+
     def _render_run_details(self, results):
         """Return a small table of the key settings this run actually used.
 
@@ -1192,11 +1209,22 @@ class AnnualPage:
             car = "{:,.0f} kWh a year at {:g} kW".format(car_kwh, float(load.get("car_rate_kw", 7.4) or 7.4)) if car_kwh > 0 else "none"
             rows.append(("Car charging", html.escape(car, quote=True)))
 
+        # The baseline is what the no-PV/battery scenario was priced on, and therefore
+        # what every saving on this page is measured FROM. Stating the saving without it
+        # leaves a figure nobody can check. Only shown when the run recorded one - an
+        # older run did not, and inventing today's default for it would be a guess about
+        # what that run actually did.
+        baseline = config.get("baseline_tariff")
+        if isinstance(baseline, dict) and baseline:
+            rows.append(("Baseline tariff", self._tariff_cell(*self._name_tariff_side(self.import_catalogue(), baseline, "import_octopus_url", "rates_import"))))
+
         tariff = config.get("tariff") or {}
         if isinstance(tariff, dict):
-            for label, url_key, rates_key in [("Import tariff", "import_octopus_url", "rates_import"), ("Export tariff", "export_octopus_url", "rates_export")]:
-                value, title = self._describe_tariff_side(tariff, url_key, rates_key)
-                rows.append((label, '<span title="{}">{}</span>'.format(title, value) if title else value))
+            for label, catalogue, url_key, rates_key in [
+                ("Import tariff", self.import_catalogue(), "import_octopus_url", "rates_import"),
+                ("Export tariff", self.export_catalogue(), "export_octopus_url", "rates_export"),
+            ]:
+                rows.append((label, self._tariff_cell(*self._name_tariff_side(catalogue, tariff, url_key, rates_key))))
             if tariff.get("standing_charge_p_per_day") is not None:
                 rows.append(("Standing charge", html.escape("{:g}p a day".format(float(tariff["standing_charge_p_per_day"])), quote=True)))
 
@@ -1545,22 +1573,32 @@ annualLoadPlan();
         if not runs:
             return '<div class="annual-compare-scroll"><p>No runs have been stored yet — run some simulations to compare them here.</p></div>\n'
 
+        # Built once and passed down rather than per row: each merge walks the built-ins
+        # and the user's compare_list, and twenty rows would repeat that work twenty times
+        # for an answer that cannot change between them.
+        catalogues = (self.import_catalogue(), self.export_catalogue())
+
         text = '<div class="annual-compare-scroll">\n<table class="comparison-table annual-compare">\n'
         text += (
-            "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>System cost</th><th>Tariff</th><th>Cost with Predbat</th><th>Saving vs no system</th>"
+            "<tr><th>Run</th><th>Solar</th><th>Battery</th><th>System cost</th><th>Baseline</th><th>Import</th><th>Export</th>"
+            "<th>Cost with Predbat</th><th>Saving vs no system</th>"
             "<th>PV only pays back in</th><th>PV + battery pays back in</th><th>With Predbat pays back in</th><th></th></tr>\n"
         )
         for run in runs:
-            text += self._render_compare_row(run, selected_id)
+            text += self._render_compare_row(run, selected_id, catalogues)
         text += "</table>\n</div>\n"
         return text
 
-    def _render_compare_row(self, run, selected_id):
+    def _render_compare_row(self, run, selected_id, catalogues):
         """Return one comparison row, reading entirely from ``run``'s own summary.
 
         Reading anything other than ``run["summary"]`` here - another run in the
         list, or the live configuration form - has already been a defect once on
         this branch: it misattributes every figure on the row to the wrong system.
+
+        ``catalogues`` is the (import, export) pair used to name the three tariffs; it
+        describes the tariffs on offer, not any one run, so sharing it across rows cannot
+        leak one run's figures into another's.
         """
         summary = run.get("summary") or {}
         run_id = str(run.get("id", ""))
@@ -1581,8 +1619,22 @@ annualLoadPlan();
         else:
             price = "—"
         text += "<td>{}</td>\n".format(price)
-        tariff = summary.get("tariff")
-        text += "<td>{}</td>\n".format(html.escape(str(tariff), quote=True) if tariff else "—")
+        import_catalogue, export_catalogue = catalogues
+        # Baseline first: it is what the other two are being judged against, so reading
+        # left to right gives "instead of this, on these, it costs...".
+        for catalogue, tariff, url_key, rates_key in [
+            (import_catalogue, summary.get("baseline_tariff"), "import_octopus_url", "rates_import"),
+            (import_catalogue, summary.get("tariff"), "import_octopus_url", "rates_import"),
+            (export_catalogue, summary.get("tariff"), "export_octopus_url", "rates_export"),
+        ]:
+            # A summary written before these fields existed holds a plain string here
+            # rather than a dict. backfill_summaries normally refreshes those, but it
+            # skips a run whose document has gone, so the table must still draw a row for
+            # one rather than failing the whole page over a value it cannot describe.
+            if not isinstance(tariff, dict) or not tariff:
+                text += "<td>—</td>\n"
+                continue
+            text += "<td>{}</td>\n".format(self._tariff_cell(*self._name_tariff_side(catalogue, tariff, url_key, rates_key)))
         text += "<td>{}</td>\n".format(self._compare_money(summary.get("cost_with_predbat_p")))
         text += "<td>{}</td>\n".format(self._compare_money(summary.get("saving_vs_none_p")))
         payback_years = summary.get("payback_years") or {}
@@ -1735,11 +1787,21 @@ annualLoadPlan();
 .annual-caveats li { margin-bottom: 0.35rem; }
 .annual-unavailable { opacity: 0.6; font-style: italic; }
 .annual-synthesised-tag { font-size: 0.75rem; font-weight: 600; color: #D55E00; border: 1px solid #D55E00; border-radius: 3px; padding: 0.05rem 0.35rem; margin-left: 0.35rem; }
-/* Nine columns is wide - the table scrolls within its own container instead of
+/* Thirteen columns is wide - the table scrolls within its own container instead of
    forcing the whole page wider, which would otherwise push the nav strip and
    everything else sideways on anything narrower than a desktop monitor. */
 .annual-compare-scroll { overflow-x: auto; }
-table.annual-compare { white-space: nowrap; }
+/* nowrap on the DATA only. Applied to the whole table it caught the headers too, and
+   since a column can be no narrower than its widest unbreakable content, every column
+   was held open at its heading set on one line - "PV + battery pays back in" is ~24
+   characters propping open a column whose data reads "4.2 years". Letting the headings
+   wrap onto two or three short lines lets each column shrink to the figures it holds,
+   which is what keeps three tariff columns affordable. */
+table.annual-compare td { white-space: nowrap; }
+table.annual-compare th { white-space: normal; vertical-align: bottom; }
+/* The headings are now the tall part of the table, so the padding that suited a
+   single-line row is more than they need between columns. */
+table.annual-compare th, table.annual-compare td { padding: 4px 8px 4px 4px; }
 .annual-compare-current { font-weight: 600; }
 </style>
 """

@@ -17,6 +17,7 @@ from tariff_catalogue import (
     IMPORT_TARIFFS,
     NO_EXPORT_ID,
     convert_compare_entry,
+    match_entry,
     merged_export_catalogue,
     merged_import_catalogue,
 )
@@ -169,11 +170,11 @@ def test_tariff_catalogue(my_predbat):
     print("Test: an import-only compare_list entry is not offered as an export tariff")
     # Offering it would produce a run priced against an export tariff that does not
     # exist, which reads downstream as "export earns nothing" with no warning.
-    import_only = [{"id": "imponly", "name": "Import only", "rates_import": [{"rate": 9.0}]}]
-    if "imponly" not in [entry["id"] for entry in merged_import_catalogue(import_only)]:
+    import_only = [{"id": "import_only", "name": "Import only", "rates_import": [{"rate": 9.0}]}]
+    if "import_only" not in [entry["id"] for entry in merged_import_catalogue(import_only)]:
         print("  ERROR: an import-only entry should appear in the import list")
         failed = True
-    if "imponly" in [entry["id"] for entry in merged_export_catalogue(import_only)]:
+    if "import_only" in [entry["id"] for entry in merged_export_catalogue(import_only)]:
         print("  ERROR: an import-only entry must not appear in the export list")
         failed = True
 
@@ -202,5 +203,60 @@ def test_tariff_catalogue(my_predbat):
         if "ok" not in [entry["id"] for entry in merged]:
             print("  ERROR: {} the valid entry should survive alongside malformed ones".format(name))
             failed = True
+
+    print("Test: match_entry finds the entry a tariff side was chosen from, by URL and by rates")
+    imports = merged_import_catalogue()
+    exports = merged_export_catalogue()
+    agile = [entry for entry in IMPORT_TARIFFS if entry["id"] == "agile"][0]
+    matched = match_entry(imports, {"import_octopus_url": agile["import_octopus_url"]}, "import_octopus_url", "rates_import")
+    if not matched or matched.get("id") != "agile":
+        print("  ERROR: a URL side should match its catalogue entry, got {}".format(matched))
+        failed = True
+    price_cap = [entry for entry in IMPORT_TARIFFS if entry["id"] == BASELINE_DEFAULT_IMPORT_ID][0]
+    matched = match_entry(imports, {"rates_import": price_cap["rates_import"]}, "import_octopus_url", "rates_import")
+    if not matched or matched.get("id") != BASELINE_DEFAULT_IMPORT_ID:
+        print("  ERROR: a basic-rates side should match on its rates, got {}".format(matched))
+        failed = True
+    no_export = [entry for entry in EXPORT_TARIFFS if entry["id"] == NO_EXPORT_ID][0]
+    matched = match_entry(exports, {"rates_export": no_export["rates_export"]}, "export_octopus_url", "rates_export")
+    if not matched or matched.get("id") != NO_EXPORT_ID:
+        print("  ERROR: a deliberate no-export side should match its own entry, got {}".format(matched))
+        failed = True
+
+    print("Test: match_entry returns None for a side that matches nothing, and for one that is not set")
+    # None rather than the Custom entry: Custom carries no rate source, so returning it
+    # would let a caller read a name off an entry that describes no actual tariff.
+    for tariff, label in [
+        ({"import_octopus_url": "https://example.com/mine/"}, "a hand-entered URL"),
+        ({"rates_import": [{"rate": 99.5}]}, "a rate that is in no entry"),
+        ({}, "an unset side"),
+        (None, "no tariff at all"),
+    ]:
+        matched = match_entry(imports, tariff, "import_octopus_url", "rates_import")
+        if matched is not None:
+            print("  ERROR: {} should match nothing, got {}".format(label, matched))
+            failed = True
+
+    print("Test: match_entry matches each side against its own list, so the two cannot be confused")
+    # An export URL handed to the import side must not match: the pairing bug this
+    # catalogue replaced came from matching one side's value against the wrong list.
+    outgoing = [entry for entry in EXPORT_TARIFFS if entry.get("export_octopus_url")][0]
+    if match_entry(imports, {"import_octopus_url": outgoing["export_octopus_url"]}, "import_octopus_url", "rates_import") is not None:
+        print("  ERROR: an export URL should not match an import catalogue entry")
+        failed = True
+
+    print("Test: match_entry sees the user's own compare_list entries, not just the built-ins")
+    # This is why naming happens where the merged catalogue is available: a user tariff
+    # would otherwise fall back to a bare product code despite having a name.
+    user_list = [{"id": "mine", "name": "My deal", "rates_import": [{"rate": 12.34}]}]
+    matched = match_entry(merged_import_catalogue(user_list), {"rates_import": [{"rate": 12.34}]}, "import_octopus_url", "rates_import")
+    if not matched or matched.get("name") != "My deal":
+        print("  ERROR: a compare_list entry should be matchable by name, got {}".format(matched))
+        failed = True
+
+    print("Test: the Custom placeholder is never returned even when a tariff carries nothing")
+    if any(match_entry(catalogue, {}, url_key, rates_key) for catalogue, url_key, rates_key in [(imports, "import_octopus_url", "rates_import"), (exports, "export_octopus_url", "rates_export")]):
+        print("  ERROR: an empty tariff should match nothing at all")
+        failed = True
 
     return failed

@@ -167,6 +167,42 @@ def _merged(builtins, keys, compare_list, custom_name):
     return catalogue
 
 
+def match_entry(catalogue, tariff, url_key, rates_key):
+    """Return the catalogue entry one side of ``tariff`` was chosen from, or None.
+
+    The single rule for mapping a stored tariff back to the choice that produced it.
+    Both the configuration form (to re-select its dropdowns) and the compare table (to
+    name a run's tariffs) go through here, so the two cannot describe the same tariff
+    differently.
+
+    Basic-rates entries are matched on their RATES, not a URL: several entries ("Price
+    cap", "Eon Next Drive", "No export payment") carry no URL at all, and matching on
+    URL alone identified none of them.
+
+    Each side is matched against its OWN list. The single paired dropdown this catalogue
+    replaced matched on the import URL alone, so "Agile / Prime" and "Agile / Fixed"
+    were indistinguishable and a saved config reloaded as whichever came first.
+
+    Returns None both for a side that is unset and for one that matches nothing - a
+    hand-entered URL, or a ``compare_list`` entry the user has since removed. The Custom
+    placeholder is never returned: it carries no rate source, so naming a tariff after
+    it would describe nothing. Callers that want an id for the dropdown map None onto
+    ``CUSTOM_ID`` themselves, which is a question about the form rather than about the
+    catalogue.
+    """
+    tariff = tariff or {}
+    current_url = tariff.get(url_key)
+    current_rates = tariff.get(rates_key)
+    if not current_url and not current_rates:
+        return None
+    for entry in catalogue or []:
+        if current_url and entry.get(url_key) == current_url:
+            return entry
+        if not current_url and entry.get(rates_key) == current_rates:
+            return entry
+    return None
+
+
 def merged_import_catalogue(compare_list=None):
     """Return the import dropdown's entries: built-ins, then the user's own, then Custom."""
     return _merged(IMPORT_TARIFFS, ["import_octopus_url", "rates_import"], compare_list, "Custom - enter URL below")

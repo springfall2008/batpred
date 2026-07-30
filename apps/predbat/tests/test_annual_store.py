@@ -251,6 +251,36 @@ def test_annual_store(my_predbat):
         print("  ERROR: an unavailable payback should carry its reason, got {}".format(unavailable))
         failed = True
 
+    print("Test: the summary carries both tariff dicts so the compare table can name all three sides")
+    # Deliberately the raw dicts rather than a rendered name: naming needs the merged
+    # catalogue, which includes the user's own compare_list entries, and only the web
+    # layer can read those. A name baked in here could not see them.
+    tariffs = {
+        "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/x/", "rates_export": [{"rate": 0.0}]},
+        "baseline_tariff": {"rates_import": [{"rate": 26.11}]},
+    }
+    with_tariffs = build_summary(results, tariffs)
+    if with_tariffs.get("tariff") != tariffs["tariff"]:
+        print("  ERROR: the summary should carry the run's tariff dict, got {}".format(with_tariffs.get("tariff")))
+        failed = True
+    if with_tariffs.get("baseline_tariff") != tariffs["baseline_tariff"]:
+        print("  ERROR: the summary should carry the baseline tariff dict, got {}".format(with_tariffs.get("baseline_tariff")))
+        failed = True
+
+    print("Test: the summary's tariffs are copies, so later edits to the config cannot rewrite a stored run")
+    mutable = {"tariff": {"rates_import": [{"rate": 5.0}]}, "baseline_tariff": {"rates_import": [{"rate": 26.11}]}}
+    copied = build_summary(results, mutable)
+    mutable["tariff"]["rates_import"][0]["rate"] = 99.0
+    if copied["tariff"]["rates_import"][0]["rate"] != 5.0:
+        print("  ERROR: the summary should hold its own copy of the tariff, got {}".format(copied["tariff"]))
+        failed = True
+
+    print("Test: a config with no tariff at all summarises as empty dicts rather than raising")
+    bare = build_summary(results, {})
+    if bare.get("tariff") != {} or bare.get("baseline_tariff") != {}:
+        print("  ERROR: a config with no tariff should summarise as empty, got {}".format(bare))
+        failed = True
+
     print("Test: save_run records the summary on the index entry")
     storage = FakeStorage()
     asyncio.run(save_run(storage, results, config, "20260728-090000"))
@@ -300,7 +330,7 @@ def test_annual_store(my_predbat):
         print("  ERROR: backfill should still write the index exactly once despite the corrupt entry, got {} writes".format(len(storage.save_calls) - writes_before))
         failed = True
 
-    print("Test: backfill writes nothing when every entry already has a summary")
+    print("Test: backfill writes nothing when every entry already has a current summary")
     storage = FakeStorage()
     asyncio.run(save_run(storage, results, config, "20260728-090400"))
     asyncio.run(save_run(storage, results, config, "20260728-090401"))
@@ -308,6 +338,32 @@ def test_annual_store(my_predbat):
     asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
     if len(storage.save_calls) != writes_before:
         print("  ERROR: a compare page that changes nothing must not write storage, got {} writes".format(len(storage.save_calls) - writes_before))
+        failed = True
+
+    print("Test: a summary predating the tariff fields is refreshed, not left as it is")
+    # A summary that merely EXISTS is no longer enough: runs stored before the compare
+    # table showed three tariffs have one, but it describes none of them. Left alone,
+    # those rows would show dashes forever despite their document holding the answer.
+    storage = FakeStorage()
+    # The config rides along inside the document, which is where backfill reads it from -
+    # the index entry's own copy is exactly what is being rebuilt here.
+    stale_config = {"tariff": {"rates_import": [{"rate": 7.5}]}, "baseline_tariff": {"rates_import": [{"rate": 26.11}]}}
+    stale_results = dict(results, config=stale_config)
+    asyncio.run(save_run(storage, stale_results, stale_config, "20260728-090500"))
+    stale = asyncio.run(list_runs(storage))
+    # Exactly the shape the old code wrote: a summary with a rendered name and no dicts.
+    stale[0]["summary"] = {"total_kwp": 5.6, "battery_kwh": 9.5, "tariff": "Agile", "cost_with_predbat_p": 66000.0}
+    asyncio.run(storage.save(STORAGE_MODULE, INDEX_NAME, stale, format="json"))
+    writes_before = len(storage.save_calls)
+    filled = asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
+    if filled[0]["summary"].get("tariff") != {"rates_import": [{"rate": 7.5}]}:
+        print("  ERROR: a stale summary should be rebuilt from the document's config, got {}".format(filled[0]["summary"].get("tariff")))
+        failed = True
+    if filled[0]["summary"].get("baseline_tariff") != {"rates_import": [{"rate": 26.11}]}:
+        print("  ERROR: the rebuilt summary should carry the baseline the run actually used, got {}".format(filled[0]["summary"]))
+        failed = True
+    if len(storage.save_calls) != writes_before + 1:
+        print("  ERROR: refreshing a stale summary should persist the index once, got {} writes".format(len(storage.save_calls) - writes_before))
         failed = True
 
     print("Test: save_run strips the plans out of the stored document and keys them per leg")
