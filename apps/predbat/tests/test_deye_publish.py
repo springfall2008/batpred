@@ -328,12 +328,13 @@ def test_automatic_config_skips_missing_ratings():
 
 
 def test_automatic_config_maps_energy_counters():
-    """The lifetime energy counters are published and mapped to Predbat's history args."""
+    """The energy counters are published and mapped to Predbat's history args."""
     failed = False
     d = RecordingDeye()
     d.device_list = ["INV1"]
     d.device_values = {"INV1": {"soc": 100.0}}
-    d.device_energy = {"INV1": {"import_today": 13579.1, "export_today": 11.7, "pv_today": 2198.1, "load_today": 14326.4}}
+    # Daily-register magnitudes, matching DEYE_ENERGY_KEYS' Daily* sources.
+    d.device_energy = {"INV1": {"import_today": 7.0, "export_today": 0.0, "pv_today": 4.5, "load_today": 12.8}}
     d.set_args = {}
     d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
     import tests.test_infra as ti
@@ -341,7 +342,7 @@ def test_automatic_config_maps_energy_counters():
     ti.run_async(d.publish_data())
     ti.run_async(d.automatic_config())
 
-    for leaf, value in (("import_today", 13579.1), ("export_today", 11.7), ("pv_today", 2198.1), ("load_today", 14326.4)):
+    for leaf, value in (("import_today", 7.0), ("export_today", 0.0), ("pv_today", 4.5), ("load_today", 12.8)):
         entity = f"sensor.predbat_deye_inv1_{leaf}"
         if d.published.get(entity) != value:
             print(f"ERROR: {entity} published as {d.published.get(entity)}, expected {value}")

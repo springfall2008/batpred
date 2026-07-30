@@ -812,7 +812,9 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if rated_power > 0:
                 self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"DEYE {sn} Inverter Limit"}, app="deye")
 
-            # Lifetime energy counters feed Predbat's load/import/export history learning.
+            # Daily energy counters feed Predbat's load/import/export history learning. They
+            # reset at midnight; minute_data/clean_incrementing_reverse absorb that (see
+            # DEYE_ENERGY_KEYS for why the Daily registers are used over the Total* ones).
             for leaf, value in self.device_energy.get(sn, {}).items():
                 self.dashboard_item(
                     self._sensor_name(sn, leaf),
