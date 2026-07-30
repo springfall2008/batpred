@@ -223,24 +223,29 @@ def _validate_load(raw):
 DEFAULT_BASELINE_TARIFF = {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}], "rates_export": [{"rate": SEG_EXPORT_P}]}
 
 
-def _validate_tariff(raw):
-    """Normalise the tariff block, requiring at least one import rate source.
+def _validate_tariff(raw, path="annual.tariff"):
+    """Normalise a tariff block, requiring at least one import rate source.
 
     A URL containing {dno_region} with no dno_region supplied is rejected here
     rather than left to 404 at fetch time, where it would surface as an
     unavailable month and read like an Octopus outage.
+
+    ``path`` names the block being validated, because two of them come through here:
+    the main tariff and ``baseline_tariff``. Hard-coded messages sent every baseline
+    problem to "annual.tariff", telling the user to fix a block that was perfectly
+    valid - the one thing an error message must never do.
     """
     if not isinstance(raw, dict):
-        raise AnnualConfigError("annual.tariff is required and must be a mapping")
+        raise AnnualConfigError("{} is required and must be a mapping".format(path))
     if not raw.get("import_octopus_url") and not raw.get("rates_import"):
-        raise AnnualConfigError("annual.tariff requires either import_octopus_url or rates_import")
+        raise AnnualConfigError("{} requires either import_octopus_url or rates_import".format(path))
 
     templated = [name for name in ["import_octopus_url", "export_octopus_url"] if raw.get(name) and "{dno_region}" in raw[name]]
     if templated and not raw.get("dno_region"):
-        raise AnnualConfigError("annual.tariff.{} uses {{dno_region}} but annual.tariff.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(", ".join(templated)))
+        raise AnnualConfigError("{path}.{fields} uses {{dno_region}} but {path}.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(path=path, fields=", ".join(templated)))
 
     tariff = dict(raw)
-    tariff["standing_charge_p_per_day"] = _require_number(raw.get("standing_charge_p_per_day", 0.0), "annual.tariff.standing_charge_p_per_day", minimum=0)
+    tariff["standing_charge_p_per_day"] = _require_number(raw.get("standing_charge_p_per_day", 0.0), "{}.standing_charge_p_per_day".format(path), minimum=0)
     return tariff
 
 
@@ -310,7 +315,7 @@ def validate_config(config, today=None):
         # only worth having once you have something to shift load into. Pricing the
         # no-PV/battery scenario on the same tariff as the battery scenarios therefore
         # understates what the system is worth. Defaults to the Ofgem price cap.
-        "baseline_tariff": _validate_tariff(raw.get("baseline_tariff") or DEFAULT_BASELINE_TARIFF),
+        "baseline_tariff": _validate_tariff(raw.get("baseline_tariff") or DEFAULT_BASELINE_TARIFF, path="annual.baseline_tariff"),
         "samples_per_month": samples_per_month,
         "costs": _validated_costs(raw.get("costs")),
         "debug": _coerce_bool(raw.get("debug", False)),

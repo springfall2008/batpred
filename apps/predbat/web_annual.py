@@ -558,7 +558,17 @@ class AnnualPage:
         # Falls back to the price cap when the config carries no baseline - a config
         # saved before this existed, or a fresh prefill. Matches validate_config's own
         # default, so what the form shows is what a run would actually use.
-        baseline_id = self._selected_import_id(baseline, import_catalogue) or BASELINE_DEFAULT_IMPORT_ID
+        #
+        # CUSTOM_ID counts as "no baseline" here, because this dropdown deliberately has
+        # no Custom option (the baseline answers "what would they otherwise be on", so a
+        # hand-entered URL has no place in it - see config_from_post). A hand-edited YAML
+        # baseline matching no entry therefore left NOTHING marked selected, and the form
+        # relied on the browser falling back to the first option to show anything at all.
+        # Naming the default explicitly is what makes the rendered form state its
+        # selection rather than imply it.
+        baseline_id = self._selected_import_id(baseline, import_catalogue)
+        if not baseline_id or baseline_id == CUSTOM_ID:
+            baseline_id = BASELINE_DEFAULT_IMPORT_ID
         text += '<div class="annual-field"><label for="baseline_tariff_id">Import tariff without PV or a battery</label><select id="baseline_tariff_id" name="baseline_tariff_id">\n'
         for entry in import_catalogue:
             if entry["id"] == CUSTOM_ID:

@@ -174,6 +174,30 @@ def test_annual_config(my_predbat):
     del config["annual"]["tariff"]
     failed = expect_error("no tariff", config, "annual.tariff is required", failed)
 
+    print("Test: a broken baseline_tariff names the baseline block, not the main tariff")
+    # Both blocks go through the same validator. Reporting every baseline problem against
+    # "annual.tariff" sent the user to fix a block that was perfectly valid - the one
+    # thing an error message must not do.
+    for broken, fragment, label in [
+        ({"rates_export": [{"rate": 4.1}]}, "annual.baseline_tariff requires either import_octopus_url or rates_import", "no import source"),
+        ({"import_octopus_url": "https://example.com/{dno_region}/x/"}, "annual.baseline_tariff.import_octopus_url uses {dno_region}", "templated with no region"),
+        ({"rates_import": [{"rate": 26.11}], "standing_charge_p_per_day": "abc"}, "annual.baseline_tariff.standing_charge_p_per_day", "non-numeric standing charge"),
+        ("not-a-dict", "annual.baseline_tariff is required and must be a mapping", "not a mapping"),
+    ]:
+        config = base_config()
+        config["annual"]["baseline_tariff"] = broken
+        failed = expect_error("baseline {}".format(label), config, fragment, failed)
+
+    print("Test: the main tariff's own messages still name the main tariff")
+    # The parameterised path must not have shifted the ordinary case onto the baseline.
+    config = base_config()
+    config["annual"]["tariff"] = {"rates_export": [{"rate": 4.1}]}
+    failed = expect_error("main tariff with no import source", config, "annual.tariff requires either import_octopus_url or rates_import", failed)
+    config = base_config()
+    config["annual"]["tariff"]["import_octopus_url"] = "https://example.com/{dno_region}/x/"
+    config["annual"]["tariff"].pop("dno_region", None)
+    failed = expect_error("main tariff templated with no region", config, "annual.tariff.import_octopus_url uses {dno_region}", failed)
+
     print("Test: car_rate_kw defaults to 7.4 kW when omitted")
     config = base_config()
     result = validate_config(config, today=date(2026, 7, 25))

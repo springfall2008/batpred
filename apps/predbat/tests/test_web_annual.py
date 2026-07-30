@@ -20,7 +20,7 @@ from aiohttp import web as aiohttp_web
 
 from annual import AnnualConfigError, validate_config
 from annual_store import list_runs, load_run, save_run
-from tariff_catalogue import CUSTOM_ID, EXPORT_TARIFFS, IMPORT_TARIFFS, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
+from tariff_catalogue import BASELINE_DEFAULT_IMPORT_ID, CUSTOM_ID, EXPORT_TARIFFS, IMPORT_TARIFFS, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage, _json_for_script
 
@@ -717,6 +717,22 @@ def test_web_annual_form(my_predbat):
         validated = validate_config(baseline_config)
         if not (validated.get("baseline_tariff") or {}).get("rates_import"):
             print("  ERROR: the baseline tariff should survive validation, got {}".format(validated.get("baseline_tariff")))
+            failed = True
+
+        print("Test: a baseline matching no catalogue entry still marks an option selected")
+        # A baseline written by hand in YAML resolves to CUSTOM_ID, which this dropdown
+        # deliberately does not offer - so nothing was marked selected and the form
+        # depended on the browser showing the first option to display anything at all.
+        # Anything reading the HTML rather than rendering it saw a dropdown with no
+        # selection, and the page stated no baseline where it means the price cap.
+        custom_baseline = make_page(my_predbat).prefill_config()
+        custom_baseline["baseline_tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL/x/", "rates_export": [{"rate": 4.1}]}
+        custom_select = re.search(r'<select id="baseline_tariff_id".*?</select>', make_page(my_predbat).render_form(custom_baseline), re.S)
+        if not custom_select or len(re.findall(r"selected", custom_select.group(0))) != 1:
+            print("  ERROR: exactly one baseline option should be selected, got {}".format(custom_select.group(0) if custom_select else None))
+            failed = True
+        elif not re.search(r'value="{}"[^>]*selected'.format(BASELINE_DEFAULT_IMPORT_ID), custom_select.group(0)):
+            print("  ERROR: an unmatched baseline should fall back to the price cap, got {}".format(custom_select.group(0)[:300]))
             failed = True
 
         print("Test: an unrecognised baseline id falls back to the default rather than inventing rates")
