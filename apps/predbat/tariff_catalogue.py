@@ -98,7 +98,16 @@ IMPORT_TARIFFS = [
     {"id": "flux", "name": "Octopus Flux", "import_octopus_url": "{}/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{{dno_region}}/standard-unit-rates".format(_OCTOPUS)},
     {"id": "intelligent_flux", "name": "Octopus Intelligent Flux", "import_octopus_url": _INTELLI_FLUX},
     {"id": "edf_go", "name": "EDF Go Electric", "import_octopus_url": "{}/EDF_EV_FIX_GOELEC_12M_HH/electricity-tariffs/E-1R-EDF_EV_FIX_GOELEC_12M_HH-{{dno_region}}/standard-unit-rates/".format(_EDF)},
-    {"id": "edf_empower_fixed", "name": "EDF Empower Fixed", "import_octopus_url": "{}/EDF_EMPOWER_TRACKER_EX_SEG_12M_V2_HH/electricity-tariffs/E-1R-EDF_EMPOWER_TRACKER_EX_SEG_12M_V2_HH-{{dno_region}}/standard-unit-rates/".format(_EDF)},
+    {
+        "id": "edf_empower_fixed",
+        "name": "EDF Empower Fixed",
+        "rates_import": [
+            {"rate": 10, "start": "00:00:00", "end": "03:00:00"},
+            {"rate": 20, "start": "03:00:00", "end": "16:00:00"},
+            {"rate": 30, "start": "16:00:00", "end": "19:00:00"},
+            {"rate": 20, "start": "19:00:00", "end": "00:00:00"},
+        ],
+    },
 ]
 
 EXPORT_TARIFFS = [
