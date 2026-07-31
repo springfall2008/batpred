@@ -29,15 +29,15 @@ from prediction import Prediction
 # own "reasons" params - published once here rather than duplicating the rendered sentence on
 # every row (per maintainer review on PR #4311).
 REASON_TEMPLATES = {
-    "demand_rising": "Battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
-    "demand_falling": "Battery is expected to discharge to cover house demand; no charging or exporting is scheduled this slot.",
-    "demand_steady": "Battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
+    "demand_rising": "Demand — battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
+    "demand_falling": "Demand — the battery is expected to discharge to cover house load; no charging or exporting is scheduled this slot.",
+    "demand_steady": "Demand — battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
     # Used for the first half of a split slot where the export window only starts partway through -
     # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
     # reasons above, which would contradict the export reason sitting alongside it in the same slot.
-    "demand_before_export_rising": "Until the export window starts partway through this slot, the battery level is expected to rise from solar generation.",
-    "demand_before_export_falling": "Until the export window starts partway through this slot, the battery is expected to discharge to cover house demand.",
-    "demand_before_export_steady": "Until the export window starts partway through this slot, the battery level is expected to stay steady.",
+    "demand_before_export_rising": "Until the export window starts partway through this slot, this is Demand mode - the battery level is expected to rise from solar generation.",
+    "demand_before_export_falling": "Until the export window starts partway through this slot, this is Demand mode - the battery is expected to discharge to cover house load.",
+    "demand_before_export_steady": "Until the export window starts partway through this slot, this is Demand mode - the battery level is expected to stay steady.",
     "freeze_charge": "Freeze charging — the battery holds at the current level rather than charging further this slot (import rate {rate}p/kWh vs. your {threshold}p/kWh threshold).",
     "hold_charge_at_target": "Holding — the battery is already predicted to be at or above the {target_percent}% target for this window without charging further.",
     "charge_low_rate": "Charging up to {target_percent}% at the import rate for this slot of ({rate}p/kWh).",
