@@ -65,12 +65,12 @@ def test_tariff_catalogue(my_predbat):
                 failed = True
 
     print("Test: the built-in catalogues contain exactly the expected ids")
-    expected_import = ["price_cap", "eon_next_drive", "agile", "intelligent_go", "go", "cosy", "snug", "flux", "intelligent_flux"]
+    expected_import = ["price_cap", "eon_next_drive", "agile", "intelligent_go", "go", "cosy", "snug", "flux", "intelligent_flux", "edf_go", "edf_empower_fixed"]
     actual_import = [entry["id"] for entry in IMPORT_TARIFFS]
     if actual_import != expected_import:
         print("  ERROR: import ids changed, expected {} got {}".format(expected_import, actual_import))
         failed = True
-    expected_export = [NO_EXPORT_ID, "seg", "outgoing_fixed", "outgoing_prime", "agile_outgoing", "flux_export", "intelligent_flux_export", "eon_next_export"]
+    expected_export = [NO_EXPORT_ID, "seg", "outgoing_fixed", "outgoing_prime", "agile_outgoing", "flux_export", "intelligent_flux_export", "eon_next_export", "edf_export", "edf_export_exclusive"]
     actual_export = [entry["id"] for entry in EXPORT_TARIFFS]
     if actual_export != expected_export:
         print("  ERROR: export ids changed, expected {} got {}".format(expected_export, actual_export))
