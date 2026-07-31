@@ -20,7 +20,7 @@ from aiohttp import web as aiohttp_web
 
 from annual import AnnualConfigError, validate_config
 from annual_store import list_runs, load_run, save_run
-from tariff_catalogue import CUSTOM_ID
+from tariff_catalogue import BASELINE_DEFAULT_IMPORT_ID, CUSTOM_ID, EXPORT_TARIFFS, IMPORT_TARIFFS, NO_EXPORT_ID, PRICE_CAP_IMPORT_P
 from web import WebInterface
 from web_annual import DEFAULT_CONFIG, AnnualPage, _json_for_script
 
@@ -116,7 +116,8 @@ def valid_postdata():
         "load_shape": "flat",
         "load_car_charging_kwh": "2500",
         "load_car_rate_kw": "7.4",
-        "tariff_id": CUSTOM_ID,
+        "tariff_import_id": CUSTOM_ID,
+        "tariff_export_id": CUSTOM_ID,
         "tariff_import_url": "https://example.com/import/",
         "tariff_export_url": "https://example.com/export/",
         "tariff_standing_charge": "60.0",
@@ -275,14 +276,20 @@ def test_web_annual(my_predbat):
         my_predbat.args.pop("rates_import_octopus_url", None)
         my_predbat.args.pop("rates_export_octopus_url", None)
 
-        print("Test: the catalogue merges the user's compare_list")
+        print("Test: the catalogues merge the user's compare_list, each side taking what it can use")
         my_predbat.args["compare_list"] = [{"id": "mine", "name": "My tariff", "rates_import_octopus_url": "https://example.com/x"}]
-        ids = [entry["id"] for entry in make_page(my_predbat).catalogue()]
-        if "mine" not in ids:
-            print("  ERROR: a user compare_list entry should appear in the catalogue, got {}".format(ids))
+        import_ids = [entry["id"] for entry in make_page(my_predbat).import_catalogue()]
+        export_ids = [entry["id"] for entry in make_page(my_predbat).export_catalogue()]
+        if "mine" not in import_ids:
+            print("  ERROR: a user compare_list entry should appear in the import catalogue, got {}".format(import_ids))
             failed = True
-        if "agile_agile" not in ids:
-            print("  ERROR: built-in entries should still be present, got {}".format(ids))
+        # This entry supplies an import URL only, so offering it as an export tariff would
+        # price export against a source it does not have.
+        if "mine" in export_ids:
+            print("  ERROR: an import-only compare_list entry should not appear in the export catalogue, got {}".format(export_ids))
+            failed = True
+        if "agile" not in import_ids or "outgoing_prime" not in export_ids:
+            print("  ERROR: built-in entries should still be present, got {} / {}".format(import_ids, export_ids))
             failed = True
 
         print("Test: the default config validates on its own")
@@ -385,13 +392,18 @@ def test_web_annual_form(my_predbat):
             failed = True
         my_predbat.args.pop("soc_max", None)
 
-        print("Test: the tariff dropdown lists the catalogue and a Custom entry")
+        print("Test: the tariff dropdowns list their catalogues and a Custom entry each")
         if CUSTOM_ID not in html:
-            print("  ERROR: the dropdown should offer a Custom entry")
+            print("  ERROR: the dropdowns should offer a Custom entry")
             failed = True
-        if "Agile import / Agile export" not in html:
-            print("  ERROR: the dropdown should list the built-in tariffs")
-            failed = True
+        for select_id, expected in [("tariff_import_id", "Octopus Agile"), ("tariff_export_id", "Octopus Agile Outgoing")]:
+            block = re.search(r'<select id="{}".*?</select>'.format(select_id), html, re.S)
+            if not block:
+                print("  ERROR: the {} dropdown should render".format(select_id))
+                failed = True
+            elif expected not in block.group(0):
+                print("  ERROR: the {} dropdown should list the built-in tariffs, expected {}".format(select_id, expected))
+                failed = True
 
         print("Test: the load source is a radio pair, not two independent sections")
         if html.count('type="radio"') < 2:
@@ -406,46 +418,55 @@ def test_web_annual_form(my_predbat):
             print("  ERROR: the annual kWh value should appear in the form")
             failed = True
 
-        print("Test: a configured Octopus key and account prefill, select the Octopus source, and still validate")
-        # _validate_load treats octopus and annual_kwh as mutually exclusive, so a prefill
-        # that merely ADDED the octopus block to the default load would render fine and
-        # then fail the moment it was run. Validating here is the assertion that matters.
+        print("Test: a configured Octopus key and account fill the fields but do NOT select the Octopus source")
+        # The Octopus source reads the IMPORT meter, and on a home that already has solar
+        # or a battery that meter has had the existing system's self-consumption and
+        # discharge subtracted from every reading - which is why the form carries a banner
+        # warning against using it there. Selecting it automatically for anyone with
+        # credentials in apps.yaml therefore picked exactly the wrong source for a
+        # configured Predbat, which by definition has a battery or an array. Predicted
+        # consumption is always the default; the credentials still prefill so switching to
+        # Octopus is one click rather than a paste.
         my_predbat.args["octopus_api_key"] = "sk_live_exampleKey123"
         my_predbat.args["octopus_api_account"] = "A-1234ABCD"
         octopus_page = make_page(my_predbat)
         octopus_config = octopus_page.prefill_config()
-        if (octopus_config.get("load") or {}).get("octopus", {}).get("api_key") != "sk_live_exampleKey123":
-            print("  ERROR: a configured Octopus API key should prefill, got {}".format(octopus_config.get("load")))
+        if "octopus" in (octopus_config.get("load") or {}):
+            print("  ERROR: configured Octopus credentials must not select the Octopus load source, got {}".format(octopus_config.get("load")))
             failed = True
-        if (octopus_config.get("load") or {}).get("octopus", {}).get("account_id") != "A-1234ABCD":
-            print("  ERROR: a configured Octopus account should prefill, got {}".format(octopus_config.get("load")))
-            failed = True
-        if "annual_kwh" in (octopus_config.get("load") or {}):
-            print("  ERROR: the prefilled octopus load must not also carry annual_kwh - they are mutually exclusive")
+        if (octopus_config.get("load") or {}).get("annual_kwh") != DEFAULT_CONFIG["load"]["annual_kwh"]:
+            print("  ERROR: the prefill should keep the predicted-consumption load, got {}".format(octopus_config.get("load")))
             failed = True
         try:
             validate_config(octopus_config)
         except Exception as error:
-            print("  ERROR: an Octopus-prefilled config must validate, got {}".format(error))
+            print("  ERROR: the prefilled config must validate, got {}".format(error))
             failed = True
         octopus_form = octopus_page.render_form(octopus_config)
-        if not re.search(r'value="octopus"[^>]*checked', octopus_form):
-            print("  ERROR: the Octopus radio should be selected when a key and account are configured")
+        if re.search(r'value="octopus"[^>]*checked', octopus_form):
+            print("  ERROR: the Octopus radio must not be selected just because credentials are configured")
             failed = True
-        # The manual inputs must still show usable values, so switching the radio back
-        # does not present an empty form.
+        if not re.search(r'value="manual"[^>]*checked', octopus_form):
+            print("  ERROR: the predicted-consumption radio should be the selected default")
+            failed = True
+        # The credentials still reach the boxes, so choosing Octopus does not mean pasting
+        # a key in by hand.
+        if "sk_live_exampleKey123" not in octopus_form or "A-1234ABCD" not in octopus_form:
+            print("  ERROR: configured Octopus credentials should still prefill the fields")
+            failed = True
         if 'id="load_annual_kwh"' not in octopus_form or 'value=""' in octopus_form.split('id="load_annual_kwh"')[1][:80]:
             print("  ERROR: the manual consumption field should still show a default value")
             failed = True
 
-        print("Test: a key without an account (or the reverse) does not select the Octopus source")
-        # An incomplete pair cannot download anything, so offering it would only produce
-        # a run that fails partway through.
+        print("Test: a key without an account (or the reverse) does not prefill the credential fields")
+        # An incomplete pair cannot download anything, so showing half of it would only
+        # produce a run that fails partway through.
         my_predbat.args["octopus_api_key"] = "sk_live_exampleKey123"
         my_predbat.args.pop("octopus_api_account", None)
-        partial_config = make_page(my_predbat).prefill_config()
-        if "octopus" in (partial_config.get("load") or {}):
-            print("  ERROR: an API key with no account must not select the Octopus source")
+        partial_page = make_page(my_predbat)
+        partial_form = partial_page.render_form(partial_page.prefill_config())
+        if "sk_live_exampleKey123" in partial_form:
+            print("  ERROR: an API key with no account must not prefill the credential fields")
             failed = True
         my_predbat.args.pop("octopus_api_key", None)
 
@@ -465,7 +486,7 @@ def test_web_annual_form(my_predbat):
         # were cleared and the no-URL fallback silently substituted the price-cap rates -
         # a different tariff to the one named on screen, and different money out.
         eon_post = valid_postdata()
-        eon_post["tariff_id"] = "eon_next_drive"
+        eon_post["tariff_import_id"] = "eon_next_drive"
         eon_post["tariff_import_url"] = ""
         eon_post["tariff_export_url"] = ""
         eon_config = make_page(my_predbat).config_from_post(eon_post)
@@ -482,7 +503,7 @@ def test_web_annual_form(my_predbat):
         # The box is hidden for a built-in entry, so a stale value left in it from an
         # earlier selection must not be what actually runs.
         stale_post = valid_postdata()
-        stale_post["tariff_id"] = "agile_fixed"
+        stale_post["tariff_import_id"] = "agile"
         stale_post["tariff_import_url"] = "https://example.com/STALE-LEFTOVER/"
         stale_config = make_page(my_predbat).config_from_post(stale_post)
         if "STALE-LEFTOVER" in str(stale_config["tariff"]):
@@ -494,23 +515,108 @@ def test_web_annual_form(my_predbat):
 
         print("Test: Custom still honours the hand-entered URLs")
         custom_post = valid_postdata()
-        custom_post["tariff_id"] = CUSTOM_ID
+        custom_post["tariff_import_id"] = CUSTOM_ID
         custom_post["tariff_import_url"] = "https://example.com/my-own/"
+        # A catalogue export alongside the custom import, so the next test can prove the
+        # two sides toggle their URL boxes independently.
+        custom_post["tariff_export_id"] = "seg"
+        custom_post["tariff_export_url"] = ""
         custom_config = make_page(my_predbat).config_from_post(custom_post)
         if custom_config["tariff"].get("import_octopus_url") != "https://example.com/my-own/":
             print("  ERROR: Custom should use the typed URL, got {}".format(custom_config["tariff"]))
             failed = True
 
-        print("Test: the URL boxes are only shown for Custom")
+        print("Test: each URL box is only shown for its own side's Custom")
         builtin_form = make_page(my_predbat).render_form(stale_config)
         custom_form = make_page(my_predbat).render_form(custom_config)
-        builtin_row = re.search(r'<div id="tariff-custom-urls" style="display:([^"]*)"', builtin_form)
-        custom_row = re.search(r'<div id="tariff-custom-urls" style="display:([^"]*)"', custom_form)
+        builtin_row = re.search(r'<div id="tariff-custom-import" style="display:([^"]*)"', builtin_form)
+        custom_row = re.search(r'<div id="tariff-custom-import" style="display:([^"]*)"', custom_form)
         if not builtin_row or builtin_row.group(1) != "none":
-            print("  ERROR: the URL boxes should be hidden for a built-in tariff, got {}".format(builtin_row and builtin_row.group(1)))
+            print("  ERROR: the import URL box should be hidden for a built-in tariff, got {}".format(builtin_row and builtin_row.group(1)))
             failed = True
         if not custom_row or custom_row.group(1) != "block":
-            print("  ERROR: the URL boxes should be shown for Custom, got {}".format(custom_row and custom_row.group(1)))
+            print("  ERROR: the import URL box should be shown for a custom import, got {}".format(custom_row and custom_row.group(1)))
+            failed = True
+        # The sides are independent, so a custom import must not drag the export box open
+        # with it - that was the whole failure mode of the single paired dropdown.
+        custom_export_row = re.search(r'<div id="tariff-custom-export" style="display:([^"]*)"', custom_form)
+        if not custom_export_row or custom_export_row.group(1) != "none":
+            print("  ERROR: a custom import with a catalogue export should leave the export URL box hidden, got {}".format(custom_export_row and custom_export_row.group(1)))
+            failed = True
+
+        print("Test: import and export can be combined freely, and each round-trips through the form")
+        # The point of splitting the dropdowns: a pairing nobody enumerated in advance
+        # must survive save-and-reload with both sides intact.
+        for import_id, export_id, import_marker, export_marker in [
+            ("price_cap", "outgoing_prime", "rates_import", "export_octopus_url"),
+            ("agile", "seg", "import_octopus_url", "rates_export"),
+            ("intelligent_go", "agile_outgoing", "import_octopus_url", "export_octopus_url"),
+        ]:
+            combo_post = valid_postdata()
+            combo_post["tariff_import_id"] = import_id
+            combo_post["tariff_export_id"] = export_id
+            combo_post["tariff_import_url"] = ""
+            combo_post["tariff_export_url"] = ""
+            # Octopus product URLs are region-templated, and validate_config rightly
+            # refuses one without a region letter to substitute into it.
+            combo_post["tariff_dno_region"] = "A"
+            combo_config = make_page(my_predbat).config_from_post(combo_post)
+            combo_tariff = combo_config["tariff"]
+            if not combo_tariff.get(import_marker):
+                print("  ERROR: {}+{} should set {}, got {}".format(import_id, export_id, import_marker, combo_tariff))
+                failed = True
+            if not combo_tariff.get(export_marker):
+                print("  ERROR: {}+{} should set {}, got {}".format(import_id, export_id, export_marker, combo_tariff))
+                failed = True
+            validate_config(combo_config)
+            combo_form = make_page(my_predbat).render_form(combo_config)
+            import_select = re.search(r'<select id="tariff_import_id".*?</select>', combo_form, re.S)
+            export_select = re.search(r'<select id="tariff_export_id".*?</select>', combo_form, re.S)
+            if not import_select or not re.search(r'value="{}"[^>]*selected'.format(import_id), import_select.group(0)):
+                print("  ERROR: import {} should re-select itself on reload".format(import_id))
+                failed = True
+            if not export_select or not re.search(r'value="{}"[^>]*selected'.format(export_id), export_select.group(0)):
+                print("  ERROR: export {} should re-select itself on reload".format(export_id))
+                failed = True
+
+        print("Test: two export tariffs sharing an import are told apart on reload")
+        # The single paired dropdown matched on the import URL alone, so "Agile / Prime"
+        # and "Agile / Fixed" were indistinguishable and a saved config came back as
+        # whichever appeared first in the list. Pin that it no longer can.
+        prime_post = valid_postdata()
+        prime_post.update({"tariff_import_id": "agile", "tariff_export_id": "outgoing_prime", "tariff_import_url": "", "tariff_export_url": ""})
+        prime_form = make_page(my_predbat).render_form(make_page(my_predbat).config_from_post(prime_post))
+        prime_select = re.search(r'<select id="tariff_export_id".*?</select>', prime_form, re.S)
+        if not prime_select or not re.search(r'value="outgoing_prime"[^>]*selected', prime_select.group(0)):
+            print("  ERROR: Agile+Prime should reload as Prime, not as the first export sharing that import")
+            failed = True
+
+        print("Test: 'no export payment' is a real selection, priced at zero rather than left unset")
+        no_export_post = valid_postdata()
+        no_export_post.update({"tariff_import_id": "agile", "tariff_export_id": NO_EXPORT_ID, "tariff_import_url": "", "tariff_export_url": "", "tariff_dno_region": "A"})
+        no_export_config = make_page(my_predbat).config_from_post(no_export_post)
+        no_export_tariff = no_export_config["tariff"]
+        if no_export_tariff.get("rates_export") != [{"rate": 0.0}]:
+            print("  ERROR: no export should set a flat 0p export rate, got {}".format(no_export_tariff))
+            failed = True
+        if no_export_tariff.get("export_octopus_url"):
+            print("  ERROR: no export must not also carry an export URL, got {}".format(no_export_tariff))
+            failed = True
+        validate_config(no_export_config)
+        no_export_form = make_page(my_predbat).render_form(no_export_config)
+        no_export_select = re.search(r'<select id="tariff_export_id".*?</select>', no_export_form, re.S)
+        if not no_export_select or not re.search(r'value="{}"[^>]*selected'.format(NO_EXPORT_ID), no_export_select.group(0)):
+            print("  ERROR: no export should re-select itself on reload")
+            failed = True
+
+        print("Test: a config with no export source at all shows as 'no export' rather than Custom")
+        # A prefill from an Octopus account with an import tariff but no export agreement
+        # lands here. Falling through to Custom would open an empty URL box and read as a
+        # broken config rather than the ordinary situation it is.
+        bare_form = make_page(my_predbat).render_form({"tariff": {"import_octopus_url": "https://example.com/import/", "standing_charge_p_per_day": 60.0}})
+        bare_select = re.search(r'<select id="tariff_export_id".*?</select>', bare_form, re.S)
+        if not bare_select or not re.search(r'value="{}"[^>]*selected'.format(NO_EXPORT_ID), bare_select.group(0)):
+            print("  ERROR: a tariff with no export source should default the dropdown to no export")
             failed = True
 
         print("Test: a basic-rates tariff re-selects its own dropdown entry, not the first one")
@@ -579,6 +685,64 @@ def test_web_annual_form(my_predbat):
             if "What If Annual Prediction" not in make_page(my_predbat).render_nav(page_name):
                 print("  ERROR: the {} page should carry the What If title".format(page_name))
                 failed = True
+
+        print("Test: the no-PV/battery scenario gets its own tariff, defaulting to the price cap")
+        # A household with no system is not on a battery tariff, so pricing the
+        # counterfactual on one credits it with a saving it could never have had.
+        baseline_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
+        if 'name="baseline_tariff_id"' not in baseline_form:
+            print("  ERROR: the form should offer a separate baseline tariff")
+            failed = True
+        baseline_select = re.search(r'<select id="baseline_tariff_id".*?</select>', baseline_form, re.S)
+        if not baseline_select:
+            print("  ERROR: the baseline tariff dropdown should render")
+            failed = True
+        else:
+            # Custom is a hand-entered URL, which makes no sense for "what would they
+            # otherwise be on".
+            if 'value="{}"'.format(CUSTOM_ID) in baseline_select.group(0):
+                print("  ERROR: Custom should not be offered as a baseline tariff")
+                failed = True
+            if not re.search(r'value="price_cap"[^>]*selected', baseline_select.group(0)):
+                print("  ERROR: the baseline should default to the price cap, got {}".format(baseline_select.group(0)[:200]))
+                failed = True
+
+        print("Test: a chosen baseline tariff reaches the config and validates")
+        baseline_post = valid_postdata()
+        baseline_post["baseline_tariff_id"] = "price_cap"
+        baseline_config = make_page(my_predbat).config_from_post(baseline_post)
+        if not (baseline_config.get("baseline_tariff") or {}).get("rates_import"):
+            print("  ERROR: the chosen baseline tariff should reach the config, got {}".format(baseline_config.get("baseline_tariff")))
+            failed = True
+        validated = validate_config(baseline_config)
+        if not (validated.get("baseline_tariff") or {}).get("rates_import"):
+            print("  ERROR: the baseline tariff should survive validation, got {}".format(validated.get("baseline_tariff")))
+            failed = True
+
+        print("Test: a baseline matching no catalogue entry still marks an option selected")
+        # A baseline written by hand in YAML resolves to CUSTOM_ID, which this dropdown
+        # deliberately does not offer - so nothing was marked selected and the form
+        # depended on the browser showing the first option to display anything at all.
+        # Anything reading the HTML rather than rendering it saw a dropdown with no
+        # selection, and the page stated no baseline where it means the price cap.
+        custom_baseline = make_page(my_predbat).prefill_config()
+        custom_baseline["baseline_tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL/x/", "rates_export": [{"rate": 4.1}]}
+        custom_select = re.search(r'<select id="baseline_tariff_id".*?</select>', make_page(my_predbat).render_form(custom_baseline), re.S)
+        if not custom_select or len(re.findall(r"selected", custom_select.group(0))) != 1:
+            print("  ERROR: exactly one baseline option should be selected, got {}".format(custom_select.group(0) if custom_select else None))
+            failed = True
+        elif not re.search(r'value="{}"[^>]*selected'.format(BASELINE_DEFAULT_IMPORT_ID), custom_select.group(0)):
+            print("  ERROR: an unmatched baseline should fall back to the price cap, got {}".format(custom_select.group(0)[:300]))
+            failed = True
+
+        print("Test: an unrecognised baseline id falls back to the default rather than inventing rates")
+        stale_post = valid_postdata()
+        stale_post["baseline_tariff_id"] = "no-such-tariff"
+        stale_validated = validate_config(make_page(my_predbat).config_from_post(stale_post))
+        cap_rate = (stale_validated["baseline_tariff"].get("rates_import") or [{}])[0].get("rate")
+        if cap_rate != PRICE_CAP_IMPORT_P:
+            print("  ERROR: an unknown baseline id should fall back to the price cap, got {}".format(cap_rate))
+            failed = True
 
         print("Test: the form shows a live cost estimate and offers quote overrides")
         cost_form = make_page(my_predbat).render_form(make_page(my_predbat).prefill_config())
@@ -830,7 +994,8 @@ def test_web_annual_form(my_predbat):
             "load_shape": "flat",
             "load_car_charging_kwh": "2500",
             "load_car_rate_kw": "7.4",
-            "tariff_id": CUSTOM_ID,
+            "tariff_import_id": CUSTOM_ID,
+            "tariff_export_id": CUSTOM_ID,
             "tariff_import_url": "https://example.com/import/",
             "tariff_export_url": "https://example.com/export/",
             "tariff_standing_charge": "60.0",
@@ -879,12 +1044,17 @@ def test_web_annual_form(my_predbat):
             failed = True
 
         print("Test: the tariff dropdown keeps the current selection across a re-render")
-        catalogue_entries = page.catalogue()
+        catalogue_entries = page.import_catalogue()
         built_in = next(entry for entry in catalogue_entries if entry["id"] != CUSTOM_ID and entry.get("import_octopus_url"))
+
+        def import_select(html_text):
+            """Return just the import dropdown's markup - Custom appears in both selects."""
+            block = re.search(r'<select id="tariff_import_id".*?</select>', html_text, re.S)
+            return block.group(0) if block else ""
 
         matched_config = copy.deepcopy(config)
         matched_config["tariff"] = {"import_octopus_url": built_in["import_octopus_url"], "standing_charge_p_per_day": 60.0}
-        matched_html = page.render_form(matched_config)
+        matched_html = import_select(page.render_form(matched_config))
         matched_tag = option_tag(matched_html, built_in["id"])
         if matched_tag is None or "selected" not in matched_tag:
             print("  ERROR: the option matching the config's import URL should be selected, got {}".format(matched_tag))
@@ -896,7 +1066,7 @@ def test_web_annual_form(my_predbat):
 
         custom_config = copy.deepcopy(config)
         custom_config["tariff"] = {"import_octopus_url": "https://example.com/not-in-the-catalogue/", "standing_charge_p_per_day": 60.0}
-        custom_html = page.render_form(custom_config)
+        custom_html = import_select(page.render_form(custom_config))
         custom_tag = option_tag(custom_html, CUSTOM_ID)
         if custom_tag is None or "selected" not in custom_tag:
             print("  ERROR: a hand-entered URL with no catalogue match should select Custom, got {}".format(custom_tag))
@@ -1264,9 +1434,15 @@ def sample_run_results():
             "solar": [{"kwp": 5.6, "declination": 35, "azimuth": 180}],
             "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
             "load": {"annual_kwh": 3800, "shape": "night", "car_charging_kwh": 3000, "car_rate_kw": 7.4},
+            # Templated, with dno_region beside them: results["config"] is the RAW config
+            # (annual.py stores self.config["raw"]), and AnnualTariff substitutes the
+            # region at fetch time without writing it back. A pre-substituted URL here
+            # would not be what a real run stores, and would quietly stop matching the
+            # catalogue that names it.
             "tariff": {
-                "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/",
-                "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-A/standard-unit-rates/",
+                "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/",
+                "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-{dno_region}/standard-unit-rates/",
+                "dno_region": "A",
                 "standing_charge_p_per_day": 60.0,
             },
             "samples_per_month": 2,
@@ -1330,10 +1506,33 @@ def test_web_annual_results(my_predbat):
 
     print("Test: a run states the key settings it actually used")
     details = page._render_run_details(results)
-    for expected in ["5.6 kWp", "9.5 kWh", "AGILE-24-10-01", "OUTGOING-PRIME-FIX-12M-26-06-23", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "Octopus Outgoing Prime", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
         if expected not in details:
             print("  ERROR: the run details should state {}, got {}".format(expected, details))
             failed = True
+    # The full URL stays as the cell's title for anyone checking the exact endpoint - the
+    # catalogue name replaces the product code on screen, it does not hide the source.
+    for expected in ["AGILE-24-10-01", "OUTGOING-PRIME-FIX-12M-26-06-23"]:
+        if expected not in details:
+            print("  ERROR: the run details should keep {} as the cell's title, got {}".format(expected, details))
+            failed = True
+
+    print("Test: the run details name the baseline tariff the saving is measured against")
+    # Without it the page states a saving but not what it is a saving FROM, which cannot
+    # be checked - and the compare table beside it does show the baseline.
+    baseline_run = copy.deepcopy(results)
+    baseline_run["config"]["baseline_tariff"] = {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}]}
+    baseline_details = page._render_run_details(baseline_run)
+    if "Baseline tariff" not in baseline_details or "Price cap" not in baseline_details:
+        print("  ERROR: the run details should name the baseline tariff, got {}".format(baseline_details))
+        failed = True
+
+    print("Test: a run that recorded no baseline omits the row rather than inventing one")
+    no_baseline = copy.deepcopy(results)
+    no_baseline["config"].pop("baseline_tariff", None)
+    if "Baseline tariff" in page._render_run_details(no_baseline):
+        print("  ERROR: a run with no stored baseline should not show a baseline row")
+        failed = True
 
     print("Test: the details describe the RUN's own config, not the live form")
     # The selector can show a run from a completely different system; labelling it with
@@ -1743,6 +1942,16 @@ def test_web_annual_pages(my_predbat):
         failed = True
 
     print("Test: the compare table lists every run with its own figures")
+
+    def catalogue_entry(entries, entry_id):
+        """Return one built-in catalogue entry by id, so fixtures cannot drift from it."""
+        return [entry for entry in entries if entry["id"] == entry_id][0]
+
+    agile = catalogue_entry(IMPORT_TARIFFS, "agile")
+    cosy = catalogue_entry(IMPORT_TARIFFS, "cosy")
+    price_cap = catalogue_entry(IMPORT_TARIFFS, "price_cap")
+    outgoing_fixed = catalogue_entry(EXPORT_TARIFFS, "outgoing_fixed")
+    no_export = catalogue_entry(EXPORT_TARIFFS, NO_EXPORT_ID)
     runs = [
         {
             "id": "20260728-0900",
@@ -1750,12 +1959,15 @@ def test_web_annual_pages(my_predbat):
             # this test used a label like "9.5 kWh battery, 5.6 kWp, Agile", which meant
             # the Solar/Battery assertions below were satisfied by the label text alone -
             # deleting the Solar/Battery <td> cells outright would still have passed.
-            "label": "System Alpha, Agile",
+            # It carries no tariff name either, for the same reason: the three tariff
+            # cells must be doing the work, not the label.
+            "label": "System Alpha",
             "summary": {
                 "total_kwp": 5.6,
                 "battery_kwh": 9.5,
                 "total_gbp": 12250.0,
-                "tariff": "Agile",
+                "tariff": {"import_octopus_url": agile["import_octopus_url"], "export_octopus_url": outgoing_fixed["export_octopus_url"]},
+                "baseline_tariff": {"rates_import": price_cap["rates_import"]},
                 "cost_with_predbat_p": 66000.0,
                 "saving_vs_none_p": 114000.0,
                 "payback_years": {"pv_only": 17.8, "pv_battery": 13.61, "pv_battery_predbat": 11.78},
@@ -1765,13 +1977,14 @@ def test_web_annual_pages(my_predbat):
         },
         {
             "id": "20260728-0800",
-            "label": "System Beta, Cosy",
+            "label": "System Beta",
             "summary": {
                 "total_kwp": 12.0,
                 "battery_kwh": 20.0,
                 "total_gbp": 25400.0,
                 "quoted": True,
-                "tariff": "Cosy",
+                "tariff": {"import_octopus_url": cosy["import_octopus_url"], "rates_export": no_export["rates_export"]},
+                "baseline_tariff": {"rates_import": price_cap["rates_import"]},
                 "cost_with_predbat_p": 40000.0,
                 "saving_vs_none_p": 140000.0,
                 "payback_years": {"pv_only": 9.1, "pv_battery": 8.2, "pv_battery_predbat": 7.0},
@@ -1781,10 +1994,92 @@ def test_web_annual_pages(my_predbat):
         },
     ]
     table = page.render_compare(runs, "20260728-0900")
-    for expected in ["5.6 kWp", "9.5 kWh", "Agile", "13.6", "12 kWp", "20 kWh", "Cosy", "8.2"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "13.6", "12 kWp", "20 kWh", "Octopus Cosy", "8.2"]:
         if expected not in table:
             print("  ERROR: the compare table should show {}, got {}".format(expected, table))
             failed = True
+
+    print("Test: the compare table has a column each for the baseline, import and export tariffs")
+    # One "Tariff" column could not describe a run once import and export became
+    # independent choices: two runs differing only in their export deal looked
+    # identical, and the baseline the saving is measured against was invisible.
+    header = re.search(r"<tr[^>]*>.*?</tr>", table, re.S).group(0)
+    for heading in ["Baseline", "Import", "Export"]:
+        if "<th>{}</th>".format(heading) not in header:
+            print("  ERROR: the compare table should have a {} column, got {}".format(heading, header))
+            failed = True
+    if "<th>Tariff</th>" in header:
+        print("  ERROR: the single Tariff column should have been replaced by the three, got {}".format(header))
+        failed = True
+
+    print("Test: the tariff cells show the catalogue's own names, on the run that used them")
+    alpha_row, beta_row = [row for row in re.findall(r"<tr[^>]*>.*?</tr>", table, re.S) if "<th>" not in row]
+    for row, label, expected_names, unexpected_names in [
+        (alpha_row, "System Alpha", ["Price cap", "Octopus Agile", "Octopus Outgoing Fixed"], ["Octopus Cosy", "No export payment"]),
+        (beta_row, "System Beta", ["Price cap", "Octopus Cosy", "No export payment"], ["Octopus Agile", "Octopus Outgoing Fixed"]),
+    ]:
+        for name in expected_names:
+            if name not in row:
+                print("  ERROR: the {} row should name {}, got {}".format(label, name, row))
+                failed = True
+        for name in unexpected_names:
+            if name in row:
+                print("  ERROR: the {} row should not carry {}, got {}".format(label, name, row))
+                failed = True
+
+    print("Test: a tariff that matches no catalogue entry falls back to something readable, not a blank")
+    # A hand-entered URL, or a compare_list entry the user has since deleted. The
+    # product code is the part of a 130-character URL anyone recognises.
+    odd = [
+        {
+            "id": "odd",
+            "label": "System Delta",
+            "summary": {
+                "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL-24/electricity-tariffs/x/", "rates_export": [{"rate": 15.0}]},
+                "baseline_tariff": {},
+                "payback_years": {},
+            },
+        }
+    ]
+    odd_table = page.render_compare(odd, "odd")
+    if "MY-OWN-DEAL-24" not in odd_table:
+        print("  ERROR: an unmatched import URL should fall back to its product code, got {}".format(odd_table))
+        failed = True
+    if "flat 15.0p" not in odd_table:
+        print("  ERROR: an unmatched export rate should be described rather than blanked, got {}".format(odd_table))
+        failed = True
+
+    print("Test: a run stored before the tariff fields renders as dashes rather than raising")
+    # backfill_summaries normally refreshes these, but it skips a run whose document has
+    # gone; the table must still draw rather than 500 the whole compare page.
+    legacy = [{"id": "legacy", "label": "System Epsilon", "summary": {"total_kwp": 4.0, "tariff": "Agile", "payback_years": {}}}]
+    legacy_table = page.render_compare(legacy, "legacy")
+    if "System Epsilon" not in legacy_table:
+        print("  ERROR: a legacy summary should still render its row, got {}".format(legacy_table))
+        failed = True
+
+    print("Test: the compare table's own compare_list tariffs are named, not reduced to a rate")
+    # The reason naming happens here rather than in annual_store: only the web layer can
+    # read compare_list, so a name computed at save time would be blind to the user's
+    # own tariffs.
+    my_predbat.args["compare_list"] = [{"id": "mine", "name": "My works deal", "rates_import": [{"rate": 11.11}]}]
+    mine = [{"id": "mine-run", "label": "System Zeta", "summary": {"tariff": {"rates_import": [{"rate": 11.11}]}, "baseline_tariff": {}, "payback_years": {}}}]
+    if "My works deal" not in make_page(my_predbat).render_compare(mine, "mine-run"):
+        print("  ERROR: a compare_list tariff should be named in the compare table")
+        failed = True
+    my_predbat.args.pop("compare_list", None)
+
+    print("Test: only the data cells are held on one line, so the headers can wrap and the columns shrink")
+    # nowrap on the whole table forced every column to at least its header width on one
+    # line - "PV + battery pays back in" is ~24 characters holding open a column whose
+    # data is "4.2 years". Thirteen columns of that scrolled far further than they needed.
+    css = page.render_css()
+    if "table.annual-compare th" not in css.replace("\n", " "):
+        print("  ERROR: the compare table's headers should be allowed to wrap")
+        failed = True
+    if "table.annual-compare { white-space: nowrap; }" in css:
+        print("  ERROR: nowrap must not apply to the whole compare table, or the headers cannot wrap")
+        failed = True
 
     print("Test: each run's figures land in its OWN row, not merely somewhere in the table")
     # A per-table substring check (above) cannot tell "each run got its own row" apart
@@ -1800,8 +2095,8 @@ def test_web_annual_pages(my_predbat):
         failed = True
     else:
         row_expectations = [
-            ("System Alpha, Agile", ["5.6 kWp", "9.5 kWh", "Agile", "13.6"], ["Cosy", "8.2", "12 kWp", "20 kWh"]),
-            ("System Beta, Cosy", ["12 kWp", "20 kWh", "Cosy", "8.2"], ["Agile", "13.6", "5.6 kWp", "9.5 kWh"]),
+            ("System Alpha", ["5.6 kWp", "9.5 kWh", "Octopus Agile", "13.6"], ["Octopus Cosy", "8.2", "12 kWp", "20 kWh"]),
+            ("System Beta", ["12 kWp", "20 kWh", "Octopus Cosy", "8.2"], ["Octopus Agile", "13.6", "5.6 kWp", "9.5 kWh"]),
         ]
         for row, (label_fragment, must_contain, must_not_contain) in zip(data_rows, row_expectations):
             if label_fragment not in row:

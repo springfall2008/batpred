@@ -109,7 +109,19 @@ def build_summary(results, config):
         # it is repaying. None rather than 0 when the run predates costs entirely.
         "total_gbp": costs.get("total_gbp"),
         "quoted": bool(costs.get("pv_quoted") or costs.get("battery_quoted")),
-        "tariff": _describe_tariff((config or {}).get("tariff") or {}),
+        # The tariff dicts themselves, not a rendered name. Naming one needs the merged
+        # catalogue, which includes the user's own compare_list entries, and only the web
+        # layer can read those - a name baked in here would be blind to them and would
+        # also freeze at whatever the catalogue said on the day the run was saved. Both
+        # are small: a URL, or a handful of {"rate": n} entries.
+        #
+        # Copied, so a later edit to the live configuration cannot reach back and rewrite
+        # what a stored run says it used.
+        "tariff": copy.deepcopy((config or {}).get("tariff") or {}),
+        # What the no-PV/battery scenario was priced on. Carried separately because it is
+        # a genuinely different tariff to the one the modelled system runs on, and a
+        # saving quoted against an unnamed baseline cannot be checked.
+        "baseline_tariff": copy.deepcopy((config or {}).get("baseline_tariff") or {}),
         "cost_with_predbat_p": predbat,
         "saving_vs_none_p": (baseline - predbat) if (baseline is not None and predbat is not None) else None,
         "payback_years": payback_years,
@@ -276,22 +288,37 @@ async def load_plan(storage, run_id, month, index, scenario):
     return None
 
 
-async def backfill_summaries(storage, runs):
-    """Return ``runs`` with any missing summary filled in, writing the index back once.
+def _summary_is_current(summary):
+    """Return True when a summary carries the fields the compare table reads today.
 
-    A run stored before summaries existed has none. Rather than re-reading its document
-    on every visit to the compare page - several megabytes for a debug run - its summary
-    is computed once and persisted, so every later visit is index-only.
+    Presence alone is not enough. A run stored before the compare table named three
+    tariffs has a summary, but it holds a single pre-rendered import name and neither
+    tariff dict - so those rows would show dashes forever despite the run's own document
+    holding the answer. ``baseline_tariff`` is the marker because ``build_summary``
+    always writes it, even as an empty dict, so it is present exactly when the summary
+    was written by the current code.
+    """
+    return isinstance(summary, dict) and "baseline_tariff" in summary
+
+
+async def backfill_summaries(storage, runs):
+    """Return ``runs`` with any missing or outdated summary rebuilt, writing the index back once.
+
+    A run stored before summaries existed has none; one stored before the tariff fields
+    has a summary that predates them. Both are rebuilt from the run's own document.
+    Rather than re-reading that document on every visit to the compare page - several
+    megabytes for a debug run - the result is persisted, so every later visit is
+    index-only.
 
     The index is written at most once per call, and only when something was actually
-    filled in: a compare page that changes nothing must not write storage at all.
+    rebuilt: a compare page that changes nothing must not write storage at all.
     """
     if not storage or not runs:
         return runs or []
 
     filled = False
     for entry in runs:
-        if entry.get("summary") or not entry.get("id"):
+        if _summary_is_current(entry.get("summary")) or not entry.get("id"):
             continue
         results = await load_run(storage, entry["id"])
         if not isinstance(results, dict):
@@ -309,3 +336,28 @@ async def backfill_summaries(storage, runs):
     if filled:
         await storage.save(STORAGE_MODULE, INDEX_NAME, runs, format="json")
     return runs
+
+
+async def delete_run(storage, run_id):
+    """Remove one run entirely - its document, its captured plans and its index entry.
+
+    Reuses the same discard path eviction uses, so a run the user deletes leaves no more
+    behind than one that aged out of the ring: the document and every plan key are
+    expired, not merely unlinked from the index. Storage has no ``delete`` method on the
+    real component, which is why discarding is overwrite-with-expiry rather than removal.
+
+    Returns True when a run was found and removed, False when the id matched nothing -
+    so the caller can tell "deleted" from "already gone" rather than reporting success
+    for a run that was never there.
+    """
+    if not storage or not run_id:
+        return False
+
+    index = await list_runs(storage)
+    entry = next((existing for existing in index if existing.get("id") == run_id), None)
+    if entry is None:
+        return False
+
+    await _discard_run(storage, run_id, entry.get("plan_keys"))
+    await storage.save(STORAGE_MODULE, INDEX_NAME, [existing for existing in index if existing.get("id") != run_id], format="json")
+    return True

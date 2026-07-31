@@ -12,7 +12,7 @@
 import asyncio
 import datetime
 
-from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, list_runs, load_plan, load_run, save_run
+from annual_store import INDEX_NAME, MAX_RUNS, STORAGE_MODULE, _discard_run, backfill_summaries, build_label, build_summary, delete_run, list_runs, load_plan, load_run, save_run
 from tests.test_infra import run_async
 
 
@@ -251,6 +251,36 @@ def test_annual_store(my_predbat):
         print("  ERROR: an unavailable payback should carry its reason, got {}".format(unavailable))
         failed = True
 
+    print("Test: the summary carries both tariff dicts so the compare table can name all three sides")
+    # Deliberately the raw dicts rather than a rendered name: naming needs the merged
+    # catalogue, which includes the user's own compare_list entries, and only the web
+    # layer can read those. A name baked in here could not see them.
+    tariffs = {
+        "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/x/", "rates_export": [{"rate": 0.0}]},
+        "baseline_tariff": {"rates_import": [{"rate": 26.11}]},
+    }
+    with_tariffs = build_summary(results, tariffs)
+    if with_tariffs.get("tariff") != tariffs["tariff"]:
+        print("  ERROR: the summary should carry the run's tariff dict, got {}".format(with_tariffs.get("tariff")))
+        failed = True
+    if with_tariffs.get("baseline_tariff") != tariffs["baseline_tariff"]:
+        print("  ERROR: the summary should carry the baseline tariff dict, got {}".format(with_tariffs.get("baseline_tariff")))
+        failed = True
+
+    print("Test: the summary's tariffs are copies, so later edits to the config cannot rewrite a stored run")
+    mutable = {"tariff": {"rates_import": [{"rate": 5.0}]}, "baseline_tariff": {"rates_import": [{"rate": 26.11}]}}
+    copied = build_summary(results, mutable)
+    mutable["tariff"]["rates_import"][0]["rate"] = 99.0
+    if copied["tariff"]["rates_import"][0]["rate"] != 5.0:
+        print("  ERROR: the summary should hold its own copy of the tariff, got {}".format(copied["tariff"]))
+        failed = True
+
+    print("Test: a config with no tariff at all summarises as empty dicts rather than raising")
+    bare = build_summary(results, {})
+    if bare.get("tariff") != {} or bare.get("baseline_tariff") != {}:
+        print("  ERROR: a config with no tariff should summarise as empty, got {}".format(bare))
+        failed = True
+
     print("Test: save_run records the summary on the index entry")
     storage = FakeStorage()
     asyncio.run(save_run(storage, results, config, "20260728-090000"))
@@ -300,7 +330,7 @@ def test_annual_store(my_predbat):
         print("  ERROR: backfill should still write the index exactly once despite the corrupt entry, got {} writes".format(len(storage.save_calls) - writes_before))
         failed = True
 
-    print("Test: backfill writes nothing when every entry already has a summary")
+    print("Test: backfill writes nothing when every entry already has a current summary")
     storage = FakeStorage()
     asyncio.run(save_run(storage, results, config, "20260728-090400"))
     asyncio.run(save_run(storage, results, config, "20260728-090401"))
@@ -308,6 +338,32 @@ def test_annual_store(my_predbat):
     asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
     if len(storage.save_calls) != writes_before:
         print("  ERROR: a compare page that changes nothing must not write storage, got {} writes".format(len(storage.save_calls) - writes_before))
+        failed = True
+
+    print("Test: a summary predating the tariff fields is refreshed, not left as it is")
+    # A summary that merely EXISTS is no longer enough: runs stored before the compare
+    # table showed three tariffs have one, but it describes none of them. Left alone,
+    # those rows would show dashes forever despite their document holding the answer.
+    storage = FakeStorage()
+    # The config rides along inside the document, which is where backfill reads it from -
+    # the index entry's own copy is exactly what is being rebuilt here.
+    stale_config = {"tariff": {"rates_import": [{"rate": 7.5}]}, "baseline_tariff": {"rates_import": [{"rate": 26.11}]}}
+    stale_results = dict(results, config=stale_config)
+    asyncio.run(save_run(storage, stale_results, stale_config, "20260728-090500"))
+    stale = asyncio.run(list_runs(storage))
+    # Exactly the shape the old code wrote: a summary with a rendered name and no dicts.
+    stale[0]["summary"] = {"total_kwp": 5.6, "battery_kwh": 9.5, "tariff": "Agile", "cost_with_predbat_p": 66000.0}
+    asyncio.run(storage.save(STORAGE_MODULE, INDEX_NAME, stale, format="json"))
+    writes_before = len(storage.save_calls)
+    filled = asyncio.run(backfill_summaries(storage, asyncio.run(list_runs(storage))))
+    if filled[0]["summary"].get("tariff") != {"rates_import": [{"rate": 7.5}]}:
+        print("  ERROR: a stale summary should be rebuilt from the document's config, got {}".format(filled[0]["summary"].get("tariff")))
+        failed = True
+    if filled[0]["summary"].get("baseline_tariff") != {"rates_import": [{"rate": 26.11}]}:
+        print("  ERROR: the rebuilt summary should carry the baseline the run actually used, got {}".format(filled[0]["summary"]))
+        failed = True
+    if len(storage.save_calls) != writes_before + 1:
+        print("  ERROR: refreshing a stale summary should persist the index once, got {} writes".format(len(storage.save_calls) - writes_before))
         failed = True
 
     print("Test: save_run strips the plans out of the stored document and keys them per leg")
@@ -448,5 +504,45 @@ def test_annual_store(my_predbat):
     if any(storage.store.get(key) is not None for key in keys_before):
         print("  ERROR: an evicted run's plan keys should be discarded too")
         failed = True
+
+    print("Test: deleting a run removes its document, its plans and its index entry")
+    storage = FakeStorage()
+    debug_doc = {
+        "annual": {"scenarios": {"no_pvbat": {"cost_p": 10.0}, "with_predbat": {"cost_p": 5.0}}, "months_included": 12},
+        "months": [{"month": 1, "status": "ok", "plans": [{"day": "2025-01-08", "leg": "single", "scenarios": {"with_predbat": {"rows": [1]}}}]}],
+    }
+    asyncio.run(save_run(storage, debug_doc, {}, "doomed"))
+    asyncio.run(save_run(storage, sample_results(1), sample_config(), "keeper"))
+    plan_keys = [key for key in storage.store if "doomed" in str(key) and "plans" in str(key)]
+    if not plan_keys:
+        print("  ERROR: the fixture should have produced plan keys to delete")
+        failed = True
+
+    if asyncio.run(delete_run(storage, "doomed")) is not True:
+        print("  ERROR: deleting a stored run should report success")
+        failed = True
+    if [entry["id"] for entry in asyncio.run(list_runs(storage))] != ["keeper"]:
+        print("  ERROR: only the deleted run should leave the index, got {}".format(asyncio.run(list_runs(storage))))
+        failed = True
+    if asyncio.run(load_run(storage, "doomed")) is not None:
+        print("  ERROR: a deleted run's document should no longer load")
+        failed = True
+    # Dropping it from the index alone would leave the plans orphaned - unreachable, but
+    # still occupying storage that nothing will ever clean up.
+    if any(storage.store.get(key) is not None for key in plan_keys):
+        print("  ERROR: a deleted run's plan keys should be discarded too, got {}".format(plan_keys))
+        failed = True
+    if asyncio.run(load_run(storage, "keeper")) is None:
+        print("  ERROR: deleting one run must not touch another")
+        failed = True
+
+    print("Test: deleting an unknown run reports failure rather than pretending it worked")
+    if asyncio.run(delete_run(storage, "never-existed")) is not False:
+        print("  ERROR: deleting a run that was never there should return False")
+        failed = True
+    for bad in [None, ""]:
+        if asyncio.run(delete_run(storage, bad)) is not False:
+            print("  ERROR: delete_run({!r}) should return False".format(bad))
+            failed = True
 
     return failed

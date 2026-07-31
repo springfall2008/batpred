@@ -420,6 +420,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/annual", self.annual_page.html_annual_post)
         app.router.add_post("/annual_reset", self.annual_page.html_annual_reset)
         app.router.add_post("/annual_array", self.annual_page.html_annual_array)
+        app.router.add_post("/annual_delete", self.annual_page.html_annual_delete)
         app.router.add_get("/annual_cost_preview", self.annual_page.html_annual_cost_preview)
         app.router.add_post("/annual_run", self.annual_page.html_annual_run)
         app.router.add_get("/annual_status", self.annual_page.html_annual_status)

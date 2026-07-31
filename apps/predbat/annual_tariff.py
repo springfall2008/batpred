@@ -408,10 +408,12 @@ class AnnualTariff:
                         self.log("Warn: Annual: no export rates available for {}-{:02d}, treating export as unpaid".format(year, month))
                         export_unpaid = True
 
-            # Only import failing makes the month unusable: rates_for's gate is
-            # `self.import_url or self.export_url`, so an export-only configuration
-            # (no import_url) must not be marked unavailable just because
-            # `import_rates` is the empty dict it was initialised to above.
+            # Only a failed import download makes the month unusable: there is then
+            # nothing to price import with, whereas a missing export merely means export
+            # earns nothing. A tariff with no import URL at all is fine here - it either
+            # has a basic import pattern, which rates_for now reads independently of the
+            # export side, or no import source whatsoever, which _validate_tariff rejects
+            # long before this point.
             if self.import_url and not import_rates:
                 return False
             # Recorded only now that the month is confirmed available: a month excluded
@@ -471,30 +473,35 @@ class AnnualTariff:
         rates = self._basic_table(info, name, cache_attr)
         return {minute: rates.get(minute % MINUTES_PER_DAY, 0.0) for minute in range(minutes)}
 
+    def _side_window(self, midnight_utc, minutes, url, stamped_by_month, basic, name, cache_attr):
+        """Return one side's rates, keyed by absolute minute from ``midnight_utc``.
+
+        Each side picks its own source: a downloaded URL if it has one, otherwise its
+        basic repeating pattern. This used to be one either/or gate over BOTH sides
+        (``if self.import_url or self.export_url``), which silently mispriced any
+        mixed tariff - and since import and export became separately selectable, a
+        mixed tariff is an ordinary choice rather than a hypothetical. "Price cap
+        import with Octopus Outgoing Prime export" took the URL branch and then found
+        no import rates to stamp, pricing the entire year's import at zero.
+        """
+        if not url:
+            return self._basic_window(basic or [], name, minutes, cache_attr)
+
+        key = (midnight_utc.year, midnight_utc.month)
+        # A 48 hour window starting late in a month spills into the next month's download
+        next_key = (midnight_utc.year, midnight_utc.month + 1) if midnight_utc.month < 12 else (midnight_utc.year + 1, 1)
+        stamped = dict(stamped_by_month.get(key, {}))
+        stamped.update(stamped_by_month.get(next_key, {}))
+
+        rates = {}
+        for minute in range(minutes):
+            stamp = midnight_utc + timedelta(minutes=minute)
+            if stamp in stamped:
+                rates[minute] = stamped[stamp]
+        return rates
+
     def rates_for(self, midnight_utc, minutes):
         """Return (import, export) rate dicts keyed by absolute minute from ``midnight_utc``."""
-        key = (midnight_utc.year, midnight_utc.month)
-
-        if self.import_url or self.export_url:
-            import_stamped = self.import_rates.get(key, {})
-            export_stamped = self.export_rates.get(key, {})
-            # A 48 hour window starting late in a month spills into the next month's download
-            next_key = (midnight_utc.year, midnight_utc.month + 1) if midnight_utc.month < 12 else (midnight_utc.year + 1, 1)
-            import_stamped = dict(import_stamped)
-            import_stamped.update(self.import_rates.get(next_key, {}))
-            export_stamped = dict(export_stamped)
-            export_stamped.update(self.export_rates.get(next_key, {}))
-
-            rate_import = {}
-            rate_export = {}
-            for minute in range(minutes):
-                stamp = midnight_utc + timedelta(minutes=minute)
-                if stamp in import_stamped:
-                    rate_import[minute] = import_stamped[stamp]
-                if stamp in export_stamped:
-                    rate_export[minute] = export_stamped[stamp]
-            return rate_import, rate_export
-
-        rate_import = self._basic_window(self.basic_import or [], "rates_import", minutes, "_basic_import_table")
-        rate_export = self._basic_window(self.basic_export or [], "rates_export", minutes, "_basic_export_table")
+        rate_import = self._side_window(midnight_utc, minutes, self.import_url, self.import_rates, self.basic_import, "rates_import", "_basic_import_table")
+        rate_export = self._side_window(midnight_utc, minutes, self.export_url, self.export_rates, self.basic_export, "rates_export", "_basic_export_table")
         return rate_import, rate_export

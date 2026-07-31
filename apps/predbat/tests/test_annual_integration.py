@@ -329,6 +329,30 @@ def test_annual_integration(my_predbat):
                 print("  ERROR: {}.{} = {} without capture but {} with capture - save is leaking into the billed numbers".format(key, field, without_capture[key][field], with_capture[key][field]))
                 failed = True
 
+    print("Test: the baseline tariff prices no_pvbat only and does not leak into the other scenarios")
+    # A flat price-cap-style baseline against the banded main tariff. Two properties
+    # matter and they pull in opposite directions: the counterfactual MUST change (or the
+    # feature does nothing), and every other scenario must be bit-for-bit identical (or
+    # the swap has leaked and silently repriced the system being evaluated). _apply_rates
+    # mutates predbat in place and replicates what it is given, so a leak here is a very
+    # live possibility rather than a theoretical one.
+    reset_inverter(my_predbat)
+    baseline_midnight = pytz.utc.localize(datetime(day.year, day.month, day.day))
+    baseline_load_source = SyntheticLoadProfile(annual_kwh=config["load"]["annual_kwh"], shape=config["load"]["shape"], year=config["year"])
+    flat_cap = StubTariff(cheap=26.11, normal=26.11, peak=26.11, export=4.1)
+    without_baseline = _run_scenarios(my_predbat, config, weather, StubTariff(), baseline_load_source, day, baseline_midnight, car_kwh=0.0, car_rate_kw=DEFAULT_CAR_RATE_KW)
+    reset_inverter(my_predbat)
+    with_baseline = _run_scenarios(my_predbat, config, weather, StubTariff(), baseline_load_source, day, baseline_midnight, car_kwh=0.0, car_rate_kw=DEFAULT_CAR_RATE_KW, baseline_tariff=flat_cap)
+
+    if abs(with_baseline["no_pvbat"]["cost_p"] - without_baseline["no_pvbat"]["cost_p"]) < 1.0:
+        print("  ERROR: a flat baseline tariff should reprice no_pvbat away from the banded main tariff, got {} vs {}".format(without_baseline["no_pvbat"]["cost_p"], with_baseline["no_pvbat"]["cost_p"]))
+        failed = True
+    for key in ["pv_only", "without_predbat", "with_predbat"]:
+        for field in SCENARIO_FIELDS:
+            if without_baseline[key][field] != with_baseline[key][field]:
+                print("  ERROR: {}.{} changed from {} to {} - the baseline tariff has leaked past no_pvbat".format(key, field, without_baseline[key][field], with_baseline[key][field]))
+                failed = True
+
     print("Test: capturing plans does not leak predbat.debug_enable on")
     # The annual "debug" flag means "save the plan info", nothing more - it must never be
     # wired to Predbat's own debug_enable, which kernel_supported() requires False to use

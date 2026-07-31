@@ -25,6 +25,7 @@ from annual_tariff import AnnualTariff
 from annual_weather import AnnualWeather, resolve_postcode
 from const import MINUTE_WATT, PREDICT_STEP
 from prediction import Prediction
+from tariff_catalogue import PRICE_CAP_IMPORT_P, SEG_EXPORT_P
 
 VALID_SHAPES = ["night", "day", "flat"]
 
@@ -215,24 +216,36 @@ def _validate_load(raw):
     }
 
 
-def _validate_tariff(raw):
-    """Normalise the tariff block, requiring at least one import rate source.
+# What a household with no PV and no battery actually pays: the Ofgem price cap for
+# import, and a typical fixed Smart Export Guarantee rate for the export they cannot
+# have without generation. Rates come from tariff_catalogue so the cap figure is stated
+# in exactly one place.
+DEFAULT_BASELINE_TARIFF = {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}], "rates_export": [{"rate": SEG_EXPORT_P}]}
+
+
+def _validate_tariff(raw, path="annual.tariff"):
+    """Normalise a tariff block, requiring at least one import rate source.
 
     A URL containing {dno_region} with no dno_region supplied is rejected here
     rather than left to 404 at fetch time, where it would surface as an
     unavailable month and read like an Octopus outage.
+
+    ``path`` names the block being validated, because two of them come through here:
+    the main tariff and ``baseline_tariff``. Hard-coded messages sent every baseline
+    problem to "annual.tariff", telling the user to fix a block that was perfectly
+    valid - the one thing an error message must never do.
     """
     if not isinstance(raw, dict):
-        raise AnnualConfigError("annual.tariff is required and must be a mapping")
+        raise AnnualConfigError("{} is required and must be a mapping".format(path))
     if not raw.get("import_octopus_url") and not raw.get("rates_import"):
-        raise AnnualConfigError("annual.tariff requires either import_octopus_url or rates_import")
+        raise AnnualConfigError("{} requires either import_octopus_url or rates_import".format(path))
 
     templated = [name for name in ["import_octopus_url", "export_octopus_url"] if raw.get(name) and "{dno_region}" in raw[name]]
     if templated and not raw.get("dno_region"):
-        raise AnnualConfigError("annual.tariff.{} uses {{dno_region}} but annual.tariff.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(", ".join(templated)))
+        raise AnnualConfigError("{path}.{fields} uses {{dno_region}} but {path}.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(path=path, fields=", ".join(templated)))
 
     tariff = dict(raw)
-    tariff["standing_charge_p_per_day"] = _require_number(raw.get("standing_charge_p_per_day", 0.0), "annual.tariff.standing_charge_p_per_day", minimum=0)
+    tariff["standing_charge_p_per_day"] = _require_number(raw.get("standing_charge_p_per_day", 0.0), "{}.standing_charge_p_per_day".format(path), minimum=0)
     return tariff
 
 
@@ -297,6 +310,12 @@ def validate_config(config, today=None):
         "battery": battery,
         "load": _validate_load(raw.get("load")),
         "tariff": _validate_tariff(raw.get("tariff")),
+        # The counterfactual bill is what the household would pay with no system at all,
+        # and such a household is not on a battery tariff: the smart import tariffs are
+        # only worth having once you have something to shift load into. Pricing the
+        # no-PV/battery scenario on the same tariff as the battery scenarios therefore
+        # understates what the system is worth. Defaults to the Ofgem price cap.
+        "baseline_tariff": _validate_tariff(raw.get("baseline_tariff") or DEFAULT_BASELINE_TARIFF, path="annual.baseline_tariff"),
         "samples_per_month": samples_per_month,
         "costs": _validated_costs(raw.get("costs")),
         "debug": _coerce_bool(raw.get("debug", False)),
@@ -1079,7 +1098,7 @@ def _capture_plan(predbat, pv_step, pv_step10, load_step, load_step10, end_recor
     return raw_plan
 
 
-def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh, car_rate_kw, plans=None):
+def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh, car_rate_kw, plans=None, baseline_tariff=None):
     """Run all four scenarios against one sampled day at a fixed car charging energy.
 
     ``car_kwh`` is the actual energy this leg charges - either a full weekly charging
@@ -1119,10 +1138,31 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.charge_window_best = []
     predbat.export_window_best = []
     predbat.export_limits_best = []
+    # Price the counterfactual on its OWN tariff. A household with no PV and no battery is
+    # not on a smart import tariff - those only pay off once there is something to shift
+    # load into - so charging the baseline at the battery tariff's overnight rate credits
+    # it with a saving it could never have had, and understates the system.
+    #
+    # The rates are restored immediately afterwards, from the tariff's own output rather
+    # than from predbat.rate_import: _apply_rates REPLICATES what it is given, so reusing
+    # the installed dict would re-replicate an already-replicated series. Every later
+    # scenario in this leg therefore runs on exactly what prepare_sample() installed.
+    if baseline_tariff is not None:
+        baseline_import, baseline_export = baseline_tariff.rates_for(midnight_utc, PLAN_MINUTES)
+        _apply_rates(predbat, baseline_import, baseline_export)
+
+    # Constructed AFTER the rate swap, never before: Prediction snapshots the rates off
+    # predbat at construction time (prediction.py, `self.rate_import = base.rate_import`),
+    # so a Prediction built first would be billed at the main tariff no matter what was
+    # installed afterwards - the swap would appear to work and change nothing.
     predbat.prediction = Prediction(predbat, zero_step, zero_step, load_step, load_step, soc_kw=0, soc_max=0)
     results["no_pvbat"] = _billed_result(predbat, DAY_MINUTES, zero_step)
     if plans is not None:
         plans["no_pvbat"] = _capture_plan(predbat, zero_step, zero_step, load_step, load_step, DAY_MINUTES)
+
+    if baseline_tariff is not None:
+        main_import, main_export = tariff.rates_for(midnight_utc, PLAN_MINUTES)
+        _apply_rates(predbat, main_import, main_export)
 
     # Scenario 1b: PV but no battery. apply_hardware gives the array its real inverter
     # and export limits - a PV-only system still has an inverter, and clipping matters -
@@ -1223,7 +1263,7 @@ def _blend_results(with_car, without_car, fraction):
     return {key: {field: fraction * with_car[key][field] + (1 - fraction) * without_car[key][field] for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
 
 
-def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, plans=None):
+def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, plans=None, baseline_tariff=None):
     """Run all four scenarios against one sampled day and return their billed figures.
 
     A configured car charges in weekly sessions, not a daily smear (see
@@ -1245,7 +1285,7 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, pl
 
     if car_charging_kwh <= 0:
         leg_plans = {} if plans is not None else None
-        result = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=leg_plans)
+        result = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=leg_plans, baseline_tariff=baseline_tariff)
         if plans is not None:
             plans.append({"leg": "single", "scenarios": leg_plans})
         return result
@@ -1257,12 +1297,12 @@ def run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, pl
     sessions_per_week, session_kwh = car_charging_schedule(car_charging_kwh, car_rate_kw)
 
     with_car_plans = {} if plans is not None else None
-    with_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=session_kwh, car_rate_kw=car_rate_kw, plans=with_car_plans)
+    with_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=session_kwh, car_rate_kw=car_rate_kw, plans=with_car_plans, baseline_tariff=baseline_tariff)
     if plans is not None:
         plans.append({"leg": "with_car", "scenarios": with_car_plans})
 
     without_car_plans = {} if plans is not None else None
-    without_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=without_car_plans)
+    without_car = _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_utc, car_kwh=0.0, car_rate_kw=car_rate_kw, plans=without_car_plans, baseline_tariff=baseline_tariff)
     if plans is not None:
         plans.append({"leg": "without_car", "scenarios": without_car_plans})
 
@@ -1423,6 +1463,9 @@ class AnnualPredictor:
             self.caveats.append("Months {} had too few forecast/actual day pairs, so their P10 used the flat {} derate.".format(sorted(self.weather.fallback_months), self.config["pv10_derate_fallback"]))
         if has_solar:
             self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
+        self.caveats.append(
+            "The no_pvbat counterfactual is priced on its own baseline tariff, since a household with no PV or battery would not be on a battery tariff. Both scenarios still use ONE standing charge - the main tariff's - so any difference in standing charge between the two tariffs is NOT included in the reported savings or payback."
+        )
         self.caveats.append("export_credit_p_estimate is money ALREADY included inside cost_p (which prices every export minute at its real rate); it is informational only - adding it to cost_p double-counts export income.")
         self.caveats.append(
             "The without_predbat baseline charges in the single cheapest contiguous band of each day, mirroring Predbat's own savings baseline. On a half-hourly tariff such as Agile the cheapest band is often one 30 minute slot, so the baseline is a more pessimistic comparator there than on a banded tariff (Economy 7, Cosy, Flux) where it covers the whole cheap period. Compare predbat_vs_baseline_p across tariffs with that in mind."
@@ -1439,7 +1482,11 @@ class AnnualPredictor:
         self.predbat = create_headless_predbat(self.work_dir, self.config["timezone"], self.log)
         self.load_source = await self._build_load_source()
         self.tariff = AnnualTariff(self.config["tariff"], log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
+        # Prices the no-PV/battery counterfactual only. Its own AnnualTariff because it
+        # may be a completely different product with its own rate downloads and cache.
+        self.baseline_tariff = AnnualTariff(self.config["baseline_tariff"], log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
 
+        baseline_fallback_months = []
         zone = pytz.timezone(self.config["timezone"])
         months = []
         total_units = 12
@@ -1452,6 +1499,11 @@ class AnnualPredictor:
             days_in_month = calendar.monthrange(year, month)[1]
             standing_charge_p = self.tariff.standing_charge_p_per_day * days_in_month
 
+            baseline_ready = await self.baseline_tariff.fetch_month(year, month)
+            if not baseline_ready:
+                # Falls back to the main tariff for this month rather than losing it, but
+                # that silently changes what no_pvbat means, so it is recorded.
+                baseline_fallback_months.append(month)
             if not await self.tariff.fetch_month(year, month):
                 months.append({"month": month, "status": "unavailable", "reason": "no rate data available", "days": days_in_month, "standing_charge_p": standing_charge_p})
                 completed += 1
@@ -1478,7 +1530,7 @@ class AnnualPredictor:
                 midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
                 day_plans = [] if self.config["debug"] else None
                 try:
-                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans)
+                    result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans, baseline_tariff=self.baseline_tariff if baseline_ready else None)
                 except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
                     self.log("Warn: Annual: {} in month {} failed to plan/cost ({}: {}); excluding it from this month's total".format(day.isoformat(), month, type(exc).__name__, exc))
                     failed_days.append(day.isoformat())
@@ -1534,6 +1586,13 @@ class AnnualPredictor:
             completed += 1
 
         self.caveats.extend(self._tariff_fallback_caveats(self.tariff.fallback_months, self.tariff.unpaid_export_months, year))
+
+        if baseline_fallback_months:
+            # Falling back to the main tariff keeps the month rather than losing it, but it
+            # silently changes what no_pvbat means there, so it has to be said out loud.
+            self.caveats.append(
+                "No baseline-tariff rates were available for month(s) {}, so the no-PV/battery counterfactual there was priced on the main tariff instead, which understates what the system is worth in those months.".format(sorted(baseline_fallback_months))
+            )
 
         if progress:
             progress(total_units, total_units, "Complete")
