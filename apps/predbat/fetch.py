@@ -2390,7 +2390,6 @@ class Fetch:
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
-        self.best_soc_margin = 0.0
         self.best_soc_min = self.get_arg("best_soc_min")
         self.best_soc_max = self.get_arg("best_soc_max")
         self.best_soc_keep = self.get_arg("best_soc_keep")
