@@ -354,6 +354,7 @@ powerline
 Powerwall
 ppdetails
 ppkwh
+preclip
 pred
 predai
 predbat
