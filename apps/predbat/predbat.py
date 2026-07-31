@@ -1511,11 +1511,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         see #4379. A clean validation cancels any retry sequence already in progress.
         """
         if errors:
-            retries = self.get_arg("validate_config_retries", 2)
+            retries = int(self.get_arg("validate_config_retries", 2))
             if retries > 0:
                 self.validate_config_retries_remaining = retries
-                retry_minutes = self.get_arg("validate_config_retry_minutes", 1)
+                retry_minutes = max(0, int(self.get_arg("validate_config_retry_minutes", 1)))
                 self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+            else:
+                self.validate_config_retries_remaining = 0
+                self.validate_config_next_retry_time = None
         else:
             self.validate_config_retries_remaining = 0
             self.validate_config_next_retry_time = None

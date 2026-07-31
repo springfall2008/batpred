@@ -441,11 +441,13 @@ def test_validate_config_retry(my_predbat):
         assert my_predbat.validate_config_retries_remaining == 0, "A successful retry should clear the sequence, not just decrement it"
         assert my_predbat.validate_config_next_retry_time is None
 
-        # validate_config_retries: 0 disables the feature entirely
+        # validate_config_retries: 0 disables the feature entirely (and cancels any armed retry sequence)
+        my_predbat.validate_config_retries_remaining = 2
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc + timedelta(minutes=1)
         my_predbat.args["validate_config_retries"] = 0
         my_predbat.validate_config_schedule_retry(1)
         assert my_predbat.validate_config_retries_remaining == 0, "validate_config_retries=0 should disable retries"
-
+        assert my_predbat.validate_config_next_retry_time is None
         # A custom retry count/interval is respected
         my_predbat.args["validate_config_retries"] = 5
         my_predbat.args["validate_config_retry_minutes"] = 3
