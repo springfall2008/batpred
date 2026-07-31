@@ -407,7 +407,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
-        self.best_soc_margin = 0
         self.best_soc_keep = 0
         self.best_soc_keep_weight = 0.5
         self.rate_min = 0

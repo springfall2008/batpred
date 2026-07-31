@@ -126,22 +126,55 @@ Restoring by element reassignment is safe: `window_links` holds only a type and 
 and both loops re-read `self.export_window_best[window_n]` each iteration, so no stale reference to
 the replaced dict survives.
 
-### 2. The guard in both passes
+### 2. The optimisers report the plan metric
 
-Each pass measures its baseline once on entry, then wraps each existing window change:
+`optimise_charge_limit` and `optimise_export` already simulate the whole plan for every option they try,
+so the guard does not need to simulate again — it needs the number they already have. What they *return*
+today is unusable for this: `best_metric` has the ranking adjustments baked in (the -0.003/-0.002/-0.001
+tie-break weightings, the isCharging bonus, the export commitment bonus). Those adjustments are root
+cause A, so comparing on them would leave the guard blind to exactly what it exists to catch.
+
+Both functions therefore capture the metric straight out of `compute_metric`, before any adjustment, and
+return it as an extra value:
+
+```python
+metric, battery_value = self.compute_metric(...)
+metric_plan = metric        # unadjusted: what this option does to the plan
+... ranking adjustments ...
+```
+
+The adjusted `best_metric` is still returned and still ranks candidates, so `optimise_detailed_pass` —
+which uses it as its own accept/reject gate — is untouched. Replacing it outright would strip the
+isCharging and export-commitment stickiness from that gate, changing fresh-plan behaviour.
+
+Six call sites gain a name for the new value; four of them ignore it.
+
+### 3. Dead `best_soc_margin` removed
+
+`optimise_charge_limit` applied `best_soc = min(best_soc + self.best_soc_margin, self.soc_max)` *after*
+selection, which would mean the SoC written back was not the one simulated. The field is dead: assigned
+`0.0` in `fetch.py` and `0` in `predbat.py` and set nowhere else — no config item, no apps.yaml key, no
+schema entry, unlike its `best_soc_min`/`best_soc_max`/`best_soc_keep` neighbours. Removing it makes
+"the option simulated is the option written back" a property rather than a coincidence.
+
+The `min(..., self.soc_max)` clamp stays: `best_soc_min_setting` is appended to `try_socs` unclamped.
+
+### 4. The guard in both passes
+
+Each pass measures its baseline once on entry via `plan_metric_now()`, then wraps each existing window
+change:
 
 ```python
 snapshot = self.plan_window_snapshot(typ, window_n)
 <existing window change, untouched>
-candidate = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=end_record)
+candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
 if candidate[0] < selected[0]:   # element 0 is the metric, lower is better
     selected = candidate
 else:
     self.plan_window_restore(typ, window_n, snapshot)
 ```
 
-`end_record` is the `tweak_plan` parameter of that name in the first pass, and `self.end_record` in
-the second — matching what each pass already passes to its optimiser calls.
+This costs **no extra simulation per window** — only the single baseline measurement per pass.
 
 `selected` is returned at the end of the pass in place of the values previously carried out of the
 last optimise call.
@@ -150,13 +183,26 @@ last optimise call.
 passes, mutates the plan, and its return value is discarded at the call site. The `best_metric` the
 caller holds is therefore already stale by the time either pass is entered.
 
-**Comparison is strict (`<`).** A change that merely ties is reverted, which reduces plan churn
-between cycles. This differs from `optimise_swap_export`, which accepts ties with `<=`.
+**Ties are kept (`<=`).** Only a genuine regression is reverted, matching `optimise_swap_export`.
+
+Reverting ties was tried first, on the reasoning that it reduces churn. The random-scenario benchmark
+disagreed: reverting a metric-neutral tie leaves a differently shaped plan of equal value, and the
+passes that run after tweak (`optimise_solar`, `optimise_swap_charge`, clipping) amplify that into a
+real difference. Measured over 20 scenarios against `main`:
+
+| tie handling | unchanged | better | worse | avg metric | golden file |
+|---|---|---|---|---|---|
+| strict `<` | 18 | 1 (-0.27) | 1 (+2.52) | +0.1125 worse | needed regenerating |
+| `<=` | 19 | 1 (-0.27) | 0 | -0.0136 better | unchanged |
+
+In the one regressing scenario `tweak_plan` itself finished at metric 256.76 / cost 384.81 under both
+rules - identical. The pass is monotonic either way; the divergence was entirely downstream of a tie
+that cost nothing to make.
 
 Any log line reads from `selected` by unpacking it first rather than indexing it positionally.
 Reverts are logged under `debug_enable`.
 
-### 3. Scope the in-progress export commitment bonus
+### 5. Scope the in-progress export commitment bonus
 
 In `optimise_export`, move
 
@@ -168,7 +214,7 @@ inside the existing `if start <= self.minutes_now:` so a candidate that starts *
 minute no longer receives the in-progress bonus. This matches the `keep_export` condition that
 already sits directly below it, and is the direct fix for cause A.
 
-### 4. Signature
+### 6. Signature
 
 `tweak_plan(self, end_record)` — the `best_metric` and `metric_keep` parameters become unused once
 the baseline is measured internally, so they go, along with the one caller in `optimise_all_windows`.
@@ -194,28 +240,34 @@ In `apps/predbat/tests/test_export_commitment.py`:
 3. **`optimise_full_second_pass` reverts likewise.** New coverage — the existing
    `optimise_windows_kernel` test exercises `second_pass=True` but only proves the pass still runs.
 
-4. **An in-progress export is not restarted later inside its own window.** Covers §3.
+4. **An in-progress export is not restarted later inside its own window.** Covers §5. Needs a
+   capacity-limited battery and a rising price inside the window, so that starting late is genuinely
+   better on the raw metric and only the commitment keeps the running export alive. A flat rate does
+   not discriminate: starting earlier already wins, so the bonus decides nothing.
 
-Each new test must be verified to fail with the guard removed, not merely to pass with it.
+5. **A reported metric equals a fresh whole-plan simulation**, for both the export and charge branches.
+   This is the invariant §2 rests on. The tolerance must stay below the 0.001 tie-break weightings,
+   or reporting the adjusted metric by mistake slips through.
 
-Full suite (`./run_all`), not just `--quick`, plus `./run_pre_commit`.
+Each new test must be verified to fail with the corresponding production change reverted, not merely
+to pass with it. Mutation battery run: guard disabled, bonus scoping reverted, export reports adjusted
+metric, charge reports adjusted metric, `Prediction` built before config — 5/5 caught.
+
+Full suite (`./run_all`), not just `--quick`, plus `./run_pre_commit`. Check `run_all`'s own summary
+line, not the shell exit code of a compound command.
 
 ## Risks and non-goals
 
 - **The guard's objective excludes the commitment bonus.** An in-progress export that is
-  raw-metric-worse than what the plan already holds will be reverted, because `run_prediction_metric`
-  carries no bonus. This follows from the strict comparison and is stated in the helper docstring so
+  raw-metric-worse than what the plan already holds will be reverted, because the metric it compares on
+  is the unadjusted one. This follows from the strict comparison and is stated in the helper docstring so
   it is a documented property rather than a surprise. In practice it rarely bites: in tweak mode the
   incoming plan already holds the export, so re-selecting it is a no-change tie.
 - **`tweak_plan`'s 8-window budget is spent on reverted windows too**, so a cycle can burn its budget
   achieving nothing. Existing behaviour of the cap; not changed here.
-- **Performance.** One extra `run_prediction_metric` (two simulations) per window. `tweak_plan` is
-  capped at 8 windows. `optimise_full_second_pass` is uncapped but `calculate_second_pass` defaults
-  to `False`. Measured on `optimise_windows_kernel` in #4398: 46.95s / 47.65s without, 42.69s /
-  43.04s with — no regression, plausibly because later windows are no longer optimised on top of a
-  degraded intermediate plan.
-- **Not doing:** skipping the re-measure when the window is unchanged. It would save roughly a third
-  of the added cost but adds a branch that is not needed at these window counts.
+- **Performance.** No extra simulation per window: the guard reuses the metric the optimiser already
+  computed, and each pass adds only one baseline measurement. Verified in a real plan run that the
+  reported metric matched a fresh simulation on all 16 guard invocations, delta 0.0 on every one.
 - **Not touching:** `optimise_detailed_pass`, `optimise_levels_pass`, `optimise_solar`,
   `should_replace_plan`.
 
@@ -224,6 +276,10 @@ Full suite (`./run_all`), not just `--quick`, plus `./run_pre_commit`.
 Open an issue for root causes A and B — the ranking score diverging from the plan metric, and the
 reference point being a fixed default rather than the status quo. Fixing those would make the passes
 monotonic by construction and let the guard become a cheap assertion rather than a correction.
+
+Fixing A also collapses the two metrics this change has to carry: once ranking no longer applies
+adjustments, `best_metric` and `best_metric_plan` are the same number and the extra return value goes
+away, along with the `optimise_detailed_pass` gate's dependence on the adjusted score.
 
 ## Provenance
 
