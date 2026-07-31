@@ -58,6 +58,7 @@ def collect_watch_files(roots, apps_file_path):
     write_minimal_apps_yaml()) would otherwise be indistinguishable from the real config file,
     forcing an unwanted restart of the live instance whenever they run (#4397, #4396).
     """
+    apps_file_path = os.path.abspath(apps_file_path)
     py_files = []
     seen_files = set()
     for root_dir in roots:
@@ -71,6 +72,15 @@ def collect_watch_files(roots, apps_file_path):
                 if file.endswith(".py") or full_path == apps_file_path:
                     py_files.append(full_path)
                     seen_files.add(full_path)
+
+    # The real configured apps.yaml might not live under any of the walked roots at all
+    # (e.g. PREDBAT_APPS_FILE pointing somewhere the roots don't reach) - always include it
+    # explicitly if it exists, rather than silently dropping config-change watching entirely
+    # just because the walk never happened to encounter it (Copilot review on #4401).
+    if apps_file_path not in seen_files and os.path.exists(apps_file_path):
+        py_files.append(apps_file_path)
+        seen_files.add(apps_file_path)
+
     return py_files
 
 

@@ -73,6 +73,27 @@ def test_hass_watcher(my_predbat):
             print(f"ERROR: hidden file {hidden_py} should NOT be watched, got {watched_abs}")
             failed = True
 
+    print("  [apps.yaml outside the walked roots] still watched explicitly (Copilot review on #4401)")
+    with tempfile.TemporaryDirectory() as walked_root, tempfile.TemporaryDirectory() as outside_root:
+        outside_apps_yaml = os.path.join(outside_root, "apps.yaml")
+        with open(outside_apps_yaml, "w", encoding="utf-8") as f:
+            f.write("pred_bat:\n  timezone: Europe/London\n")
+
+        watched = collect_watch_files([walked_root], outside_apps_yaml)
+        watched_abs = set(os.path.abspath(p) for p in watched)
+        if os.path.abspath(outside_apps_yaml) not in watched_abs:
+            print(f"ERROR: apps.yaml outside the walked roots should still be watched, got {watched_abs}")
+            failed = True
+
+    print("  [apps.yaml that does not exist] not added if the configured path is missing entirely")
+    with tempfile.TemporaryDirectory() as walked_root:
+        missing_apps_yaml = os.path.join(walked_root, "does_not_exist", "apps.yaml")
+        watched = collect_watch_files([walked_root], missing_apps_yaml)
+        watched_abs = set(os.path.abspath(p) for p in watched)
+        if os.path.abspath(missing_apps_yaml) in watched_abs:
+            print(f"ERROR: a non-existent apps.yaml path should not be added, got {watched_abs}")
+            failed = True
+
     print("  [resolve_apps_yaml_path] defaults to 'apps.yaml' in the working directory when PREDBAT_APPS_FILE is unset")
     saved_env = os.environ.pop("PREDBAT_APPS_FILE", None)
     try:
