@@ -79,10 +79,36 @@ def _tiebreak_decision_tests(my_predbat, failures):
     _check(my_predbat.should_replace_plan(-200.0, -200.0, 4, 2) is True, "cost-neutral cleaner plan adopts new", failures)
 
 
+def _scoring_pair_tests(my_predbat, failures):
+    """plan_scoring_pair: selection scores the pre-clip plans, and never mixes a clipped side with a pre-clip one.
+
+    Clipping sets the percentage actually sent to the inverter. It is a no-op in the expected case but moves the
+    metric through the PV10 branch by an amount that depends on plan shape, so comparing post-clip decides
+    between plans on a difference clipping invented rather than one the plans really have.
+    """
+    clipped_new = ([1.0], [{"start": 0, "end": 30}], [{"start": 30, "end": 60}], [100.0])
+    clipped_prev = ([2.0], [{"start": 0, "end": 30}], [{"start": 30, "end": 60}], [100.0])
+    preclip_new = ([3.0], [{"start": 0, "end": 30}], [{"start": 30, "end": 60}], [0.0])
+    preclip_prev = ([4.0], [{"start": 0, "end": 30}], [{"start": 30, "end": 60}], [0.0])
+
+    # Both pre-clip snapshots available: score the plans as optimised
+    pair = my_predbat.plan_scoring_pair(clipped_new, clipped_prev, preclip_new, preclip_prev)
+    _check(pair == (preclip_new, preclip_prev), "with both snapshots the pre-clip plans are scored", failures)
+
+    # No incumbent snapshot (first recompute after a restart): fall back to clipped on BOTH sides, never a mix,
+    # otherwise the new plan is scored untaxed against a taxed incumbent and wins on the difference
+    pair = my_predbat.plan_scoring_pair(clipped_new, clipped_prev, preclip_new, None)
+    _check(pair == (clipped_new, clipped_prev), "without an incumbent snapshot both sides fall back to clipped", failures)
+
+    pair = my_predbat.plan_scoring_pair(clipped_new, clipped_prev, None, preclip_prev)
+    _check(pair == (clipped_new, clipped_prev), "without a new snapshot both sides fall back to clipped", failures)
+
+
 def run_plan_tiebreak_tests(my_predbat):
     """Run the plan fragmentation tie-break tests. Returns True on failure."""
     print("**** Running plan tie-break tests ****")
     failures = []
     _fragmentation_tests(my_predbat, failures)
     _tiebreak_decision_tests(my_predbat, failures)
+    _scoring_pair_tests(my_predbat, failures)
     return len(failures) > 0

@@ -999,6 +999,25 @@ class Plan:
         self.plan_window_restore(typ, window_n, snapshot)
         return baseline
 
+    def plan_scoring_pair(self, plan_new, plan_prev, preclip_new, preclip_prev):
+        """Return the (new, previous) plans that selection should be scored on.
+
+        Plans are (charge_limit, charge_window, export_window, export_limits) tuples.
+
+        Clipping sets the charge/export percentage actually shown on the plan and sent to the inverter, so it
+        has to stay. It is a no-op in the expected case - the mid-case cost is unchanged - but it moves the
+        metric through the PV10 branch by an amount that depends on plan shape. Scoring the clipped plans
+        therefore decides between them partly on a difference clipping invented rather than one the plans
+        really have, and by then the slot is usually hours away and will be re-planned many times before it
+        executes.
+
+        Both sides fall back together when either snapshot is missing (the first recompute after a restart):
+        scoring an un-taxed new plan against a taxed incumbent would favour the new plan on the tax alone.
+        """
+        if preclip_new is not None and preclip_prev is not None:
+            return preclip_new, preclip_prev
+        return plan_new, plan_prev
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1047,12 +1066,14 @@ class Plan:
                 charge_window_best_prev = copy.deepcopy(self.charge_window_best)
                 export_window_best_prev = copy.deepcopy(self.export_window_best)
                 export_limits_best_prev = copy.deepcopy(self.export_limits_best)
+                preclip_prev = self.plan_preclip
                 self.log("Recompute is saving previous plan...")
             else:
                 charge_limit_best_prev = None
                 charge_window_best_prev = None
                 export_window_best_prev = None
                 export_limits_best_prev = None
+                preclip_prev = None
                 self.log("Recompute, previous plan is invalid...")
 
             self.plan_valid = False  # In case of crash, plan is now invalid
@@ -1179,6 +1200,9 @@ class Plan:
             # Remove charge windows that overlap with export windows
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
 
+            # Snapshot the plan as optimised, before clipping adjusts the percentages for execution
+            preclip_new = (copy.deepcopy(self.charge_limit_best), copy.deepcopy(self.charge_window_best), copy.deepcopy(self.export_window_best), copy.deepcopy(self.export_limits_best))
+
             # Filter out any unused export windows
             if self.calculate_best_export and self.export_window_best:
                 # Filter out the windows we disabled
@@ -1263,26 +1287,37 @@ class Plan:
 
             # Plan comparison
             if charge_window_best_prev is not None and not debug_mode:
-                metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(
-                    self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+                # Score the plans as optimised rather than as clipped - see plan_scoring_pair()
+                score_new, score_prev = self.plan_scoring_pair(
+                    (self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best),
+                    (charge_limit_best_prev, charge_window_best_prev, export_window_best_prev, export_limits_best_prev),
+                    preclip_new,
+                    preclip_prev,
                 )
+                metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(score_new[0], score_new[1], score_new[2], score_new[3], end_record=self.end_record)
                 metric_prev, battery_value_prev, cost_prev, metric_keep_prev, battery_cycle_prev, final_carbon_g_prev, import_kwh_prev, export_kwh_prev = self.run_prediction_metric(
-                    charge_limit_best_prev, charge_window_best_prev, export_window_best_prev, export_limits_best_prev, end_record=self.end_record
+                    score_prev[0], score_prev[1], score_prev[2], score_prev[3], end_record=self.end_record
                 )
 
                 self.log("Previous plan best metric is {} (cost {}) and new plan best metric is {} (cost {})".format(dp2(metric_prev), dp2(cost_prev), dp2(metric), dp2(cost)))
-                fragmentation_prev = self.plan_fragmentation(charge_window_best_prev, charge_limit_best_prev, export_window_best_prev, export_limits_best_prev)
-                fragmentation_new = self.plan_fragmentation(self.charge_window_best, self.charge_limit_best, self.export_window_best, self.export_limits_best)
+                fragmentation_prev = self.plan_fragmentation(score_prev[1], score_prev[0], score_prev[2], score_prev[3])
+                fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
                 if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
                     self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
                     self.charge_window_best = copy.deepcopy(charge_window_best_prev)
                     self.charge_limit_best = copy.deepcopy(charge_limit_best_prev)
                     self.export_window_best = copy.deepcopy(export_window_best_prev)
                     self.export_limits_best = copy.deepcopy(export_limits_best_prev)
+                    # Keeping the incumbent keeps its pre-clip snapshot too, so the next cycle still compares
+                    # like for like
+                    preclip_new = preclip_prev
                 elif (metric_prev - metric) >= self.metric_min_improvement_plan:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
                 else:
                     self.log("New plan is a cost-neutral improvement but less fragmented ({} vs {} segments), using new plan".format(fragmentation_new, fragmentation_prev))
+
+            # Carry the pre-clip snapshot of whichever plan we kept into the next cycle
+            self.plan_preclip = preclip_new
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))
