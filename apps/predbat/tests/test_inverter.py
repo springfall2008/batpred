@@ -1632,6 +1632,127 @@ def test_discharge_target_tracks_reserve(test_name, ha, inv, dummy_rest):
     return failed
 
 
+def test_discharge_target_read_back(test_name, ha, inv, dummy_rest):
+    """
+    Regression test for issue #4404: spurious "REST failed to setExportTarget" warnings.
+
+    GivTCP reports the raw invertor registers as strings, so rest_setDischargeTarget's read back
+    check compared '20' against the int 20 and never matched. Every export slot burned all five
+    retries (five redundant register writes) and then recorded an error status, even though the
+    write had actually landed.
+
+    The same cycle also has to cope with an inverter that does not expose the export target at
+    all - reading it back as None must not be treated as a real target of 0 that needs raising to
+    the reserve, or Predbat writes to an entity that isn't there on every cycle.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_reserve_percent = inv.reserve_percent
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+    saved_had_errors = inv.base.had_errors
+    saved_record_status = inv.base.record_status
+    saved_target_soc = ha.dummy_items.get("number.discharge_target_soc")
+
+    # Capture the error statuses so the unrelated fixture warnings (the H M format time entities
+    # this inverter has no entity for) don't mask what the export target write itself recorded
+    errors = []
+
+    def capture_record_status(message, debug="", had_errors=False, notify=False, extra=""):
+        """Record error statuses so the test can assert on the export target ones only."""
+        if had_errors:
+            errors.append(message)
+        return saved_record_status(message, debug=debug, had_errors=had_errors, notify=notify, extra=extra)
+
+    def target_errors():
+        """Return the captured error statuses that relate to the export target."""
+        return [message for message in errors if "ExportTarget" in message or "discharge_target_soc" in message]
+
+    inv.base.record_status = capture_record_status
+
+    start_time = "03:33:00"
+    end_time = "04:44:00"
+    ts = datetime.strptime(start_time, "%H:%M:%S")
+    te = datetime.strptime(end_time, "%H:%M:%S")
+
+    try:
+        # Case 1: GivTCP reports the register back as a string - the write must be seen as successful
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.rest_data = {"Control": {"Mode": "Timed Export"}, "raw": {"invertor": {"discharge_target_soc_1": "4"}}}
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+        polled = copy.deepcopy(inv.rest_data)
+        polled["raw"]["invertor"]["discharge_target_soc_1"] = "20"
+        dummy_rest.queue_rest_data(polled)
+        dummy_rest.get_commands()
+        del errors[:]
+
+        if not inv.rest_setDischargeTarget(20):
+            print("ERROR: {}: string read back of the export target should count as success".format(test_name))
+            failed = True
+        if target_errors():
+            print("ERROR: {}: string read back of the export target should not record an error, got {}".format(test_name, target_errors()))
+            failed = True
+        commands = dummy_rest.get_commands()
+        if len(commands) != 1:
+            print("ERROR: {}: export target should be written once, got {} writes".format(test_name, len(commands)))
+            failed = True
+
+        # Case 2: an export target that can not be read must not be written to, on the REST path
+        inv.reserve_percent = 20
+        inv.rest_data = {
+            "Control": {"Enable_Discharge_Schedule": "on", "Mode": "Timed Export"},
+            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
+            "raw": {"invertor": {"discharge_target_soc_1": None}},
+        }
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+        dummy_rest.get_commands()
+        del errors[:]
+
+        inv.adjust_force_export(True, ts, te)
+        if [command for command in dummy_rest.get_commands() if "setDischargeTarget" in command[0]]:
+            print("ERROR: {}: unreadable REST export target should not be written".format(test_name))
+            failed = True
+        if target_errors():
+            print("ERROR: {}: unreadable REST export target should not record an error, got {}".format(test_name, target_errors()))
+            failed = True
+
+        # Case 3: the same on the entity path, where the configured entity has no state
+        inv.rest_data = None
+        inv.rest_api = None
+        inv.reserve_percent = 20
+        ha.dummy_items["select.discharge_start_time"] = start_time
+        ha.dummy_items["select.discharge_end_time"] = end_time
+        ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+        ha.dummy_items["sensor.predbat_GE_0_scheduled_discharge_enable"] = "on"
+        ha.dummy_items["number.discharge_target_soc"] = None
+        ha.dummy_items["select.inverter_mode"] = "Timed Export"
+        ha.dummy_items["switch.inverter_button"] = "off"
+        del errors[:]
+
+        inv.adjust_force_export(True, ts, te)
+        if ha.get_state("number.discharge_target_soc") is not None:
+            print("ERROR: {}: unreadable export target entity should not be written, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
+            failed = True
+        if target_errors():
+            print("ERROR: {}: unreadable export target entity should not record an error, got {}".format(test_name, target_errors()))
+            failed = True
+    finally:
+        inv.reserve_percent = saved_reserve_percent
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+        inv.base.record_status = saved_record_status
+        inv.base.had_errors = saved_had_errors
+        ha.dummy_items["number.discharge_target_soc"] = saved_target_soc
+
+    return failed
+
+
 def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     """
     Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
@@ -2754,6 +2875,11 @@ charge_start_service:
 
     # Regression test: export target SoC must track the minimum reserve SoC in both directions
     failed |= test_discharge_target_tracks_reserve("discharge_target_tracks_reserve", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4404: export target read back must cope with string and missing values
+    failed |= test_discharge_target_read_back("discharge_target_read_back", ha, inv, dummy_rest)
     if failed:
         return failed
 
