@@ -763,6 +763,8 @@ class AnnualPage:
                             baseline.update({key: copy.deepcopy(export_entry[key]) for key in ["export_octopus_url", "rates_export"] if export_entry.get(key)})
                             break
                     config["baseline_tariff"] = baseline
+                    if value("tariff_dno_region"):
+                        config["baseline_tariff"]["dno_region"] = value("tariff_dno_region")
                     break
 
         if value("year"):

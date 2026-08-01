@@ -2030,12 +2030,15 @@ def test_web_annual_pages(my_predbat):
     print("Test: a tariff that matches no catalogue entry falls back to something readable, not a blank")
     # A hand-entered URL, or a compare_list entry the user has since deleted. The
     # product code is the part of a 130-character URL anyone recognises.
+    # The export rate has to be one no EXPORT_TARIFFS entry uses, or it matches the
+    # catalogue and is named rather than falling back - 15.0p stopped being unmatched
+    # once EDF Export was added, which is what this rate is dodging.
     odd = [
         {
             "id": "odd",
             "label": "System Delta",
             "summary": {
-                "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL-24/electricity-tariffs/x/", "rates_export": [{"rate": 15.0}]},
+                "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL-24/electricity-tariffs/x/", "rates_export": [{"rate": 21.5}]},
                 "baseline_tariff": {},
                 "payback_years": {},
             },
@@ -2045,7 +2048,7 @@ def test_web_annual_pages(my_predbat):
     if "MY-OWN-DEAL-24" not in odd_table:
         print("  ERROR: an unmatched import URL should fall back to its product code, got {}".format(odd_table))
         failed = True
-    if "flat 15.0p" not in odd_table:
+    if "flat 21.5p" not in odd_table:
         print("  ERROR: an unmatched export rate should be described rather than blanked, got {}".format(odd_table))
         failed = True
 

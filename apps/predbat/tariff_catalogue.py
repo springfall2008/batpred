@@ -74,6 +74,10 @@ _OUTGOING_PRIME = "{}/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-O
 # export entry below to a distinct export code; that product does not exist and 404s.
 _INTELLI_FLUX = "{}/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS)
 
+# EDF Kraken API base URL for EDF tariffs
+_EDF = "https://api.edfgb-kraken.energy/v1/products"
+
+
 # Import and export are chosen independently, so they are listed independently. They used
 # to be one list of pre-paired combinations, which could not express a pairing nobody had
 # thought to enumerate - and, because the pairs were matched back to the dropdown on their
@@ -93,6 +97,17 @@ IMPORT_TARIFFS = [
     {"id": "snug", "name": "Octopus Snug", "import_octopus_url": "{}/SNUG-24-11-07/electricity-tariffs/E-1R-SNUG-24-11-07-{{dno_region}}/standard-unit-rates/".format(_OCTOPUS)},
     {"id": "flux", "name": "Octopus Flux", "import_octopus_url": "{}/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{{dno_region}}/standard-unit-rates".format(_OCTOPUS)},
     {"id": "intelligent_flux", "name": "Octopus Intelligent Flux", "import_octopus_url": _INTELLI_FLUX},
+    {"id": "edf_go", "name": "EDF Go Electric", "import_octopus_url": "{}/EDF_EV_FIX_GOELEC_12M_HH/electricity-tariffs/E-1R-EDF_EV_FIX_GOELEC_12M_HH-{{dno_region}}/standard-unit-rates/".format(_EDF)},
+    {
+        "id": "edf_empower_fixed",
+        "name": "EDF Empower Fixed",
+        "rates_import": [
+            {"rate": 10, "start": "00:00:00", "end": "03:00:00"},
+            {"rate": 20, "start": "03:00:00", "end": "16:00:00"},
+            {"rate": 30, "start": "16:00:00", "end": "19:00:00"},
+            {"rate": 20, "start": "19:00:00", "end": "00:00:00"},
+        ],
+    },
 ]
 
 EXPORT_TARIFFS = [
@@ -104,6 +119,8 @@ EXPORT_TARIFFS = [
     {"id": "flux_export", "name": "Octopus Flux export", "export_octopus_url": "{}/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-{{dno_region}}/standard-unit-rates".format(_OCTOPUS)},
     {"id": "intelligent_flux_export", "name": "Octopus Intelligent Flux export", "export_octopus_url": _INTELLI_FLUX},
     {"id": "eon_next_export", "name": "Eon Next export (16.5p)", "rates_export": [{"rate": 16.5}]},
+    {"id": "edf_export", "name": "EDF Export (15p)", "rates_export": [{"rate": 15.0}]},
+    {"id": "edf_export_exclusive", "name": "EDF Export Exclusive (18p)", "rates_export": [{"rate": 18.0}]},
 ]
 
 
