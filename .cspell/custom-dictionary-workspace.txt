@@ -183,6 +183,7 @@ Ginlong
 GivEnergy
 givtcp
 gnueabihf
+GOELEC
 gridcode
 gridconsumption
 gridconsumptionpower
@@ -285,6 +286,10 @@ minsoc
 minsocongrid
 minuteb
 misclick
+misdetect
+misdetected
+misdetecting
+misdetection
 Mixergy
 mkdocs
 mlugg

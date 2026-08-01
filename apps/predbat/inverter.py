@@ -2494,6 +2494,8 @@ class Inverter:
         # Export target, always set to the minimum reserve. This must track the reserve in *both*
         # directions - a target left below the minimum reserve SoC (e.g. GE Cloud resets it to 4%)
         # lets the inverter drain the battery past the reserve between Predbat cycles.
+        # A target we can not read is left alone - an inverter that does not expose the register
+        # reads back as None, and writing to it every cycle just produces errors.
         if force_export:
             target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
@@ -2502,9 +2504,11 @@ class Inverter:
                     try:
                         current = float(current)
                     except (ValueError, TypeError) as e:
-                        current = 0
+                        current = None
 
-                    if current != target_soc:
+                    if current is None:
+                        self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
+                    elif current != target_soc:
                         self.rest_setDischargeTarget(target_soc)
                     else:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
@@ -2513,8 +2517,10 @@ class Inverter:
                 try:
                     current = float(current)
                 except (ValueError, TypeError) as e:
-                    current = 0
-                if current != target_soc:
+                    current = None
+                if current is None:
+                    self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
+                elif current != target_soc:
                     self.write_and_poll_value("discharge_target_soc", self.base.get_arg("discharge_target_soc", indirect=False, index=self.id, required_unit="%"), target_soc)
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
@@ -3381,18 +3387,26 @@ class Inverter:
         target = int(target)
         url = self.rest_api + "/setDischargeTarget"
         data = {"dischargeToPercent": target, "slot": 1}
+        result = None
 
         for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
-            if self.rest_data["raw"]["invertor"]["discharge_target_soc_1"] == target:
+            # GivTCP reports the raw registers as strings, so coerce before comparing or a
+            # successful write reads back as '4' and never matches the int target
+            result = self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None)
+            try:
+                result = int(float(result))
+            except (ValueError, TypeError):
+                result = None
+            if result == target:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
                 return True
             self.sleep(2)
 
-        self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn: Inverter {} REST failed to setExportTarget".format(self.id), had_errors=True)
+        self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed got {}".format(self.id, data, result))
+        self.base.record_status("Warn: Inverter {} REST failed to setExportTarget got {}".format(self.id, result), had_errors=True)
         return False
 
     def rest_setDischargeSlot1(self, start, finish):
