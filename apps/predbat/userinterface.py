@@ -904,6 +904,29 @@ class UserInterface:
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
+    def is_new_install(self):
+        """
+        Determine whether this is a genuinely new install, used to set sensible defaults
+        (e.g. mode defaults to Monitor rather than Control charge & discharge).
+        """
+        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
+        if current_status:
+            return False
+
+        # HA's live state and history can both come back empty for a moment right after an
+        # abrupt restart, before HA's own state store has fully warmed back up. A single
+        # failed predbat.status read isn't enough evidence of a fresh install on its own -
+        # predbat_config.json only exists once Predbat has actually saved a config before,
+        # so its presence is a persistent, restart-proof signal that this is a real install,
+        # not a new one (see #4397/#4396 root cause, and #3259/#3306 for the resulting
+        # spurious config resets this was letting through).
+        if not self.ha_interface.db_primary and os.path.exists(self.config_root + "/predbat_config.json"):
+            self.log("predbat.status unavailable but predbat_config.json exists - not treating this as a new install")
+            return False
+
+        self.log("New install detected")
+        return True
+
     def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
@@ -913,12 +936,7 @@ class UserInterface:
         self.log("Refreshing Predbat configuration")
 
         # New install, used to set default of expert mode
-        new_install = True
-        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
-        if current_status:
-            new_install = False
-        else:
-            self.log("New install detected")
+        new_install = self.is_new_install()
 
         # Build config index
         for item in self.CONFIG_ITEMS:
