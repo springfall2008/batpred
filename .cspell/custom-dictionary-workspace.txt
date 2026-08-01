@@ -180,10 +180,10 @@ geserial
 geseriale
 getall
 Ginlong
-GOELEC
 GivEnergy
 givtcp
 gnueabihf
+GOELEC
 gridcode
 gridconsumption
 gridconsumptionpower
