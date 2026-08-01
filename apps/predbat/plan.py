@@ -2325,7 +2325,13 @@ class Plan:
         """
         Clip charge slots that are useless as they don't charge at all
         set the 'target' field in the charge window for HTML reporting
+
+        Both clip-up branches raise the limit to the full battery so that adjacent windows share a limit and can
+        be merged, which is only sound when the limit had no influence on the simulated charge. The achieved SoC
+        lands just under the limit when the limit clamped it (charge loss), and can dip a hair below its own peak
+        for the same reason, so both tests need a margin of one charge step to tell a real effect from rounding.
         """
+        charge_step = self.battery_rate_max_charge * self.battery_rate_max_scaling * step
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
@@ -2363,13 +2369,13 @@ class Plan:
                         window["target"] = 0
                         if self.debug_enable:
                             self.log("Clip off charge window {} from {} - {} from limit {} to new limit {} min percent {} limit percent {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], soc_min_percent, limit_percent))
-                    elif soc_max < limit:
+                    elif soc_max < (limit - charge_step):
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
-                    elif (soc_max > soc_m1) and soc_max == limit:
+                    elif (soc_max > (soc_m1 + charge_step)) and soc_max == limit:
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
