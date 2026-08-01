@@ -1842,6 +1842,23 @@ but there is one configuration item in `apps.yaml`:
 
 Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
 
+## Config validation retries
+
+`apps.yaml` is validated at startup and whenever its configuration changes. If a sensor you've mapped isn't populated yet at that exact moment
+(e.g. a slower-starting integration during a Home Assistant restart), Predbat reports a configuration error - correctly, at the time. If that
+sensor comes good on its own a few seconds later, Predbat automatically retries validation a few times, so a self-healed condition clears its
+own error status rather than needing a manual restart.
+
+```yaml
+  validate_config_retries: 2
+  validate_config_retry_minutes: 1
+```
+
+**validate_config_retries** sets how many times to retry after an initial validation failure - the default is 2. **validate_config_retry_minutes**
+sets how long to wait between each retry - the default is 1 minute. Retries only happen after a validation failure; a clean `apps.yaml` is never
+re-checked early. Set **validate_config_retries** to 0 to disable retries entirely and revert to the previous behaviour (a failed validation
+persists until the next restart or config change).
+
 ## Workarounds
 
 There are a number of different configuration items in `apps.yaml` that can be used to tweak the way Predbat operates and workaround
