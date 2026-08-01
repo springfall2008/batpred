@@ -285,6 +285,10 @@ minsoc
 minsocongrid
 minuteb
 misclick
+misdetect
+misdetected
+misdetecting
+misdetection
 Mixergy
 mkdocs
 mlugg
