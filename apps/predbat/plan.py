@@ -2328,8 +2328,8 @@ class Plan:
 
         Both clip-up branches raise the limit to the full battery so that adjacent windows share a limit and can
         be merged, which is only sound when the limit had no influence on the simulated charge. The achieved SoC
-        lands just under the limit when the limit clamped it (charge loss), and can dip a hair below its own peak
-        for the same reason, so both tests need a margin of one charge step to tell a real effect from rounding.
+        can land just under the limit even when the limit never clamped it (e.g. charge loss/rounding), and can dip
+        a hair below its own peak for the same reason, so both tests need a margin of one charge step to tell a real effect from rounding.
         """
         charge_step = self.battery_rate_max_charge * self.battery_rate_max_scaling * step
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
