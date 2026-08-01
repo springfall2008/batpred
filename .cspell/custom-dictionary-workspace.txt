@@ -183,6 +183,7 @@ Ginlong
 GivEnergy
 givtcp
 gnueabihf
+GOELEC
 gridcode
 gridconsumption
 gridconsumptionpower
