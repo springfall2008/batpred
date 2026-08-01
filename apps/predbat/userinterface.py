@@ -920,7 +920,8 @@ class UserInterface:
         # so its presence is a persistent, restart-proof signal that this is a real install,
         # not a new one (see #4397/#4396 root cause, and #3259/#3306 for the resulting
         # spurious config resets this was letting through).
-        if not self.ha_interface.db_primary and os.path.exists(self.config_root + "/predbat_config.json"):
+        config_path = os.path.join(self.config_root or "", "predbat_config.json")
+        if not self.ha_interface.db_primary and os.path.isfile(config_path):
             self.log("predbat.status unavailable but predbat_config.json exists - not treating this as a new install")
             return False
 
