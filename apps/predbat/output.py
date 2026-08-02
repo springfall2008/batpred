@@ -2878,10 +2878,12 @@ class Output:
         end_record = 24 * 60
         forecast_minutes_before_yesterday_step = self.forecast_minutes
         self.forecast_minutes = max(self.forecast_minutes, end_record + self.minutes_now)
-        yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        self.forecast_minutes = forecast_minutes_before_yesterday_step
+        try:
+            yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+            yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+            yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+        finally:
+            self.forecast_minutes = forecast_minutes_before_yesterday_step
         minutes_back = self.minutes_now + 1
 
         # Get yesterday's SoC
