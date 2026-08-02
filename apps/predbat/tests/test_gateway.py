@@ -4440,6 +4440,52 @@ class TestRateAnchors(unittest.TestCase):
         self.assertIsNone(extract_rate_anchors(8.0, float("inf"), 15.0, 12.0))
 
 
+class TestPublishRawLoopSafety:
+    """_publish_raw() must run the actual client.publish() on the event loop that
+    owns the aiomqtt Client (self._loop), even when invoked from a different loop —
+    otherwise the publish confirmation Future is bound to the wrong loop and stalls
+    for aiomqtt's ~10s default timeout instead of completing near-instantly. This is
+    what happens today when a control write reaches GatewayMQTT via
+    ha.py::run_async(), which runs the whole call chain on a fresh, throwaway
+    event loop distinct from GatewayMQTT's own persistent MQTT loop.
+    """
+
+    def test_publish_dispatches_to_owning_loop_when_called_cross_loop(self):
+        """A cross-loop _publish_raw() call must execute client.publish() on the
+        thread that owns self._loop, not on the calling thread."""
+        import asyncio
+        import threading
+        from gateway import GatewayMQTT
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw._mqtt_connected = True
+        observed = {}
+
+        class FakeClient:
+            async def publish(self, topic, payload, qos=0, retain=False):
+                observed["thread_ident"] = threading.get_ident()
+
+        gw._mqtt_client = FakeClient()
+
+        # Real second event loop on its own thread — mimics GatewayMQTT's
+        # persistent MQTT loop (owned by a dedicated thread via hass.py::create_task).
+        owner_loop = asyncio.new_event_loop()
+        owner_thread = threading.Thread(target=owner_loop.run_forever, daemon=True)
+        owner_thread.start()
+        gw._loop = owner_loop
+
+        try:
+            # Call _publish_raw from a DIFFERENT, freshly-created loop on THIS
+            # thread — mirrors ha.py::run_async()'s asyncio.run(coro) pattern.
+            asyncio.run(gw._publish_raw("predbat/devices/test/command", b"payload"))
+        finally:
+            owner_loop.call_soon_threadsafe(owner_loop.stop)
+            owner_thread.join(timeout=2)
+            assert not owner_thread.is_alive(), "owner MQTT loop thread did not stop"
+            owner_loop.close()
+        assert observed.get("thread_ident") == owner_thread.ident, "client.publish() ran on the wrong thread/loop"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -4476,6 +4522,7 @@ def run_gateway_tests(my_predbat=None):
         TestApplyRefreshResponse,
         TestMaybeRefreshOnAuthError,
         TestRateAnchors,
+        TestPublishRawLoopSafety,
     ]
     for cls in test_classes:
         instance = cls()
