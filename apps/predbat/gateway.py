@@ -244,6 +244,13 @@ class GatewayMQTT(ComponentBase):
         self._mqtt_client = None
         self._mqtt_task = None
         self._mqtt_connected = False
+        # Event loop that owns self._mqtt_client (captured in run()). Control writes
+        # arrive via ha.py::run_async(), which runs on its own throwaway loop on the
+        # calling thread — publishing directly from there would bind the aiomqtt
+        # publish-confirmation Future to the wrong loop and stall for the client's
+        # ~10s default timeout instead of completing near-instantly. _publish_raw()
+        # dispatches onto this loop when called from elsewhere.
+        self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
         self._last_plan_data = None
@@ -536,6 +543,9 @@ class GatewayMQTT(ComponentBase):
             return False
 
         if first:
+            # Capture the loop that will own the MQTT client/listener task, so
+            # cross-loop callers (ha.py::run_async()) can dispatch onto it later.
+            self._loop = asyncio.get_running_loop()
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
@@ -1622,12 +1632,30 @@ class GatewayMQTT(ComponentBase):
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
 
+        Must run the actual client.publish() on the event loop that owns
+        self._mqtt_client (self._loop). Callers reached via ha.py::run_async()
+        (i.e. every control write issued from the synchronous engine thread)
+        run on a different, throwaway loop — publishing directly from there
+        binds aiomqtt's publish-confirmation Future to the wrong loop and
+        stalls for the client's ~10s default timeout instead of completing
+        near-instantly. When we're already on the owning loop (e.g. internal
+        periodic publishes from run()/housekeeping), publish directly.
+
         Args:
             topic: MQTT topic string.
             payload: Bytes to publish.
             retain: Whether to set the retain flag.
         """
-        if self._mqtt_client and self._mqtt_connected:
+        if not (self._mqtt_client and self._mqtt_connected):
+            return
+
+        if self._loop is not None and self._loop is not asyncio.get_running_loop():
+            future = asyncio.run_coroutine_threadsafe(
+                self._mqtt_client.publish(topic, payload, qos=1, retain=retain),
+                self._loop,
+            )
+            await asyncio.wrap_future(future)
+        else:
             await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
 
     def is_alive(self):
