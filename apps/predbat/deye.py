@@ -23,8 +23,8 @@ import aiohttp
 import argparse
 import json
 import os
-from datetime import datetime
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from deye_const import (
     DEYE_BASE_URLS,
@@ -129,6 +129,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._saved_ratings = None  # signature of the ratings last written, to skip no-op saves
+        self._soc_floor_warned = set()
         self.battery_nominal_voltage = self._as_float(battery_nominal_voltage, 0.0)
         # auth_method defaults to app_credentials, but an injected access token with no
         # developer app credentials can only be oauth — and in app_credentials mode
@@ -446,6 +447,21 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 return round(configured_ah * volts / 1000.0, 2)
         return self.device_capacity.get(sn, 0.0)
 
+    def battery_reserve_min(self, sn):
+        """Return the inverter's own minimum SOC floor in percent, or 0 when unknown.
+
+        config/battery reports this as battLowCapacity (14 on the live 3-phase hybrid).
+        It is the floor the installer configured on the inverter, so Predbat must never
+        ask for a slot SOC below it.
+        """
+        if sn not in self.device_battery_config:
+            return 0
+        try:
+            floor = int(self._battery_config_value(sn, "reserve_min", 0))
+        except (TypeError, ValueError):
+            return 0
+        return floor if 0 < floor <= 100 else 0
+
     def battery_rate_max(self, sn):
         """Return the battery's maximum charge rate in W, for Predbat's battery_rate_max.
 
@@ -536,9 +552,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
                 intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
                 state = self.derive_control_state(intent, current_soc)
-                segments[window["start"]] = state
+                # Normalised to HH:MM here: these strings become DEYE slot times, and the
+                # entities they came from carry seconds.
+                segments[self._to_slot_time(window["start"])] = state
                 # After the window, return to self-use at reserve.
-                segments.setdefault(window["end"], {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None})
+                segments.setdefault(self._to_slot_time(window["end"]), {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None})
         ordered = sorted(segments.items(), key=lambda kv: kv[0])
         slots = []
         for start_time, state in ordered:
@@ -566,6 +584,23 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             return int(self.minutes_now)
         except (TypeError, ValueError):
             return 0
+
+    @staticmethod
+    def _to_slot_time(value):
+        """Normalise a schedule time to the HH:MM DEYE's TOU slots require.
+
+        The control entities carry HH:MM:SS because that is the format Predbat writes (see
+        INVERTER_DEF charge_time_format), but DEYE's timeUseSettingItems take HH:MM, so the
+        seconds are dropped here — at the one point a schedule time becomes a slot time.
+        """
+        text = str(value or "00:00")
+        parts = text.split(":")
+        if len(parts) < 2:
+            return "00:00"
+        try:
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        except ValueError:
+            return "00:00"
 
     @staticmethod
     def _hm_to_minutes(hm):
@@ -617,6 +652,24 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             now_minutes = self._now_minutes()
         slots = self.build_tou_slots(schedule, current_soc)
         active = self._active_state(schedule, current_soc, now_minutes)
+        # Final guard: never ask the battery to go below the floor its own installer
+        # settings declare (config/battery battLowCapacity). Predbat's control entities
+        # start at 0 and only reach their real value once it has written them, so without
+        # this the first control write of a cycle sends slot SOC 0 to a pack whose floor is
+        # 14%. Applied here, at the last step, so no other caller can bypass it.
+        floor = self.battery_reserve_min(sn)
+        if floor > 0:
+            lifted = False
+            for slot in slots:
+                if slot.get(TOU_FIELD["soc"], 0) < floor:
+                    slot[TOU_FIELD["soc"]] = floor
+                    lifted = True
+            # Say so once per serial. Routine before Predbat has written the reserve, but a
+            # persistent complaint means Predbat is planning below the inverter's floor —
+            # usually battery_min_soc not being mapped, which is worth surfacing.
+            if lifted and sn not in self._soc_floor_warned:
+                self._soc_floor_warned.add(sn)
+                self.log(f"Info: DEYE {sn} raising requested slot SOC to the inverter's {floor}% floor (config/battery battLowCapacity)")
         return {
             "deviceSn": sn,
             "workMode": active["work_mode"],
@@ -759,7 +812,9 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if rated_power > 0:
                 self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"DEYE {sn} Inverter Limit"}, app="deye")
 
-            # Lifetime energy counters feed Predbat's load/import/export history learning.
+            # Daily energy counters feed Predbat's load/import/export history learning. They
+            # reset at midnight; minute_data/clean_incrementing_reverse absorb that (see
+            # DEYE_ENERGY_KEYS for why the Daily registers are used over the Total* ones).
             for leaf, value in self.device_energy.get(sn, {}).items():
                 self.dashboard_item(
                     self._sensor_name(sn, leaf),
@@ -777,14 +832,27 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     async def publish_schedule_settings_ha(self, sn):
         """Publish the charge/export schedule control entities for one inverter."""
         local = self.local_schedule.get(sn, {})
+        # Deliberately NOT clamped to the inverter floor. This entity is Predbat's control
+        # surface: it writes a value then reads it back to confirm (write_and_poll_value),
+        # so publishing anything other than what was written guarantees a mismatch and a
+        # retry storm. The floor is enforced at the API boundary instead, in
+        # build_dynamic_payload, which is what actually protects the battery.
         reserve = int(local.get("reserve", 0))
         self.dashboard_item(
-            self._control_name("number", sn, "battery_schedule_reserve"), state=reserve, attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"DEYE {sn} Battery Schedule Reserve", "icon": "mdi:gauge"}, app="deye"
+            self._control_name("number", sn, "battery_schedule_reserve"),
+            state=reserve,
+            attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"DEYE {sn} Battery Schedule Reserve", "icon": "mdi:gauge"},
+            app="deye",
         )
         for direction in ("charge", "export"):
             window = local.get(direction, {})
-            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), state=window.get("start", "00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} Start", "icon": "mdi:clock-outline"}, app="deye")
-            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), state=window.get("end", "00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} End", "icon": "mdi:clock-outline"}, app="deye")
+            # HH:MM:SS to match INVERTER_DEF charge_time_format. Any other value makes
+            # Predbat replace these entities with its own dummies (inverter.py, the
+            # inv_charge_time_format != "HH:MM:SS" branch) and the window never arrives.
+            self.dashboard_item(
+                self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), state=window.get("start", "00:00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} Start", "icon": "mdi:clock-outline"}, app="deye"
+            )
+            self.dashboard_item(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), state=window.get("end", "00:00:00"), attributes={"friendly_name": f"DEYE {sn} {direction.title()} End", "icon": "mdi:clock-outline"}, app="deye")
             self.dashboard_item(
                 self._control_name("number", sn, f"battery_schedule_{direction}_soc"),
                 state=int(window.get("soc", 0)),
@@ -814,8 +882,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         for direction in ("charge", "export"):
             schedule[direction] = {
                 "enable": self.get_state_wrapper(self._control_name("switch", sn, f"battery_schedule_{direction}_enable"), default="off") == "on",
-                "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00"),
-                "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00"),
+                "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00:00"),
+                "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00:00"),
                 "soc": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_soc"), default=0), 0)),
                 "power": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_power"), default=0), 0)),
             }
@@ -848,8 +916,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.control_active.add(sn)  # Predbat is now actively controlling this inverter
         return await self.apply_dynamic_control(sn, schedule, current_soc, force=True)
 
-    async def apply_schedule(self, sn, force=True):
-        """Recompute the schedule from HA control entities and push it for one inverter."""
+    async def apply_schedule(self, sn, force=False):
+        """Recompute the schedule from HA control entities and push it for one inverter.
+
+        Not forced by default. Predbat presses the write button on every cycle as its normal
+        "apply the schedule" action, so forcing here re-sent a byte-identical payload every
+        few minutes — 36 orders in two hours on a live site with nothing actually changing.
+        The applied-payload cache is the single source of truth for whether a write is
+        needed; when it must be distrusted (an order left unconfirmed after
+        DEYE_ORDER_MAX_POLLS) that path already pops the entry, which makes the next apply
+        write naturally.
+        """
         schedule = await self.get_schedule_settings_ha(sn)
         current_soc = self.device_values.get(sn, {}).get("soc", schedule.get("reserve", 0))
         self.control_active.add(sn)  # Predbat is now actively controlling this inverter
@@ -877,6 +954,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """
         schedule = self.local_schedule.setdefault(sn, {})
         if entity_id.endswith("battery_schedule_reserve"):
+            # Stored exactly as written; the floor is applied at the API boundary so the
+            # read-back Predbat performs always matches what it wrote.
             schedule["reserve"] = int(self._as_float(value, 0))
             return True
         direction = "charge" if "_charge_" in entity_id else ("export" if "_export_" in entity_id else None)
@@ -934,7 +1013,9 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             # A momentary button, not schedule state: it has nothing to store, and must not
             # fall through to update_local_schedule where "_charge_" would match a direction.
             if service in ("turn_on", "on", "toggle"):
-                await self.apply_schedule(sn, force=True)
+                # Unforced: change detection decides. Predbat presses this every cycle, so
+                # forcing would re-send an unchanged payload each time.
+                await self.apply_schedule(sn)
             return
         await self._handle_control_event(entity_id, service)
 
@@ -1284,6 +1365,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
 
         if first and self.automatic:
             await self.automatic_config()
+
+        # Report the cycle as successful. components.is_alive() requires a success within
+        # the last 60 minutes, and with no timestamp ever recorded it returns False for the
+        # whole session — so every Predbat run ended "Complete run status ... with component
+        # errors: DEYE Cloud" despite nothing having failed.
+        self.update_success_timestamp()
         return True
 
     async def _reconcile_control(self):
@@ -1311,57 +1398,6 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     async def final(self):
         """Cleanup on shutdown."""
         self.log("Info: DeyeAPI shutdown")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base object so DeyeAPI can be exercised from the command line."""
-
-    def __init__(self):
-        """Set up the minimal base surface DeyeAPI reads (tz, prefix, args, time, entities)."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return a previously published entity state (or default)."""
-        if raw:
-            return self.entities.get(entity_id, {})
-        return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Record an entity state locally."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print a timestamped log line."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and record a published dashboard entity."""
-        print(f"ENTITY: {entity_id} = {state}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return the caller's default (no configured args in CLI mode)."""
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 def _build_deye(mock_base, args):  # pragma: no cover

@@ -19,7 +19,7 @@ and historical data extraction from incrementing energy counters.
 import array
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -1150,9 +1150,14 @@ def find_charge_rate(
     battery_temperature=20,
     battery_temperature_curve={},
     current_charge_rate=None,
+    pv_window_kwh=0.0,
 ):
     """
     Find the lowest charge rate that fits the charge slow
+
+    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window
+    overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
+    window and would push the PV out of the battery, raising the cost above the planned full rate charge
     """
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
@@ -1169,6 +1174,13 @@ def find_charge_rate(
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
+        # If the charge window overlaps with PV production then charge at max rate, a throttled rate would
+        # cap the PV going into the battery, exporting the surplus and importing to make the target up later
+        if pv_window_kwh > LOW_POWER_PV_THRESHOLD:
+            if log_to:
+                log_to("Low power mode: PV forecast in window {}kWh > {}kWh, default to max rate".format(dp2(pv_window_kwh), LOW_POWER_PV_THRESHOLD))
+            return max_rate, max_rate_real
+
         minutes_left = window["end"] - minutes_now - margin
         abs_minutes_left = window["end"] - minutes_now
 

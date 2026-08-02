@@ -54,9 +54,28 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
 
+# Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
+_STARTUP_WAIT_TICKS = 120 * 2
+_STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
+
 # Time options for schedule select entities (HH:MM:SS, one per minute across 24 h)
 _GATEWAY_BASE_TIME = datetime.datetime.strptime("00:00", "%H:%M")
 _GATEWAY_OPTIONS_TIME = [(_GATEWAY_BASE_TIME + datetime.timedelta(seconds=m * 60)).strftime("%H:%M:%S") for m in range(0, 24 * 60, 5)]
+
+
+def _serial_suffix(serial):
+    """Return the entity-name suffix for an inverter serial.
+
+    Entity IDs use the last six characters of the serial, lower-cased; serials of
+    six characters or fewer are used whole.
+
+    Args:
+        serial: Inverter serial string.
+
+    Returns:
+        str: The lower-cased suffix used in gateway entity IDs.
+    """
+    return serial[-6:].lower() if len(serial) > 6 else serial.lower()
 
 
 PLAN_MODE_AUTO = 0
@@ -479,6 +498,21 @@ class GatewayMQTT(ComponentBase):
         """
         await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
 
+    async def _startup_wait(self, ticks, ready):
+        """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
+
+        Args:
+            ticks: Ticks already consumed by earlier waits in this startup.
+            ready: Zero-argument callable returning True once the wait can end.
+
+        Returns:
+            int: The total ticks consumed, to pass to the next wait in the chain.
+        """
+        while ticks < _STARTUP_WAIT_TICKS and not self.api_stop and not ready():
+            await asyncio.sleep(0.5)
+            ticks += 1
+        return ticks
+
     async def run(self, seconds, first):
         """Component run loop — called every 60 seconds by ComponentBase.start().
 
@@ -505,23 +539,21 @@ class GatewayMQTT(ComponentBase):
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
-            # Wait up to a minute for first connection attempt before declaring started
-            for _ in range(60 * 2):
-                if self._first_connection_attempted or self.api_stop:
-                    break
-                await asyncio.sleep(0.5)
-            else:
+            # Wait for the first connection attempt and then for the first telemetry →
+            # auto-config, so the inverter args are wired up before startup continues.
+            # Both waits share the single _STARTUP_WAIT_TICKS budget so an offline gateway
+            # device can never stall startup for longer than that.
+            ticks = await self._startup_wait(0, lambda: self._first_connection_attempted)
+            if not self._first_connection_attempted and not self.api_stop:
                 self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
-            # After a successful connection, wait briefly for the first telemetry → auto-config so
-            # that inverter args are wired up before other components start.  Cap at 60 s so an
-            # offline gateway device does not stall startup indefinitely.
-            if self._mqtt_connected and not self.api_stop:
-                for _ in range(60 * 2):
-                    if self._auto_configured or self.api_stop:
-                        break
-                    await asyncio.sleep(0.5)
-                else:
-                    self.log("Warn: GatewayMQTT: Auto-config not complete after 60s — gateway device may be offline, continuing startup")
+            # The auto-config wait runs even when the first attempt failed: the MQTT loop
+            # retries with backoff in the background, so a transient broker failure at
+            # startup usually still yields telemetry inside the window. Returning early
+            # here declares the component started with no inverter args set, which lets
+            # PredBat's startup race ahead of auto-config.
+            await self._startup_wait(ticks, lambda: self._auto_configured)
+            if not self._auto_configured and not self.api_stop:
+                self.log(f"Warn: GatewayMQTT: Auto-config not complete after {_STARTUP_WAIT_SECONDS:.0f}s — gateway device may be offline or MQTT broker unreachable, continuing startup")
             return True
 
         # Housekeeping on subsequent runs
@@ -710,14 +742,36 @@ class GatewayMQTT(ComponentBase):
         self._last_telemetry_time = time.time()
         self.update_success_timestamp()
 
-        if not self.api_started:
-            self.api_started = True
-            self.log("Info: GatewayMQTT: First telemetry received, API started")
-
         self._inject_entities(status)
 
         if self._needs_reconfigure(status):
             self.automatic_config()
+
+        # Declare the API started only once auto-config has wired up the inverter args.
+        # ComponentManager.start() polls api_started from the main thread while this
+        # handler runs in the component's own thread, so setting it any earlier releases
+        # PredBat startup with num_inverters / soc_percent unset. When auto-config cannot
+        # complete (e.g. a serial filter matching nothing) the run() startup path still
+        # releases the component after its timeout.
+        if self._auto_configured and not self.api_started:
+            self.api_started = True
+            self.log("Info: GatewayMQTT: First telemetry received and auto-config complete, API started")
+
+    def _is_bound_target(self, inv):
+        """Whether automatic_config bound PredBat's args to this inverter's suffix.
+
+        ``_suffix_to_serial`` is populated by ``automatic_config`` with exactly the
+        control-target suffixes, so it is the authoritative record of which entities
+        PredBat reads. Empty before the first auto-config, in which case no unit is
+        bound yet and the primary-only path applies.
+
+        Args:
+            inv: A ``predbat_InverterEntry`` from the gateway status.
+
+        Returns:
+            bool: True if this unit's entities are read by PredBat.
+        """
+        return _serial_suffix(inv.serial) in self._suffix_to_serial
 
     def _inject_entities(self, status):
         """Inject inverter entities into PredBat state cache.
@@ -735,10 +789,14 @@ class GatewayMQTT(ComponentBase):
             app="gateway",
         )
 
-        # Inverter time from gateway timestamp — use first primary inverter's serial
+        # Inverter time from gateway timestamp — write it under the suffix PredBat
+        # actually reads (the control target), not the primary's, or the bound
+        # inverter_time arg is never updated and silently freezes.
         if status.timestamp > 0 and len(status.inverters) > 0:
-            primary_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
-            ts_suffix = primary_inv.serial[-6:].lower() if len(primary_inv.serial) > 6 else primary_inv.serial.lower()
+            ts_inv = next((inv for inv in status.inverters if self._is_bound_target(inv)), None)
+            if ts_inv is None:
+                ts_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
+            ts_suffix = _serial_suffix(ts_inv.serial)
             dt = datetime.datetime.fromtimestamp(status.timestamp, tz=self.local_tz)
             self.dashboard_item(
                 f"sensor.{self.prefix}_gateway_{ts_suffix}_inverter_time",
@@ -748,12 +806,15 @@ class GatewayMQTT(ComponentBase):
             )
 
         for inv in status.inverters:
-            # Skip non-primary inverters — EMS/gateway units report overlapping
-            # power readings that would cause doubled values on the dashboard.
-            if not inv.primary:
+            # Inject primary (battery-bearing) units, plus whichever unit automatic_config
+            # bound PredBat's args to. On a multi-AIO site the control target is the
+            # Gateway/EMS, which firmware never flags primary — skipping it left every
+            # bound arg unwritten and frozen at its last value. Non-primary units that are
+            # NOT the control target stay skipped: they report overlapping power readings
+            # that would double up on the dashboard.
+            if not inv.primary and not self._is_bound_target(inv):
                 continue
-            suffix = inv.serial[-6:].lower() if len(inv.serial) > 6 else inv.serial.lower()
-            self._inject_inverter_entities(inv, suffix)
+            self._inject_inverter_entities(inv, _serial_suffix(inv.serial))
 
         # EV charger entities (device-level, present only when a charge point is connected)
         self._inject_ev_entities(status)

@@ -9,7 +9,7 @@
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
 from unittest.mock import patch
-from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
+from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS
 from tests.test_deye_api import MockDeye
 from tests.test_infra import run_async as run_async_local
 
@@ -351,6 +351,188 @@ def test_run_clears_pending_order_and_count_on_success():
     assert not failed, "test_run_clears_pending_order_and_count_on_success"
 
 
+def test_window_times_reach_the_slots_in_deye_format():
+    """A HH:MM:SS window becomes HH:MM slot times and actually produces a window.
+
+    Live regression: every control payload for two hours carried only the filler times
+    (00:00/04:00/08:00/12:00/16:00/20:00) with grid charge off everywhere — the signature of
+    build_tou_slots seeing no window at all — because Predbat was writing the window times
+    to dummy entities this component never reads.
+    """
+    failed = False
+    d = MockDeye()
+    sched = {
+        "reserve": 14,
+        "charge": {"enable": True, "soc": 95, "power": 3000, "start": "05:00:00", "end": "05:30:00"},
+        "export": {"enable": False, "soc": 0, "power": 0},
+    }
+    slots = d.build_tou_slots(sched, current_soc=40)
+    times = [s[TOU_FIELD["time"]] for s in slots]
+
+    if any(len(t) != 5 or t.count(":") != 1 for t in times):
+        print(f"ERROR: DEYE slot times must be HH:MM, got {times}")
+        failed = True
+    if "05:00" not in times:
+        print(f"ERROR: the charge window start never reached the slots: {times}")
+        failed = True
+    if not any(s[TOU_FIELD["grid_charge"]] and s[TOU_FIELD["soc"]] == 95 for s in slots):
+        print(f"ERROR: no grid-charge slot was produced for the window: {slots}")
+        failed = True
+    # The all-filler payload is exactly what the bug produced, so assert we are not back there
+    if times == TOU_FILLER_TIMES[:TOU_SLOT_COUNT]:
+        print(f"ERROR: slots are pure filler, the window was lost: {times}")
+        failed = True
+
+    # A HH:MM window still works, so a stale entity value cannot break the payload
+    sched["charge"]["start"] = "05:00"
+    sched["charge"]["end"] = "05:30"
+    if "05:00" not in [s[TOU_FIELD["time"]] for s in d.build_tou_slots(sched, current_soc=40)]:
+        print("ERROR: a HH:MM window should still resolve")
+        failed = True
+    assert not failed, "test_window_times_reach_the_slots_in_deye_format"
+
+
+def test_to_slot_time_normalisation():
+    """Schedule times are reduced to the HH:MM DEYE requires, tolerating bad input."""
+    failed = False
+    d = MockDeye()
+    cases = [("05:00:00", "05:00"), ("05:30", "05:30"), ("5:3", "05:03"), ("23:59:59", "23:59"), ("", "00:00"), (None, "00:00"), ("garbage", "00:00"), ("12", "00:00")]
+    for value, want in cases:
+        got = d._to_slot_time(value)
+        if got != want:
+            print(f"ERROR: _to_slot_time({value!r}) expected {want!r}, got {got!r}")
+            failed = True
+    assert not failed, "test_to_slot_time_normalisation"
+
+
+def test_repeated_write_button_presses_do_not_resend_an_unchanged_payload():
+    """Predbat presses the write button every cycle, so it must not force a write.
+
+    Live regression: 40 button presses produced 36 byte-identical control orders across two
+    hours with nothing changing, because apply_schedule defaulted to force=True and bypassed
+    the applied-payload cache. Over the same period _reconcile_control, which is unforced,
+    correctly suppressed 119 writes — so the cache was working; only the button ignored it.
+    """
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 99.0}}
+    d.local_schedule["INV1"] = {"reserve": 14, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000, "start": "16:00", "end": "23:30"}}
+    posts = []
+
+    async def fake_post(endpoint_key, body):
+        """Record every control POST that reaches the API."""
+        posts.append(endpoint_key)
+        return {"success": True, "orderId": len(posts)}
+
+    async def fake_read(sn):
+        """Return the unchanging schedule, as the HA entities would."""
+        return d.local_schedule["INV1"]
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        with patch.object(d, "get_schedule_settings_ha", side_effect=fake_read):
+            for _ in range(5):
+                # Clear the order the previous press raised, as poll_order does on success,
+                # so the in-flight guard is not what suppresses the repeats.
+                d.pending_orders.pop("INV1", None)
+                run_async_local(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+
+    if len(posts) != 1:
+        print(f"ERROR: an unchanged schedule should be written once, got {len(posts)} writes")
+        failed = True
+    if not any("control unchanged" in m for m in d.log_messages):
+        print(f"ERROR: expected the repeats to be suppressed as unchanged: {d.log_messages}")
+        failed = True
+    assert not failed, "test_repeated_write_button_presses_do_not_resend_an_unchanged_payload"
+
+
+def test_write_button_still_writes_when_the_schedule_changes():
+    """Suppression must not swallow a genuine change."""
+    failed = False
+    d = MockDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    d.local_schedule["INV1"] = {"reserve": 14, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    posts = []
+
+    async def fake_post(endpoint_key, body):
+        """Record every control POST that reaches the API."""
+        posts.append(body)
+        return {"success": True, "orderId": len(posts)}
+
+    async def fake_read(sn):
+        """Return the current schedule, as the HA entities would."""
+        return d.local_schedule["INV1"]
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        with patch.object(d, "get_schedule_settings_ha", side_effect=fake_read):
+            run_async_local(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+            d.pending_orders.pop("INV1", None)
+            # A real change: a charge window opens
+            d.local_schedule["INV1"]["charge"] = {"enable": True, "soc": 90, "power": 3000, "start": "01:00", "end": "05:00"}
+            run_async_local(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
+
+    if len(posts) != 2:
+        print(f"ERROR: a changed schedule must be written, got {len(posts)} writes")
+        failed = True
+    assert not failed, "test_write_button_still_writes_when_the_schedule_changes"
+
+
+def test_slot_soc_never_goes_below_the_inverter_floor():
+    """Slot SOC is clamped to config/battery battLowCapacity, whatever the schedule says.
+
+    Live regression: the first control write of a cycle went out with slot SOC 0 on a pack
+    whose installer floor is 14%, because Predbat's reserve entity reads 0 until it has
+    written the real value. Mirrors fox's max(value, fdsoc_min) clamp.
+    """
+    failed = False
+    d = MockDeye()
+    d.device_battery_config["INV1"] = {"battLowCapacity": 14}
+    idle = {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    payload = d.build_dynamic_payload("INV1", idle, current_soc=98)
+    socs = [s[TOU_FIELD["soc"]] for s in payload["timeUseSettingItems"]]
+    if any(s < 14 for s in socs):
+        print(f"ERROR: slot SOC below the 14% floor: {socs}")
+        failed = True
+
+    # An explicit target above the floor is untouched
+    export = {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": 24, "power": 3000, "start": "18:00", "end": "23:30"}}
+    socs = [s[TOU_FIELD["soc"]] for s in d.build_dynamic_payload("INV1", export, current_soc=98)["timeUseSettingItems"]]
+    if 24 not in socs:
+        print(f"ERROR: an above-floor target should survive: {socs}")
+        failed = True
+    if any(s < 14 for s in socs):
+        print(f"ERROR: slot SOC below the floor in the export case: {socs}")
+        failed = True
+
+    # With no config/battery there is no known floor, so nothing is clamped
+    d2 = MockDeye()
+    socs = [s[TOU_FIELD["soc"]] for s in d2.build_dynamic_payload("INV1", idle, current_soc=98)["timeUseSettingItems"]]
+    if any(s != 0 for s in socs):
+        print(f"ERROR: without a known floor the schedule should pass through: {socs}")
+        failed = True
+    assert not failed, "test_slot_soc_never_goes_below_the_inverter_floor"
+
+
+def test_battery_reserve_min_reads_the_configured_floor():
+    """The floor comes from battLowCapacity, defaulting to 0 when unknown or nonsensical."""
+    failed = False
+    d = MockDeye()
+    if d.battery_reserve_min("INV1") != 0:
+        print("ERROR: with no config/battery the floor must be 0")
+        failed = True
+    d.device_battery_config["INV1"] = {"battLowCapacity": 14}
+    if d.battery_reserve_min("INV1") != 14:
+        print(f"ERROR: expected 14, got {d.battery_reserve_min('INV1')}")
+        failed = True
+    for bad in (0, -5, 150):
+        d.device_battery_config["INV1"] = {"battLowCapacity": bad}
+        if d.battery_reserve_min("INV1") != 0:
+            print(f"ERROR: {bad} is not a usable floor, expected 0")
+            failed = True
+    assert not failed, "test_battery_reserve_min_reads_the_configured_floor"
+
+
 def _schedule():
     """Return a minimal schedule shape for a control write."""
     return {"reserve": 10, "charge": {"enable": True, "soc": 100, "power": 3000, "start": "01:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
@@ -488,6 +670,12 @@ def run_deye_control_tests(my_predbat):
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
         ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
+        ("window_times_reach_slots", test_window_times_reach_the_slots_in_deye_format),
+        ("to_slot_time", test_to_slot_time_normalisation),
+        ("write_button_no_resend", test_repeated_write_button_presses_do_not_resend_an_unchanged_payload),
+        ("write_button_writes_on_change", test_write_button_still_writes_when_the_schedule_changes),
+        ("slot_soc_floor", test_slot_soc_never_goes_below_the_inverter_floor),
+        ("battery_reserve_min", test_battery_reserve_min_reads_the_configured_floor),
         ("control_deferred_in_flight", test_control_write_deferred_while_an_order_is_in_flight),
         ("control_proceeds_when_clear", test_control_write_proceeds_once_the_order_clears),
         ("busy_response_detection", test_busy_response_detection),

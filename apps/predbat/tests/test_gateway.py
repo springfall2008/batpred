@@ -1,6 +1,7 @@
 """
 Tests for GatewayMQTT component.
 """
+
 import sys
 import os
 import math
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytz
 import gateway_status_pb2 as pb
+from gateway import _STARTUP_WAIT_TICKS
 
 import importlib.util
 
@@ -291,6 +293,7 @@ class TestInjectEntities:
         gw._last_status = None
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
+        gw._suffix_to_serial = {}  # set by automatic_config; empty = nothing bound yet
         gw._dashboard_calls = {}  # entity_id → (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
@@ -671,6 +674,97 @@ class TestInjectEntities:
         assert entity in gw._dashboard_calls
         state, _ = gw._dashboard_calls[entity]
         assert state == 6000
+
+
+class TestBoundEntitiesAreWritten:
+    """Every entity automatic_config() binds must actually be written by _inject_entities().
+
+    A bound-but-never-written entity holds whatever value it last had and silently
+    freezes — surfacing only as PredBat's clock-skew warning once the stale
+    inverter_time drifts past the threshold.
+    """
+
+    def _make_gateway(self):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.log = MagicMock()
+        gw.prefix = "predbat"
+        gw._last_status = None
+        gw._auto_configured = False
+        gw._suffix_to_serial = {}
+        gw.args = {}
+        gw._args = {}
+        gw.local_tz = pytz.timezone("Europe/London")
+        gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw._dashboard_calls = {}
+
+        def capture_set_arg(key, value):
+            gw._args[key] = value
+
+        def capture_dashboard(entity_id, state=None, attributes=None, app=None):
+            gw._dashboard_calls[entity_id] = (state, attributes)
+
+        gw.set_arg = capture_set_arg
+        gw.dashboard_item = capture_dashboard
+        return gw
+
+    def _add_inverter(self, status, serial, primary, inv_type=None):
+        inv = status.inverters.add()
+        inv.type = inv_type if inv_type is not None else pb.INVERTER_TYPE_GIVENERGY
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = True
+        inv.active = True
+        inv.battery.soc_percent = 50
+        inv.battery.capacity_wh = 9500
+        inv.battery.rate_max_w = 5000
+        return inv
+
+    def _gateway_plus_two_aios(self):
+        """Reproduces the field topology: a Gateway coordinating two primary AIOs.
+
+        Per GivTCP rules automatic_config picks the Gateway as the control target,
+        so every arg binds to the Gateway's serial suffix. The Gateway is not
+        flagged primary — firmware only sets primary on battery inverters.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_test"
+        status.firmware = "0.27.0"
+        status.timestamp = 1741789200
+        status.schema_version = 1
+        self._add_inverter(status, "GW2315G357", primary=False, inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+        self._add_inverter(status, "CH2335G421", primary=True)
+        self._add_inverter(status, "CH2432G070", primary=True)
+        return status
+
+    def test_bound_inverter_time_entity_is_written(self):
+        """The inverter_time entity bound by automatic_config must be written."""
+        gw = self._make_gateway()
+        gw._last_status = self._gateway_plus_two_aios()
+        gw.automatic_config()
+
+        bound = gw._args["inverter_time"][0]
+
+        gw._inject_entities(gw._last_status)
+
+        assert bound in gw._dashboard_calls, "automatic_config bound inverter_time to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
+
+    def test_bound_soc_entity_is_written(self):
+        """The soc_percent entity bound by automatic_config must be written."""
+        gw = self._make_gateway()
+        gw._last_status = self._gateway_plus_two_aios()
+        gw.automatic_config()
+
+        bound = gw._args["soc_percent"][0]
+
+        gw._inject_entities(gw._last_status)
+
+        assert bound in gw._dashboard_calls, "automatic_config bound soc_percent to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
 
 
 class TestDebugLogging:
@@ -2902,6 +2996,9 @@ class TestGatewayUnitControlBinding:
         gw.args = {}
         gw._args = {}
         gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw._configured_ev_chargers = frozenset()
 
         def capture_set_arg(key, value):
             gw._args[key] = value
@@ -3105,6 +3202,56 @@ class TestGatewayUnitControlBinding:
         gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"]).SerializeToString())
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"][0] == "select.predbat_gateway_47g077_charge_slot1_start"
+
+    def test_api_started_only_set_once_auto_config_has_completed(self):
+        """api_started must not become visible before automatic_config has wired up the args.
+
+        ComponentManager.start() polls api_started from the *main* thread while the MQTT
+        listener runs in the component's own thread, so setting the flag on receipt of the
+        first telemetry frame — before automatic_config() — lets PredBat startup continue
+        with num_inverters / soc_percent unset.
+        """
+        gw = self._make_handler_gateway()
+        seen = {}
+        real_config = gw.automatic_config
+
+        def watched_config():
+            seen["api_started_during_config"] = gw.api_started
+            return real_config()
+
+        gw.automatic_config = watched_config
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+
+        assert seen["api_started_during_config"] is False, "api_started was set before auto-config ran"
+        assert gw._auto_configured
+        assert gw.api_started is True
+
+    def test_api_started_stays_false_when_auto_config_aborts(self):
+        """A serial filter that matches nothing aborts auto-config, so the API is not started.
+
+        The run() startup path still releases the component after its timeout, but the
+        telemetry path must not declare the component started with no inverter args set.
+        """
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["CH0000X000"]
+
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+
+    def test_api_started_set_on_later_frame_that_needs_no_reconfigure(self):
+        """Once configured, a steady-state frame that triggers no re-config still starts the API."""
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["CH0000X000"]
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw.api_started is False
+
+        # Filter corrected (as a restart would do) — the next frame configures and starts.
+        gw.gateway_inverter_serial = []
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw._auto_configured
+        assert gw.api_started is True
 
     # ------------------------------------------------------------------
     # EMS and AC3 topologies
@@ -3496,13 +3643,14 @@ class TestRunStartupWait:
         return asyncio.run(coro)
 
     def test_returns_true_without_sleeping_when_flag_already_set(self):
-        """When _first_connection_attempted is pre-set, run() returns True without sleeping."""
+        """When both startup conditions are pre-set, run() returns True without sleeping."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch, AsyncMock
 
         gw = self._make_gateway()
         gw._first_connection_attempted = True
+        gw._auto_configured = True
 
         async def run_test():
             async def fake_mqtt_loop():
@@ -3518,7 +3666,7 @@ class TestRunStartupWait:
         assert sleep_count == 0
 
     def test_returns_true_after_flag_set_on_first_sleep(self):
-        """run() exits the wait loop as soon as the flag is set, after a single sleep."""
+        """run() exits the wait loop as soon as the flags are set, after a single sleep."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch
@@ -3529,7 +3677,9 @@ class TestRunStartupWait:
         async def run_test():
             async def fake_sleep(t):
                 sleep_count[0] += 1
-                gw._first_connection_attempted = True  # Simulates MQTT loop completing first attempt
+                # Simulates the MQTT loop connecting and the first telemetry arriving
+                gw._first_connection_attempted = True
+                gw._auto_configured = True
 
             async def fake_mqtt_loop():
                 pass
@@ -3566,7 +3716,9 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 120  # 60 * 2 iterations of 0.5s each = 60s total
+        # The connection and auto-config waits share one budget, so a dead broker stalls
+        # startup for the budget once, not once per wait.
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS
         warn_logged = any("Warn" in str(c) and "not yet complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when the first connection attempt times out"
 
@@ -3623,32 +3775,73 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 60 * 2  # 60 * 2 iterations of 0.5s each = 60s total
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS  # Whole startup budget consumed
         warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when auto-config times out"
 
-    def test_auto_config_wait_skipped_when_not_connected(self):
-        """When connection failed, auto-config wait is skipped entirely."""
+    def test_auto_config_wait_still_runs_when_first_attempt_failed(self):
+        """A failed *first* connection attempt must not skip the auto-config wait.
+
+        The MQTT loop retries with backoff in the background, so a transient broker
+        failure at startup is usually followed by a connection and telemetry within the
+        60s window. Returning immediately declares the component started with no
+        inverter args set.
+        """
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import patch
 
         gw = self._make_gateway()
         gw._first_connection_attempted = True
-        # _mqtt_connected stays False (connection failed)
+        # _mqtt_connected stays False (first attempt failed)
+        sleep_count = [0]
 
         async def run_test():
+            async def fake_sleep(t):
+                sleep_count[0] += 1
+                # Reconnect succeeds and the first telemetry arrives.
+                gw._mqtt_connected = True
+                gw._auto_configured = True
+
             async def fake_mqtt_loop():
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch("asyncio.sleep", side_effect=fake_sleep):
                 result = await gw.run(0, True)
-            return result, mock_sleep.call_count
+            return result
 
-        result, sleep_count = self._run(run_test())
+        result = self._run(run_test())
         assert result is True
-        assert sleep_count == 0  # No sleeps: connection-wait breaks immediately, auto-config skipped
+        assert sleep_count[0] == 1  # One sleep in the auto-config wait loop
+
+    def test_auto_config_wait_times_out_when_broker_never_reachable(self):
+        """A broker that never comes up still releases startup after the 60s cap."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+        sleep_count = [0]
+
+        async def run_test():
+            async def fast_sleep(t):
+                sleep_count[0] += 1  # Never connects, never auto-configures
+
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS  # Whole startup budget consumed
+        warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
+        assert warn_logged, "Expected a Warn log when auto-config times out"
 
 
 class TestSetChargeSlotPayload:
@@ -4259,6 +4452,8 @@ def run_gateway_tests(my_predbat=None):
         TestInjectEntities,
         TestDebugLogging,
         TestAutomaticConfig,
+        TestBoundEntitiesAreWritten,
+        TestGatewayUnitControlBinding,
         TestEvTelemetry,
         TestEvAutoConfig,
         TestEvInitialize,

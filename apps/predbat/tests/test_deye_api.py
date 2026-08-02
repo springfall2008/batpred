@@ -50,6 +50,7 @@ class MockDeye(DeyeAPI):
         self.cached_values = {}
         self._tier_refreshed = {}
         self._cache_restored = False
+        self._soc_floor_warned = set()
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
@@ -389,8 +390,16 @@ def test_rated_power_survives_a_payload_that_omits_it():
     assert not failed, "test_rated_power_survives_a_payload_that_omits_it"
 
 
-def test_fetch_device_data_captures_energy_counters():
-    """The lifetime energy counters are captured from device/latest for Predbat's history."""
+def test_energy_counters_use_the_daily_registers():
+    """The energy counters read the Daily registers, not the drifting lifetime accumulators.
+
+    The lifetime "Total*" accumulators are firmware-derived and drift. On a live capture
+    TotalConsumption read 14332.40 kWh where the other lifetime counters implied 15475.00
+    (buy 13579.20 + PV 2208.30 - sell 11.80 + discharge 5255.90 - charge 5556.60), a 7.4%
+    shortfall that made Predbat's learned load too low and under-sized every charge window.
+    The Daily registers balanced exactly on that same payload - see
+    test_daily_energy_registers_balance_on_the_live_payload.
+    """
     failed = False
     d = MockDeye()
 
@@ -402,12 +411,30 @@ def test_fetch_device_data_captures_energy_counters():
         run_async_local(d.fetch_device_data("INV1"))
 
     energy = d.device_energy.get("INV1", {})
-    expected = {"import_today": 13579.1, "export_today": 11.7, "pv_today": 2198.1, "load_today": 14326.4}
+    # The Daily* values from LIVE_DATA_LIST, not the Total* ones (14326.40, 13579.10, ...).
+    expected = {"import_today": 7.0, "export_today": 0.0, "pv_today": 4.5, "load_today": 12.8}
     for name, want in expected.items():
-        if abs(energy.get(name, 0.0) - want) > 0.01:
-            print(f"ERROR: {name} expected {want}, got {energy.get(name)}")
+        got = energy.get(name)
+        if got is None or abs(got - want) > 0.01:
+            print(f"ERROR: {name} expected {want} (daily register), got {got}")
             failed = True
-    assert not failed, "test_fetch_device_data_captures_energy_counters"
+    assert not failed, "test_energy_counters_use_the_daily_registers"
+
+
+def test_daily_energy_registers_balance_on_the_live_payload():
+    """The Daily registers are self-consistent, which is why load_today trusts them.
+
+    Guards the key map as a set: if any of these five names drifts to a wrong spelling the
+    balance breaks, which is the same failure that hid the original TotalConsumption bug.
+    """
+    failed = False
+    flat = {item["key"]: float(item["value"]) for item in LIVE_DATA_LIST}
+
+    derived = flat["DailyActiveProduction"] + flat["DailyEnergyPurchased"] - flat["DailyGridFeedIn"] + flat["DailyDischargingEnergy"] - flat["DailyChargingEnergy"]
+    if abs(derived - flat["DailyConsumption"]) > 0.01:
+        print(f"ERROR: daily energy balance {derived} != DailyConsumption {flat['DailyConsumption']}")
+        failed = True
+    assert not failed, "test_daily_energy_registers_balance_on_the_live_payload"
 
 
 def test_energy_counters_absent_are_not_invented():
@@ -585,7 +612,8 @@ def run_deye_api_tests(my_predbat):
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rated_power_captured", test_rated_power_captured_for_inverter_limit),
         ("rated_power_not_clobbered", test_rated_power_survives_a_payload_that_omits_it),
-        ("energy_counters_captured", test_fetch_device_data_captures_energy_counters),
+        ("energy_counters_daily_registers", test_energy_counters_use_the_daily_registers),
+        ("daily_energy_balance", test_daily_energy_registers_balance_on_the_live_payload),
         ("energy_counters_absent", test_energy_counters_absent_are_not_invented),
         ("derive_capacity_no_rating", test_derive_battery_capacity_without_rating),
         ("fetch_battery_config_success", test_fetch_battery_config_caches_on_success),

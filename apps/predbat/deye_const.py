@@ -182,19 +182,29 @@ DEYE_TELEMETRY_KEYS = {
 DEYE_TELEMETRY_NEGATE = ("grid_power",)
 
 # Cumulative energy counters Predbat needs for its history-based load/rate learning, from
-# the same device/latest dataList. The lifetime "Total*" counters are used rather than the
-# "Daily*" ones because Predbat requires an incrementing series and the daily counters
-# reset at midnight, which would read as a large negative delta every night.
+# the same device/latest dataList.
 #
 # The mapping is confirmed by DEYE's own daily figures balancing exactly:
-#   DailyConsumption 12.80 = DailyActiveProduction 4.50 + DailyEnergyPurchased 7.00
+#   DailyConsumption 12.80 = DailyActiveProduction 4.50 + DailyEnergyPurchased 7.00 - DailyGridFeedIn 0.00
 #                            + (DailyDischargingEnergy 4.10 - DailyChargingEnergy 2.80)
 # which only holds if ActiveProduction is PV generation alone, excluding battery discharge.
+#
+# These are the DAILY registers, not the lifetime "Total*" ones. The lifetime accumulators
+# are firmware-derived and drift: on a live capture TotalConsumption read 14332.40 kWh where
+# the other lifetime counters implied 15475.00 (buy 13579.20 + PV 2208.30 - sell 11.80 +
+# discharge 5255.90 - charge 5556.60). That 7.4% shortfall fed straight into Predbat's
+# learned load and under-sized every charge window. The Daily registers balance exactly on
+# the same payload, so the whole set reads from them.
+#
+# A daily counter is safe despite resetting at midnight: minute_data() smooths the
+# near-midnight drop (utils.py, the near_midnight branch) and clean_incrementing_reverse()
+# re-bases on any reset to <= 0, so the nightly return to 0.00 is absorbed rather than read
+# as a negative delta. Predbat only ever needs today-so-far plus history from these args.
 DEYE_ENERGY_KEYS = {
-    "import_today": "TotalEnergyBuy",
-    "export_today": "TotalEnergySell",
-    "pv_today": "TotalActiveProduction",
-    "load_today": "TotalConsumption",
+    "import_today": "DailyEnergyPurchased",
+    "export_today": "DailyGridFeedIn",
+    "pv_today": "DailyActiveProduction",
+    "load_today": "DailyConsumption",
 }
 
 # Metrics that must be present in every device/latest response. A key missing here means

@@ -328,12 +328,13 @@ def test_automatic_config_skips_missing_ratings():
 
 
 def test_automatic_config_maps_energy_counters():
-    """The lifetime energy counters are published and mapped to Predbat's history args."""
+    """The energy counters are published and mapped to Predbat's history args."""
     failed = False
     d = RecordingDeye()
     d.device_list = ["INV1"]
     d.device_values = {"INV1": {"soc": 100.0}}
-    d.device_energy = {"INV1": {"import_today": 13579.1, "export_today": 11.7, "pv_today": 2198.1, "load_today": 14326.4}}
+    # Daily-register magnitudes, matching DEYE_ENERGY_KEYS' Daily* sources.
+    d.device_energy = {"INV1": {"import_today": 7.0, "export_today": 0.0, "pv_today": 4.5, "load_today": 12.8}}
     d.set_args = {}
     d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
     import tests.test_infra as ti
@@ -341,7 +342,7 @@ def test_automatic_config_maps_energy_counters():
     ti.run_async(d.publish_data())
     ti.run_async(d.automatic_config())
 
-    for leaf, value in (("import_today", 13579.1), ("export_today", 11.7), ("pv_today", 2198.1), ("load_today", 14326.4)):
+    for leaf, value in (("import_today", 7.0), ("export_today", 0.0), ("pv_today", 4.5), ("load_today", 12.8)):
         entity = f"sensor.predbat_deye_inv1_{leaf}"
         if d.published.get(entity) != value:
             print(f"ERROR: {entity} published as {d.published.get(entity)}, expected {value}")
@@ -489,13 +490,51 @@ def test_write_button_applies_and_is_not_stored_as_schedule():
 
     with patch.object(d, "apply_schedule", side_effect=fake_apply):
         ti.run_async(d.switch_event("switch.predbat_deye_inv1_battery_schedule_charge_write", "turn_on"))
-    if applied != [("INV1", True)]:
-        print(f"ERROR: expected a forced apply, got {applied}")
+    # Unforced: Predbat presses this every cycle, so forcing would re-send an unchanged
+    # payload each time. Change detection decides whether a write is actually needed.
+    if applied != [("INV1", False)]:
+        print(f"ERROR: expected an unforced apply, got {applied}")
         failed = True
     if d.local_schedule.get("INV1", {}).get("charge", {}):
         print(f"ERROR: the write button must not be stored as schedule state: {d.local_schedule}")
         failed = True
     assert not failed, "test_write_button_applies_and_is_not_stored_as_schedule"
+
+
+def test_reserve_entity_echoes_the_written_value_even_below_the_floor():
+    """The reserve entity must echo exactly what Predbat wrote, floor or no floor.
+
+    Predbat writes this entity then reads it back to confirm (write_and_poll_value), so
+    republishing a clamped value can never match what was written and would retry until it
+    gave up — the same "didn't complete got 0.0" failure this component already had. The
+    floor is enforced at the API boundary in build_dynamic_payload instead, which is what
+    actually protects the battery.
+    """
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 50.0}}
+    d.device_battery_config = {"INV1": {"battLowCapacity": 14}}
+    entity = "number.predbat_deye_inv1_battery_schedule_reserve"
+    import tests.test_infra as ti
+
+    async def fake_apply(sn, schedule, current_soc, force=False):
+        """Stand in for the live control write."""
+        return True
+
+    # A below-floor write is echoed verbatim so the read-back matches
+    with patch.object(d, "apply_dynamic_control", side_effect=fake_apply):
+        ti.run_async(d.number_event(entity, 4))
+    if d.published.get(entity) != 4:
+        print(f"ERROR: expected the entity to echo 4, got {d.published.get(entity)!r}")
+        failed = True
+
+    # ...but the payload that reaches the inverter is still lifted to the floor
+    socs = [s["soc"] for s in d.build_dynamic_payload("INV1", d.local_schedule["INV1"], 50)["timeUseSettingItems"]]
+    if any(s < 14 for s in socs):
+        print(f"ERROR: the payload must still respect the 14% floor: {socs}")
+        failed = True
+    assert not failed, "test_reserve_entity_echoes_the_written_value_even_below_the_floor"
 
 
 def test_reserve_write_is_republished():
@@ -559,6 +598,7 @@ def run_deye_publish_tests(my_predbat):
         ("control_writes_republished", test_control_entity_writes_are_republished),
         ("write_button_not_stored", test_write_button_applies_and_is_not_stored_as_schedule),
         ("reserve_republished", test_reserve_write_is_republished),
+        ("reserve_echoes_written", test_reserve_entity_echoes_the_written_value_even_below_the_floor),
         ("unknown_entity_ignored", test_unrelated_entity_does_not_corrupt_schedule),
     ]:
         try:

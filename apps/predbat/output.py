@@ -29,9 +29,9 @@ from prediction import Prediction
 # own "reasons" params - published once here rather than duplicating the rendered sentence on
 # every row (per maintainer review on PR #4311).
 REASON_TEMPLATES = {
-    "demand_rising": "Battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
-    "demand_falling": "Battery is expected to discharge to cover house demand; no charging or exporting is scheduled this slot.",
-    "demand_steady": "Battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
+    "demand_rising": "Demand — battery level is expected to rise from solar generation; no charging or exporting is scheduled this slot.",
+    "demand_falling": "Demand — the battery is expected to discharge to cover house load; no charging or exporting is scheduled this slot.",
+    "demand_steady": "Demand — battery level is expected to stay steady; no charging or exporting is scheduled this slot.",
     # Used for the first half of a split slot where the export window only starts partway through -
     # deliberately worded without the "nothing is scheduled this slot" clause of the plain demand
     # reasons above, which would contradict the export reason sitting alongside it in the same slot.

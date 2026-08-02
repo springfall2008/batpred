@@ -12,7 +12,16 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, AsyncMock
 import json
-from solax import SolaxAPI, SOLAX_MIN_RESERVE_PERCENT
+from solax import (
+    SolaxAPI,
+    SOLAX_MIN_RESERVE_PERCENT,
+    SOLAX_CONTROL_RETRY_BACKOFF,
+    SOLAX_CONTROL_RETRY_MAX,
+    SOLAX_PLANT_INFO_MAX_AGE,
+    SOLAX_DEVICE_INFO_MAX_AGE,
+    SOLAX_CACHE_EXPIRY_HOURS,
+    SOLAX_INFO_RETRY_MINUTES,
+)
 from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -29,10 +38,17 @@ class MockSolaxAPI(SolaxAPI):
         self.device_info = {}
         self.realtime_data = {}
         self.realtime_device_data = {}
+        self.realtime_plant_failed = set()  # Plants whose last realtime read failed
+        self.realtime_device_failed = set()  # Devices whose last realtime read failed
+        self._storage = None  # No storage cache by default in tests
         self.log_messages = []
         self.dashboard_items = {}
         self.current_mode_hash = None
         self.current_mode_hash_timestamp = None
+        self.freeze_charge_min_soc = None  # Held minSoc floor while freeze charge is active
+        self.failed_mode_hash = None  # Backoff state for a mode the inverter rejected
+        self.failed_mode_retry_time = None
+        self.failed_mode_count = 0
         self.args = {}  # Configuration arguments
         self.plant_list = []  # List of plant IDs
         self.automatic = False  # Automatic config flag
@@ -55,6 +71,16 @@ class MockSolaxAPI(SolaxAPI):
         self.access_token = None
         self.token_expiry = None
         self.error_count = 0
+
+    @property
+    def storage(self):
+        """Mock storage component, ComponentBase resolves this from the base object which tests do not have"""
+        return self._storage
+
+    @storage.setter
+    def storage(self, value):
+        """Allow tests to install a mock storage backend"""
+        self._storage = value
 
     def log(self, message):
         """Mock log method"""
@@ -87,12 +113,14 @@ class MockSolaxAPI(SolaxAPI):
         """Mock update_success_timestamp method"""
         pass
 
-    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse"):
+    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse", min_soc=SOLAX_MIN_RESERVE_PERCENT):
         """Mock set_default_work_mode - calls set_work_mode (which can be mocked in tests)"""
         self.set_default_work_mode_called = True
         self.last_work_mode = mode
+        self.last_min_soc = min_soc
+        min_soc = max(SOLAX_MIN_RESERVE_PERCENT, min(100, min_soc))
         # Call set_work_mode (tests can mock this)
-        success = await self.set_work_mode(mode, sn_list, 10, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
+        success = await self.set_work_mode(mode, sn_list, min_soc, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
         if success:
             self.log(f"SolaX API: Set default work mode to {mode} for device {sn_list}")
         else:
@@ -155,7 +183,12 @@ def run_solax_tests(my_predbat):
         failed |= asyncio.run(test_write_setting_from_event(my_predbat))
         failed |= asyncio.run(test_fetch_controls_main(my_predbat))
         failed |= asyncio.run(test_apply_controls_main(my_predbat))
+        failed |= asyncio.run(test_apply_controls_min_soc_main(my_predbat))
+        failed |= asyncio.run(test_apply_controls_backoff_main(my_predbat))
         failed |= asyncio.run(test_publish_plant_info_main(my_predbat))
+        failed |= asyncio.run(test_publish_plant_info_capacity_floor_main(my_predbat))
+        failed |= asyncio.run(test_static_info_cache_main(my_predbat))
+        failed |= asyncio.run(test_realtime_publish_gating_main(my_predbat))
 
         if not failed:
             print("**** SolaX API tests: All tests passed ****")
@@ -250,13 +283,16 @@ async def test_apply_controls(solax_api, test_plant_id):
         else:
             # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
             first_call_endpoint = mock_send.call_args_list[0][0][0]
-            # Verify second call is self_consume_mode (self_consume/charge_or_discharge_mode endpoint)
+            # Verify second call hands control back to the inverter (exit_vpp_mode endpoint)
             second_call_endpoint = mock_send.call_args_list[1][0][0]
             if "batch_set_spontaneity_self_use" not in first_call_endpoint:
                 print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
                 failed = True
-            elif "self_consume/charge_or_discharge_mode" not in second_call_endpoint:
-                print(f"**** ERROR: Second call not self_consume_mode, got {second_call_endpoint} ****")
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
+                failed = True
+            elif mock_send.call_args_list[0][0][1].get("minSoc") != 10:
+                print(f"**** ERROR: Eco mode should write the reserve as minSoc 10, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
                 failed = True
             else:
                 print(f"✓ ECO mode applied correctly at 12:00")
@@ -357,7 +393,7 @@ async def test_apply_controls(solax_api, test_plant_id):
         mock_send.return_value = True
 
         # Set hash from previous charge call
-        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360))  # 06:00 = 360 minutes
+        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360, 10))  # 06:00 = 360 minutes, minSoc 10
         solax_api.current_mode_hash_timestamp = test_time
 
         result = await solax_api.apply_controls(test_plant_id)
@@ -382,7 +418,7 @@ async def test_apply_controls(solax_api, test_plant_id):
 
         # Hash timestamp is 16 minutes old (> 15 minute threshold)
         old_timestamp = test_time - timedelta(minutes=16)
-        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360))
+        solax_api.current_mode_hash = hash(("charge", 5000, 95, 360, 10))
         solax_api.current_mode_hash_timestamp = old_timestamp
 
         result = await solax_api.apply_controls(test_plant_id)
@@ -419,13 +455,13 @@ async def test_apply_controls(solax_api, test_plant_id):
         else:
             # Verify first call is set_default_work_mode (selfuse)
             first_call_endpoint = mock_send.call_args_list[0][0][0]
-            # Verify second call is self_consume_mode
+            # Verify second call hands control back to the inverter
             second_call_endpoint = mock_send.call_args_list[1][0][0]
             if "batch_set_spontaneity_self_use" not in first_call_endpoint:
                 print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
                 failed = True
-            elif "self_consume/charge_or_discharge_mode" not in second_call_endpoint:
-                print(f"**** ERROR: Second call not self_consume_mode, got {second_call_endpoint} ****")
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
                 failed = True
             else:
                 print(f"✓ ECO mode correctly applied when charge disabled at 03:00")
@@ -455,13 +491,16 @@ async def test_apply_controls(solax_api, test_plant_id):
         else:
             # Verify first call is set_default_work_mode (batch_set_spontaneity_self_use endpoint)
             first_call_endpoint = mock_send.call_args_list[0][0][0]
-            # Verify second call is self_consume_charge_only_mode
+            # Verify second call hands control back to the inverter, the freeze is held by minSoc
             second_call_endpoint = mock_send.call_args_list[1][0][0]
             if "batch_set_spontaneity_self_use" not in first_call_endpoint:
                 print(f"**** ERROR: First call not set_default_work_mode (selfuse), got {first_call_endpoint} ****")
                 failed = True
-            elif "self_consume/charge_only_mode" not in second_call_endpoint:
-                print(f"**** ERROR: Second call not self_consume_charge_only_mode, got {second_call_endpoint} ****")
+            elif "exit_vpp_mode" not in second_call_endpoint:
+                print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
+                failed = True
+            elif mock_send.call_args_list[0][0][1].get("minSoc") != 50:
+                print(f"**** ERROR: Freeze charge should hold minSoc at the current SOC 50, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
                 failed = True
             else:
                 print(f"✓ Freeze charge mode applied correctly at 03:00 (target_soc == current_soc)")
@@ -527,7 +566,7 @@ async def test_apply_controls(solax_api, test_plant_id):
             print("**** ERROR: No API calls made - charge window not detected after midnight ****")
             failed = True
         else:
-            # Charge mode sends soc_target_control_mode; eco mode sends self_consume/charge_or_discharge_mode
+            # Charge mode sends soc_target_control_mode; eco mode sends exit_vpp_mode
             calls_str = " ".join(str(c) for c in mock_send.call_args_list)
             if "soc_target_control_mode" not in calls_str:
                 print(f"**** ERROR: Expected soc_target_control_mode (charge mode) after midnight, got: {calls_str} ****")
@@ -584,11 +623,781 @@ async def test_apply_controls(solax_api, test_plant_id):
             if "soc_target_control_mode" in calls_str:
                 print(f"**** ERROR: Expected eco mode at 06:00 (after window end), got charge mode: {calls_str} ****")
                 failed = True
-            elif "charge_or_discharge_mode" not in calls_str:
-                print(f"**** ERROR: Expected eco mode (charge_or_discharge_mode) at 06:00, got: {calls_str} ****")
+            elif "exit_vpp_mode" not in calls_str:
+                print(f"**** ERROR: Expected eco mode (exit_vpp_mode) at 06:00, got: {calls_str} ****")
                 failed = True
             else:
                 print(f"✓ After midnight-spanning window end (06:00) correctly uses eco mode")
+
+    return failed
+
+
+async def make_apply_controls_api():
+    """
+    Build a mock SolaX API instance with one inverter and a 15 kWh battery at 50% SOC
+
+    Returns:
+        tuple: (solax_api, test_plant_id)
+    """
+    solax_api = MockSolaxAPI(prefix="predbat")
+    test_plant_id = "1618699116555534337"
+
+    solax_api.plant_inverters[test_plant_id] = ["H1231231932123"]
+    solax_api.plant_batteries[test_plant_id] = ["TP123456123123"]
+    solax_api.device_info["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceType": 1, "plantId": test_plant_id, "ratedPower": 10.0}
+    solax_api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
+    solax_api.plant_info = [{"plantId": test_plant_id, "batteryCapacity": 15.0}]
+    solax_api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 50, "batteryRemainings": 7.5}
+
+    return solax_api, test_plant_id
+
+
+async def test_apply_controls_min_soc_main(my_predbat):
+    """
+    Test the minSoc written by each control mode
+
+    Idle and the freeze modes are held by the work mode minSoc rather than a VPP mode, so minSoc must
+    follow the configured reserve, and must hold at the current SOC while freeze charge is active
+    """
+    from datetime import datetime as dt_class
+
+    failed = False
+    solax_api, test_plant_id = await make_apply_controls_api()
+
+    # Reserve of 25%, no active windows so that eco mode is selected
+    solax_api.controls[test_plant_id] = {
+        "reserve": 25,
+        "charge": {"start_time": "02:00:00", "end_time": "06:00:00", "enable": False, "target_soc": 95, "rate": 5000},
+        "export": {"start_time": "16:00:00", "end_time": "20:00:00", "enable": False, "target_soc": 15, "rate": 4500},
+    }
+    test_time = datetime.now(solax_api.local_tz).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    # Test 1: Eco mode writes the configured reserve as minSoc, it must not be hard coded
+    print("\n--- Test 1: Eco mode minSoc follows the reserve ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        work_mode_payload = mock_send.call_args_list[0][0][1]
+        if work_mode_payload.get("minSoc") != 25:
+            print(f"**** ERROR: Expected minSoc 25 from the reserve, got {work_mode_payload.get('minSoc')} ****")
+            failed = True
+        elif work_mode_payload.get("chargeFromGridEnable") != 0:
+            print(f"**** ERROR: Eco mode must not enable grid charging, got {work_mode_payload.get('chargeFromGridEnable')} ****")
+            failed = True
+        elif "exit_vpp_mode" not in mock_send.call_args_list[1][0][0]:
+            print(f"**** ERROR: Second call not exit_vpp_mode, got {mock_send.call_args_list[1][0][0]} ****")
+            failed = True
+        else:
+            print("✓ Eco mode writes the reserve as minSoc and exits VPP mode")
+
+    # Test 2: A reserve below the SolaX floor is clamped up
+    print("\n--- Test 2: minSoc clamped to the SolaX floor ---")
+    solax_api.controls[test_plant_id]["reserve"] = 1
+    solax_api.current_mode_hash = None
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        min_soc = mock_send.call_args_list[0][0][1].get("minSoc")
+        if min_soc != SOLAX_MIN_RESERVE_PERCENT:
+            print(f"**** ERROR: Expected minSoc clamped to {SOLAX_MIN_RESERVE_PERCENT}, got {min_soc} ****")
+            failed = True
+        else:
+            print(f"✓ minSoc clamped up to the SolaX floor of {SOLAX_MIN_RESERVE_PERCENT}")
+
+    # Another reserve below the floor sends the same payload, so the mode hash must not change and
+    # nothing should be re-sent.  write_setting_from_event does not clamp, so out of range values do reach here
+    print("\n--- Test 2b: A different out of range reserve does not re-send ---")
+    solax_api.controls[test_plant_id]["reserve"] = 5
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: The clamped payload is unchanged so nothing should be re-sent, got {mock_send.call_count} calls ****")
+            failed = True
+        else:
+            print("✓ The mode hash tracks the clamped minSoc, so no needless rewrite")
+
+    # Test 3: Freeze charge holds minSoc at the SOC the window opened at, even as the battery charges
+    print("\n--- Test 3: Freeze charge holds the minSoc floor ---")
+    # A charge target at the reserve is a freeze charge whatever the SOC does, so the window stays in
+    # freeze charge as PV charges the battery
+    solax_api.controls[test_plant_id]["reserve"] = 10
+    solax_api.controls[test_plant_id]["charge"] = {"start_time": "11:00:00", "end_time": "14:00:00", "enable": True, "target_soc": 10, "rate": 5000}
+    solax_api.current_mode_hash = None
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_args_list[0][0][1].get("minSoc") != 50:
+            print(f"**** ERROR: Expected freeze charge minSoc 50, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
+            failed = True
+        elif "exit_vpp_mode" not in mock_send.call_args_list[1][0][0]:
+            print(f"**** ERROR: Freeze charge second call not exit_vpp_mode, got {mock_send.call_args_list[1][0][0]} ****")
+            failed = True
+        else:
+            print("✓ Freeze charge writes the current SOC as minSoc and exits VPP mode")
+
+    # PV charges the battery to 60%, the floor must not be chased upwards and so nothing is re-sent
+    solax_api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 60, "batteryRemainings": 9.0}
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: Freeze charge floor should not be rewritten as the battery charges, got {mock_send.call_count} calls ****")
+            failed = True
+        else:
+            print("✓ Freeze charge floor is not chased upwards while the battery charges")
+
+    # Test 4: Leaving freeze charge releases the floor back to the reserve
+    print("\n--- Test 4: Leaving freeze charge releases the floor ---")
+    solax_api.controls[test_plant_id]["charge"]["enable"] = False
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        min_soc = mock_send.call_args_list[0][0][1].get("minSoc")
+        if min_soc != 10:
+            print(f"**** ERROR: Expected minSoc released back to the reserve 10, got {min_soc} ****")
+            failed = True
+        elif solax_api.freeze_charge_min_soc is not None:
+            print(f"**** ERROR: Freeze charge floor should be cleared, got {solax_api.freeze_charge_min_soc} ****")
+            failed = True
+        else:
+            print("✓ Leaving freeze charge releases minSoc back to the reserve")
+
+    return failed
+
+
+async def test_apply_controls_backoff_main(my_predbat):
+    """
+    Test that a control mode the inverter rejects backs off instead of retrying every cycle
+    """
+    from datetime import datetime as dt_class
+
+    failed = False
+    solax_api, test_plant_id = await make_apply_controls_api()
+
+    solax_api.controls[test_plant_id] = {
+        "reserve": 10,
+        "charge": {"start_time": "02:00:00", "end_time": "06:00:00", "enable": False, "target_soc": 95, "rate": 5000},
+        "export": {"start_time": "16:00:00", "end_time": "20:00:00", "enable": False, "target_soc": 15, "rate": 4500},
+    }
+    test_time = datetime.now(solax_api.local_tz).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    # Test 1: A failing mode records a retry time rather than caching the mode hash
+    print("\n--- Test 1: Failure records a backoff ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if solax_api.current_mode_hash is not None:
+            print("**** ERROR: A failed mode must not be cached as applied ****")
+            failed = True
+        elif solax_api.failed_mode_count != 1:
+            print(f"**** ERROR: Expected failure count 1, got {solax_api.failed_mode_count} ****")
+            failed = True
+        elif solax_api.failed_mode_retry_time != test_time + timedelta(seconds=SOLAX_CONTROL_RETRY_BACKOFF):
+            print(f"**** ERROR: Expected retry time {SOLAX_CONTROL_RETRY_BACKOFF}s ahead, got {solax_api.failed_mode_retry_time} ****")
+            failed = True
+        else:
+            print(f"✓ Failed mode backs off for {SOLAX_CONTROL_RETRY_BACKOFF} seconds")
+
+    # Test 2: The next cycle inside the backoff window issues nothing
+    print("\n--- Test 2: No retry inside the backoff window ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=65)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if mock_send.call_count:
+            print(f"**** ERROR: Expected no API calls inside the backoff window, got {mock_send.call_count} ****")
+            failed = True
+        else:
+            print("✓ No API calls while backed off")
+
+    # Test 3: A different mode is tried immediately, the inverter may well accept it
+    print("\n--- Test 3: A different mode is not held back ---")
+    solax_api.controls[test_plant_id]["charge"] = {"start_time": "11:00:00", "end_time": "14:00:00", "enable": True, "target_soc": 95, "rate": 5000}
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=70)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if not mock_send.call_count:
+            print("**** ERROR: A different mode should be attempted immediately ****")
+            failed = True
+        elif solax_api.failed_mode_count != 1:
+            print(f"**** ERROR: A different mode should restart the backoff at 1, got {solax_api.failed_mode_count} ****")
+            failed = True
+        else:
+            print("✓ A different mode is attempted immediately and restarts the backoff")
+
+    # Test 4: Repeated failures of the same mode back off exponentially up to the cap
+    print("\n--- Test 4: Backoff grows and is capped ---")
+    solax_api.failed_mode_count = 20  # Far beyond the cap
+    solax_api.failed_mode_retry_time = test_time
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=75)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = False
+
+        await solax_api.apply_controls(test_plant_id)
+
+        expected = test_time + timedelta(seconds=75 + SOLAX_CONTROL_RETRY_MAX)
+        if solax_api.failed_mode_retry_time != expected:
+            print(f"**** ERROR: Expected backoff capped at {SOLAX_CONTROL_RETRY_MAX}s, got {solax_api.failed_mode_retry_time} ****")
+            failed = True
+        else:
+            print(f"✓ Backoff is capped at {SOLAX_CONTROL_RETRY_MAX} seconds")
+
+    # Test 5: Success clears the backoff state
+    print("\n--- Test 5: Success clears the backoff ---")
+    with patch("solax.datetime") as mock_datetime, patch.object(solax_api, "send_command_and_wait", new_callable=AsyncMock) as mock_send:
+        mock_datetime.now.return_value = test_time + timedelta(seconds=SOLAX_CONTROL_RETRY_MAX + 120)
+        mock_datetime.side_effect = lambda *args, **kw: dt_class(*args, **kw)
+        mock_send.return_value = True
+
+        await solax_api.apply_controls(test_plant_id)
+
+        if solax_api.failed_mode_hash is not None or solax_api.failed_mode_count:
+            print(f"**** ERROR: Success should clear the backoff, got hash {solax_api.failed_mode_hash} count {solax_api.failed_mode_count} ****")
+            failed = True
+        elif solax_api.current_mode_hash is None:
+            print("**** ERROR: Success should cache the applied mode ****")
+            failed = True
+        else:
+            print("✓ Success clears the backoff and caches the applied mode")
+
+    return failed
+
+
+class MockStorage:
+    """Mock storage backend recording saves and serving a configurable per key age"""
+
+    def __init__(self, data=None, ages=None):
+        """
+        Args:
+            data: Dict of cache name to contents
+            ages: Dict of cache name to age in minutes
+        """
+        self.data = data or {}
+        self.ages = ages or {}
+        self.saved = []
+
+    async def load(self, module, filename):
+        """Return the configured cache contents for this key"""
+        return self.data.get(filename)
+
+    async def age(self, module, filename):
+        """Return the configured cache age in minutes for this key"""
+        return self.ages.get(filename)
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record the saved data and reset its age"""
+        self.saved.append({"module": module, "filename": filename, "data": data, "format": format, "expiry": expiry})
+        self.data[filename] = data
+        self.ages[filename] = 0
+        return True
+
+
+async def run_one_cycle(api, seconds=0, first=True):
+    """
+    Run a single run() cycle with everything except the static info handling mocked out
+
+    Returns:
+        tuple: (result, mock_query_plant_info, mock_query_device_info)
+    """
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock) as mock_device:
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = api.plant_info
+                                            result = await api.run(seconds=seconds, first=first)
+    return result, mock_plant, mock_device
+
+
+def build_cached_api(plant_age=None, device_age=None):
+    """
+    Build a mock API with a storage cache holding plant and device info at the given ages
+
+    Args:
+        plant_age: Age in minutes of the cached plant info, None for no cache entry
+        device_age: Age in minutes of the cached device info, None for no cache entry
+
+    Returns:
+        MockSolaxAPI instance with storage installed
+    """
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+
+    data = {}
+    ages = {}
+    if plant_age is not None:
+        data["plant_info"] = {"plant_info": [{"plantId": "plant1", "batteryCapacity": 15.0}]}
+        ages["plant_info"] = plant_age
+    if device_age is not None:
+        data["device_info"] = {
+            "device_info": {"INV1": {"deviceSn": "INV1", "deviceType": 1, "plantId": "plant1"}},
+            "plant_inverters": {"plant1": ["INV1"]},
+            "plant_batteries": {"plant1": ["BAT1"]},
+        }
+        ages["device_info"] = device_age
+
+    api.storage = MockStorage(data=data, ages=ages)
+    api.plant_info = [{"plantId": "plant1", "batteryCapacity": 15.0}]
+    return api
+
+
+async def test_static_info_cache_main(my_predbat):
+    """
+    Test that plant and device info are cached in storage and re-read based on the age of the data
+
+    Re-reading every plant and device on each restart is slow, so the hardware information is cached and
+    only re-polled once the data itself is older than its maximum age
+    """
+    failed = False
+    print("\n=== Testing static info storage cache ===")
+
+    # Test 1: Cached data still within its maximum age is restored without polling
+    print("Test 1: Fresh cache is restored without polling")
+    api = build_cached_api(plant_age=60, device_age=5)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not result:
+        print("**** ERROR: Run failed with a fresh cache ****")
+        failed = True
+    elif mock_plant.called:
+        print("**** ERROR: query_plant_info should not be called when the cached plant info is fresh ****")
+        failed = True
+    elif mock_device.called:
+        print("**** ERROR: query_device_info should not be called when the cached device info is fresh ****")
+        failed = True
+    elif api.plant_list != ["plant1"]:
+        print(f"**** ERROR: Plant list not built from the cache, got {api.plant_list} ****")
+        failed = True
+    elif api.plant_inverters != {"plant1": ["INV1"]} or api.plant_batteries != {"plant1": ["BAT1"]}:
+        print(f"**** ERROR: Device mappings not restored, got {api.plant_inverters} {api.plant_batteries} ****")
+        failed = True
+    else:
+        print("✓ Fresh cache restored without any polling")
+
+    # Test 2: Device info older than its maximum age is re-read even though the plant info is fresh
+    print("Test 2: Aged device info is re-read, fresh plant info is not")
+    api = build_cached_api(plant_age=60, device_age=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if mock_plant.called:
+        print("**** ERROR: Plant info is still fresh and should not be polled ****")
+        failed = True
+    elif not mock_device.called:
+        print("**** ERROR: Device info older than the maximum age should be re-read ****")
+        failed = True
+    elif [item["filename"] for item in api.storage.saved] != ["device_info"]:
+        print(f"**** ERROR: Only device info should be saved, got {[item['filename'] for item in api.storage.saved]} ****")
+        failed = True
+    elif api.storage.saved[-1]["expiry"] is None:
+        print("**** ERROR: Cached data must be saved with an expiry so a stale cache is discarded ****")
+        failed = True
+    elif not (timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS - 1) < api.storage.saved[-1]["expiry"] - datetime.now(timezone.utc) <= timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS)):
+        print(f"**** ERROR: Expected roughly a {SOLAX_CACHE_EXPIRY_HOURS} hour expiry, got {api.storage.saved[-1]['expiry']} ****")
+        failed = True
+    else:
+        print(f"✓ Device info re-read once older than {SOLAX_DEVICE_INFO_MAX_AGE} minutes")
+
+    # Test 3: Plant info older than its maximum age is re-read
+    print("Test 3: Aged plant info is re-read")
+    api = build_cached_api(plant_age=SOLAX_PLANT_INFO_MAX_AGE + 1, device_age=5)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not mock_plant.called:
+        print("**** ERROR: Plant info older than the maximum age should be re-read ****")
+        failed = True
+    elif mock_device.called:
+        print("**** ERROR: Device info is still fresh and should not be polled ****")
+        failed = True
+    elif "plant_info" not in [item["filename"] for item in api.storage.saved]:
+        print("**** ERROR: Refreshed plant info should be saved ****")
+        failed = True
+    else:
+        print(f"✓ Plant info re-read once older than {SOLAX_PLANT_INFO_MAX_AGE} minutes")
+
+    # Test 4: The age carries over from the cache, a restart does not restart the interval
+    print("Test 4: Device info age carries over across a restart")
+    api = build_cached_api(plant_age=60, device_age=SOLAX_DEVICE_INFO_MAX_AGE - 2)
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+    if mock_device.called:
+        print("**** ERROR: Device info just under the maximum age should not be polled yet ****")
+        failed = True
+    else:
+        # Two more minutes of data age is enough to make it due, without waiting a full interval
+        api.device_info_updated = api.device_info_updated - timedelta(minutes=3)
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if not mock_device.called:
+            print("**** ERROR: Device info should be re-read once the data ages past the maximum ****")
+            failed = True
+        else:
+            print("✓ The refresh follows the age of the data, not the time since startup")
+
+    # Test 5: No cache at all falls back to polling everything
+    print("Test 5: Missing cache polls everything")
+    api = build_cached_api()
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not mock_plant.called or not mock_device.called:
+        print("**** ERROR: Without a cache both plant and device info must be polled ****")
+        failed = True
+    elif sorted(item["filename"] for item in api.storage.saved) != ["device_info", "plant_info"]:
+        print(f"**** ERROR: Both caches should be written, got {[item['filename'] for item in api.storage.saved]} ****")
+        failed = True
+    else:
+        print("✓ Missing cache falls back to polling and saves both entries")
+
+    # Test 6: With no storage configured the behaviour is unchanged
+    print("Test 6: No storage configured")
+    api = MockSolaxAPI()
+    api.initialize(client_id="test", client_secret="test", region="eu")
+    api.plant_info = [{"plantId": "plant1", "batteryCapacity": 15.0}]
+
+    result, mock_plant, mock_device = await run_one_cycle(api)
+
+    if not result:
+        print("**** ERROR: Run failed without storage ****")
+        failed = True
+    elif not mock_plant.called or not mock_device.called:
+        print("**** ERROR: Without storage everything must still be polled ****")
+        failed = True
+    else:
+        print("✓ Without storage the poll behaviour is unchanged")
+
+    # Test 7: A failed refresh keeps the previous data rather than dropping it
+    print("Test 7: A failed refresh keeps the previous plant info")
+    api = build_cached_api(plant_age=SOLAX_PLANT_INFO_MAX_AGE + 1, device_age=5)
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock):
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = None  # Refresh fails
+                                            result = await api.run(seconds=0, first=True)
+
+    if not result:
+        print("**** ERROR: A failed refresh should not abort the run when cached data exists ****")
+        failed = True
+    elif api.plant_list != ["plant1"]:
+        print(f"**** ERROR: The cached plant info should be kept on a failed refresh, got {api.plant_list} ****")
+        failed = True
+    else:
+        print("✓ A failed refresh keeps the cached plant info")
+
+    # Test 8: A failed device info read does not mark the data fresh or overwrite a good cache
+    print("Test 8: A failed device info read is not treated as a refresh")
+    api = build_cached_api(plant_age=60, device_age=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+    good_cache = api.storage.data["device_info"]
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock):
+        with patch.object(api, "query_device_info", new_callable=AsyncMock) as mock_device:
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_device.return_value = None  # API failure
+                                            await api.run(seconds=0, first=True)
+
+    if api.device_info_updated is not None:
+        print(f"**** ERROR: A failed device read must not mark the data fresh, got {api.device_info_updated} ****")
+        failed = True
+    elif [item["filename"] for item in api.storage.saved] != []:
+        print(f"**** ERROR: A failed device read must not write the cache, got {[item['filename'] for item in api.storage.saved]} ****")
+        failed = True
+    elif api.storage.data["device_info"] is not good_cache:
+        print("**** ERROR: The previous good cache should be left alone ****")
+        failed = True
+    else:
+        print("✓ A failed device read is not marked fresh and does not overwrite the cache")
+
+    # Test 9: A failing read is retried at the retry interval, not on every cycle
+    print("Test 9: A failing read is rate limited")
+    result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+
+    if mock_device.called:
+        print("**** ERROR: A failed read must not be retried on the very next cycle ****")
+        failed = True
+    else:
+        # Once the retry interval has passed the read is attempted again
+        api.device_info_attempted = api.device_info_attempted - timedelta(minutes=SOLAX_INFO_RETRY_MINUTES + 1)
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=10, first=False)
+        if not mock_device.called:
+            print(f"**** ERROR: The read should be retried after {SOLAX_INFO_RETRY_MINUTES} minutes ****")
+            failed = True
+        else:
+            print(f"✓ A failing read is retried every {SOLAX_INFO_RETRY_MINUTES} minutes, not every cycle")
+
+    # Test 10: A failing plant info read is rate limited in the same way
+    print("Test 10: A failing plant info read is rate limited")
+    api = build_cached_api()
+    api.plant_info = [{"plantId": "plant1"}]
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock):
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = None
+                                            await api.run(seconds=0, first=True)
+
+    if api.plant_info_updated is not None:
+        print("**** ERROR: A failed plant read must not mark the data fresh ****")
+        failed = True
+    else:
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if mock_plant.called:
+            print("**** ERROR: A failed plant read must not be retried on the very next cycle ****")
+            failed = True
+        else:
+            print("✓ A failing plant info read is rate limited too")
+
+    # Test 11: A changed device list makes the plant info suspect and forces a re-read
+    print("Test 11: A device change forces a plant info re-read")
+    # Start from a restored cache so there is a known device list to compare against, then age it out
+    api = build_cached_api(plant_age=60, device_age=5)
+    await run_one_cycle(api)
+    api.device_info_updated = api.device_info_updated - timedelta(minutes=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+    api.storage.saved = []
+
+    async def add_a_device(plant_id, device_type, device_sn=None, business_type=None):
+        """Return a battery that was not in the cached device list"""
+        if device_type == 2:
+            api.device_info["BAT_NEW"] = {"deviceSn": "BAT_NEW", "deviceType": 2, "plantId": "plant1"}
+            return [api.device_info["BAT_NEW"]]
+        return []
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", side_effect=add_a_device):
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_plant.return_value = api.plant_info
+                                            await api.run(seconds=5, first=False)
+
+    if mock_plant.called:
+        print("**** ERROR: The cached plant info was fresh, it should not have been read on this cycle ****")
+        failed = True
+    elif api.plant_info_updated is not None or api.plant_info_attempted is not None:
+        print("**** ERROR: A device change should clear the plant info read and attempt times ****")
+        failed = True
+    else:
+        # The next cycle picks the plant info back up, without waiting for the retry interval
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if not mock_plant.called:
+            print("**** ERROR: Plant info should be re-read on the cycle after a device change ****")
+            failed = True
+        else:
+            print("✓ A changed device list forces the plant info to be re-read")
+
+    # Test 12: An unchanged device list leaves the fresh plant info alone
+    print("Test 12: An unchanged device list does not force a plant re-read")
+    api = build_cached_api(plant_age=60, device_age=5)
+    await run_one_cycle(api)
+    api.device_info_updated = api.device_info_updated - timedelta(minutes=SOLAX_DEVICE_INFO_MAX_AGE + 1)
+    plant_updated_before = None
+
+    with patch.object(api, "query_plant_info", new_callable=AsyncMock) as mock_plant:
+        with patch.object(api, "query_device_info", new_callable=AsyncMock) as mock_device:
+            with patch.object(api, "query_plant_realtime_data", new_callable=AsyncMock):
+                with patch.object(api, "query_device_realtime_data_all", new_callable=AsyncMock):
+                    with patch.object(api, "fetch_controls", new_callable=AsyncMock):
+                        with patch.object(api, "publish_plant_info", new_callable=AsyncMock):
+                            with patch.object(api, "publish_device_info", new_callable=AsyncMock):
+                                with patch.object(api, "publish_device_realtime_data", new_callable=AsyncMock):
+                                    with patch.object(api, "publish_controls", new_callable=AsyncMock):
+                                        with patch.object(api, "apply_controls", new_callable=AsyncMock):
+                                            mock_device.return_value = []  # Poll succeeds, nothing new
+                                            await api.run(seconds=5, first=False)
+                                            plant_updated_before = api.plant_info_updated
+
+    if plant_updated_before is None and api.plant_info_attempted is None:
+        print("**** ERROR: An unchanged device list should leave the cached plant info in place ****")
+        failed = True
+    else:
+        result, mock_plant, mock_device = await run_one_cycle(api, seconds=5, first=False)
+        if mock_plant.called:
+            print("**** ERROR: Plant info should not be re-read when the device list is unchanged ****")
+            failed = True
+        else:
+            print("✓ An unchanged device list leaves the plant info alone")
+
+    return failed
+
+
+async def test_realtime_publish_gating_main(my_predbat):
+    """
+    Test that realtime sensors are not published when the read failed
+
+    Publishing on a failed read would push stale values, or defaults of zero before the first successful
+    read, which corrupts the energy totals Predbat consumes
+    """
+    failed = False
+    print("\n=== Testing realtime publish gating ===")
+
+    test_plant_id = "1618699116555534337"
+
+    def build_api():
+        """Build a mock API with one inverter and one battery holding realtime data"""
+        api = MockSolaxAPI(prefix="predbat")
+        api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "batteryCapacity": 15.0, "pvCapacity": 8.5}]
+        api.plant_inverters[test_plant_id] = ["H1231231932123"]
+        api.plant_batteries[test_plant_id] = ["TP123456123123"]
+        api.device_info["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceType": 1, "plantId": test_plant_id, "ratedPower": 10.0}
+        api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
+        api.realtime_data[test_plant_id] = {"totalYield": 3250.5, "totalCharged": 1850.2, "totalDischarged": 1720.8, "totalImported": 4200.3, "totalExported": 2800.7, "totalEarnings": 485.5}
+        api.realtime_device_data["TP123456123123"] = {"deviceSn": "TP123456123123", "batterySOC": 75, "batteryRemainings": 11.25, "batteryTemperature": 18.5}
+        return api
+
+    yield_entity = f"sensor.predbat_solax_{test_plant_id}_total_yield"
+    soc_entity = f"sensor.predbat_solax_{test_plant_id}_battery_soc"
+
+    # Test 1: With no failures everything is published
+    print("Test 1: Successful reads publish")
+    api = build_api()
+    await api.publish_plant_info()
+
+    if yield_entity not in api.dashboard_items:
+        print("**** ERROR: Total yield sensor not published on a good read ****")
+        failed = True
+    elif soc_entity not in api.dashboard_items:
+        print("**** ERROR: Battery SOC sensor not published on a good read ****")
+        failed = True
+    else:
+        print("✓ Sensors published when the read succeeded")
+
+    # Test 2: A failed plant read holds back the plant totals but not the static sensors
+    print("Test 2: Failed plant read holds back the totals")
+    api = build_api()
+    api.realtime_plant_failed.add(test_plant_id)
+    await api.publish_plant_info()
+
+    if yield_entity in api.dashboard_items:
+        print("**** ERROR: Total yield published despite the plant read failing ****")
+        failed = True
+    elif f"sensor.predbat_solax_{test_plant_id}_pv_capacity" not in api.dashboard_items:
+        print("**** ERROR: Static sensors should still be published on a failed realtime read ****")
+        failed = True
+    else:
+        print("✓ Plant totals held back, static sensors still published")
+
+    # Test 3: A failed battery read holds back the battery sensors
+    print("Test 3: Failed battery read holds back the battery sensors")
+    api = build_api()
+    api.realtime_device_failed.add("TP123456123123")
+    await api.publish_plant_info()
+
+    if soc_entity in api.dashboard_items:
+        print("**** ERROR: Battery SOC published despite the battery read failing ****")
+        failed = True
+    elif f"sensor.predbat_solax_{test_plant_id}_battery_capacity" not in api.dashboard_items:
+        print("**** ERROR: Battery capacity is static and should still be published ****")
+        failed = True
+    else:
+        print("✓ Battery sensors held back on a failed battery read")
+
+    # Test 4: Per-device publishing skips the failed device only
+    print("Test 4: Per-device publishing skips only the failed device")
+    api = build_api()
+    api.realtime_device_data["H1231231932123"] = {"deviceSn": "H1231231932123", "deviceStatus": 102, "gridPower": 100.0, "totalYield": 3250.5}
+    api.realtime_device_failed.add("H1231231932123")
+    await api.publish_device_realtime_data()
+
+    inverter_entity = f"sensor.predbat_solax_{test_plant_id}_H1231231932123_grid_power"
+    battery_entity = f"sensor.predbat_solax_{test_plant_id}_TP123456123123_battery_soc"
+    if inverter_entity in api.dashboard_items:
+        print("**** ERROR: Failed inverter device was published ****")
+        failed = True
+    elif battery_entity not in api.dashboard_items:
+        print("**** ERROR: The battery read succeeded and should still be published ****")
+        failed = True
+    else:
+        print("✓ Only the failed device is skipped")
+
+    # Test 5: A failing device read is recorded, and a later success clears it
+    print("Test 5: Failures are recorded and cleared")
+    api = build_api()
+    with patch.object(api, "fetch_single_result", new_callable=AsyncMock) as mock_fetch:
+        mock_fetch.return_value = (None, None)
+        await api.query_device_realtime_data("TP123456123123", 2)
+
+    if "TP123456123123" not in api.realtime_device_failed:
+        print("**** ERROR: A failed read should be recorded ****")
+        failed = True
+    else:
+        with patch.object(api, "fetch_single_result", new_callable=AsyncMock) as mock_fetch:
+            mock_fetch.return_value = ([{"deviceSn": "TP123456123123", "batterySOC": 80, "batteryRemainings": 12.0}], "req1")
+            await api.query_device_realtime_data("TP123456123123", 2)
+
+        if "TP123456123123" in api.realtime_device_failed:
+            print("**** ERROR: A successful read should clear the failure ****")
+            failed = True
+        else:
+            print("✓ Failures are recorded on a bad read and cleared on a good one")
 
     return failed
 
@@ -628,6 +1437,21 @@ async def test_write_setting_from_event(my_predbat):
         failed = True
     else:
         print(f"✓ Reserve setting updated to {new_value}")
+
+    # Test 1b: A value outside the range the entity advertises is clamped rather than stored as given,
+    # a service call can bypass the min and max that the number entity publishes
+    await solax_api.number_event(entity_id, 1)
+    if solax_api.controls[test_plant_id]["reserve"] != SOLAX_MIN_RESERVE_PERCENT:
+        print(f"**** ERROR: Reserve below the floor should clamp to {SOLAX_MIN_RESERVE_PERCENT}, got {solax_api.controls[test_plant_id]['reserve']} ****")
+        failed = True
+    else:
+        await solax_api.number_event(entity_id, 150)
+        if solax_api.controls[test_plant_id]["reserve"] != 100:
+            print(f"**** ERROR: Reserve above the maximum should clamp to 100, got {solax_api.controls[test_plant_id]['reserve']} ****")
+            failed = True
+        else:
+            print(f"✓ Out of range reserve clamped to {SOLAX_MIN_RESERVE_PERCENT}-100")
+    await solax_api.number_event(entity_id, new_value)  # Restore for the tests below
 
     # Test 2: Invalid entity ID format
     invalid_entity_id = "number.invalid_format"
@@ -970,6 +1794,63 @@ async def test_publish_plant_info_main(my_predbat):
     }
 
     return await test_publish_plant_info(solax_api, test_plant_id, test_plant_name)
+
+
+async def test_publish_plant_info_capacity_floor_main(my_predbat):
+    """
+    Test the published battery capacity is never below the measured energy remaining
+
+    The plant capacity is a nominal figure from the SolaX portal and is often rounded down, so a nearly
+    full battery can report more energy remaining than the nominal capacity (soc_kw > soc_max in Predbat)
+    """
+    failed = False
+
+    # Create mock SolaX API instance
+    solax_api = MockSolaxAPI(prefix="predbat")
+    test_plant_id = "1618699116555534337"
+
+    # Nominal capacity of 6.0 kWh, but the pack is really 6.16 kWh and is 99% full
+    solax_api.plant_info = [{"plantId": test_plant_id, "plantName": "Test Plant", "pvCapacity": 4.0, "batteryCapacity": 6.0}]
+    solax_api.plant_inverters[test_plant_id] = ["H4502AI4634062"]
+    solax_api.plant_batteries[test_plant_id] = ["TP123456123123"]
+    solax_api.device_info["H4502AI4634062"] = {"deviceSn": "H4502AI4634062", "deviceType": 1, "plantId": test_plant_id, "ratedPower": 5.0}
+    solax_api.device_info["TP123456123123"] = {"deviceSn": "TP123456123123", "deviceType": 2, "plantId": test_plant_id, "ratedPower": 5.0}
+    solax_api.realtime_data[test_plant_id] = {}
+    solax_api.realtime_device_data["TP123456123123"] = {"batterySOC": 99, "batteryTemperature": 30.0, "batteryRemainings": 6.1}
+
+    await solax_api.publish_plant_info()
+
+    soc_entity = f"sensor.{solax_api.prefix}_solax_{test_plant_id}_battery_soc"
+    capacity_entity = f"sensor.{solax_api.prefix}_solax_{test_plant_id}_battery_capacity"
+    battery_soc = solax_api.dashboard_items.get(soc_entity, {}).get("state")
+    battery_capacity = solax_api.dashboard_items.get(capacity_entity, {}).get("state")
+
+    if battery_soc != 6.1:
+        print(f"**** ERROR: Battery SOC incorrect. Expected 6.1, got {battery_soc} ****")
+        failed = True
+    elif battery_capacity != 6.1:
+        print(f"**** ERROR: Battery capacity should be floored at the current SOC 6.1, got {battery_capacity} ****")
+        failed = True
+    elif solax_api.dashboard_items[soc_entity]["attributes"]["soc_max"] != 6.1:
+        print(f"**** ERROR: soc_max attribute should match the published capacity, got {solax_api.dashboard_items[soc_entity]['attributes']['soc_max']} ****")
+        failed = True
+    else:
+        print("✓ Battery capacity floored at the current SOC when the nominal capacity is lower")
+
+    # A nominal capacity above the current SOC must be left alone
+    solax_api.realtime_device_data["TP123456123123"]["batteryRemainings"] = 3.0
+    solax_api.realtime_device_data["TP123456123123"]["batterySOC"] = 50
+    solax_api.dashboard_items = {}
+    await solax_api.publish_plant_info()
+
+    battery_capacity = solax_api.dashboard_items.get(capacity_entity, {}).get("state")
+    if battery_capacity != 6.0:
+        print(f"**** ERROR: Battery capacity should be the nominal 6.0, got {battery_capacity} ****")
+        failed = True
+    else:
+        print("✓ Nominal battery capacity is used when it is above the current SOC")
+
+    return failed
 
 
 async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
@@ -5846,6 +6727,9 @@ async def test_run_main():
     api2.initialize(client_id="test", client_secret="test", region="eu")
     api2.plant_info = [{"plantId": "plant1"}]
     api2.plant_list = ["plant1"]
+    # Static info was read moments ago, so neither poll is due yet
+    api2.plant_info_updated = datetime.now(timezone.utc)
+    api2.device_info_updated = datetime.now(timezone.utc)
 
     with patch.object(api2, "query_plant_info", new_callable=AsyncMock) as mock_query_plant:
         with patch.object(api2, "query_device_info", new_callable=AsyncMock) as mock_query_device:
