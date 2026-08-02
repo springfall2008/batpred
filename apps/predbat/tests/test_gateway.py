@@ -4481,7 +4481,8 @@ class TestPublishRawLoopSafety:
         finally:
             owner_loop.call_soon_threadsafe(owner_loop.stop)
             owner_thread.join(timeout=2)
-
+            assert not owner_thread.is_alive(), "owner MQTT loop thread did not stop"
+            owner_loop.close()
         assert observed.get("thread_ident") == owner_thread.ident, "client.publish() ran on the wrong thread/loop"
 
 
