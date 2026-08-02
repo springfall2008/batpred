@@ -6423,10 +6423,11 @@ def get_plan_renderer_js():
             // Short explanations for each plan-table column header, condensed from the full
             // descriptions in predbat-plan-card.md - keep these brief, a hover tooltip is not
             // the place for the doc page's colour-coding detail.
+            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
             const COLUMN_HEADER_HELP = {
                 time: 'Predbat plans in slots (30 minutes by default) aligned to rate change times.',
-                import: 'The import rate for this slot, in pence per kWh. Bold if a charge is planned this slot.',
-                export: 'The export rate for this slot, in pence per kWh. Bold if a discharge/export is planned this slot.',
+                import: `The import rate for this slot, in ${currencyMinor} per kWh. Bold if a charge is planned this slot.`,
+                export: `The export rate for this slot, in ${currencyMinor} per kWh. Bold if a discharge/export is planned this slot.`,
                 state: "What the battery is doing this slot - hover a state cell for the specific reason.",
                 limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
                 pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
@@ -6445,13 +6446,13 @@ def get_plan_renderer_js():
             function th(key, innerHtml, extraAttrs) {
                 const helpText = COLUMN_HEADER_HELP[key];
                 const titleAttr = helpText ? ` title="${escapeAttr(helpText)}"` : '';
-                return `<th${extraAttrs || ''}${titleAttr}><b>${innerHtml}</b></th>`;
+                const attrs = extraAttrs ? ` ${extraAttrs.trim()}` : '';
+                return `<th${attrs}${titleAttr}><b>${innerHtml}</b></th>`;
             }
 
             // Render header
             html += '<tr>';
             html += th('time', 'Time');
-            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
             html += showDebug ? th('import', `Import ${currencyMinor} (w/loss)`) : th('import', `Import ${currencyMinor}`);
             html += showDebug ? th('export', `Export ${currencyMinor} (w/loss)`) : th('export', `Export ${currencyMinor}`);
             html += th('state', 'State', ' colspan="2"');
