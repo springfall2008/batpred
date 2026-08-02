@@ -63,10 +63,10 @@ class _WarningPredictor:
 def sample_results():
     """Return a small results document covering an ok month and an unavailable one."""
     scenarios = {
-        "no_pvbat": {"cost_p": 12000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 0.0},
-        "pv_only": {"cost_p": 10000.0, "import_kwh": 350.0, "export_kwh": 60.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 180.0},
-        "without_predbat": {"cost_p": 8000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "export_credit_p_estimate": 300.0},
-        "with_predbat": {"cost_p": 6000.0, "import_kwh": 280.0, "export_kwh": 45.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "export_credit_p_estimate": 675.0},
+        "no_pvbat": {"cost_p": 12000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0},
+        "pv_only": {"cost_p": 10000.0, "import_kwh": 350.0, "export_kwh": 60.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 180.0},
+        "without_predbat": {"cost_p": 8000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "battery_cycles": 2.0, "export_credit_p_estimate": 300.0},
+        "with_predbat": {"cost_p": 6000.0, "import_kwh": 280.0, "export_kwh": 45.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "battery_cycles": 3.0, "export_credit_p_estimate": 675.0},
     }
     return {
         "year": 2025,
@@ -184,6 +184,11 @@ def test_annual_cli(my_predbat):
         failed = True
     if "already included" not in table.lower():
         print("  ERROR: the export credit line must warn it is already counted inside cost, to stop it being double-counted, got:\n{}".format(table))
+        failed = True
+
+    print("Test: the battery cycle estimate is shown")
+    if "equivalent battery cycles" not in table.lower():
+        print("  ERROR: the table should report the equivalent battery cycles estimate, got:\n{}".format(table))
         failed = True
 
     print("Test: a degraded month (some sampled days failed) is costed and included, not treated as unavailable")

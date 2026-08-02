@@ -83,6 +83,16 @@ def format_table(results, currency="p"):
         for key in SCENARIO_KEYS:
             total_row += "{:>20}".format(_format_pence(annual["scenarios"][key]["cost_p"], currency))
         lines.append(total_row)
+        with_cycles = annual["scenarios"].get("with_predbat", {}).get("battery_cycles")
+        without_cycles = annual["scenarios"].get("without_predbat", {}).get("battery_cycles")
+        if with_cycles is not None or without_cycles is not None:
+            if with_cycles is not None and without_cycles is not None:
+                diff = with_cycles - without_cycles
+                lines.append("Estimated equivalent battery cycles: Without Predbat: {:.2f}; With Predbat: {:.2f} ({:+.2f})".format(without_cycles, with_cycles, diff))
+            elif with_cycles is not None:
+                lines.append("Estimated equivalent battery cycles with Predbat: {:.2f}".format(with_cycles))
+            else:
+                lines.append("Estimated equivalent battery cycles without Predbat: {:.2f}".format(without_cycles))
     else:
         lines.append("No annual total available: no month produced a usable result.")
 
@@ -197,6 +207,26 @@ def main(argv=None):
     except AnnualConfigError as error:
         sys.stderr.write("Config error: {}\n".format(error))
         return 2
+
+    # Augment JSON results with battery cycle info in payback rows so --out contains the same data
+    try:
+        annual = results.get("annual", {}) or {}
+        scenarios = annual.get("scenarios", {}) or {}
+        payback = annual.get("payback", {}) or {}
+        if payback:
+            # map cycles into payback rows where appropriate
+            if "pv_battery" in payback:
+                payback["pv_battery"]["battery_cycles"] = scenarios.get("without_predbat", {}).get("battery_cycles")
+            if "pv_battery_predbat" in payback:
+                payback["pv_battery_predbat"]["battery_cycles"] = scenarios.get("with_predbat", {}).get("battery_cycles")
+                # also provide an explicit change value when both present
+                base = payback.get("pv_battery", {}).get("battery_cycles")
+                curr = payback["pv_battery_predbat"].get("battery_cycles")
+                if base is not None and curr is not None:
+                    payback["pv_battery_predbat"]["battery_cycles_change"] = curr - base
+    except Exception:
+        # Augmentation is optional and must not break the run; ignore any failure
+        pass
 
     exit_code = 0
     if args.out:
