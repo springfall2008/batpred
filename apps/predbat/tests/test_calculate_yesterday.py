@@ -202,11 +202,11 @@ def _make_recording_step_data(pv_today_ref, my_predbat, forecast_minutes_snapsho
     def _mock(item, minutes_now, forward, step=5, scale_today=1.0, scale_fixed=1.0, **kwargs):
         forecast_minutes_snapshots.append(my_predbat.forecast_minutes)
         if item is None:
-            return {minute: 0.0 for minute in range(0, 24 * 60, 5)}
+            return {minute: 0.0 for minute in range(0, 24 * 60, step)}
         elif item is pv_today_ref:
-            return {minute: FLAT_PV_KWH for minute in range(0, 24 * 60, 5)}
+            return {minute: FLAT_PV_KWH for minute in range(0, 24 * 60, step)}
         else:
-            return {minute: FLAT_LOAD_KWH for minute in range(0, 24 * 60, 5)}
+            return {minute: FLAT_LOAD_KWH for minute in range(0, 24 * 60, step)}
 
     return _mock
 
