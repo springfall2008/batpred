@@ -1124,14 +1124,12 @@ class Fetch:
             elif self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
                 limit_percent = dp1(self.car_charging_limit[car_n] / self.car_charging_battery_size[car_n] * 100) if self.car_charging_battery_size[car_n] else 0
                 self.log(
-                    "Car {} plan charging from {} to {}, with slots {} from SoC {}kWh to {}% ({}kWh), ready by {}".format(
+                    "Car {} plan charging from {}kWh to {}% ({}kWh), with slots {}, ready by {}".format(
                         car_n,
-                        self.car_charging_soc[car_n],
-                        self.car_charging_limit[car_n],
-                        self.low_rates,
                         self.car_charging_soc[car_n],
                         limit_percent,
                         self.car_charging_limit[car_n],
+                        self.low_rates,
                         self.car_charging_plan_time[car_n],
                     )
                 )
