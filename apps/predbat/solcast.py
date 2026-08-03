@@ -1372,12 +1372,14 @@ class SolarAPI(ComponentBase):
                 except (ValueError, TypeError, KeyError):
                     pass
 
-            # For the HA sensor path the divide_by was computed assuming 30-minute periods;
-            # recalculate it using the actual detected period so that the per-minute kWh
-            # values are correctly scaled regardless of the forecast resolution.
-            if not self.forecast_solar and not (self.solcast_host and self.solcast_api_key):
-                factor = divide_by / 30.0
-                divide_by = dp2(period * factor)
+            # divide_by was computed assuming 30-minute periods; recalculate it using the actual
+            # detected period so that the per-minute kWh values are correctly scaled regardless of
+            # the forecast resolution. This applies to every source: the direct API downloaders all
+            # emit kWh per slot but the slot length varies (Forecast.Solar uses plan_interval_minutes,
+            # Open-Meteo is hourly, Solcast reports PT15M or PT30M), and the HA sensor path carries
+            # its own unit factor, which this division preserves.
+            factor = divide_by / 30.0
+            divide_by = dp2(period * factor)
 
             if period != 30:
                 self.log("SolarAPI: PV Forecast data has {} minute resolution, adjusting calculations".format(period))
