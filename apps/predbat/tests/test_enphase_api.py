@@ -669,8 +669,8 @@ def test_gateway_serial_read_from_today():
     assert gateway_serial({}) is None
 
 
-def _publish_with_buckets(api):
-    """Publish a site whose /today buckets give pv 1000 W, grid 400 W, battery -800 W."""
+def _publish_with_buckets(api, production=250, imp=100, exp=0, charge=200, discharge=0):
+    """Publish a site from /today buckets; the defaults give pv 1000 W, importing 400 W, charging 800 W."""
     start = 1783724400
 
     def bucket(value):
@@ -681,7 +681,7 @@ def _publish_with_buckets(api):
 
     api.today["12345"] = {
         "totals": {},
-        "arrays": {"production": bucket(250), "import": bucket(100), "export": bucket(0), "charge": bucket(200), "discharge": bucket(0)},
+        "arrays": {"production": bucket(production), "import": bucket(imp), "export": bucket(exp), "charge": bucket(charge), "discharge": bucket(discharge)},
         "start_time": start,
         "interval_length": 900,
     }
@@ -713,7 +713,34 @@ def test_publish_prefers_the_measured_livestream_reading():
     api = MockEnphaseAPI()
     api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
     published = _publish_with_buckets(api)
-    assert published == {"pv": 4632.8, "grid": -2686.1, "battery": 32.0, "load": 1978.7}
+    assert published == {"pv": 4632.8, "grid": 2686.1, "battery": 32.0, "load": 1978.7}  # grid flipped to +export
+
+
+def test_grid_power_is_positive_when_exporting():
+    """Grid power follows Predbat's convention: positive exporting, negative importing.
+
+    web.py's power flow reads `grid_power >= 10` as exporting, and sigenergy documents the same.
+    The Enphase channels are the other way round (a livestream grid reading is negative while
+    exporting, and the /today buckets give import - export), so both paths have to be flipped.
+    """
+    api = MockEnphaseAPI()
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+    published = _publish_with_buckets(api)
+    assert published["grid"] == 2686.1  # exporting 2.7 kW -> positive
+
+
+def test_grid_power_from_buckets_is_positive_when_exporting():
+    """The bucket fallback follows the same convention as the livestream."""
+    api = MockEnphaseAPI()
+    published = _publish_with_buckets(api, production=250, imp=0, exp=100, charge=0, discharge=0)
+    assert published["grid"] == 400.0  # 100 Wh exported over a 15-min bucket
+
+
+def test_published_power_satisfies_the_predbat_energy_balance():
+    """With Predbat's signs the balance is load = pv + battery - grid, not pv + battery + grid."""
+    api = MockEnphaseAPI()
+    published = _publish_with_buckets(api)
+    assert published["load"] == published["pv"] + published["battery"] - published["grid"]
 
 
 def test_publish_falls_back_to_buckets_without_a_livestream_reading():
@@ -725,10 +752,10 @@ def test_publish_falls_back_to_buckets_without_a_livestream_reading():
     api = MockEnphaseAPI()
     published = _publish_with_buckets(api)
     assert published["pv"] == 1000.0
-    assert published["grid"] == 400.0
-    assert published["battery"] == -800.0
-    assert published["load"] == 600.0  # 1000 + 400 - 800
-    assert published["load"] == published["pv"] + published["grid"] + published["battery"]
+    assert published["grid"] == -400.0  # importing
+    assert published["battery"] == -800.0  # charging
+    assert published["load"] == 600.0  # 1000 - 800 + 400
+    assert published["load"] == published["pv"] + published["battery"] - published["grid"]
 
 
 def test_interval_power():
@@ -801,7 +828,7 @@ def _published_power(api):
 
 
 def test_load_power_is_derived_from_the_other_channels():
-    """Load is the energy-balance residual: pv + grid + battery.
+    """Load is the energy-balance residual: pv + battery - grid, in Predbat's signs.
 
     The cloud's own consumption channel is exactly this sum, and `get_latest_power` reports
     production rather than consumption, so publishing that as load made the load sensor track PV.
@@ -810,9 +837,9 @@ def test_load_power_is_derived_from_the_other_channels():
     api = _api_with_today_buckets(production=250, imp=100, exp=0, charge=0, discharge=25)
     run_async(api.publish_data("12345"))
     pv, grid, battery, load = _published_power(api)
-    assert (pv, grid, battery) == (1000.0, 400.0, 100.0)
+    assert (pv, grid, battery) == (1000.0, -400.0, 100.0)  # grid negative: importing
     assert load == 1500.0
-    assert load == pv + grid + battery  # the power-flow card must balance
+    assert load == pv + battery - grid  # the power-flow card must balance
 
 
 def test_load_power_never_goes_negative():
@@ -825,7 +852,7 @@ def test_load_power_never_goes_negative():
     api = _api_with_today_buckets(production=0, imp=1461, exp=714, charge=1796, discharge=203)
     run_async(api.publish_data("12345"))
     pv, grid, battery, load = _published_power(api)
-    assert pv + grid + battery < 0  # the raw residual really is negative
+    assert pv + battery - grid < 0  # the raw residual really is negative
     assert load == 0.0
 
 
@@ -1160,7 +1187,7 @@ def test_publish_data_sensors():
     assert items["sensor.predbat_enphase_12345_export_today"]["state"] == 0.4
     assert items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
     assert items["sensor.predbat_enphase_12345_pv_power"]["state"] == 4000.0  # 1000 Wh / 0.25h
-    assert items["sensor.predbat_enphase_12345_grid_power"]["state"] == 400.0
+    assert items["sensor.predbat_enphase_12345_grid_power"]["state"] == -400.0  # importing
     assert items["sensor.predbat_enphase_12345_battery_power"]["state"] == -800.0  # charging
     assert items["sensor.predbat_enphase_12345_load_power"]["state"] == 3600.0  # derived residual
 
@@ -2066,6 +2093,9 @@ def run_enphase_api_tests(my_predbat):
     test_gateway_serial_read_from_today()
     test_publish_prefers_the_measured_livestream_reading()
     test_publish_falls_back_to_buckets_without_a_livestream_reading()
+    test_grid_power_is_positive_when_exporting()
+    test_grid_power_from_buckets_is_positive_when_exporting()
+    test_published_power_satisfies_the_predbat_energy_balance()
     test_get_schedules_parses_families()
     test_automatic_config()
     test_automatic_config_no_dtg_raises()

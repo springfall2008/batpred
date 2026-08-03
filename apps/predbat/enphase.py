@@ -580,7 +580,10 @@ class EnphaseAPI(ComponentBase):
         channel_watts = {channel: interval_power(arrays.get(channel, []), start_time, interval_length, now_ts) for channel in ("production", "import", "export", "charge", "discharge")}
 
         pv_power = channel_watts.get("production", 0.0)
-        grid_power = round(channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0), 1)
+        # Predbat's convention is grid positive when EXPORTING and battery positive when
+        # DISCHARGING (see the power flow in web.py and the charge detection in inverter.py), so
+        # export leads the grid subtraction and discharge leads the battery one.
+        grid_power = round(channel_watts.get("export", 0.0) - channel_watts.get("import", 0.0), 1)
         battery_power = round(channel_watts.get("discharge", 0.0) - channel_watts.get("charge", 0.0), 1)
         # House load is the energy-balance residual of the other three, taken from the same settled
         # bucket so the four sensors agree and a power-flow display balances. This is exactly how the
@@ -591,7 +594,8 @@ class EnphaseAPI(ComponentBase):
         # CT clamps and the battery telemetry. While the battery is cycling hard those terms dwarf
         # the house term and the residual can go unphysical, so it is clamped at zero - a negative
         # house load would render nonsensically. load_today remains the trustworthy energy figure.
-        load_power = max(0.0, round(pv_power + grid_power + battery_power, 1))
+        # In Predbat's signs (grid +export, battery +discharge) the balance is pv + battery - grid.
+        load_power = max(0.0, round(pv_power + battery_power - grid_power, 1))
 
         # Prefer the livestream when we have one: those four channels are separately metered and
         # instantaneous, where the buckets are a 15-minute average and load is only ever a residual.
@@ -599,7 +603,8 @@ class EnphaseAPI(ComponentBase):
         live = self.live_power.get(site_id) or {}
         if live:
             pv_power = live.get("pv", pv_power)
-            grid_power = live.get("grid", grid_power)
+            # The livestream reports grid negative while exporting, the opposite of Predbat's sign.
+            grid_power = round(-live["grid"], 1) if "grid" in live else grid_power
             battery_power = live.get("battery", battery_power)
             load_power = live.get("load", load_power)
 
