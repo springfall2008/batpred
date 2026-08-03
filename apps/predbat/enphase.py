@@ -70,7 +70,9 @@ ENPHASE_SETTLED_BUCKETS = 2
 ENPHASE_LIVESTREAM_TIMEOUT = 15  # seconds to wait for a livestream message before giving up
 LIVESTREAM_BOOTSTRAP = "/pv/aws_sigv4/livestream.json"  # returns the AWS IoT endpoint, topic and authorizer credentials
 
-ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power", "live_power"]
+# live_power is deliberately absent: livestream readings are instantaneous and carry no usable
+# timestamp, so a restored one would be republished as if current. In-memory only.
+ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power"]
 ENPHASE_CACHE_VERSION = 2
 
 # Battery profiles accepted by the profile endpoint
@@ -1203,6 +1205,18 @@ class EnphaseAPI(ComponentBase):
         re-authorising every `live_stream_duration` (900s). Returns the reading, or None on any
         failure, leaving the caller to fall back to the bucket-derived values.
         """
+        reading = await self._fetch_live_power(site_id)
+        if reading:
+            self.live_power[site_id] = reading
+        else:
+            # Drop any previous reading rather than let publish_data republish it. These values are
+            # instantaneous, so a stale measurement presented as current is worse than falling back
+            # to the (lagging but genuinely current) bucket values.
+            self.live_power.pop(site_id, None)
+        return reading
+
+    async def _fetch_live_power(self, site_id):
+        """Bootstrap the livestream and return one decoded reading, or None if unavailable."""
         if not (HAS_AIOMQTT and HAS_LIVESTREAM_PROTOBUF):
             return None
         serial = gateway_serial(self.today.get(site_id, {}))
@@ -1211,11 +1225,7 @@ class EnphaseAPI(ComponentBase):
         boot = await self.request_json("GET", LIVESTREAM_BOOTSTRAP, params={"serial_num": serial})
         if not boot or not boot.get("aws_iot_endpoint") or not boot.get("live_stream_topic"):
             return None
-        reading = await self._read_livestream(site_id, boot, serial)
-        if reading:
-            self.live_power[site_id] = reading
-            await self._save_cache("live_power", self.live_power)
-        return reading
+        return await self._read_livestream(site_id, boot, serial)
 
     async def _read_livestream(self, site_id, boot, serial):
         """Connect to AWS IoT, take the first livestream message for a site, then disconnect.

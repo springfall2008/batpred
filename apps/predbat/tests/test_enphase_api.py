@@ -716,6 +716,32 @@ def test_publish_prefers_the_measured_livestream_reading():
     assert published == {"pv": 4632.8, "grid": 2686.1, "battery": 32.0, "load": 1978.7}  # grid flipped to +export
 
 
+def test_live_power_is_never_persisted():
+    """Livestream readings stay in memory only.
+
+    They are instantaneous and carry no usable timestamp of their own, so restoring one from the
+    cache after a restart would republish an old measurement as if it were current - and the
+    refresh gate can be satisfied by the restored age, so nothing would immediately correct it.
+    """
+    from enphase import ENPHASE_CACHE_KEYS
+
+    assert "live_power" not in ENPHASE_CACHE_KEYS
+
+
+def test_failed_live_read_drops_the_previous_reading():
+    """A failed livestream read clears the last reading rather than leaving it to be republished.
+
+    Falling back to the (lagging but current) bucket values beats presenting a stale measurement
+    as though it were live.
+    """
+    api = MockEnphaseAPI()
+    api.today["12345"] = {"serial": "122530006866"}
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+    # No canned response for the bootstrap, so it 404s and the read fails
+    assert run_async(api.get_live_power("12345")) is None
+    assert "12345" not in api.live_power
+
+
 def test_grid_power_is_positive_when_exporting():
     """Grid power follows Predbat's convention: positive exporting, negative importing.
 
@@ -2093,6 +2119,8 @@ def run_enphase_api_tests(my_predbat):
     test_gateway_serial_read_from_today()
     test_publish_prefers_the_measured_livestream_reading()
     test_publish_falls_back_to_buckets_without_a_livestream_reading()
+    test_live_power_is_never_persisted()
+    test_failed_live_read_drops_the_previous_reading()
     test_grid_power_is_positive_when_exporting()
     test_grid_power_from_buckets_is_positive_when_exporting()
     test_published_power_satisfies_the_predbat_energy_balance()
