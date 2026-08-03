@@ -49,6 +49,7 @@ class MockEnphaseAPI(EnphaseAPI):
 
         # Test instrumentation
         self.http_responses = {}  # path -> dict(status, json_data, text_data)
+        self.http_sequences = {}  # path -> list of (status, json_data), consumed one per request
         self.request_log = []
         self.dashboard_items = {}
         self.mock_ha_states = {}
@@ -83,10 +84,22 @@ class MockEnphaseAPI(EnphaseAPI):
         """Prime a canned HTTP response for a URL path."""
         self.http_responses[path] = {"status": status, "json_data": json_data, "text_data": text_data}
 
+    def set_http_sequence(self, path, responses):
+        """Prime a series of (status, json_data) responses returned one per request to a path.
+
+        The final entry is repeated once the sequence is exhausted, so a test only has to list
+        the responses it cares about.
+        """
+        self.http_sequences[path] = list(responses)
+
     async def request_raw(self, method, url, headers=None, data=None, json_body=None, params=None):
         """Return canned responses instead of performing HTTP."""
         path = url.split("enphaseenergy.com", 1)[-1].split("?")[0]
         self.request_log.append({"method": method, "path": path, "json": json_body, "data": data, "params": params})
+        sequence = self.http_sequences.get(path)
+        if sequence:
+            status, json_data = sequence.pop(0) if len(sequence) > 1 else sequence[0]
+            return status, json_data, "", {}
         response = self.http_responses.get(path, {"status": 404, "json_data": None, "text_data": "not found"})
         return response["status"], response["json_data"], response.get("text_data") or "", {}
 
@@ -1567,8 +1580,159 @@ def test_apply_activates_cfg_when_setting_off_but_schedule_matches():
     assert api.battery_settings["12345"]["chargeFromGrid"] is True
 
 
+SCHEDULES_PATH = "/service/batteryConfig/api/v1/battery/sites/12345/schedules"
+
+
+def _cfg_detail(schedule_id, start, end, limit=100, deleted=False):
+    """Build one CFG schedule detail entry in the shape the cloud returns."""
+    return {"scheduleId": schedule_id, "startTime": start, "endTime": end, "limit": limit, "scheduleType": "CFG", "days": [1, 2, 3, 4, 5, 6, 7], "isDeleted": deleted, "isEnabled": True}
+
+
+def _schedules_payload(cfg_details):
+    """Wrap CFG detail entries in a full schedules response with empty dtg/rbd families."""
+    return {
+        "type": "BATTERY_SCHEDULES_CONFIG",
+        "cfg": {"scheduleStatus": "active", "count": len(cfg_details), "details": cfg_details},
+        "dtg": {"scheduleStatus": "active", "count": 0, "details": []},
+        "rbd": {"scheduleStatus": "active", "count": 0, "details": []},
+    }
+
+
+def test_get_schedules_pins_adopted_schedule_id():
+    """A re-read keeps the already-adopted schedule id even when the cloud reorders the list.
+
+    The cloud returns details ordered by updatedAt, so writing to the adopted schedule pushes it
+    behind its sibling. Taking details[0] would make Predbat swap to the sibling and then write a
+    window that overlaps the one it just wrote, which the cloud rejects with HTTP 409.
+    """
+    api = MockEnphaseAPI()
+    api.mock_ha_states["switch.predbat_set_read_only"] = "on"  # isolate pinning from sibling pruning
+    api.schedules["12345"] = {"cfg": {"id": "adopted", "startTime": "02:00", "endTime": "02:20"}}
+    # Cloud lists the sibling first, as it does after we write to "adopted"
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sibling", "05:30", "07:00"), _cfg_detail("adopted", "02:00", "02:20")]))
+    run_async(api.get_schedules("12345"))
+    cfg = api.schedules["12345"]["cfg"]
+    assert cfg["id"] == "adopted"
+    assert cfg["startTime"] == "02:00" and cfg["endTime"] == "02:20"
+
+
+def test_get_schedules_adopts_first_when_none_adopted_yet():
+    """With no schedule adopted yet the first non-deleted entry is taken."""
+    api = MockEnphaseAPI()
+    api.mock_ha_states["switch.predbat_set_read_only"] = "on"
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("gone", "01:00", "02:00", deleted=True), _cfg_detail("first", "05:30", "07:00")]))
+    run_async(api.get_schedules("12345"))
+    assert api.schedules["12345"]["cfg"]["id"] == "first"
+
+
+def test_get_schedules_readopts_when_pinned_id_disappears():
+    """If the adopted schedule is deleted outside Predbat, the remaining one is adopted instead."""
+    api = MockEnphaseAPI()
+    api.mock_ha_states["switch.predbat_set_read_only"] = "on"
+    api.schedules["12345"] = {"cfg": {"id": "adopted", "startTime": "02:00", "endTime": "02:20"}}
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("survivor", "05:30", "07:00")]))
+    run_async(api.get_schedules("12345"))
+    assert api.schedules["12345"]["cfg"]["id"] == "survivor"
+
+
+def test_get_schedules_deletes_sibling_schedules_in_write_mode():
+    """In write mode Predbat owns one schedule per family and deletes any extras.
+
+    A schedule Predbat does not track keeps a stale window that it can never clear, and that
+    window collides with whatever Predbat writes next.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "adopted", "startTime": "02:00", "endTime": "02:20"}}
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sibling", "05:30", "07:00"), _cfg_detail("adopted", "02:00", "02:20")]))
+    api.set_http_response(SCHEDULES_PATH + "/sibling", 204, None)
+    run_async(api.get_schedules("12345"))
+    deletes = [r["path"] for r in api.request_log if r["method"] == "DELETE"]
+    assert deletes == [SCHEDULES_PATH + "/sibling"]
+    assert api.schedules["12345"]["cfg"]["id"] == "adopted"
+    assert api.schedules["12345"]["cfg"]["count"] == 1  # pruned count, not the stale cloud count
+
+
+def test_get_schedules_keeps_sibling_schedules_in_read_only_mode():
+    """Read-only mode must not delete anything on the account."""
+    api = MockEnphaseAPI()
+    api.mock_ha_states["switch.predbat_set_read_only"] = "on"
+    api.schedules["12345"] = {"cfg": {"id": "adopted", "startTime": "02:00", "endTime": "02:20"}}
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sibling", "05:30", "07:00"), _cfg_detail("adopted", "02:00", "02:20")]))
+    run_async(api.get_schedules("12345"))
+    assert [r for r in api.request_log if r["method"] == "DELETE"] == []
+
+
+def test_write_schedule_disable_deletes_the_schedule():
+    """Disabling a window deletes the schedule rather than PUTting isEnabled=False.
+
+    The cloud ignores isEnabled=False on a PUT (it echoes isEnabled true and the window survives),
+    so a disabled window would otherwise linger and conflict with later writes.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1", 204, None)
+    wrote = run_async(api._write_schedule("12345", "CFG", "00:00:00", "00:00:00", 100, False))
+    assert wrote is True
+    assert [r["method"] for r in api.request_log] == ["DELETE"]
+    assert api.schedules["12345"]["cfg"].get("id") is None  # nothing left to update in place
+
+
+def test_write_schedule_retries_once_after_conflict():
+    """A 409 conflict triggers a schedules re-read and one retry of the write."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_sequence(SCHEDULES_PATH + "/sched-1", [(409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}}), (200, {"scheduleId": "sched-1"})])
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sched-1", "02:00", "02:20")]))
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is True
+    assert [r["method"] for r in api.request_log] == ["PUT", "GET", "PUT"]  # re-read between the attempts
+    assert api.schedules["12345"]["cfg"]["startTime"] == "03:00"
+
+
+def test_write_schedule_gives_up_after_second_conflict():
+    """A conflict that survives the re-read fails the write instead of looping."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1", 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sched-1", "02:00", "02:20")]))
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is False
+    assert [r["method"] for r in api.request_log].count("PUT") == 2  # one retry only
+
+
+def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
+    """Replay of the live failure: two writes either side of a re-read must target the same schedule.
+
+    Observed on a site with two DTG schedules: Predbat wrote 22:35-23:30 to one, the re-read
+    returned the pair in the opposite order, Predbat swapped to the other and wrote 22:50-23:30 -
+    which the cloud rejected with CONFLICTING_SCHEDULE_DTG against the window Predbat had set
+    itself five minutes earlier. Every subsequent cycle then failed the same way.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "first", "startTime": "20:30", "endTime": "21:00", "limit": 5, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/first", 200, {"scheduleId": "first"})
+    api.set_http_response(SCHEDULES_PATH + "/second", 200, {"scheduleId": "second"})
+    api.set_http_response(SCHEDULES_PATH + "/second", 204, None)
+    run_async(api._write_schedule("12345", "CFG", "22:35:00", "23:30:00", 5, True))
+    # Cloud re-read now lists the sibling first, because our write made "first" the most recent
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("second", "20:30", "21:00", limit=5), _cfg_detail("first", "22:35", "23:30", limit=5)]))
+    run_async(api.get_schedules("12345"))
+    run_async(api._write_schedule("12345", "CFG", "22:50:00", "23:30:00", 5, True))
+    written = [r["path"] for r in api.request_log if r["method"] == "PUT"]
+    assert written == [SCHEDULES_PATH + "/first", SCHEDULES_PATH + "/first"]  # never swapped onto the sibling
+
+
 def run_enphase_api_tests(my_predbat):
     """Run all Enphase API tests, returning 0 on success."""
+    test_consecutive_writes_stay_on_one_schedule_across_a_reorder()
+    test_get_schedules_pins_adopted_schedule_id()
+    test_get_schedules_adopts_first_when_none_adopted_yet()
+    test_get_schedules_readopts_when_pinned_id_disappears()
+    test_get_schedules_deletes_sibling_schedules_in_write_mode()
+    test_get_schedules_keeps_sibling_schedules_in_read_only_mode()
+    test_write_schedule_disable_deletes_the_schedule()
+    test_write_schedule_retries_once_after_conflict()
+    test_write_schedule_gives_up_after_second_conflict()
     test_initialize_defaults()
     test_needs_refresh()
     test_is_alive()
