@@ -601,6 +601,130 @@ def test_today_channel_kwh():
     assert today_channel_kwh({"totals": {"charge": 9000, "solar_battery": 1000}}, "charge") == 9.0
 
 
+# A real DataMsg captured from the Enlighten livestream topic (site exporting on a sunny afternoon):
+# pv 4632.8 W, storage 32.0 W, grid -2686.1 W, load 1978.7 W, soc 100%.
+LIVESTREAM_FRAME = base64.b64decode(
+    "CAEQwIQ9GogBChYI7+GaAhDv4ZoCGgTv4ZoCIgTv4ZoCEhIIgPoBEPP6ARoDgPoBIgPz+gEaLgjZhtz+//////8BELLiwf7//////wEaCtmG3P7//////wEiCrLiwf7//////wEiEgjI4ngQlL9eGgPI4ngiA5S/XigCMGQ6BhoBACIBAEAGSAFaBghkEKCcASABKAUyAhACMgQIARACMgQIAhABMgQIAxAB"
+)
+
+
+def test_decode_livestream_message():
+    """A livestream DataMsg decodes to watts per channel plus SOC.
+
+    agg_p_mw is milliwatts. Signs follow Predbat's convention: grid negative when exporting,
+    battery positive when discharging.
+    """
+    from enphase import decode_livestream_message
+
+    reading = decode_livestream_message(LIVESTREAM_FRAME)
+    assert reading == {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+
+
+def test_decode_livestream_message_balances():
+    """The decoded channels satisfy the energy balance load = pv + grid + battery."""
+    from enphase import decode_livestream_message
+
+    r = decode_livestream_message(LIVESTREAM_FRAME)
+    assert abs((r["pv"] + r["grid"] + r["battery"]) - r["load"]) < 0.05
+
+
+def test_decode_livestream_message_rejects_rubbish():
+    """A payload that is not a DataMsg returns None rather than raising."""
+    from enphase import decode_livestream_message
+
+    assert decode_livestream_message(b"\xff\xff\xff\xff not protobuf") is None
+
+
+def test_livestream_username_carries_the_authorizer_credentials():
+    """The MQTT username is the query-string blob AWS IoT's custom authorizer expects.
+
+    The WebSocket URL carries no query parameters - the browser cannot set custom headers on a
+    WebSocket - so the authorizer name, token and signature all travel in the CONNECT username.
+    """
+    from enphase import livestream_username
+
+    boot = {
+        "aws_authorizer": "aws-lambda-authoriser-prod",
+        "aws_token_key": "enph_token",
+        "aws_token_value": "tok123",
+        "aws_digest": "sig+with/reserved=chars",
+    }
+    user = livestream_username(boot, "5667604")
+    assert user.startswith("?")
+    assert "x-amz-customauthorizer-name=aws-lambda-authoriser-prod" in user
+    assert "enph_token=tok123" in user
+    assert "site-id=5667604" in user
+    # The digest is base64 and must be percent-encoded, not passed raw
+    from urllib.parse import quote_plus
+
+    assert f"x-amz-customauthorizer-signature={quote_plus(boot['aws_digest'])}" in user
+    assert boot["aws_digest"] not in user
+
+
+def test_gateway_serial_read_from_today():
+    """The livestream bootstrap needs the gateway serial, which /today already carries."""
+    from enphase import gateway_serial
+
+    assert gateway_serial({"serial": "122530006866"}) == "122530006866"
+    assert gateway_serial({}) is None
+
+
+def _publish_with_buckets(api):
+    """Publish a site whose /today buckets give pv 1000 W, grid 400 W, battery -800 W."""
+    start = 1783724400
+
+    def bucket(value):
+        """Return a 96-slot Wh array with the bucket read by publish_data set to value."""
+        out = [0] * 96
+        out[80] = value
+        return out
+
+    api.today["12345"] = {
+        "totals": {},
+        "arrays": {"production": bucket(250), "import": bucket(100), "export": bucket(0), "charge": bucket(200), "discharge": bucket(0)},
+        "start_time": start,
+        "interval_length": 900,
+    }
+    import enphase as enphase_module
+
+    original = enphase_module.datetime
+
+    class _Fixed(original):
+        @classmethod
+        def now(cls, tz=None):
+            """Return a time inside the interval after the bucket that publish_data reads."""
+            return original.fromtimestamp(start + int(81.5 * 900), tz)
+
+    enphase_module.datetime = _Fixed
+    try:
+        run_async(api.publish_data("12345"))
+    finally:
+        enphase_module.datetime = original
+    base = "sensor.predbat_enphase_12345"
+    return {name: api.dashboard_items[f"{base}_{name}_power"]["state"] for name in ("pv", "grid", "battery", "load")}
+
+
+def test_publish_prefers_the_measured_livestream_reading():
+    """When a livestream reading is available the power sensors use it, not the energy buckets.
+
+    The livestream channels are metered, instantaneous and include a real house load, so they beat
+    the 15-minute buckets on every count.
+    """
+    api = MockEnphaseAPI()
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+    published = _publish_with_buckets(api)
+    assert published == {"pv": 4632.8, "grid": -2686.1, "battery": 32.0, "load": 1978.7}
+
+
+def test_publish_falls_back_to_buckets_without_a_livestream_reading():
+    """With no livestream reading the bucket-derived values are still published."""
+    api = MockEnphaseAPI()
+    published = _publish_with_buckets(api)
+    assert published["pv"] == 1000.0
+    assert published["grid"] == 400.0
+    assert published["battery"] == -800.0
+
+
 def test_interval_power():
     """interval_power converts a settled 15-minute Wh bucket into watts.
 
@@ -956,6 +1080,7 @@ def test_publish_data_sensors():
         "start_time": start,
         "interval_length": 900,
     }
+    # No livestream reading here, so the power sensors fall back to the /today buckets.
     # Freeze "now" so interval_power selects settled bucket 80 (current 82, just-closed 81).
     import enphase as enphase_module
 
@@ -1880,6 +2005,13 @@ def run_enphase_api_tests(my_predbat):
     test_load_power_is_derived_from_the_other_channels()
     test_load_power_never_goes_negative()
     test_power_sensors_ignore_the_unsettled_bucket()
+    test_decode_livestream_message()
+    test_decode_livestream_message_balances()
+    test_decode_livestream_message_rejects_rubbish()
+    test_livestream_username_carries_the_authorizer_credentials()
+    test_gateway_serial_read_from_today()
+    test_publish_prefers_the_measured_livestream_reading()
+    test_publish_falls_back_to_buckets_without_a_livestream_reading()
     test_get_schedules_parses_families()
     test_automatic_config()
     test_automatic_config_no_dtg_raises()

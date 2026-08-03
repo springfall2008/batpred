@@ -21,13 +21,31 @@ import asyncio
 import base64
 import json
 import random
+import ssl
 import uuid
+from urllib.parse import urlencode
 
 import aiohttp
 
 from component_base import ComponentBase
 from mock_base import MockBase
 from predbat_metrics import record_api_call
+
+try:
+    import enphase_livestream_pb2 as livestream_pb
+
+    HAS_LIVESTREAM_PROTOBUF = True
+except (ImportError, Exception):
+    livestream_pb = None
+    HAS_LIVESTREAM_PROTOBUF = False
+
+try:
+    import aiomqtt
+
+    HAS_AIOMQTT = True
+except (ImportError, Exception):
+    aiomqtt = None
+    HAS_AIOMQTT = False
 
 # Defined locally (not imported from utils) - every cloud component defines its own
 # copy of this table rather than sharing one, matching the pattern used by fox.py.
@@ -49,8 +67,10 @@ ENPHASE_REFRESH_POWER = 5  # latest instantaneous power
 # How many intra-day buckets to step back when deriving power from the /today energy arrays.
 # 1 would be the just-closed bucket, which the cloud is still back-filling; 2 is settled.
 ENPHASE_SETTLED_BUCKETS = 2
+ENPHASE_LIVESTREAM_TIMEOUT = 15  # seconds to wait for a livestream message before giving up
+LIVESTREAM_BOOTSTRAP = "/pv/aws_sigv4/livestream.json"  # returns the AWS IoT endpoint, topic and authorizer credentials
 
-ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power"]
+ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power", "live_power"]
 ENPHASE_CACHE_VERSION = 2
 
 # Battery profiles accepted by the profile endpoint
@@ -170,6 +190,55 @@ def enphase_time_to_ha(value):
     return text + ":00"
 
 
+def gateway_serial(today):
+    """Return the gateway (Envoy) serial recorded by get_today, or None."""
+    return (today or {}).get("serial")
+
+
+def livestream_username(boot, site_id):
+    """Build the MQTT CONNECT username that AWS IoT's custom authorizer expects.
+
+    The livestream WebSocket carries no query parameters and no password - a browser cannot set
+    custom headers on a WebSocket - so the authorizer name, the token and the token's signature all
+    travel in the username as a leading-'?' query string. Field order matches the Enlighten web app.
+    """
+    return "?" + urlencode(
+        [
+            ("x-amz-customauthorizer-name", boot.get("aws_authorizer", "")),
+            (boot.get("aws_token_key", "enph_token"), boot.get("aws_token_value", "")),
+            ("site-id", str(site_id)),
+            ("x-amz-customauthorizer-signature", boot.get("aws_digest", "")),
+            ("evse-count", "0"),
+            ("env", "prod"),
+        ]
+    )
+
+
+def decode_livestream_message(payload):
+    """Decode one livestream DataMsg into per-channel watts plus battery SOC.
+
+    ``agg_p_mw`` is real power in milliwatts. The channels are measured, not derived, and satisfy
+    load = pv + grid + battery exactly. Signs already match Predbat's convention (grid negative when
+    exporting, battery positive when discharging). Returns None if the payload will not decode.
+    """
+    if not HAS_LIVESTREAM_PROTOBUF or not payload:
+        return None
+    try:
+        message = livestream_pb.DataMsg()
+        message.ParseFromString(payload)
+    except Exception:
+        return None
+    meters = message.meters
+    watts = lambda channel: round(channel.agg_p_mw / 1000.0, 1)  # noqa: E731 - milliwatts -> watts
+    return {
+        "pv": watts(meters.pv),
+        "battery": watts(meters.storage),
+        "grid": watts(meters.grid),
+        "load": watts(meters.load),
+        "soc": int(meters.soc),
+    }
+
+
 def _schedule_id_of(entry):
     """Return the cloud id of a schedule detail entry ('scheduleId', or 'id' on older shapes)."""
     return entry.get("scheduleId") or entry.get("id")
@@ -257,6 +326,7 @@ class EnphaseAPI(ComponentBase):
         self.site_settings = {}
         self.today = {}  # per-site today totals (Wh) + intra-day 15-minute buckets, from /today
         self.latest_power = {}
+        self.live_power = {}  # measured pv/grid/battery/load watts + soc from the Enlighten livestream
 
         # Local (HA-side) schedule model, written by events, applied on write switch
         self.local_schedule = {}
@@ -367,6 +437,8 @@ class EnphaseAPI(ComponentBase):
                 await self.get_today(site_id)
             if self._needs_refresh("latest_power", ENPHASE_REFRESH_POWER):
                 await self.get_latest_power(site_id)
+                # Measured instantaneous power; falls back to the /today buckets if unavailable.
+                await self.get_live_power(site_id)
             self.sync_local_schedule_from_cloud(site_id)
             await self.publish_data(site_id)
             await self.publish_schedule_settings_ha(site_id)
@@ -496,7 +568,8 @@ class EnphaseAPI(ComponentBase):
                 app="enphase",
             )
 
-        # Instantaneous power from the most recent settled intra-day 15-minute energy bucket of
+        # Fallback when the livestream is unavailable: instantaneous power from the most recent
+        # settled intra-day 15-minute energy bucket of
         # the /today arrays (Wh per interval -> average watts over that interval). This reads a
         # single bucket value per poll, so it is inherently stable within an interval and needs no
         # cross-poll delta tracking.
@@ -519,6 +592,16 @@ class EnphaseAPI(ComponentBase):
         # the house term and the residual can go unphysical, so it is clamped at zero - a negative
         # house load would render nonsensically. load_today remains the trustworthy energy figure.
         load_power = max(0.0, round(pv_power + grid_power + battery_power, 1))
+
+        # Prefer the livestream when we have one: those four channels are separately metered and
+        # instantaneous, where the buckets are a 15-minute average and load is only ever a residual.
+        # The bucket values above stay as the fallback for when the stream is unavailable.
+        live = self.live_power.get(site_id) or {}
+        if live:
+            pv_power = live.get("pv", pv_power)
+            grid_power = live.get("grid", grid_power)
+            battery_power = live.get("battery", battery_power)
+            load_power = live.get("load", load_power)
 
         self.dashboard_item(
             f"{entity_base}_load_power",
@@ -1091,6 +1174,8 @@ class EnphaseAPI(ComponentBase):
             "interval_length": stat.get("interval_length"),
             # Site health: siteStatus is "normal"/"comm" (communication fault) etc., with a
             # human-readable status description when there is a problem (e.g. gateway not reporting).
+            # Gateway (Envoy) serial, needed to bootstrap the livestream - saves a separate call.
+            "serial": ((data.get("connectionDetails") or [{}])[0] or {}).get("serial_num"),
             "site_status": data.get("siteStatus"),
             "status_severity": status_details.get("statusSeverity"),
             "status_desc": status_details.get("statusDesc"),
@@ -1098,6 +1183,77 @@ class EnphaseAPI(ComponentBase):
         }
         await self._save_cache("today", self.today)
         return self.today[site_id]
+
+    async def get_live_power(self, site_id):
+        """Fetch one instantaneous, measured power reading from the Enlighten livestream.
+
+        The Enlighten app streams a protobuf `DataMsg` once a second over MQTT-on-WebSockets from
+        AWS IoT, carrying separately METERED pv/storage/grid/load channels plus SOC. That is the
+        only source of a real house-load figure: the /today energy buckets can only yield load as
+        the residual of much larger numbers, which is unusable while the battery cycles, and
+        get_latest_power reports production rather than consumption.
+
+        Predbat only needs one sample per cycle, so this connects, takes the first message and
+        disconnects - the same lifecycle the web app uses - rather than holding the stream open and
+        re-authorising every `live_stream_duration` (900s). Returns the reading, or None on any
+        failure, leaving the caller to fall back to the bucket-derived values.
+        """
+        if not (HAS_AIOMQTT and HAS_LIVESTREAM_PROTOBUF):
+            return None
+        serial = gateway_serial(self.today.get(site_id, {}))
+        if not serial:
+            return None
+        boot = await self.request_json("GET", LIVESTREAM_BOOTSTRAP, params={"serial_num": serial})
+        if not boot or not boot.get("aws_iot_endpoint") or not boot.get("live_stream_topic"):
+            return None
+        reading = await self._read_livestream(site_id, boot, serial)
+        if reading:
+            self.live_power[site_id] = reading
+            await self._save_cache("live_power", self.live_power)
+        return reading
+
+    async def _read_livestream(self, site_id, boot, serial):
+        """Connect to AWS IoT, take the first livestream message for a site, then disconnect.
+
+        Credentials ride in the MQTT CONNECT username (see livestream_username) because the
+        WebSocket carries no query string and no password. Any failure is logged and swallowed -
+        the livestream is an enhancement, never a reason to fail a cycle.
+        """
+        timeout = safe_float(boot.get("timeout"), ENPHASE_LIVESTREAM_TIMEOUT) or ENPHASE_LIVESTREAM_TIMEOUT
+        topic = boot.get("live_stream_topic")
+
+        async def consume():
+            """Subscribe and return the first decodable reading."""
+            async with aiomqtt.Client(
+                hostname=boot["aws_iot_endpoint"],
+                port=443,
+                transport="websockets",
+                websocket_path="/mqtt",
+                tls_context=ssl.create_default_context(),
+                identifier=f"em-paho-mqtt-{random.randint(10000, 99999)}-{serial}",
+                username=livestream_username(boot, site_id),
+                clean_session=True,
+                keepalive=60,
+            ) as client:
+                await client.subscribe(topic, qos=0)
+                async for message in client.messages:
+                    reading = decode_livestream_message(bytes(message.payload))
+                    if reading:
+                        return reading
+            return None
+
+        try:
+            reading = await asyncio.wait_for(consume(), timeout=timeout)
+        except asyncio.TimeoutError:
+            self.log(f"Warn: Enphase: Livestream timed out after {timeout}s for site {site_id}")
+            record_api_call("enphase", False, "livestream_timeout")
+            return None
+        except Exception as error:
+            self.log(f"Warn: Enphase: Livestream failed for site {site_id}: {error}")
+            record_api_call("enphase", False, "livestream_error")
+            return None
+        record_api_call("enphase", True)
+        return reading
 
     async def get_latest_power(self, site_id):
         """Fetch and normalise the latest instantaneous power reading for a site."""
@@ -1601,6 +1757,26 @@ async def test_enphase_api(username, password, site_id):  # pragma: no cover
         for channel, values in (today.get("arrays") or {}).items():
             if values:
                 print(f"  {channel}: len={len(values)} last5={values[-5:]}")
+
+        # Livestream: prove the connect -> read one message -> disconnect cycle works against the
+        # real account, and cross-check it against the bucket-derived values it replaces.
+        print(f"\ngateway serial: {gateway_serial(today)}")
+        print(f"protobuf available: {HAS_LIVESTREAM_PROTOBUF}   aiomqtt available: {HAS_AIOMQTT}")
+        for attempt in range(1, 4):
+            started = datetime.now(timezone.utc)
+            reading = await api.get_live_power(sid)
+            elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+            if not reading:
+                print(f"  livestream attempt {attempt}: FAILED after {elapsed:.1f}s")
+                continue
+            balance = reading["pv"] + reading["grid"] + reading["battery"] - reading["load"]
+            print(f"  livestream attempt {attempt} ({elapsed:.1f}s): pv={reading['pv']}W grid={reading['grid']}W battery={reading['battery']}W load={reading['load']}W soc={reading['soc']}%")
+            print(f"    energy balance (pv+grid+battery-load) = {balance:.1f} W  <- expect ~0")
+        arrays = today.get("arrays") or {}
+        now_ts = datetime.now(timezone.utc).timestamp()
+        bucket = {channel: interval_power(arrays.get(channel, []), today.get("start_time"), today.get("interval_length"), now_ts) for channel in ("production", "import", "export", "charge", "discharge")}
+        print(f"  bucket-derived for comparison: pv={bucket['production']}W grid={bucket['import'] - bucket['export']}W battery={bucket['discharge'] - bucket['charge']}W")
+        print("    (buckets are a 15-minute average and lag; large differences are expected)")
 
     print("\nDone")
 

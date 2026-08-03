@@ -25,6 +25,7 @@ armhf
 armv
 ASHP
 asyncio
+authoriser
 autodocstring
 autoflake
 automations
@@ -76,6 +77,7 @@ corruptplans
 cprofile
 creds
 crosscharge
+customauthorizer
 customisation
 Customise
 cvalue
@@ -138,6 +140,7 @@ energythroughput
 enho
 Enlighten
 enlm
+enph
 enphase
 enphaseenergy
 Enpower
@@ -368,6 +371,7 @@ predheat
 preseed
 preseeded
 prevs
+protobuf
 psum
 pvbat
 pvenergytotal
