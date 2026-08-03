@@ -602,21 +602,109 @@ def test_today_channel_kwh():
 
 
 def test_interval_power():
-    """interval_power converts the most recent completed 15-minute Wh bucket into watts."""
+    """interval_power converts a settled 15-minute Wh bucket into watts.
+
+    The bucket that has only just closed is still being back-filled by the cloud - first read it
+    returns roughly a third of its eventual value, then it corrects upward - so reading it makes
+    the power sensors saw-tooth on every bucket rollover. Step back to a bucket that has stopped
+    changing instead.
+    """
     from enphase import interval_power
 
-    # 96 fifteen-minute buckets from midnight; interval_length 900s. now = start + 82.5 intervals.
+    # 96 fifteen-minute buckets from midnight; interval_length 900s.
     start = 1783724400
     interval = 900
     values = [0] * 96
-    values[80] = 199  # 199 Wh in the 15-min bucket -> 199 / 0.25h = 796 W
-    values[81] = 103
-    now_ts = start + int(81.5 * interval)  # current interval index 81 -> last completed = 80
+    values[80] = 199  # settled bucket: 199 Wh / 0.25h = 796 W
+    values[81] = 61  # just-closed bucket, still filling - must not be used
+    now_ts = start + int(82.5 * interval)  # current index 82, just-closed 81, settled 80
     assert interval_power(values, start, interval, now_ts) == 796.0
     # Missing/empty data -> 0
     assert interval_power([], start, interval, now_ts) == 0.0
     assert interval_power(values, None, interval, now_ts) == 0.0
     assert interval_power(values, start, 0, now_ts) == 0.0
+
+
+def test_interval_power_clamps_at_start_of_day():
+    """Before enough buckets exist to settle, interval_power clamps to the first bucket."""
+    from enphase import interval_power
+
+    start = 1783724400
+    values = [7] + [0] * 95
+    assert interval_power(values, start, 900, start + 450) == 28.0  # 7 Wh / 0.25h, index clamped to 0
+
+
+def _api_with_today_buckets(production, imp, exp, charge, discharge):
+    """Build a mock API whose settled bucket holds the given per-channel Wh values."""
+    api = MockEnphaseAPI()
+    now = datetime.now(timezone.utc).timestamp()
+    interval = 900
+    settled = 80  # current index 82, just-closed 81, settled 80
+    start = now - 82.5 * interval
+
+    def arr(value, filler):
+        """Return a 96-bucket array with the settled bucket set and a decoy in the just-closed one."""
+        out = [0] * 96
+        out[settled] = value
+        out[settled + 1] = filler  # partially filled bucket that must be ignored
+        return out
+
+    api.today["12345"] = {
+        "totals": {},
+        "arrays": {
+            "production": arr(production, 9999),
+            "import": arr(imp, 9999),
+            "export": arr(exp, 0),
+            "charge": arr(charge, 0),
+            "discharge": arr(discharge, 9999),
+        },
+        "start_time": start,
+        "interval_length": interval,
+    }
+    return api
+
+
+def _published_power(api):
+    """Return the four published power sensor states as floats."""
+    base = "sensor.predbat_enphase_12345"
+    return tuple(float(api.dashboard_items[f"{base}_{name}_power"]["state"]) for name in ("pv", "grid", "battery", "load"))
+
+
+def test_load_power_is_derived_from_the_other_channels():
+    """Load is the energy-balance residual: pv + grid + battery.
+
+    The cloud's own consumption channel is exactly this sum, and `get_latest_power` reports
+    production rather than consumption, so publishing that as load made the load sensor track PV.
+    """
+    # 250 Wh pv, 100 Wh import, 0 export, 0 charge, 25 Wh discharge over a 15-min bucket (x4 -> W)
+    api = _api_with_today_buckets(production=250, imp=100, exp=0, charge=0, discharge=25)
+    run_async(api.publish_data("12345"))
+    pv, grid, battery, load = _published_power(api)
+    assert (pv, grid, battery) == (1000.0, 400.0, 100.0)
+    assert load == 1500.0
+    assert load == pv + grid + battery  # the power-flow card must balance
+
+
+def test_load_power_never_goes_negative():
+    """A negative residual is clamped to zero rather than published as negative house load.
+
+    Measurement skew between the micros, CT clamps and battery telemetry makes the residual
+    unphysical while the battery is cycling hard; a negative house load breaks the power flow card.
+    """
+    # Heavy grid charging: import 1461 Wh, charge 1796 Wh -> residual is negative
+    api = _api_with_today_buckets(production=0, imp=1461, exp=714, charge=1796, discharge=203)
+    run_async(api.publish_data("12345"))
+    pv, grid, battery, load = _published_power(api)
+    assert pv + grid + battery < 0  # the raw residual really is negative
+    assert load == 0.0
+
+
+def test_power_sensors_ignore_the_unsettled_bucket():
+    """Every power sensor reads the settled bucket, not the one that just closed."""
+    api = _api_with_today_buckets(production=250, imp=100, exp=0, charge=0, discharge=25)
+    run_async(api.publish_data("12345"))
+    pv, _, _, _ = _published_power(api)
+    assert pv == 1000.0  # 9999 Wh decoy sits in the just-closed bucket
 
 
 def test_get_schedules_parses_families():
@@ -854,16 +942,21 @@ def test_publish_data_sensors():
     api.battery_settings["12345"] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
     # today.totals are per-channel Wh totals for today; publish converts to kWh.
     start = 1783724400
-    prod_buckets = [0] * 96
-    prod_buckets[80] = 1000  # 1000 Wh in a 15-min bucket -> 4000 W
+
+    def _bucket(value):
+        """Return a 96-bucket Wh array with the settled bucket (80) set to value."""
+        out = [0] * 96
+        out[80] = value
+        return out
+
     api.today["12345"] = {
         "totals": {"production": 3500, "consumption": 2200, "import": 1000, "export": 400, "charge": 800, "discharge": 600},
-        "arrays": {"production": prod_buckets, "import": [], "export": [], "charge": [], "discharge": []},
+        # 15-min buckets: pv 4000 W, import 400 W, charge 800 W -> load = 4000 + 400 - 800 = 3600 W
+        "arrays": {"production": _bucket(1000), "import": _bucket(100), "export": _bucket(0), "charge": _bucket(200), "discharge": _bucket(0)},
         "start_time": start,
         "interval_length": 900,
     }
-    api.latest_power["12345"] = {"watts": 450.0, "time": 1760000000}
-    # Freeze "now" so interval_power selects bucket 80 (last completed at index 81 -> 80).
+    # Freeze "now" so interval_power selects settled bucket 80 (current 82, just-closed 81).
     import enphase as enphase_module
 
     original_datetime = enphase_module.datetime
@@ -871,8 +964,8 @@ def test_publish_data_sensors():
     class _FixedDatetime(original_datetime):
         @classmethod
         def now(cls, tz=None):
-            """Return a fixed time inside interval index 81."""
-            return original_datetime.fromtimestamp(start + int(81.5 * 900), tz)
+            """Return a fixed time inside interval index 82."""
+            return original_datetime.fromtimestamp(start + int(82.5 * 900), tz)
 
     enphase_module.datetime = _FixedDatetime
     try:
@@ -887,9 +980,11 @@ def test_publish_data_sensors():
     assert items["sensor.predbat_enphase_12345_load_today"]["state"] == 2.2
     assert items["sensor.predbat_enphase_12345_import_today"]["state"] == 1.0
     assert items["sensor.predbat_enphase_12345_export_today"]["state"] == 0.4
-    assert items["sensor.predbat_enphase_12345_load_power"]["state"] == 450.0
     assert items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
     assert items["sensor.predbat_enphase_12345_pv_power"]["state"] == 4000.0  # 1000 Wh / 0.25h
+    assert items["sensor.predbat_enphase_12345_grid_power"]["state"] == 400.0
+    assert items["sensor.predbat_enphase_12345_battery_power"]["state"] == -800.0  # charging
+    assert items["sensor.predbat_enphase_12345_load_power"]["state"] == 3600.0  # derived residual
 
 
 def test_sync_local_schedule_from_cloud():
@@ -1781,6 +1876,10 @@ def run_enphase_api_tests(my_predbat):
     test_get_battery_status_percent_soc()
     test_today_channel_kwh()
     test_interval_power()
+    test_interval_power_clamps_at_start_of_day()
+    test_load_power_is_derived_from_the_other_channels()
+    test_load_power_never_goes_negative()
+    test_power_sensors_ignore_the_unsettled_bucket()
     test_get_schedules_parses_families()
     test_automatic_config()
     test_automatic_config_no_dtg_raises()
