@@ -68,6 +68,10 @@ ENPHASE_REFRESH_POWER = 5  # latest instantaneous power
 # 1 would be the just-closed bucket, which the cloud is still back-filling; 2 is settled.
 ENPHASE_SETTLED_BUCKETS = 2
 ENPHASE_LIVESTREAM_TIMEOUT = 15  # seconds to wait for a livestream message before giving up
+# How long a livestream reading stays usable. Holding it over a missed poll avoids flipping the
+# sensors onto the 15-30 minute bucket fallback for a single blip, but it is instantaneous data
+# with no timestamp of its own, so it must not be published indefinitely either.
+ENPHASE_LIVE_MAX_AGE_MINUTES = 15
 LIVESTREAM_BOOTSTRAP = "/pv/aws_sigv4/livestream.json"  # returns the AWS IoT endpoint, topic and authorizer credentials
 
 # live_power is deliberately absent: livestream readings are instantaneous and carry no usable
@@ -603,6 +607,8 @@ class EnphaseAPI(ComponentBase):
         # instantaneous, where the buckets are a 15-minute average and load is only ever a residual.
         # The bucket values above stay as the fallback for when the stream is unavailable.
         live = self.live_power.get(site_id) or {}
+        if live and (now_ts - live.get("read_ts", 0)) > ENPHASE_LIVE_MAX_AGE_MINUTES * 60:
+            live = {}  # too old to present as current; fall back to the bucket values below
         if live:
             pv_power = live.get("pv", pv_power)
             # The livestream reports grid negative while exporting, the opposite of Predbat's sign.
@@ -1207,12 +1213,11 @@ class EnphaseAPI(ComponentBase):
         """
         reading = await self._fetch_live_power(site_id)
         if reading:
+            # Stamped on arrival: DataMsg.timestamp is a constant, so the payload cannot date itself.
+            reading["read_ts"] = datetime.now(timezone.utc).timestamp()
             self.live_power[site_id] = reading
-        else:
-            # Drop any previous reading rather than let publish_data republish it. These values are
-            # instantaneous, so a stale measurement presented as current is worse than falling back
-            # to the (lagging but genuinely current) bucket values.
-            self.live_power.pop(site_id, None)
+        # A failure deliberately leaves any previous reading alone - publish_data ages it out after
+        # ENPHASE_LIVE_MAX_AGE_MINUTES rather than dropping to the lagging buckets over one blip.
         return reading
 
     async def _fetch_live_power(self, site_id):

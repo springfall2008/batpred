@@ -669,9 +669,13 @@ def test_gateway_serial_read_from_today():
     assert gateway_serial({}) is None
 
 
+BUCKET_START = 1783724400  # local midnight of the day the /today buckets belong to
+FROZEN_NOW_TS = BUCKET_START + int(82.5 * 900)  # inside index 82, so the settled bucket read is 80
+
+
 def _publish_with_buckets(api, production=250, imp=100, exp=0, charge=200, discharge=0):
     """Publish a site from /today buckets; the defaults give pv 1000 W, importing 400 W, charging 800 W."""
-    start = 1783724400
+    start = BUCKET_START
 
     def bucket(value):
         """Return a 96-slot Wh array with the bucket read by publish_data set to value."""
@@ -693,7 +697,7 @@ def _publish_with_buckets(api, production=250, imp=100, exp=0, charge=200, disch
         @classmethod
         def now(cls, tz=None):
             """Return a time inside index 82, so the settled bucket publish_data reads is 80."""
-            return original.fromtimestamp(start + int(82.5 * 900), tz)
+            return original.fromtimestamp(FROZEN_NOW_TS, tz)
 
     enphase_module.datetime = _Fixed
     try:
@@ -711,7 +715,7 @@ def test_publish_prefers_the_measured_livestream_reading():
     the 15-minute buckets on every count.
     """
     api = MockEnphaseAPI()
-    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - 60}
     published = _publish_with_buckets(api)
     assert published == {"pv": 4632.8, "grid": 2686.1, "battery": 32.0, "load": 1978.7}  # grid flipped to +export
 
@@ -728,18 +732,34 @@ def test_live_power_is_never_persisted():
     assert "live_power" not in ENPHASE_CACHE_KEYS
 
 
-def test_failed_live_read_drops_the_previous_reading():
-    """A failed livestream read clears the last reading rather than leaving it to be republished.
+def test_failed_live_read_keeps_the_recent_reading():
+    """A failed read leaves the last reading in place so a blip does not flip the sensors.
 
-    Falling back to the (lagging but current) bucket values beats presenting a stale measurement
-    as though it were live.
+    The bucket fallback lags 15-30 minutes, so bouncing onto it for one missed cycle would be a
+    bigger step than simply holding the measurement a little longer.
     """
     api = MockEnphaseAPI()
     api.today["12345"] = {"serial": "122530006866"}
-    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+    reading = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - 60}
+    api.live_power["12345"] = dict(reading)
     # No canned response for the bootstrap, so it 404s and the read fails
     assert run_async(api.get_live_power("12345")) is None
-    assert "12345" not in api.live_power
+    assert api.live_power["12345"] == reading
+
+
+def test_live_reading_older_than_the_window_falls_back_to_buckets():
+    """Once a reading passes ENPHASE_LIVE_MAX_AGE it is ignored in favour of the bucket values.
+
+    Livestream readings are instantaneous and carry no usable timestamp of their own, so an old one
+    must not keep being published as though it were current.
+    """
+    from enphase import ENPHASE_LIVE_MAX_AGE_MINUTES
+
+    api = MockEnphaseAPI()
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - (ENPHASE_LIVE_MAX_AGE_MINUTES * 60 + 1)}
+    published = _publish_with_buckets(api)
+    assert published["pv"] == 1000.0  # bucket value, not the stale 4632.8
+    assert published["grid"] == -400.0
 
 
 def test_grid_power_is_positive_when_exporting():
@@ -750,7 +770,7 @@ def test_grid_power_is_positive_when_exporting():
     exporting, and the /today buckets give import - export), so both paths have to be flipped.
     """
     api = MockEnphaseAPI()
-    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - 60}
     published = _publish_with_buckets(api)
     assert published["grid"] == 2686.1  # exporting 2.7 kW -> positive
 
@@ -2120,7 +2140,8 @@ def run_enphase_api_tests(my_predbat):
     test_publish_prefers_the_measured_livestream_reading()
     test_publish_falls_back_to_buckets_without_a_livestream_reading()
     test_live_power_is_never_persisted()
-    test_failed_live_read_drops_the_previous_reading()
+    test_failed_live_read_keeps_the_recent_reading()
+    test_live_reading_older_than_the_window_falls_back_to_buckets()
     test_grid_power_is_positive_when_exporting()
     test_grid_power_from_buckets_is_positive_when_exporting()
     test_published_power_satisfies_the_predbat_energy_balance()
