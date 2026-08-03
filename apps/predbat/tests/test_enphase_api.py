@@ -1730,6 +1730,19 @@ def test_get_schedules_readopts_when_pinned_id_disappears():
     assert api.schedules["12345"]["cfg"]["id"] == "survivor"
 
 
+def test_delete_schedule_posts_to_the_delete_endpoint():
+    """Deletion goes through POST /schedules/<id>/delete, the endpoint the cloud actually exposes.
+
+    The API gateway does not allow the DELETE verb on the schedules resource - it answers
+    "403 Invalid CORS request" - and a 403 is treated as an auth failure, so every attempt also
+    burned a re-login and risked tripping the account's too-many-sessions guard.
+    """
+    api = MockEnphaseAPI()
+    api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 200, {})
+    assert run_async(api._delete_schedule("12345", "sched-1")) is True
+    assert [(r["method"], r["path"]) for r in api.request_log] == [("POST", SCHEDULES_PATH + "/sched-1/delete")]
+
+
 def test_get_schedules_deletes_sibling_schedules_in_write_mode():
     """In write mode Predbat owns one schedule per family and deletes any extras.
 
@@ -1739,10 +1752,10 @@ def test_get_schedules_deletes_sibling_schedules_in_write_mode():
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "adopted", "startTime": "02:00", "endTime": "02:20"}}
     api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sibling", "05:30", "07:00"), _cfg_detail("adopted", "02:00", "02:20")]))
-    api.set_http_response(SCHEDULES_PATH + "/sibling", 204, None)
+    api.set_http_response(SCHEDULES_PATH + "/sibling/delete", 204, None)
     run_async(api.get_schedules("12345"))
-    deletes = [r["path"] for r in api.request_log if r["method"] == "DELETE"]
-    assert deletes == [SCHEDULES_PATH + "/sibling"]
+    deletes = [r["path"] for r in api.request_log if r["path"].endswith("/delete")]
+    assert deletes == [SCHEDULES_PATH + "/sibling/delete"]
     assert api.schedules["12345"]["cfg"]["id"] == "adopted"
     assert api.schedules["12345"]["cfg"]["count"] == 1  # pruned count, not the stale cloud count
 
@@ -1754,7 +1767,7 @@ def test_get_schedules_keeps_sibling_schedules_in_read_only_mode():
     api.schedules["12345"] = {"cfg": {"id": "adopted", "startTime": "02:00", "endTime": "02:20"}}
     api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sibling", "05:30", "07:00"), _cfg_detail("adopted", "02:00", "02:20")]))
     run_async(api.get_schedules("12345"))
-    assert [r for r in api.request_log if r["method"] == "DELETE"] == []
+    assert [r for r in api.request_log if r["path"].endswith("/delete")] == []
 
 
 def test_write_schedule_disable_deletes_the_schedule():
@@ -1765,10 +1778,10 @@ def test_write_schedule_disable_deletes_the_schedule():
     """
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
-    api.set_http_response(SCHEDULES_PATH + "/sched-1", 204, None)
+    api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 204, None)
     wrote = run_async(api._write_schedule("12345", "CFG", "00:00:00", "00:00:00", 100, False))
     assert wrote is True
-    assert [r["method"] for r in api.request_log] == ["DELETE"]
+    assert [(r["method"], r["path"]) for r in api.request_log] == [("POST", SCHEDULES_PATH + "/sched-1/delete")]
     assert api.schedules["12345"]["cfg"].get("id") is None  # nothing left to update in place
 
 
@@ -1806,8 +1819,7 @@ def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "first", "startTime": "20:30", "endTime": "21:00", "limit": 5, "enabled": True}}
     api.set_http_response(SCHEDULES_PATH + "/first", 200, {"scheduleId": "first"})
-    api.set_http_response(SCHEDULES_PATH + "/second", 200, {"scheduleId": "second"})
-    api.set_http_response(SCHEDULES_PATH + "/second", 204, None)
+    api.set_http_response(SCHEDULES_PATH + "/second/delete", 204, None)
     run_async(api._write_schedule("12345", "CFG", "22:35:00", "23:30:00", 5, True))
     # Cloud re-read now lists the sibling first, because our write made "first" the most recent
     api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("second", "20:30", "21:00", limit=5), _cfg_detail("first", "22:35", "23:30", limit=5)]))
