@@ -41,7 +41,7 @@ from tests.test_optimise_swap_charge import run_optimise_swap_charge_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
-from tests.test_plugin_startup import test_plugin_startup_order
+from tests.test_plugin_startup import test_plugin_startup_order, test_plugin_discovery_skips_imported_base_class
 from tests.test_active_flag import test_active_flag
 from tests.test_component_health_status import test_component_health_status
 from tests.test_optimise_levels import run_optimise_levels_tests
@@ -315,6 +315,7 @@ def main():
         ("add_now_to_octopus_slot", test_add_now_to_octopus_slot, "Add now to Octopus slot tests", False),
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
+        ("plugin_discovery", test_plugin_discovery_skips_imported_base_class, "Plugin discovery skips imported base classes", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
         ("dynamic_load_car", test_dynamic_load_car_slot_cancellation, "Dynamic load car slot cancellation tests", False),
