@@ -810,6 +810,13 @@ class Execute:
                     # Force off unsupported feature
                     self.log("Note: Inverter does not support charge freeze - disabled")
                     self.set_charge_freeze = False
+                elif not self.args.get("charge_freeze_service", ""):
+                    # The inverter type supports charge freeze in general, but this setup has no
+                    # charge_freeze_service configured - adjust_charge_immediate() would silently
+                    # fall back to a real charge_start_service call instead of a passive hold (#4424),
+                    # so treat it the same as an inverter type with no support at all.
+                    self.log("Note: No charge_freeze_service configured - charge freeze disabled")
+                    self.set_charge_freeze = False
                 if not inverter.inv_has_reserve_soc:
                     self.log("Note: Inverter does not support reserve - disabling reserve functions")
                     self.set_reserve_enable = False
