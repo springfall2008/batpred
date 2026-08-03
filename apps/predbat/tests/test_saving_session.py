@@ -121,7 +121,7 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
 
     rate_import_replicated = {}
     my_predbat.rate_import = {n: 0 for n in range(-24 * 60, 48 * 60)}
-    my_predbat.load_saving_slot(expected_saving, export=False, rate_replicate=rate_import_replicated)
+    my_predbat.load_saving_slot(expected_saving, my_predbat.rate_import, export=False, rate_replicate=rate_import_replicated)
     price_ranges = [[(17.5 - 24) * 60, (18.5 - 24) * 60, 19.2], [(16.5) * 60, (17.5) * 60, 44.8], [-24 * 60, (10.5 - 24) * 60, 44.8]]
     for minute in range(-24 * 60, 48 * 60):
         rate = my_predbat.rate_import[minute]

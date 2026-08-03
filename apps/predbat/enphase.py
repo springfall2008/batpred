@@ -26,6 +26,7 @@ import uuid
 import aiohttp
 
 from component_base import ComponentBase
+from mock_base import MockBase
 from predbat_metrics import record_api_call
 
 # Defined locally (not imported from utils) - every cloud component defines its own
@@ -1465,71 +1466,6 @@ class EnphaseAPI(ComponentBase):
 
         self.failures_total += 1
         return None
-
-
-class MockBase:  # pragma: no cover
-    """Minimal stand-in for the Predbat base object so EnphaseAPI can run standalone.
-
-    Provides just the attributes and methods ComponentBase and EnphaseAPI read
-    from ``self.base`` (prefix, args, timezone/clock, state/arg accessors and a
-    logger). It deliberately has no ``components`` attribute, so ``self.storage``
-    resolves to None and the disk cache is skipped for a standalone run.
-    """
-
-    def __init__(self):
-        """Initialise the mock base with the current clock and empty state stores."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.fatal_error = False
-        self.had_errors = False
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return the stored state (or full record when raw) for an entity id."""
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Store an entity's state and attributes in memory."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print a timestamped log line to stdout."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and store a published entity, so a standalone run shows what it publishes."""
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return the default for any requested arg (no real config in standalone mode)."""
-        return default
-
-    def set_arg(self, key, value):
-        """Print an arg that automatic_config would set, resolving any referenced entity state."""
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_enphase_api(username, password, site_id):  # pragma: no cover

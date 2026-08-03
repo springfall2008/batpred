@@ -53,8 +53,8 @@ def test_rates_chart_series_names_use_currency_symbol(my_predbat):
     try:
         w = _make_web(my_predbat)
         my_predbat.dashboard_values = {
-            "predbat.soc_kw_best": {"attributes": {"results": {"2026-01-01T00:00:00+00:00": 5.0}}},
-            "predbat.rates": {"attributes": {"results": {"2026-01-01T00:00:00+00:00": 10.0}}},
+            my_predbat.prefix + ".soc_kw_best": {"attributes": {"results": {"2026-01-01T00:00:00+00:00": 5.0}}},
+            my_predbat.prefix + ".rates": {"attributes": {"results": {"2026-01-01T00:00:00+00:00": 10.0}}},
         }
         fake_history = [
             [

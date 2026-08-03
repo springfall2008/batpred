@@ -108,7 +108,8 @@ class PredbatMetrics:
         self.import_today_kwh = _gauge("predbat_import_today_kwh", "Import energy today in kWh")
         self.export_today_kwh = _gauge("predbat_export_today_kwh", "Export energy today in kWh")
         self.pv_today_kwh = _gauge("predbat_pv_today_kwh", "PV energy today in kWh")
-        self.data_age_days = _gauge("predbat_data_age_days", "Age of load data in days")
+        self.data_age_days = _gauge("predbat_data_age_days", "Days of load history successfully retrieved (depth, not staleness)")
+        self.data_age_required_days = _gauge("predbat_data_age_required_days", "Days of load history required by the configured days_previous")
 
         # -- Cost & savings ----------------------------------------------------
         self.cost_today = _gauge("predbat_cost_today", "Cost today in currency units")
@@ -212,6 +213,7 @@ class PredbatMetrics:
             "export_today_kwh": _val(self.export_today_kwh),
             "pv_today_kwh": _val(self.pv_today_kwh),
             "data_age_days": _val(self.data_age_days),
+            "data_age_required_days": _val(self.data_age_required_days),
             # Currency symbol
             "currency_symbol": self.currency_symbol,
             # Cost

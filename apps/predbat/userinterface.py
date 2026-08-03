@@ -904,6 +904,30 @@ class UserInterface:
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
+    def is_new_install(self):
+        """
+        Determine whether this is a genuinely new install, used to set sensible defaults
+        (e.g. mode defaults to Monitor rather than Control charge & discharge).
+        """
+        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
+        if current_status:
+            return False
+
+        # HA's live state and history can both come back empty for a moment right after an
+        # abrupt restart, before HA's own state store has fully warmed back up. A single
+        # failed predbat.status read isn't enough evidence of a fresh install on its own -
+        # predbat_config.json only exists once Predbat has actually saved a config before,
+        # so its presence is a persistent, restart-proof signal that this is a real install,
+        # not a new one (see #4397/#4396 root cause, and #3259/#3306 for the resulting
+        # spurious config resets this was letting through).
+        config_path = os.path.join(self.config_root or "", "predbat_config.json")
+        if not self.ha_interface.db_primary and os.path.isfile(config_path):
+            self.log("predbat.status unavailable but predbat_config.json exists - not treating this as a new install")
+            return False
+
+        self.log("New install detected")
+        return True
+
     def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
@@ -913,12 +937,7 @@ class UserInterface:
         self.log("Refreshing Predbat configuration")
 
         # New install, used to set default of expert mode
-        new_install = True
-        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
-        if current_status:
-            new_install = False
-        else:
-            self.log("New install detected")
+        new_install = self.is_new_install()
 
         # Build config index
         for item in self.CONFIG_ITEMS:
@@ -964,7 +983,10 @@ class UserInterface:
 
             # Get from current state, if not from HA directly
             ha_value = item.get("value", None)
-            if ha_value is None:
+            # The update entity is synthesised after release discovery and is explicitly
+            # non-restorable. Looking in history when its current state is absent registers
+            # an empty 30-day query with HAHistory, which then retries every two minutes.
+            if ha_value is None and type != "update":
                 ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu

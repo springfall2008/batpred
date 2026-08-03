@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.46.3"
+THIS_VERSION = "v8.47.3"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -299,6 +299,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}
+        self.validate_config_retries_remaining = 0
+        self.validate_config_next_retry_time = None
         self.ha_interface = None
         self.num_cars = 0
         self.fatal_error = False
@@ -340,6 +342,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.previous_status = None
         self.had_errors = False
         self.plan_valid = False
+        self.plan_preclip = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
         self.plugin_system = None
@@ -407,7 +410,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
-        self.best_soc_margin = 0
         self.best_soc_keep = 0
         self.best_soc_keep_weight = 0.5
         self.rate_min = 0
@@ -685,6 +687,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "charge_limit_best": self.charge_limit_best,
             "export_window_best": self.export_window_best,
             "export_limits_best": self.export_limits_best,
+            "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
         }
@@ -736,6 +739,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
         self.export_limits_best = plan_data.get("export_limits_best", [])
+        # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
+        # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
+        preclip = plan_data.get("plan_preclip")
+        self.plan_preclip = tuple(preclip) if isinstance(preclip, (list, tuple)) and len(preclip) == 4 else None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
@@ -763,7 +770,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     component_status[component_name] = "error"
                     all_healthy = False
                     error_count += 1
-                    failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                    component = self.components.get_component(component_name)
+                    if not component.is_calculating():
+                        failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
                 elif is_active:
                     component_status[component_name] = "running"
                 else:
@@ -1499,6 +1508,50 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         return errors
 
+    def validate_config_schedule_retry(self, errors):
+        """
+        Called immediately after validate_config() with its error count. If validation failed,
+        (re-)arms a retry sequence so a self-healed condition (e.g. a slow-starting integration's
+        sensor not populated yet) clears its own error status without needing a manual restart -
+        see #4379. A clean validation cancels any retry sequence already in progress.
+        """
+        if errors:
+            retries = int(self.get_arg("validate_config_retries", 2))
+            if retries > 0:
+                self.validate_config_retries_remaining = retries
+                retry_minutes = max(0, int(self.get_arg("validate_config_retry_minutes", 1)))
+                self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+            else:
+                self.validate_config_retries_remaining = 0
+                self.validate_config_next_retry_time = None
+        else:
+            self.validate_config_retries_remaining = 0
+            self.validate_config_next_retry_time = None
+
+    def validate_config_check_retry(self):
+        """
+        Called every 15 seconds from update_time_loop(). Re-runs validate_config() if a retry is
+        due, only while a retry sequence is armed (i.e. only following an actual validation
+        failure - see #4379) - a no-op the rest of the time.
+        """
+        if self.validate_config_retries_remaining <= 0:
+            return
+        if self.validate_config_next_retry_time is None or self.now_utc < self.validate_config_next_retry_time:
+            return
+
+        self.validate_config_retries_remaining -= 1
+        errors = self.validate_config()
+        if errors == 0:
+            self.log("Info: Config validation retry succeeded, previous errors have now cleared")
+            self.validate_config_retries_remaining = 0
+            self.validate_config_next_retry_time = None
+        elif self.validate_config_retries_remaining <= 0:
+            self.log("Warn: Config validation still failing after all retries, giving up until the next restart or config change")
+            self.validate_config_next_retry_time = None
+        else:
+            retry_minutes = self.get_arg("validate_config_retry_minutes", 1)
+            self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+
     def is_running(self):
         """
         Check if the app is running
@@ -1603,7 +1656,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
-            self.validate_config()
+            self.validate_config_schedule_retry(self.validate_config())
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
@@ -1684,13 +1737,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             raise Exception("HA interface not active")
 
         self.check_entity_refresh()
+        self.validate_config_check_retry()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False
             self.prediction_started = True
             try:
                 self.load_user_config()
-                self.validate_config()
+                self.validate_config_schedule_retry(self.validate_config())
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
             except Exception as e:
@@ -1767,7 +1821,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.update_pending = False
                     self.ha_interface.update_states()
                     self.load_user_config()
-                    self.validate_config()
+                    self.validate_config_schedule_retry(self.validate_config())
                     config_changed = True
 
                 # Run the prediction
