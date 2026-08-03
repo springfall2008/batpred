@@ -795,8 +795,13 @@ class EnphaseAPI(ComponentBase):
         return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
     async def _delete_schedule(self, site_id, schedule_id):
-        """Delete one schedule by id. Returns True on success."""
-        result = await self.request_json("DELETE", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", allow_empty=True)
+        """Delete one schedule by id. Returns True on success.
+
+        Deletion is a POST to the schedule's /delete sub-resource. The gateway does not allow the
+        DELETE verb here - it rejects it with "403 Invalid CORS request" - and because a 403 counts
+        as an auth failure, using it also burned a re-login on every attempt.
+        """
+        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True)
         return result is not None
 
     async def _prune_sibling_schedules(self, site_id, family_key, details, keep):
