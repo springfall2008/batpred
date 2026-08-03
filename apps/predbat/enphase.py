@@ -162,6 +162,11 @@ def enphase_time_to_ha(value):
     return text + ":00"
 
 
+def _schedule_id_of(entry):
+    """Return the cloud id of a schedule detail entry ('scheduleId', or 'id' on older shapes)."""
+    return entry.get("scheduleId") or entry.get("id")
+
+
 def schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
     """Return True when a cloud schedule entry already matches the desired window/limit/enable state."""
     if not cloud_entry or "startTime" not in cloud_entry:
@@ -736,12 +741,27 @@ class EnphaseAPI(ComponentBase):
         if limit is not None:
             payload["limit"] = int(limit)
         schedule_id = cloud_entry.get("id")
+        if schedule_id and not enabled:
+            # The cloud ignores isEnabled=False on a PUT (it answers 200 with isEnabled still true
+            # and keeps enforcing the window), so the only way to retire a window is to delete it.
+            # A lingering window would also conflict with the other family's next write.
+            self.log(f"Enphase: Deleting {family} schedule {schedule_id} on site {site_id} (window no longer required)")
+            if not await self._delete_schedule(site_id, schedule_id):
+                return False
+            # Drop the id/window so the next apply is a no-op while disabled, and a re-enable creates
+            # a fresh schedule rather than PUTting an id the cloud no longer knows.
+            cleared = dict(cloud_entry)
+            for field in ("id", "startTime", "endTime", "limit"):
+                cleared.pop(field, None)
+            cleared["enabled"] = False
+            self.schedules.setdefault(site_id, {})[family_key] = cleared
+            return True
         if schedule_id:
             self.log(f"Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
-            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
+            result = await self._put_schedule_with_conflict_retry(site_id, family_key, schedule_id, payload)
             if result is not None:
                 # Optimistically cache the new state, preserving the id and other fields.
-                updated = dict(cloud_entry)
+                updated = dict(self.schedules.get(site_id, {}).get(family_key) or cloud_entry)
                 updated.update({"startTime": start_hm, "endTime": end_hm, "limit": limit, "enabled": bool(enabled)})
                 self.schedules.setdefault(site_id, {})[family_key] = updated
         else:
@@ -751,6 +771,54 @@ class EnphaseAPI(ComponentBase):
                 # Re-read once so we learn the new schedule's cloud-assigned id for future edits.
                 await self.get_schedules(site_id)
         return result is not None
+
+    async def _put_schedule_with_conflict_retry(self, site_id, family_key, schedule_id, payload):
+        """PUT a schedule, re-reading and retrying once if the cloud reports a conflict.
+
+        HTTP 409 means some other schedule overlaps the window we asked for. Our cached view of the
+        account is up to 30 minutes stale, so re-read it: that both refreshes the id we should be
+        writing to and prunes any stray sibling that is causing the overlap. Retried once only - a
+        conflict that survives the re-read is a real clash (typically the other family's window)
+        and retrying it again would just burn API calls every cycle.
+        """
+        for attempt in range(2):
+            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
+            if result is not None or self.last_error_status != 409 or attempt:
+                return result
+            self.log(f"Enphase: Schedule {schedule_id} on site {site_id} conflicts with another schedule; re-reading schedules and retrying once")
+            await self.get_schedules(site_id)
+            schedule_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id") or schedule_id
+        return None
+
+    def _is_read_only(self):
+        """Return True when Predbat is in read-only mode and must not write to the account."""
+        return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
+
+    async def _delete_schedule(self, site_id, schedule_id):
+        """Delete one schedule by id. Returns True on success."""
+        result = await self.request_json("DELETE", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", allow_empty=True)
+        return result is not None
+
+    async def _prune_sibling_schedules(self, site_id, family_key, details, keep):
+        """Delete every schedule in a family except the one Predbat drives, and return the survivors.
+
+        Predbat owns one window per direction. A schedule it does not track cannot be updated or
+        cleared by it, but the cloud still enforces it and still rejects any overlapping write, so
+        a stray sibling wedges the family permanently. Read-only mode deletes nothing.
+        """
+        keep_id = _schedule_id_of(keep)
+        siblings = [item for item in details if _schedule_id_of(item) != keep_id]
+        if not siblings or self._is_read_only():
+            return details
+        survivors = [item for item in details if _schedule_id_of(item) == keep_id]
+        for item in siblings:
+            schedule_id = _schedule_id_of(item)
+            self.log(f"Enphase: Deleting duplicate {family_key.upper()} schedule {schedule_id} on site {site_id}: {item.get('startTime')}-{item.get('endTime')} (Predbat drives one window per direction)")
+            if await self._delete_schedule(site_id, schedule_id):
+                continue
+            self.log(f"Warn: Enphase: Failed to delete duplicate {family_key.upper()} schedule {schedule_id} on site {site_id}; it may conflict with Predbat's writes")
+            survivors.append(item)
+        return survivors
 
     def _is_schedule_pending(self, site_id, family):
         """Return True when the cached cloud schedule exists but is stuck in pending status."""
@@ -1084,8 +1152,12 @@ class EnphaseAPI(ComponentBase):
         Each family (cfg/dtg/rbd) reports ``scheduleStatus``, ``count`` and, when count > 0, a
         ``details`` list of schedule objects. A schedule object (confirmed against a battery
         account) carries ``scheduleId``, ``startTime``/``endTime`` (HH:MM), ``limit``, ``days``,
-        ``isEnabled`` and ``isDeleted``. Only the first schedule per family is used (Predbat drives
-        one window per direction); the ``scheduleId`` is what the write path updates in place.
+        ``isEnabled`` and ``isDeleted``. Predbat drives one window per direction, so exactly one
+        schedule per family is used: the one already adopted (matched by ``scheduleId``, which the
+        write path then updates in place), else the first non-deleted entry. The list order is not
+        stable - the cloud sorts by ``updatedAt`` - so the adopted id must be matched rather than
+        the position taken. In write mode any other schedule in the family is deleted, because a
+        schedule Predbat does not track still blocks overlapping writes with HTTP 409.
         """
         data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config")
         if data is None:
@@ -1093,9 +1165,17 @@ class EnphaseAPI(ComponentBase):
         parsed = {}
         for family_key in ("cfg", "dtg", "rbd"):
             family_data = data.get(family_key) or {}
-            details = family_data.get("details") or []
-            # Prefer the first non-deleted schedule
-            entry = next((item for item in details if isinstance(item, dict) and not item.get("isDeleted")), details[0] if details else {})
+            details = [item for item in (family_data.get("details") or []) if isinstance(item, dict) and not item.get("isDeleted")]
+            # Stay on the schedule we already adopted. The cloud orders details by updatedAt, so
+            # writing to our schedule pushes it behind any sibling and taking details[0] would swap
+            # us onto that sibling; we would then write a window overlapping the one we just wrote
+            # and the cloud would reject it with HTTP 409 (CONFLICTING_SCHEDULE_*).
+            adopted_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id")
+            entry = next((item for item in details if _schedule_id_of(item) == adopted_id), None) if adopted_id else None
+            if entry is None:
+                # Nothing adopted yet, or the adopted schedule was removed outside Predbat.
+                entry = details[0] if details else {}
+            details = await self._prune_sibling_schedules(site_id, family_key, details, entry)
             # "supported" gates whether Predbat can use this schedule family. Real accounts report
             # a per-family scheduleStatus ("active" seen so far); treat the usable statuses as
             # supported, with a fallback to the (unverified) boolean flags.
@@ -1108,7 +1188,7 @@ class EnphaseAPI(ComponentBase):
                 "limit": safe_int(entry.get("limit"), None),
                 "enabled": bool(entry.get("isEnabled", False)),
                 "supported": supported,
-                "count": safe_int(family_data.get("count"), 0),
+                "count": len(details),
                 "status": family_data.get("scheduleStatus"),
             }
         self.schedules[site_id] = parsed
@@ -1394,7 +1474,7 @@ class EnphaseAPI(ComponentBase):
         stripped = (text or "").lstrip().lower()
         return stripped.startswith("<!doctype") or stripped.startswith("<html")
 
-    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None):
+    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None, allow_empty=False):
         """Perform an authenticated JSON request with retries and a single 401 re-login.
 
         Builds the request URL from BASE_URL + path and attaches family-appropriate headers
@@ -1406,6 +1486,8 @@ class EnphaseAPI(ComponentBase):
         - HTTP 429 and 5xx responses, plus timeouts/connection errors, are retried with
           jittered backoff up to ENPHASE_RETRIES times.
         - Any other non-200 status is treated as a terminal failure.
+        ``allow_empty`` additionally accepts a 204/empty body as success (returning {} rather than
+        None), as a DELETE returns no content.
         Every outcome is recorded via record_api_call("enphase", ...) for metrics/health.
         Returns the parsed JSON body on success, or None on failure (self.last_error_status is
         set to the last HTTP status seen, where available).
@@ -1446,7 +1528,7 @@ class EnphaseAPI(ComponentBase):
                 await asyncio.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
                 continue
 
-            if status != 200:
+            if status != 200 and not (allow_empty and status == 204):
                 self.log(f"Warn: Enphase: HTTP {status} on {path}")
                 record_api_call("enphase", False, "client_error")
                 self.last_error_status = status
@@ -1462,6 +1544,9 @@ class EnphaseAPI(ComponentBase):
 
             record_api_call("enphase", True)
             self.update_success_timestamp()
+            # A DELETE succeeds with 204/no body; callers passing allow_empty want success, not None.
+            if json_data is None and allow_empty:
+                return {}
             return json_data
 
         self.failures_total += 1
