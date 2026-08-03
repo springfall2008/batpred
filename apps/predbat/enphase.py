@@ -507,8 +507,8 @@ class EnphaseAPI(ComponentBase):
         channel_watts = {channel: interval_power(arrays.get(channel, []), start_time, interval_length, now_ts) for channel in ("production", "import", "export", "charge", "discharge")}
 
         pv_power = channel_watts.get("production", 0.0)
-        grid_power = channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0)
-        battery_power = channel_watts.get("discharge", 0.0) - channel_watts.get("charge", 0.0)
+        grid_power = round(channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0), 1)
+        battery_power = round(channel_watts.get("discharge", 0.0) - channel_watts.get("charge", 0.0), 1)
         # House load is the energy-balance residual of the other three, taken from the same settled
         # bucket so the four sensors agree and a power-flow display balances. This is exactly how the
         # cloud derives its own consumption channel (verified equal to within 1 Wh on 80 of 96
