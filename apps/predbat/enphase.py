@@ -1625,7 +1625,9 @@ class EnphaseAPI(ComponentBase):
             return
         if isinstance(json_data, dict):
             redacted = dict(json_data)
-            for key in ("token", "auth_token", "access_token"):
+            # aws_token_value/aws_digest are the livestream's AWS IoT credentials - short-lived,
+            # but Predbat logs get shared for debugging, so they must never be written out.
+            for key in ("token", "auth_token", "access_token", "aws_token_value", "aws_digest"):
                 if key in redacted:
                     redacted[key] = "***redacted***"
             preview = json.dumps(redacted, default=str)

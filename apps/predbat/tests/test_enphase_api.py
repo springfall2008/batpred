@@ -982,6 +982,31 @@ def test_log_api_call_redacts_token():
     assert captured == []
 
 
+def test_log_api_call_redacts_livestream_credentials():
+    """The livestream bootstrap's token and signature must never reach the log.
+
+    Predbat logs are routinely shared for debugging, and this response carries live credentials
+    for the account's AWS IoT stream.
+    """
+    api = MockEnphaseAPI()
+    captured = []
+    api.log = lambda message: captured.append(message)
+    api.debug_api = True
+    api._log_api_call(
+        "GET",
+        "/pv/aws_sigv4/livestream.json",
+        {"serial_num": "122530006866"},
+        200,
+        {"aws_token_value": "token-must-not-be-logged", "aws_digest": "signature-must-not-be-logged", "aws_iot_endpoint": "iot.example.com", "live_stream_topic": "v1/live-stream/abc123"},
+        "",
+    )
+    assert "token-must-not-be-logged" not in captured[0]
+    assert "signature-must-not-be-logged" not in captured[0]
+    # Non-secret fields are still logged, so the call remains diagnosable
+    assert "iot.example.com" in captured[0]
+    assert "v1/live-stream/abc123" in captured[0]
+
+
 def test_login_dedupes_sites():
     """Duplicate sites in the search response collapse to a single entry (no double-publish)."""
     api = MockEnphaseAPI()
@@ -1977,6 +2002,7 @@ def run_enphase_api_tests(my_predbat):
     test_get_battery_status_handles_na()
     test_reads_handle_na_values()
     test_log_api_call_redacts_token()
+    test_log_api_call_redacts_livestream_credentials()
     test_login_dedupes_sites()
     test_run_single_site_publishes_once()
     test_run_no_battery_returns_false_without_raising()
