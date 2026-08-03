@@ -2870,11 +2870,21 @@ class Output:
 
         self.log("Calculating data from yesterday for savings calculation")
 
-        yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
-        minutes_back = self.minutes_now + 1
+        # step_data_history() only fills in offsets up to self.forecast_minutes + plan_interval_minutes.
+        # The History view built below needs a full "yesterday" (24h) plus "today so far" up to now, i.e.
+        # offsets up to 24*60 + self.minutes_now - widen forecast_minutes before building these step arrays,
+        # not just later when the "yesterday" plan_html is rendered, or any offset beyond the live plan's
+        # normal horizon silently reads back as zero load/PV for the rest of the day.
         end_record = 24 * 60
+        forecast_minutes_before_yesterday_step = self.forecast_minutes
+        self.forecast_minutes = max(self.forecast_minutes, end_record + self.minutes_now)
+        try:
+            yesterday_load_step = self.step_data_history(self.load_minutes, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+            yesterday_pv_step = self.step_data_history(self.pv_today, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+            yesterday_pv_step_zero = self.step_data_history(None, 0, forward=False, scale_today=1.0, scale_fixed=1.0, base_offset=24 * 60 + self.minutes_now)
+        finally:
+            self.forecast_minutes = forecast_minutes_before_yesterday_step
+        minutes_back = self.minutes_now + 1
 
         # Get yesterday's SoC
         try:
