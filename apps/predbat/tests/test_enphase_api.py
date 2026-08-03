@@ -1703,9 +1703,9 @@ def test_write_schedule_gives_up_after_second_conflict():
 def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
     """Replay of the live failure: two writes either side of a re-read must target the same schedule.
 
-    Observed on a site with two DTG schedules: Predbat wrote 22:35-23:30 to one, the re-read
+    Observed on a site with two CFG schedules: Predbat wrote 22:35-23:30 to one, the re-read
     returned the pair in the opposite order, Predbat swapped to the other and wrote 22:50-23:30 -
-    which the cloud rejected with CONFLICTING_SCHEDULE_DTG against the window Predbat had set
+    which the cloud rejected with CONFLICTING_SCHEDULE_CFG against the window Predbat had set
     itself five minutes earlier. Every subsequent cycle then failed the same way.
     """
     api = MockEnphaseAPI()
