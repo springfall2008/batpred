@@ -1354,10 +1354,14 @@ class EnphaseAPI(ComponentBase):
                 entry = details[0] if details else {}
             details = await self._prune_sibling_schedules(site_id, family_key, details, entry)
             # "supported" gates whether Predbat can use this schedule family. Real accounts report
-            # a per-family scheduleStatus ("active" seen so far); treat the usable statuses as
-            # supported, with a fallback to the (unverified) boolean flags.
+            # a per-family scheduleStatus; "active" and "pending" have both been seen, and
+            # "not_supported" is how a genuinely unavailable family reports. "pending" only means a
+            # schedule change is still settling on the gateway - which is the normal state straight
+            # after any write Predbat makes - so it must not be read as unsupported, or Predbat
+            # decides mid-run that the site cannot charge from grid and abandons configuration.
+            # A family that actually holds a schedule is supported whatever the status says.
             status_text = str(family_data.get("scheduleStatus", "")).strip().lower()
-            supported = status_text in ("active", "enabled", "supported", "available") or bool(family_data.get("scheduleSupported") or family_data.get("forceScheduleSupported"))
+            supported = status_text in ("active", "enabled", "supported", "available", "pending") or bool(details) or bool(family_data.get("scheduleSupported") or family_data.get("forceScheduleSupported"))
             parsed[family_key] = {
                 "id": entry.get("scheduleId") or entry.get("id"),
                 "startTime": entry.get("startTime"),

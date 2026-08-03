@@ -692,8 +692,8 @@ def _publish_with_buckets(api):
     class _Fixed(original):
         @classmethod
         def now(cls, tz=None):
-            """Return a time inside the interval after the bucket that publish_data reads."""
-            return original.fromtimestamp(start + int(81.5 * 900), tz)
+            """Return a time inside index 82, so the settled bucket publish_data reads is 80."""
+            return original.fromtimestamp(start + int(82.5 * 900), tz)
 
     enphase_module.datetime = _Fixed
     try:
@@ -717,12 +717,18 @@ def test_publish_prefers_the_measured_livestream_reading():
 
 
 def test_publish_falls_back_to_buckets_without_a_livestream_reading():
-    """With no livestream reading the bucket-derived values are still published."""
+    """With no livestream reading all four sensors fall back to the settled bucket values.
+
+    Load falls back to the energy-balance residual, so the four still agree and a power-flow
+    display still balances - a livestream failure degrades the sensors rather than blanking them.
+    """
     api = MockEnphaseAPI()
     published = _publish_with_buckets(api)
     assert published["pv"] == 1000.0
     assert published["grid"] == 400.0
     assert published["battery"] == -800.0
+    assert published["load"] == 600.0  # 1000 + 400 - 800
+    assert published["load"] == published["pv"] + published["grid"] + published["battery"]
 
 
 def test_interval_power():
@@ -926,6 +932,28 @@ def test_get_schedules_supported_from_status():
     assert api.schedules["12345"]["cfg"]["count"] == 0
     assert api.schedules["12345"]["cfg"]["status"] == "active"
     assert api.dtg_supported("12345") is False  # 'not_supported' status
+
+
+def test_get_schedules_pending_family_is_still_supported():
+    """A family whose scheduleStatus is 'pending' is supported - a write is in flight, that is all.
+
+    The cloud reports a family as 'pending' while a schedule change settles on the gateway, which
+    happens right after any write Predbat makes. Treating that as unsupported made Predbat decide
+    the site could not do charge-from-grid at all and abandon automatic configuration, even with an
+    active schedule sitting in the family.
+    """
+    api = MockEnphaseAPI()
+    detail = {"scheduleId": "c1", "startTime": "04:30", "endTime": "04:40", "limit": 5, "scheduleType": "CFG", "isDeleted": False, "isEnabled": True, "scheduleStatus": "active"}
+    payload = {
+        "type": "BATTERY_SCHEDULES_CONFIG",
+        "cfg": {"scheduleStatus": "pending", "count": 1, "details": [detail]},
+        "dtg": {"scheduleStatus": "pending", "count": 1, "details": [dict(detail, scheduleId="d1", scheduleType="DTG")]},
+        "rbd": {"scheduleStatus": "active", "count": 0},
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, payload)
+    run_async(api.get_schedules("12345"))
+    assert api.schedules["12345"]["cfg"]["supported"] is True
+    assert api.dtg_supported("12345") is True
 
 
 def test_inverter_def_enphase():
@@ -2043,6 +2071,7 @@ def run_enphase_api_tests(my_predbat):
     test_automatic_config_no_dtg_raises()
     test_automatic_config_no_charge_support_raises()
     test_get_schedules_supported_from_status()
+    test_get_schedules_pending_family_is_still_supported()
     test_inverter_def_enphase()
     test_run_first_polls_all_tiers()
     test_get_today()
