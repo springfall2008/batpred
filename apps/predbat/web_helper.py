@@ -111,6 +111,12 @@ def get_debug_history_js():
                         opt.textContent = when.toLocaleString() + ' (' + s.steps_back + ' steps back)';
                         select.appendChild(opt);
                     });
+                    // Rebuilding the option list via appendChild does not reliably repaint the
+                    // closed box's displayed label on its own (observed live: it kept showing
+                    // the placeholder text until the dropdown was actually opened once) -
+                    // explicitly (re)selecting the first option forces a real value-change the
+                    // control has to redraw for.
+                    select.selectedIndex = 0;
                 })
                 .catch(function(e) { console.error('Failed to load debug history:', e); });
         }
