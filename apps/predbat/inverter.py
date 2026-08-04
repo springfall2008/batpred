@@ -1999,7 +1999,7 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None, refresh=False):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
         if not entity_id:
@@ -2007,7 +2007,7 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
             return False
         domain, entity_name = entity_id.split(".")
-        current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit, refresh=refresh)
+        current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
 
         if isinstance(new_value, str):
             matched = current_state == new_value
@@ -2717,12 +2717,10 @@ class Inverter:
         Called on every adjust_charge_rate()/adjust_discharge_rate() invocation, not just when
         the power target itself changes - this register can drift or get reset independently
         (#4415). write_and_poll_value() already no-ops when the live value already matches, so
-        this is cheap when nothing has drifted. refresh=True forces a fresh state fetch on setups
-        not relying on HA's push-based WebSocket updates (DB-primary mode); it's a no-op for the
-        common live-HA-connection case.
+        this is cheap when nothing has drifted.
         """
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
-        self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1, refresh=True)
+        self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
 
     def call_service_template(self, service, data, domain="charge", extra_data={}):
         """
