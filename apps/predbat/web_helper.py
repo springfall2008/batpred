@@ -6470,18 +6470,27 @@ def get_plan_renderer_js():
     }
 
     // Render plan table from JSON data
-    // Find the retained debug-history snapshot nearest a plan row's timestamp, within a
-    // fixed tolerance, or null if none is close enough. window.debugHistoryData is a
-    // small array ({id, timestamp, steps_back}) fetched separately (see fetchAndRenderPlan) -
-    // matched here by wall-clock time rather than threaded through the plan JSON itself,
-    // since the History/Yesterday plan is a reconstruction (fed yesterday's real PV/load
-    // through the same renderer as the live plan) and has no inherent relationship to
-    // when a snapshot happened to be captured; only the row's own real timestamp does.
-    // A fixed +/-90 minute tolerance is simpler than threading debug_history_interval
-    // through to the JS layer just for this, at the cost of not auto-tracking a changed
-    // interval - acceptable given this is a "here's roughly what was captured near this
-    // time" pointer, not a precise lookup.
-    const DEBUG_SNAPSHOT_TOLERANCE_MS = 90 * 60 * 1000;
+    // Find the retained debug-history snapshot most relevant to a plan row's timestamp,
+    // or null if none qualifies. window.debugHistoryData is a small array
+    // ({id, timestamp, steps_back}) fetched separately (see fetchAndRenderPlan) - matched
+    // here by wall-clock time rather than threaded through the plan JSON itself, since the
+    // History/Yesterday plan is a reconstruction (fed yesterday's real PV/load through the
+    // same renderer as the live plan) and has no inherent relationship to when a snapshot
+    // happened to be captured; only the row's own real timestamp does.
+    //
+    // Deliberately asymmetric, not a simple nearest-within-N-minutes window: a snapshot
+    // captures Predbat's full live state (including its plan) at one moment, so it can only
+    // meaningfully describe a row at or shortly after that moment - a row well *after* the
+    // snapshot may have had its plan revised in the meantime (Predbat replans every cycle),
+    // so a snapshot captured later than a row tells you nothing about that row at all, and
+    // one captured much earlier than a row is increasingly unlikely to still describe it by
+    // the time that row's slot arrived. FORWARD_GRACE covers a snapshot landing a little
+    // after a row's start but still inside the same slot (e.g. a 17:00 row, snapshot at
+    // 17:25); BACKWARD_WINDOW is generous enough to always find the last real capture at the
+    // default 3-hourly interval, with margin, without needing to thread the configured
+    // interval through to the JS layer just for this.
+    const DEBUG_SNAPSHOT_FORWARD_GRACE_MS = 30 * 60 * 1000;
+    const DEBUG_SNAPSHOT_BACKWARD_WINDOW_MS = 210 * 60 * 1000;
     function findNearestDebugSnapshot(rowTimeStr) {
         if (!rowTimeStr || !window.debugHistoryData || !window.debugHistoryData.length) {
             return null;
@@ -6491,12 +6500,15 @@ def get_plan_renderer_js():
             return null;
         }
         let best = null;
-        let bestDiff = DEBUG_SNAPSHOT_TOLERANCE_MS;
+        let bestDiff = null;
         for (const snap of window.debugHistoryData) {
             const snapTime = new Date(snap.timestamp).getTime();
             if (isNaN(snapTime)) { continue; }
-            const diff = Math.abs(snapTime - rowTime);
-            if (diff <= bestDiff) {
+            const diff = rowTime - snapTime; // positive: snapshot before the row (good); negative: snapshot after (only a little grace)
+            if (diff < -DEBUG_SNAPSHOT_FORWARD_GRACE_MS || diff > DEBUG_SNAPSHOT_BACKWARD_WINDOW_MS) {
+                continue;
+            }
+            if (bestDiff === null || Math.abs(diff) < Math.abs(bestDiff)) {
                 bestDiff = diff;
                 best = snap;
             }
