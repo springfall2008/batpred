@@ -1476,7 +1476,7 @@ class AnnualPage:
             name = calendar.month_abbr[entry["month"]]
             if entry.get("status") not in ("ok", "degraded"):
                 reason = html.escape(str(entry.get("reason", "no result")), quote=True)
-                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='6'>unavailable — {}</td></tr>\n".format(name, reason)
+                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='7'>unavailable — {}</td></tr>\n".format(name, reason)
                 continue
             suffix = " (degraded — {} sampled day(s) failed)".format(len(entry.get("failed_days", []))) if entry.get("status") == "degraded" else ""
             synthesised = entry.get("rates_synthesised") or []
