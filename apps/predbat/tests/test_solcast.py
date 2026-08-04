@@ -2487,12 +2487,12 @@ def capture_unit_factor(test_api):
     captured = {}
     original = test_api.solar.publish_pv_stats
 
-    def wrapper(pv_forecast_data, divide_by, period):
+    def wrapper(pv_forecast_data, unit_factor, period):
         """Record the arguments then publish as normal."""
-        captured["unit_factor"] = divide_by
+        captured["unit_factor"] = unit_factor
         captured["period"] = period
         captured["data"] = pv_forecast_data
-        return original(pv_forecast_data, divide_by, period)
+        return original(pv_forecast_data, unit_factor, period)
 
     test_api.solar.publish_pv_stats = wrapper
     return captured
