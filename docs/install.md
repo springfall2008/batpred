@@ -423,11 +423,12 @@ both when it is downloaded and again immediately before it is installed.
 If any file does not match, the update is abandoned and **nothing is installed**, so a corrupted or truncated download can never leave you with a broken Predbat.
 Predbat carries on running the version you already have, and you can simply retry the update.
 
-Released versions are fetched as a single compressed archive rather than one request per file, which makes updating considerably quicker.
-Only the files that make up Predbat are installed from it; your `apps.yaml` and the rest of your configuration are never touched by an update.
+Updates are fetched as a single compressed archive rather than one request per file, which makes updating considerably quicker.
+This applies to branches such as `main` as well as to releases; if no archive is available Predbat falls back to downloading the files one at a time.
+Only the files that make up Predbat are installed from the archive; your `apps.yaml` and the rest of your configuration are never touched by an update.
 
-If you are updating from the `main` branch rather than a release, an occasional checksum mismatch is possible
-when a change is merged part way through your download. Retrying the update resolves it.
+If you are updating from a branch rather than a release, a change merged part way through your download can cause a checksum mismatch.
+Predbat retries automatically against a fresh file listing, so this normally resolves itself.
 
 ## Manually installing a Predbat release
 

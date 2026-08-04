@@ -100,8 +100,9 @@ def test_download(my_predbat):
         ("archive_extract_missing", _test_extract_archive_missing_file, "Archive extract aborts when a listed file is absent"),
         ("archive_extract_traversal", _test_extract_archive_rejects_traversal, "Archive extract ignores path traversal members"),
         ("update_download_release_archive", _test_update_download_release_uses_archive, "Release download uses the archive, not per-file requests"),
-        ("update_download_main_individual", _test_update_download_main_uses_individual, "Main branch download uses per-file requests, not the archive"),
-        ("update_download_archive_fallback", _test_update_download_archive_fetch_failure_falls_back, "Archive fetch failure falls back to per-file download"),
+        ("update_download_any_ref", _test_update_download_archive_tried_for_every_ref, "Archive is tried for any ref, with no hard coded branch name"),
+        ("update_download_fresh_listing", _test_update_download_retries_with_fresh_listing, "A mismatch is retried against a freshly fetched listing"),
+        ("update_download_archive_fallback", _test_update_download_archive_fetch_failure_falls_back, "No archive available falls back to per-file download"),
         ("update_download_archive_abort", _test_update_download_archive_verify_failure_aborts, "Archive verification failure aborts without falling back"),
         ("update_download_cleanup", _test_update_download_cleans_staged_on_failure, "Failed download removes the files staged so far"),
         ("update_move_verifies", _test_update_move_verifies_staged_files, "Move verifies staged files against the staged manifest"),
@@ -497,15 +498,16 @@ def _test_predbat_update_download_success(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.get_github_directory_listing", return_value=mock_files):
-                with patch("download.download_predbat_file_from_github", return_value="file content"):
-                    result = predbat_update_download("main")
+                with patch("download.download_predbat_release_archive", return_value=None):
+                    with patch("download.download_predbat_file_from_github", return_value="file content"):
+                        result = predbat_update_download("v8.30.8")
 
                     assert result is not None
                     assert "manifest.yaml" in result
                     assert "predbat.py" in result
                     assert "config.py" in result
                     # Check manifest file was created
-                    assert os.path.exists(os.path.join(temp_dir, "manifest.yaml.main"))
+                    assert os.path.exists(os.path.join(temp_dir, "manifest.yaml.v8.30.8"))
 
     finally:
         shutil.rmtree(temp_dir)
@@ -540,9 +542,10 @@ def _test_predbat_update_download_file_failure(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.get_github_directory_listing", return_value=mock_files):
-                with patch("download.download_predbat_file_from_github", return_value=None):
-                    result = predbat_update_download("main")
-                    assert result is None
+                with patch("download.download_predbat_release_archive", return_value=None):
+                    with patch("download.download_predbat_file_from_github", return_value=None):
+                        result = predbat_update_download("v8.30.8")
+                        assert result is None
 
     finally:
         shutil.rmtree(temp_dir)
@@ -746,7 +749,8 @@ def _test_predbat_update_download_skip_matching_sha(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.get_github_directory_listing", return_value=mock_files):
-                with patch("download.download_predbat_file_from_github", side_effect=mock_download):
+                # The per-file path is now reached only when no archive is available
+                with patch("download.download_predbat_release_archive", return_value=None), patch("download.download_predbat_file_from_github", side_effect=mock_download):
                     result = predbat_update_download("main")
 
                     # Verify download was skipped (not called)
@@ -804,7 +808,8 @@ def _test_predbat_update_download_skip_mixed(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.get_github_directory_listing", return_value=mock_files):
-                with patch("download.download_predbat_file_from_github", side_effect=mock_download):
+                # The per-file path is now reached only when no archive is available
+                with patch("download.download_predbat_release_archive", return_value=None), patch("download.download_predbat_file_from_github", side_effect=mock_download):
                     result = predbat_update_download("main")
 
                     # Verify only config.py was downloaded (not predbat.py)
@@ -1305,25 +1310,91 @@ def _test_update_download_release_uses_archive(my_predbat):
     return 0
 
 
-def _test_update_download_main_uses_individual(my_predbat):
+def _test_update_download_archive_tried_for_every_ref(my_predbat):
     """
-    Test a main branch update downloads file by file so unchanged files can be skipped
+    Test the archive is tried for every ref, not only for ref names that look like releases
+
+    GitHub builds an archive for any ref it knows about, so branches get the same single
+    request treatment as releases and nothing is keyed off a hard coded branch name.
     """
     temp_dir = tempfile.mkdtemp()
 
     try:
-        mock_files = [{"name": "predbat.py", "size": 10, "sha": "abc123", "type": "file"}]
+        predbat_files = {"predbat.py": b'print("predbat")\n'}
+        archive_path = os.path.join(temp_dir, "release.tar.gz")
+        _build_test_archive(archive_path, "batpred-branch", predbat_files)
+
+        for ref in ["main", "master", "some-feature-branch", "v8.30.8"]:
+            staged_dir = os.path.join(temp_dir, "install-" + ref)
+            os.makedirs(staged_dir)
+
+            def fake_archive_download(tag, repository=None, target_dir=None):
+                """Hand out a throwaway copy of the test archive, as the real downloader would."""
+                copy_path = os.path.join(target_dir, "release-copy.tar.gz")
+                shutil.copyfile(archive_path, copy_path)
+                return copy_path
+
+            with patch("download.os.path.dirname", return_value=staged_dir):
+                with patch("download.get_github_directory_listing", return_value=_listing_for(predbat_files)):
+                    with patch("download.download_predbat_release_archive", side_effect=fake_archive_download) as mock_archive:
+                        with patch("download.download_predbat_file_from_github") as mock_per_file:
+                            result = predbat_update_download(ref)
+
+                            assert result is not None, ref
+                            assert mock_archive.called, "The archive should be tried for ref {}".format(ref)
+                            assert mock_archive.call_args[0][0] == ref
+                            assert not mock_per_file.called, "No per-file requests are needed when the archive works for ref {}".format(ref)
+
+    finally:
+        shutil.rmtree(temp_dir)
+    return 0
+
+
+def _test_update_download_retries_with_fresh_listing(my_predbat):
+    """
+    Test a mismatch is retried against a freshly fetched listing
+
+    Updating from a branch can race with a commit landing part way through, leaving the
+    listing describing one commit and the archive another. Re-fetching the listing lets
+    the update settle on the newer commit rather than failing.
+    """
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        moved_files = {"predbat.py": b'print("the commit that landed mid-update")\n'}
+        archive_path = os.path.join(temp_dir, "release.tar.gz")
+        _build_test_archive(archive_path, "batpred-branch", moved_files)
+
+        # The first listing describes the old commit, so it will not match the archive
+        stale_listing = [{"name": "predbat.py", "size": len(moved_files["predbat.py"]), "sha": compute_data_sha1(b'print("the commit we started from")\n'), "type": "file"}]
+        listings = [stale_listing, _listing_for(moved_files)]
+
+        def fake_listing(tag, repository=None):
+            """Return the stale listing first, then the one matching the archive."""
+            return listings.pop(0) if listings else _listing_for(moved_files)
+
+        def fake_archive_download(tag, repository=None, target_dir=None):
+            """Hand out a throwaway copy of the test archive, as the real downloader would."""
+            copy_path = os.path.join(target_dir, "release-copy.tar.gz")
+            shutil.copyfile(archive_path, copy_path)
+            return copy_path
 
         with patch("download.os.path.dirname", return_value=temp_dir):
-            with patch("download.get_github_directory_listing", return_value=mock_files):
-                with patch("download.download_predbat_release_archive") as mock_archive:
-                    with patch("download.download_predbat_file_from_github", return_value=b"content") as mock_per_file:
-                        result = predbat_update_download("main")
+            with patch("download.get_github_directory_listing", side_effect=fake_listing) as mock_listing:
+                with patch("download.download_predbat_release_archive", side_effect=fake_archive_download):
+                    with patch("download.download_predbat_file_from_github") as mock_per_file:
+                        result = predbat_update_download("some-branch")
 
-                        assert result is not None
-                        assert not mock_archive.called, "The main branch must not use the release archive"
-                        assert mock_per_file.called
-                        assert mock_per_file.call_args.kwargs.get("expected_sha") == "abc123", "The expected SHA must be passed through for verification"
+                        assert result is not None, "The update should settle once the listing catches up"
+                        assert mock_listing.call_count == 2, "The listing should be re-fetched after a mismatch"
+                        assert not mock_per_file.called, "A mismatch must not be resolved by downloading from elsewhere"
+
+                        # The manifest must describe the listing the files were verified
+                        # against, or the pre-install check would reject them
+                        with open(os.path.join(temp_dir, "manifest.yaml.some-branch"), "r") as han:
+                            manifest = yaml.safe_load(han)
+                        assert manifest[0]["sha"] == compute_data_sha1(moved_files["predbat.py"])
+                        assert verify_staged_files(temp_dir, result, "some-branch") is True
 
     finally:
         shutil.rmtree(temp_dir)
@@ -1378,13 +1449,14 @@ def _test_update_download_archive_verify_failure_aborts(my_predbat):
             return copy_path
 
         with patch("download.os.path.dirname", return_value=temp_dir):
-            with patch("download.get_github_directory_listing", return_value=listing):
+            with patch("download.get_github_directory_listing", return_value=listing) as mock_listing:
                 with patch("download.download_predbat_release_archive", side_effect=fake_archive_download) as mock_archive:
                     with patch("download.download_predbat_file_from_github") as mock_per_file:
                         result = predbat_update_download("v8.30.8")
 
                         assert result is None, "A tampered archive must abort the update"
                         assert mock_archive.call_count == DOWNLOAD_MAX_ATTEMPTS, "The archive should be retried before giving up"
+                        assert mock_listing.call_count == DOWNLOAD_MAX_ATTEMPTS, "Each retry should re-fetch the listing"
                         assert not mock_per_file.called, "Verification failure must not fall back to another download route"
                         assert not os.path.exists(os.path.join(temp_dir, "predbat.py.v8.30.8"))
                         assert not os.path.exists(os.path.join(temp_dir, "manifest.yaml.v8.30.8"))
@@ -1415,7 +1487,8 @@ def _test_update_download_cleans_staged_on_failure(my_predbat):
 
         with patch("download.os.path.dirname", return_value=temp_dir):
             with patch("download.get_github_directory_listing", return_value=mock_files):
-                with patch("download.download_predbat_file_from_github", side_effect=mock_download):
+                # The per-file path is now reached only when no archive is available
+                with patch("download.download_predbat_release_archive", return_value=None), patch("download.download_predbat_file_from_github", side_effect=mock_download):
                     result = predbat_update_download("main")
 
                     assert result is None

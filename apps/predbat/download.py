@@ -29,10 +29,6 @@ import tempfile
 
 DEFAULT_PREDBAT_REPOSITORY = "springfall2008/batpred"
 
-# Branch name used for development updates, which are downloaded file by file rather
-# than from a release archive so unchanged files can be skipped
-MAIN_BRANCH = "main"
-
 # Number of attempts made for a download that fails integrity verification
 DOWNLOAD_MAX_ATTEMPTS = 3
 
@@ -260,7 +256,8 @@ def download_predbat_release_archive(tag, repository=None, target_dir=None):
     try:
         response = requests.get(url, headers={}, stream=True)
         if not response.ok:
-            print("Error: Failed to download release archive {}, status code: {}".format(url, getattr(response, "status_code", "unknown")))
+            # Not an error in itself, the caller downloads the files individually instead
+            print("Warn: No release archive at {}, status code: {}".format(url, getattr(response, "status_code", "unknown")))
             return None
 
         handle, temp_path = tempfile.mkstemp(prefix="predbat-archive-", suffix=".tar.gz", dir=target_dir)
@@ -379,46 +376,35 @@ def extract_predbat_files_from_archive(archive_path, tag, file_list, this_path):
     return staged_files
 
 
-def download_predbat_files_from_archive(tag, file_list, this_path, repository=None, attempts=DOWNLOAD_MAX_ATTEMPTS):
+def download_predbat_files_from_archive(tag, file_list, this_path, repository=None):
     """
-    Download and stage the Predbat files for a tag using the GitHub source archive.
+    Download and stage the Predbat files for a ref using the GitHub source archive.
 
-    A single archive download replaces one request per file. If the archive downloads but
-    fails verification the whole download is retried, and after *attempts* failures the
-    update is abandoned rather than falling back, because content that does not match the
-    published checksums should never be installed by another route.
+    A single archive download replaces one request per file, which is around 25 times
+    faster for a full update. GitHub builds an archive for any ref it knows about, so this
+    is tried for every version rather than for particular ref names, and the caller falls
+    back to the per-file download only if no archive comes back.
 
     Args:
-        tag (str): The version tag to download
+        tag (str): The version tag or branch to download
         file_list (list): GitHub directory listing entries with name/size/sha
         this_path (str): The Predbat install directory
         repository (str, optional): GitHub repository override in "owner/repo" format
-        attempts (int, optional): Number of attempts made when verification fails
 
     Returns:
-        tuple: (staged filenames or None, bool indicating whether the caller may fall back
-            to downloading the files individually)
+        tuple: (staged filenames or None, bool indicating whether an archive was obtained).
+            The second element distinguishes "there is no archive to use here" from "the
+            archive did not match the directory listing", which the caller handles
+            differently.
     """
-    for attempt in range(1, attempts + 1):
-        archive_path = download_predbat_release_archive(tag, repository=repository, target_dir=this_path)
-        if not archive_path:
-            # The archive could not be fetched at all, which can happen when the archive
-            # host is blocked, so the caller is allowed to try the per-file download
-            print("Warn: Release archive could not be downloaded")
-            return None, True
+    archive_path = download_predbat_release_archive(tag, repository=repository, target_dir=this_path)
+    if not archive_path:
+        return None, False
 
-        try:
-            staged_files = extract_predbat_files_from_archive(archive_path, tag, file_list, this_path)
-        finally:
-            remove_file_quietly(archive_path)
-
-        if staged_files is not None:
-            return staged_files, False
-
-        print("Warn: Release archive failed verification (attempt {} of {})".format(attempt, attempts))
-
-    print("Error: Release archive failed verification after {} attempts, aborting update".format(attempts))
-    return None, False
+    try:
+        return extract_predbat_files_from_archive(archive_path, tag, file_list, this_path), True
+    finally:
+        remove_file_quietly(archive_path)
 
 
 def download_predbat_files_individually(tag, file_list, this_path, repository=None):
@@ -468,8 +454,7 @@ def download_predbat_files_individually(tag, file_list, this_path, repository=No
         if not skip_download:
             if not download_predbat_file_from_github(tag, filename, download_filepath, repository=repository, expected_sha=expected_sha):
                 print("Error: Failed to download {}".format(filename))
-                if tag == MAIN_BRANCH:
-                    print("Info: When updating from the main branch a checksum mismatch can happen if a commit lands part way through the download, please retry the update")
+                print("Info: When updating from a branch rather than a release, a checksum mismatch can happen if a commit lands part way through the download, please retry the update")
                 remove_file_quietly(download_filepath)
                 remove_staged_files(this_path, staged_files, tag)
                 return None
@@ -667,11 +652,16 @@ def predbat_update_download(version, repository=None):
     """
     Download the defined version of Predbat from GitHub.
 
-    Released versions are fetched as a single source archive, which is one request rather
-    than one per file, while updates from the main branch are fetched file by file so that
-    unchanged files can be skipped. Either way every file is verified against the Git blob
-    SHA published in the GitHub directory listing, and a file that fails verification
-    aborts the whole update so nothing is installed.
+    The GitHub source archive is used whenever one is available, which is one request
+    instead of one per file and around 25 times faster for a full update. GitHub builds an
+    archive for any ref it knows about, so no assumption is made about which versions have
+    one; if none comes back the files are downloaded individually instead, which also lets
+    unchanged files be skipped.
+
+    Every file is verified against the Git blob SHA published in the GitHub directory
+    listing, and a file that fails verification aborts the whole update so nothing is
+    installed. A mismatch is retried against a freshly fetched listing, because updating
+    from a branch rather than a release can race with a commit landing part way through.
 
     Args:
         version (str): The version string (e.g. v8.30.8).
@@ -684,31 +674,40 @@ def predbat_update_download(version, repository=None):
     """
     this_path = os.path.dirname(__file__)
     tag_split = version.split(" ")
-    if tag_split:
-        tag = tag_split[0]
+    if not tag_split:
+        return None
+    tag = tag_split[0]
 
-        # Get the list of files from GitHub API, this is the authority for both which files
-        # are installed and what each of them must hash to
+    for attempt in range(1, DOWNLOAD_MAX_ATTEMPTS + 1):
+        # The listing is the authority for both which files are installed and what each of
+        # them must hash to. It is fetched again on each attempt so that a ref which moved
+        # under us is picked up rather than repeatedly checked against a stale listing.
         file_list = get_github_directory_listing(tag, repository=repository)
         if not file_list:
             print("Error: Failed to get file list from GitHub")
             return None
 
-        if tag == MAIN_BRANCH:
-            downloaded_files = download_predbat_files_individually(tag, file_list, this_path, repository=repository)
-        else:
-            downloaded_files, allow_fallback = download_predbat_files_from_archive(tag, file_list, this_path, repository=repository)
-            if downloaded_files is None and allow_fallback:
-                print("Warn: Falling back to downloading the files individually")
-                downloaded_files = download_predbat_files_individually(tag, file_list, this_path, repository=repository)
+        downloaded_files, archive_available = download_predbat_files_from_archive(tag, file_list, this_path, repository=repository)
 
         if downloaded_files is None:
-            return None
+            if not archive_available:
+                # No archive came back for this ref, so download the files one at a time
+                print("Warn: No release archive available, downloading the files individually")
+                downloaded_files = download_predbat_files_individually(tag, file_list, this_path, repository=repository)
+                if downloaded_files is None:
+                    return None
+            else:
+                # The archive was fetched but did not match the listing. Rather than install
+                # it by another route, try again with a fresh listing, which also resolves a
+                # branch that moved between the listing and the archive being fetched.
+                print("Warn: Downloaded files did not match the directory listing (attempt {} of {})".format(attempt, DOWNLOAD_MAX_ATTEMPTS))
+                continue
 
         # Sort files alphabetically
         file_list_sorted = sorted(file_list, key=lambda x: x["name"])
 
-        # Generate manifest.yaml (just the sorted file list from GitHub API)
+        # Generate manifest.yaml (the sorted file list the downloaded files were verified
+        # against, so the pre-install check uses the same checksums)
         manifest_filename = os.path.join(this_path, "manifest.yaml." + tag)
         try:
             with open(manifest_filename, "w") as f:
@@ -722,6 +721,8 @@ def predbat_update_download(version, repository=None):
         # Return list of files including manifest
         downloaded_files.append("manifest.yaml")
         return downloaded_files
+
+    print("Error: Downloaded files failed verification after {} attempts, aborting update".format(DOWNLOAD_MAX_ATTEMPTS))
     return None
 
 
