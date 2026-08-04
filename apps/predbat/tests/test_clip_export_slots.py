@@ -20,6 +20,8 @@ def run_clip_export_slots_tests(my_predbat):
     failed |= test_freeze_export_kept_when_soc_below_max(my_predbat)
     failed |= test_normal_export_clipped_off_when_soc_below_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_above_limit(my_predbat)
+    failed |= test_normal_export_clipped_off_when_soc_never_above_reserve(my_predbat)
+    failed |= test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat)
     failed |= test_disabled_window_ignored(my_predbat)
     failed |= test_passed_window_clipped(my_predbat)
     failed |= test_multiple_windows_mixed(my_predbat)
@@ -167,6 +169,59 @@ def test_normal_export_clipped_up_when_soc_above_limit(my_predbat):
     # Should be clipped up - limit should be higher than original 20.0
     if result_limits[0] <= 20.0:
         print("ERROR: Expected export limit to be clipped up from 20.0 but got {}".format(result_limits[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_normal_export_clipped_off_when_soc_never_above_reserve(my_predbat):
+    """A window whose SoC never rises above reserve has nothing exportable and should be clipped off,
+    even when the requested limit is 0% (drain to empty) - regression test for #4171"""
+    print("**** test_normal_export_clipped_off_when_soc_never_above_reserve ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.reserve = 0.5
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [0.0]  # Export to 0% (drain to empty)
+    # SoC flat at reserve throughout the window - nothing above reserve to export
+    predict_soc = make_predict_soc(minutes_now, 0.5, 60)
+
+    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != 100.0:
+        print("ERROR: Expected export clipped off (100.0) but got {}".format(result_limits[0]))
+        failed = True
+    if result_windows[0]["target"] != 100.0:
+        print("ERROR: Expected target 100.0 but got {}".format(result_windows[0]["target"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat):
+    """A 0% export request should still be clipped up (not off) when SoC genuinely rises above reserve,
+    so the reserve-floor check doesn't swallow the existing clip-up behaviour"""
+    print("**** test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.reserve = 0.5
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [0.0]  # Export to 0% (drain to empty)
+    # SoC well above reserve - there is real energy available to export
+    predict_soc = make_predict_soc(minutes_now, 8.0, 60)
+
+    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] == 100.0:
+        print("ERROR: Export was clipped off despite SoC being above reserve")
         failed = True
 
     if not failed:
