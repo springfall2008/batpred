@@ -601,6 +601,209 @@ def test_today_channel_kwh():
     assert today_channel_kwh({"totals": {"charge": 9000, "solar_battery": 1000}}, "charge") == 9.0
 
 
+# A real DataMsg captured from the Enlighten livestream topic (site exporting on a sunny afternoon):
+# pv 4632.8 W, storage 32.0 W, grid -2686.1 W, load 1978.7 W, soc 100%.
+LIVESTREAM_FRAME = base64.b64decode(
+    "CAEQwIQ9GogBChYI7+GaAhDv4ZoCGgTv4ZoCIgTv4ZoCEhIIgPoBEPP6ARoDgPoBIgPz+gEaLgjZhtz+//////8BELLiwf7//////wEaCtmG3P7//////wEiCrLiwf7//////wEiEgjI4ngQlL9eGgPI4ngiA5S/XigCMGQ6BhoBACIBAEAGSAFaBghkEKCcASABKAUyAhACMgQIARACMgQIAhABMgQIAxAB"
+)
+
+
+def test_decode_livestream_message():
+    """A livestream DataMsg decodes to watts per channel plus SOC.
+
+    agg_p_mw is milliwatts. Signs follow Predbat's convention: grid negative when exporting,
+    battery positive when discharging.
+    """
+    from enphase import decode_livestream_message
+
+    reading = decode_livestream_message(LIVESTREAM_FRAME)
+    assert reading == {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100}
+
+
+def test_decode_livestream_message_balances():
+    """The decoded channels satisfy the energy balance load = pv + grid + battery."""
+    from enphase import decode_livestream_message
+
+    r = decode_livestream_message(LIVESTREAM_FRAME)
+    assert abs((r["pv"] + r["grid"] + r["battery"]) - r["load"]) < 0.05
+
+
+def test_decode_livestream_message_rejects_rubbish():
+    """A payload that is not a DataMsg returns None rather than raising."""
+    from enphase import decode_livestream_message
+
+    assert decode_livestream_message(b"\xff\xff\xff\xff not protobuf") is None
+
+
+def test_livestream_username_carries_the_authorizer_credentials():
+    """The MQTT username is the query-string blob AWS IoT's custom authorizer expects.
+
+    The WebSocket URL carries no query parameters - the browser cannot set custom headers on a
+    WebSocket - so the authorizer name, token and signature all travel in the CONNECT username.
+    """
+    from enphase import livestream_username
+
+    boot = {
+        "aws_authorizer": "aws-lambda-authoriser-prod",
+        "aws_token_key": "enph_token",
+        "aws_token_value": "tok123",
+        "aws_digest": "sig+with/reserved=chars",
+    }
+    user = livestream_username(boot, "5667604")
+    assert user.startswith("?")
+    assert "x-amz-customauthorizer-name=aws-lambda-authoriser-prod" in user
+    assert "enph_token=tok123" in user
+    assert "site-id=5667604" in user
+    # The digest is base64 and must be percent-encoded, not passed raw
+    from urllib.parse import quote_plus
+
+    assert f"x-amz-customauthorizer-signature={quote_plus(boot['aws_digest'])}" in user
+    assert boot["aws_digest"] not in user
+
+
+def test_gateway_serial_read_from_today():
+    """The livestream bootstrap needs the gateway serial, which /today already carries."""
+    from enphase import gateway_serial
+
+    assert gateway_serial({"serial": "122530006866"}) == "122530006866"
+    assert gateway_serial({}) is None
+
+
+BUCKET_START = 1783724400  # local midnight of the day the /today buckets belong to
+FROZEN_NOW_TS = BUCKET_START + int(82.5 * 900)  # inside index 82, so the settled bucket read is 80
+
+
+def _publish_with_buckets(api, production=250, imp=100, exp=0, charge=200, discharge=0):
+    """Publish a site from /today buckets; the defaults give pv 1000 W, importing 400 W, charging 800 W."""
+    start = BUCKET_START
+
+    def bucket(value):
+        """Return a 96-slot Wh array with the bucket read by publish_data set to value."""
+        out = [0] * 96
+        out[80] = value
+        return out
+
+    api.today["12345"] = {
+        "totals": {},
+        "arrays": {"production": bucket(production), "import": bucket(imp), "export": bucket(exp), "charge": bucket(charge), "discharge": bucket(discharge)},
+        "start_time": start,
+        "interval_length": 900,
+    }
+    import enphase as enphase_module
+
+    original = enphase_module.datetime
+
+    class _Fixed(original):
+        @classmethod
+        def now(cls, tz=None):
+            """Return a time inside index 82, so the settled bucket publish_data reads is 80."""
+            return original.fromtimestamp(FROZEN_NOW_TS, tz)
+
+    enphase_module.datetime = _Fixed
+    try:
+        run_async(api.publish_data("12345"))
+    finally:
+        enphase_module.datetime = original
+    base = "sensor.predbat_enphase_12345"
+    return {name: api.dashboard_items[f"{base}_{name}_power"]["state"] for name in ("pv", "grid", "battery", "load")}
+
+
+def test_publish_prefers_the_measured_livestream_reading():
+    """When a livestream reading is available the power sensors use it, not the energy buckets.
+
+    The livestream channels are metered, instantaneous and include a real house load, so they beat
+    the 15-minute buckets on every count.
+    """
+    api = MockEnphaseAPI()
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - 60}
+    published = _publish_with_buckets(api)
+    assert published == {"pv": 4632.8, "grid": 2686.1, "battery": 32.0, "load": 1978.7}  # grid flipped to +export
+
+
+def test_live_power_is_never_persisted():
+    """Livestream readings stay in memory only.
+
+    They are instantaneous and carry no usable timestamp of their own, so restoring one from the
+    cache after a restart would republish an old measurement as if it were current - and the
+    refresh gate can be satisfied by the restored age, so nothing would immediately correct it.
+    """
+    from enphase import ENPHASE_CACHE_KEYS
+
+    assert "live_power" not in ENPHASE_CACHE_KEYS
+
+
+def test_failed_live_read_keeps_the_recent_reading():
+    """A failed read leaves the last reading in place so a blip does not flip the sensors.
+
+    The bucket fallback lags 15-30 minutes, so bouncing onto it for one missed cycle would be a
+    bigger step than simply holding the measurement a little longer.
+    """
+    api = MockEnphaseAPI()
+    api.today["12345"] = {"serial": "122530006866"}
+    reading = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - 60}
+    api.live_power["12345"] = dict(reading)
+    # No canned response for the bootstrap, so it 404s and the read fails
+    assert run_async(api.get_live_power("12345")) is None
+    assert api.live_power["12345"] == reading
+
+
+def test_live_reading_older_than_the_window_falls_back_to_buckets():
+    """Once a reading passes ENPHASE_LIVE_MAX_AGE it is ignored in favour of the bucket values.
+
+    Livestream readings are instantaneous and carry no usable timestamp of their own, so an old one
+    must not keep being published as though it were current.
+    """
+    from enphase import ENPHASE_LIVE_MAX_AGE_MINUTES
+
+    api = MockEnphaseAPI()
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - (ENPHASE_LIVE_MAX_AGE_MINUTES * 60 + 1)}
+    published = _publish_with_buckets(api)
+    assert published["pv"] == 1000.0  # bucket value, not the stale 4632.8
+    assert published["grid"] == -400.0
+
+
+def test_grid_power_is_positive_when_exporting():
+    """Grid power follows Predbat's convention: positive exporting, negative importing.
+
+    web.py's power flow reads `grid_power >= 10` as exporting, and sigenergy documents the same.
+    The Enphase channels are the other way round (a livestream grid reading is negative while
+    exporting, and the /today buckets give import - export), so both paths have to be flipped.
+    """
+    api = MockEnphaseAPI()
+    api.live_power["12345"] = {"pv": 4632.8, "battery": 32.0, "grid": -2686.1, "load": 1978.7, "soc": 100, "read_ts": FROZEN_NOW_TS - 60}
+    published = _publish_with_buckets(api)
+    assert published["grid"] == 2686.1  # exporting 2.7 kW -> positive
+
+
+def test_grid_power_from_buckets_is_positive_when_exporting():
+    """The bucket fallback follows the same convention as the livestream."""
+    api = MockEnphaseAPI()
+    published = _publish_with_buckets(api, production=250, imp=0, exp=100, charge=0, discharge=0)
+    assert published["grid"] == 400.0  # 100 Wh exported over a 15-min bucket
+
+
+def test_published_power_satisfies_the_predbat_energy_balance():
+    """With Predbat's signs the balance is load = pv + battery - grid, not pv + battery + grid."""
+    api = MockEnphaseAPI()
+    published = _publish_with_buckets(api)
+    assert published["load"] == published["pv"] + published["battery"] - published["grid"]
+
+
+def test_publish_falls_back_to_buckets_without_a_livestream_reading():
+    """With no livestream reading all four sensors fall back to the settled bucket values.
+
+    Load falls back to the energy-balance residual, so the four still agree and a power-flow
+    display still balances - a livestream failure degrades the sensors rather than blanking them.
+    """
+    api = MockEnphaseAPI()
+    published = _publish_with_buckets(api)
+    assert published["pv"] == 1000.0
+    assert published["grid"] == -400.0  # importing
+    assert published["battery"] == -800.0  # charging
+    assert published["load"] == 600.0  # 1000 - 800 + 400
+    assert published["load"] == published["pv"] + published["battery"] - published["grid"]
+
+
 def test_interval_power():
     """interval_power converts a settled 15-minute Wh bucket into watts.
 
@@ -671,7 +874,7 @@ def _published_power(api):
 
 
 def test_load_power_is_derived_from_the_other_channels():
-    """Load is the energy-balance residual: pv + grid + battery.
+    """Load is the energy-balance residual: pv + battery - grid, in Predbat's signs.
 
     The cloud's own consumption channel is exactly this sum, and `get_latest_power` reports
     production rather than consumption, so publishing that as load made the load sensor track PV.
@@ -680,9 +883,9 @@ def test_load_power_is_derived_from_the_other_channels():
     api = _api_with_today_buckets(production=250, imp=100, exp=0, charge=0, discharge=25)
     run_async(api.publish_data("12345"))
     pv, grid, battery, load = _published_power(api)
-    assert (pv, grid, battery) == (1000.0, 400.0, 100.0)
+    assert (pv, grid, battery) == (1000.0, -400.0, 100.0)  # grid negative: importing
     assert load == 1500.0
-    assert load == pv + grid + battery  # the power-flow card must balance
+    assert load == pv + battery - grid  # the power-flow card must balance
 
 
 def test_load_power_never_goes_negative():
@@ -695,7 +898,7 @@ def test_load_power_never_goes_negative():
     api = _api_with_today_buckets(production=0, imp=1461, exp=714, charge=1796, discharge=203)
     run_async(api.publish_data("12345"))
     pv, grid, battery, load = _published_power(api)
-    assert pv + grid + battery < 0  # the raw residual really is negative
+    assert pv + battery - grid < 0  # the raw residual really is negative
     assert load == 0.0
 
 
@@ -804,6 +1007,28 @@ def test_get_schedules_supported_from_status():
     assert api.dtg_supported("12345") is False  # 'not_supported' status
 
 
+def test_get_schedules_pending_family_is_still_supported():
+    """A family whose scheduleStatus is 'pending' is supported - a write is in flight, that is all.
+
+    The cloud reports a family as 'pending' while a schedule change settles on the gateway, which
+    happens right after any write Predbat makes. Treating that as unsupported made Predbat decide
+    the site could not do charge-from-grid at all and abandon automatic configuration, even with an
+    active schedule sitting in the family.
+    """
+    api = MockEnphaseAPI()
+    detail = {"scheduleId": "c1", "startTime": "04:30", "endTime": "04:40", "limit": 5, "scheduleType": "CFG", "isDeleted": False, "isEnabled": True, "scheduleStatus": "active"}
+    payload = {
+        "type": "BATTERY_SCHEDULES_CONFIG",
+        "cfg": {"scheduleStatus": "pending", "count": 1, "details": [detail]},
+        "dtg": {"scheduleStatus": "pending", "count": 1, "details": [dict(detail, scheduleId="d1", scheduleType="DTG")]},
+        "rbd": {"scheduleStatus": "active", "count": 0},
+    }
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, payload)
+    run_async(api.get_schedules("12345"))
+    assert api.schedules["12345"]["cfg"]["supported"] is True
+    assert api.dtg_supported("12345") is True
+
+
 def test_inverter_def_enphase():
     """EnphaseCloud INVERTER_DEF exists with the agreed capability flags."""
     from config import INVERTER_DEF
@@ -856,6 +1081,31 @@ def test_log_api_call_redacts_token():
     api.debug_api = False
     api._log_api_call("GET", "/pv/settings/1/battery_status.json", None, 200, {"x": 1}, "")
     assert captured == []
+
+
+def test_log_api_call_redacts_livestream_credentials():
+    """The livestream bootstrap's token and signature must never reach the log.
+
+    Predbat logs are routinely shared for debugging, and this response carries live credentials
+    for the account's AWS IoT stream.
+    """
+    api = MockEnphaseAPI()
+    captured = []
+    api.log = lambda message: captured.append(message)
+    api.debug_api = True
+    api._log_api_call(
+        "GET",
+        "/pv/aws_sigv4/livestream.json",
+        {"serial_num": "122530006866"},
+        200,
+        {"aws_token_value": "token-must-not-be-logged", "aws_digest": "signature-must-not-be-logged", "aws_iot_endpoint": "iot.example.com", "live_stream_topic": "v1/live-stream/abc123"},
+        "",
+    )
+    assert "token-must-not-be-logged" not in captured[0]
+    assert "signature-must-not-be-logged" not in captured[0]
+    # Non-secret fields are still logged, so the call remains diagnosable
+    assert "iot.example.com" in captured[0]
+    assert "v1/live-stream/abc123" in captured[0]
 
 
 def test_login_dedupes_sites():
@@ -956,6 +1206,7 @@ def test_publish_data_sensors():
         "start_time": start,
         "interval_length": 900,
     }
+    # No livestream reading here, so the power sensors fall back to the /today buckets.
     # Freeze "now" so interval_power selects settled bucket 80 (current 82, just-closed 81).
     import enphase as enphase_module
 
@@ -982,7 +1233,7 @@ def test_publish_data_sensors():
     assert items["sensor.predbat_enphase_12345_export_today"]["state"] == 0.4
     assert items["sensor.predbat_enphase_12345_battery_reserve_min"]["state"] == 5
     assert items["sensor.predbat_enphase_12345_pv_power"]["state"] == 4000.0  # 1000 Wh / 0.25h
-    assert items["sensor.predbat_enphase_12345_grid_power"]["state"] == 400.0
+    assert items["sensor.predbat_enphase_12345_grid_power"]["state"] == -400.0  # importing
     assert items["sensor.predbat_enphase_12345_battery_power"]["state"] == -800.0  # charging
     assert items["sensor.predbat_enphase_12345_load_power"]["state"] == 3600.0  # derived residual
 
@@ -1852,6 +2103,7 @@ def run_enphase_api_tests(my_predbat):
     test_get_battery_status_handles_na()
     test_reads_handle_na_values()
     test_log_api_call_redacts_token()
+    test_log_api_call_redacts_livestream_credentials()
     test_login_dedupes_sites()
     test_run_single_site_publishes_once()
     test_run_no_battery_returns_false_without_raising()
@@ -1880,11 +2132,25 @@ def run_enphase_api_tests(my_predbat):
     test_load_power_is_derived_from_the_other_channels()
     test_load_power_never_goes_negative()
     test_power_sensors_ignore_the_unsettled_bucket()
+    test_decode_livestream_message()
+    test_decode_livestream_message_balances()
+    test_decode_livestream_message_rejects_rubbish()
+    test_livestream_username_carries_the_authorizer_credentials()
+    test_gateway_serial_read_from_today()
+    test_publish_prefers_the_measured_livestream_reading()
+    test_publish_falls_back_to_buckets_without_a_livestream_reading()
+    test_live_power_is_never_persisted()
+    test_failed_live_read_keeps_the_recent_reading()
+    test_live_reading_older_than_the_window_falls_back_to_buckets()
+    test_grid_power_is_positive_when_exporting()
+    test_grid_power_from_buckets_is_positive_when_exporting()
+    test_published_power_satisfies_the_predbat_energy_balance()
     test_get_schedules_parses_families()
     test_automatic_config()
     test_automatic_config_no_dtg_raises()
     test_automatic_config_no_charge_support_raises()
     test_get_schedules_supported_from_status()
+    test_get_schedules_pending_family_is_still_supported()
     test_inverter_def_enphase()
     test_run_first_polls_all_tiers()
     test_get_today()
