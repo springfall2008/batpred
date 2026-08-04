@@ -610,7 +610,15 @@ class Execute:
 
             # Charging/Discharging off via service
             if not isCharging and self.set_charge_window:
-                if carHolding or boostHolding:
+                if (carHolding or boostHolding) and self.set_charge_freeze:
+                    # Only attempt the extra charge-side hold when a genuine passive freeze is available
+                    # (self.set_charge_freeze already accounts for inverter support and charge_freeze_service
+                    # being configured, #4424/#4432) - otherwise adjust_charge_immediate(soc, freeze=True)
+                    # silently falls back to a real charge_start_service targeting the current SoC, which
+                    # some inverters treat as a fresh command each cycle and briefly ramp to full power,
+                    # producing repeated short full-rate import bursts instead of a passive hold. The
+                    # discharge-side hold set above (pause/rate/reserve) already prevents discharge, so
+                    # falling back to a plain charge-stop is safe.
                     inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                 else:
                     inverter.adjust_charge_immediate(0)

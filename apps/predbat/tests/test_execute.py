@@ -282,6 +282,12 @@ def run_execute_test(
         inverter.reserve_max = reserve_max_array[inverter.id] if reserve_max_array else reserve_max
         inverter.battery_temperature = battery_temperature
 
+    # fetch_inverter_data() only ever narrows set_charge_freeze (never widens it back), matching
+    # production where fetch_config_options() re-derives it from raw config every cycle before
+    # fetch_inverter_data() runs. This helper calls fetch_inverter_data() directly and is reused
+    # across many scenarios in one process, so re-derive it here too or a capability narrowing from
+    # an earlier scenario (e.g. an unsupported inverter) leaks forward into every later one.
+    my_predbat.set_charge_freeze = my_predbat.get_arg("set_charge_freeze")
     my_predbat.fetch_inverter_data(create=False)
 
     if my_predbat.soc_kw != soc_kw:
@@ -661,6 +667,27 @@ def run_execute_tests(my_predbat):
     my_predbat.iboost_prevent_discharge = True
     my_predbat.iboost_running_full = True
     failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_export_window=True, assert_pause_discharge=True, assert_status="Hold for iBoost", soc_kw=1, assert_immediate_soc_target=10)
+
+    # #4432: boostHolding must not silently fall back to a real charge_start_service when no
+    # charge_freeze_service is configured - same fallback risk as #4424, but via this direct-call
+    # path rather than the optimiser's planned charge-freeze windows. With no freeze service
+    # available, this should fall back to a plain charge-stop, not a disguised real charge.
+    saved_charge_freeze_service = my_predbat.args.get("charge_freeze_service", "")
+    my_predbat.args["charge_freeze_service"] = ""
+    failed |= run_execute_test(
+        my_predbat,
+        "no_charge_iboost_no_freeze_service",
+        set_charge_window=True,
+        set_export_window=True,
+        assert_pause_discharge=True,
+        assert_status="Hold for iBoost",
+        soc_kw=1,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+    )
+    my_predbat.args["charge_freeze_service"] = saved_charge_freeze_service
+    if failed:
+        return failed
 
     failed |= run_execute_test(
         my_predbat,
@@ -2629,6 +2656,28 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10
     )
+
+    # #4432: carHolding must not silently fall back to a real charge_start_service when no
+    # charge_freeze_service is configured - same fallback risk as #4424, but via this direct-call
+    # path rather than the optimiser's planned charge-freeze windows. With no freeze service
+    # available, this should fall back to a plain charge-stop, not a disguised real charge.
+    saved_charge_freeze_service = my_predbat.args.get("charge_freeze_service", "")
+    my_predbat.args["charge_freeze_service"] = ""
+    failed |= run_execute_test(
+        my_predbat,
+        "car_no_freeze_service",
+        car_slot=charge_window_best_slot,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        assert_discharge_rate=1000,
+        soc_kw=1,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+    )
+    my_predbat.args["charge_freeze_service"] = saved_charge_freeze_service
+
     failed |= run_execute_test(
         my_predbat,
         "car2",
