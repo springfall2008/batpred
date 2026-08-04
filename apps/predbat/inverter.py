@@ -1831,12 +1831,18 @@ class Inverter:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
                 if "charge_rate_percent" in self.base.args:
                     self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
-                if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", new_rate)
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} charge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/charge_rate", payload=new_rate)
+
+        # Re-assert the timed current register on every call, not just when charge_rate itself
+        # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
+        # the pattern used for the charge window time registers in adjust_charge_window(): call
+        # every cycle and let write_and_poll_value()'s own read-compare decide whether a write is
+        # actually needed, which is a no-op when nothing has drifted.
+        if not self.rest_data and self.inv_output_charge_control == "current":
+            self.set_current_from_power("charge", new_rate)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
@@ -1869,12 +1875,18 @@ class Inverter:
                     self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
                 if "discharge_rate_percent" in self.base.args:
                     self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
-                if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", new_rate)
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} discharge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
+
+        # Re-assert the timed current register on every call, not just when discharge_rate itself
+        # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
+        # the pattern used for the charge window time registers in adjust_charge_window(): call
+        # every cycle and let write_and_poll_value()'s own read-compare decide whether a write is
+        # actually needed, which is a no-op when nothing has drifted.
+        if not self.rest_data and self.inv_output_charge_control == "current":
+            self.set_current_from_power("discharge", new_rate)
 
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         """
@@ -1987,7 +1999,7 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write to {} failed".format(self.id, name), had_errors=True)
             return False
 
-    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None):
+    def write_and_poll_value(self, name, entity_id, new_value, fuzzy=0, ignore_fail=False, required_unit=None, refresh=False):
         # Modified to cope with sensor entities and writing strings
         # Re-written to minimise writes
         if not entity_id:
@@ -1995,7 +2007,7 @@ class Inverter:
             self.base.record_status("Warn: Inverter {} write_and_poll_value: No entity_id for {} to write {}".format(self.id, name, new_value), had_errors=True)
             return False
         domain, entity_name = entity_id.split(".")
-        current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit)
+        current_state = self.base.get_state_wrapper(entity_id, required_unit=required_unit, refresh=refresh)
 
         if isinstance(new_value, str):
             matched = current_state == new_value
@@ -2700,10 +2712,17 @@ class Inverter:
 
     def set_current_from_power(self, direction, power):
         """
-        Set the timed charge/discharge current setting by converting power to current
+        Set the timed charge/discharge current setting by converting power to current.
+
+        Called on every adjust_charge_rate()/adjust_discharge_rate() invocation, not just when
+        the power target itself changes - this register can drift or get reset independently
+        (#4415). write_and_poll_value() already no-ops when the live value already matches, so
+        this is cheap when nothing has drifted. refresh=True forces a fresh state fetch on setups
+        not relying on HA's push-based WebSocket updates (DB-primary mode); it's a no-op for the
+        common live-HA-connection case.
         """
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
-        self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
+        self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1, refresh=True)
 
     def call_service_template(self, service, data, domain="charge", extra_data={}):
         """
