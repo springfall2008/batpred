@@ -1132,13 +1132,7 @@ class Plan:
                             already_covered = True
                             break
                     if not already_covered:
-                        new_cw = {
-                            "start": m,
-                            "end": m_end,
-                            "average": imp_rate,
-                            "clipping_target_soc_pct": target_soc_pct,
-                            "target": target_soc_pct
-                        }
+                        new_cw = {"start": m, "end": m_end, "average": imp_rate, "clipping_target_soc_pct": target_soc_pct, "target": target_soc_pct}
                         self.charge_window_best.append(new_cw)
                         self.charge_limit_best.append(target_soc_pct)
                         self.log(

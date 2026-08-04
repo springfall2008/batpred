@@ -1027,7 +1027,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                                 new_window1["end"] = dstart
                                 new_window_best.append(new_window1)
                                 new_limit_best.append(limit)
-                            
+
                             # Part 2: The intersection
                             inter_start = max(start, dstart)
                             inter_end = min(end, dend)
@@ -1039,13 +1039,13 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                                 new_window2["target"] = target_soc
                                 new_window_best.append(new_window2)
                                 new_limit_best.append(limit)
-                            
+
                             # Remaining part after the anti-clipping window will be handled in the next loop pass
                             start = max(start, dend)
                             clipped = True
                             if (end - start) >= 5:
                                 clip_again = True
-                            break # Break out of dwindow loop to process the split windows properly
+                            break  # Break out of dwindow loop to process the split windows properly
                         else:
                             # Already capped, so we just let it overlap
                             continue
@@ -1071,7 +1071,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                             clipped = True
                             if (end - start) >= 5:
                                 clip_again = True
-                                break # Break out of dwindow loop to process the new `start` cleanly
+                                break  # Break out of dwindow loop to process the new `start` cleanly
 
             if not clipped or ((end - start) >= 5):
                 new_window = window.copy()

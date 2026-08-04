@@ -414,7 +414,7 @@ def run_test_plan_why_reason(my_predbat):
     # intended for JS must be doubled. A single "\{" raises SyntaxWarning today and becomes a
     # SyntaxError in a future Python.
     print("Test web_helper.py has no invalid escape sequences")
-    with open(web_helper.__file__, "r") as han:
+    with open(web_helper.__file__, "r", encoding="utf-8") as han:
         web_helper_source = han.read()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

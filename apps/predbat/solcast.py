@@ -355,9 +355,9 @@ class SolarAPI(ComponentBase):
                 if stamp in period_data:
                     period_data[stamp]["pv_estimate"] = dp4(period_data[stamp]["pv_estimate"] + pv50)
                     period_data[stamp]["pv_estimate10"] = dp4(period_data[stamp]["pv_estimate10"] + pv10)
-                    period_data[stamp]["pv_clearsky"] = dp4(period_data[stamp]["pv_clearsky"] + pv_cs)
+                    period_data[stamp]["pv_clearsky"] = dp4(period_data[stamp].get("pv_clearsky", 0.0) + pv_cs)
                 else:
-                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10, "pv_clearsky": pv_cs}
 
         sorted_data = []
         if period_data:

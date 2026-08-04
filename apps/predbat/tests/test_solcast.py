@@ -3215,7 +3215,7 @@ def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5, c
         pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": raw_kw * plan_interval / 60.0})
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_m, adj_m10, adj_data, _ = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
     return test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end
 
@@ -3570,7 +3570,7 @@ def test_pv_calibration_no_history_ceiling_clips_raw(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 5.0 * plan_interval / 60})
 
         max_kwh = 3.0
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_m, adj_m10, adj_data, _ = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         expected_cap = 1.2 * max_kwh / 60 * plan_interval
         worst_slot = 0

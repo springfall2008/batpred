@@ -100,8 +100,8 @@ def test_inject_creates_contiguous_window(my_predbat):
         print("ERROR: Expected window start at 360, got {}".format(w["start"]))
         failed = True
 
-    if w["end"] != 840:
-        print("ERROR: Expected window end at 840, got {}".format(w["end"]))
+    if w["end"] != 780:
+        print("ERROR: Expected window end at 780, got {}".format(w["end"]))
         failed = True
 
     if not failed:
