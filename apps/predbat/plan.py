@@ -1269,7 +1269,6 @@ class Plan:
         if preclip_new is not None and preclip_prev is not None:
             return preclip_new, preclip_prev
         return plan_new, plan_prev
->>>>>>> origin/main
 
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
