@@ -130,6 +130,13 @@ class Execute:
                         inv_target_soc_percent = self.adjust_battery_target_multi(inverter, target_soc, True, False, check=True, isFreezeCharge=is_freeze_charge)
 
                         current_charge_rate = inverter.get_current_charge_rate()
+
+                        # How much PV is still forecast before this charge window closes?
+                        pv_window_kwh = 0.0
+                        if self.set_charge_low_power:
+                            for pv_minute in range(self.minutes_now, window["end"]):
+                                pv_window_kwh += self.pv_forecast_minute.get(pv_minute, 0.0)
+
                         new_charge_rate, new_charge_rate_real = find_charge_rate(
                             self.minutes_now,
                             inverter.soc_kw,
@@ -147,6 +154,7 @@ class Execute:
                             inverter.battery_temperature,
                             self.battery_temperature_charge_curve,
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
+                            pv_window_kwh=pv_window_kwh,
                         )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
 

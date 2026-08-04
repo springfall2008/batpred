@@ -17,13 +17,70 @@ def make_history(records):
     return [records]
 
 
+def utc(hour, minute, day=23):
+    """Build a UTC timestamp on 2026-07-<day>."""
+    return datetime(2026, 7, day, hour, minute, 0, tzinfo=timezone.utc)
+
+
 def run_web_history_table_tests(my_predbat):
     """Unit tests for build_entity_history_table_data() used by the /entity history table."""
     failed = 0
     print("**** Running web history table tests ****")
 
     # -------------------------------------------------------------------------
-    print("Test: 30-min bucket keeps the most recent sample, not the oldest, when several samples land in the same window")
+    # A row used to report the last sample taken inside its window, so a single momentary reading
+    # stood for the whole half hour and then carried forward into every later slot without a sample
+    # of its own - the /entity table showed a GivEnergy Cloud inverter "Lost" for hours off one blip.
+    print("Test: a momentary sample inside a window does not become the whole row's value")
+    selections = [{"entity_id": "sensor.status", "attribute": None}]
+    records = []
+    stamp = utc(20, 0, day=24)
+    while stamp < utc(23, 0, day=24):
+        records.append({"last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": "Normal"})
+        stamp += timedelta(minutes=5)
+    records.append({"last_updated": utc(21, 57, day=24).strftime("%Y-%m-%dT%H:%M:%S%z"), "state": "Lost"})
+    records.sort(key=lambda record: record["last_updated"])
+
+    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, {"sensor.status": make_history(records)})
+    reported_lost = [ts for ts in sorted_ts_30 if filled_30[0][ts][0] == "Lost"]
+    if reported_lost:
+        print(f"  ERROR: the sensor read Normal at every 30-min mark but these rows report 'Lost': {[ts.strftime('%H:%M') for ts in reported_lost]}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    # Detail rows used to be the offsets -5..-25, i.e. the half hour BEFORE the row, so expanding a
+    # row described a different window and could contradict the row it sat under.
+    print("Test: detail slots belong to the row's own half hour, not the one before it")
+    row_2130 = utc(21, 30, day=24)
+    expected_slots = {ts + timedelta(minutes=offset) for ts in sorted_ts_30 for offset in range(0, 30, 5)}
+    if display_slots_5 != expected_slots:
+        print(f"  ERROR: detail slots should be each row's own half hour; {len(expected_slots - display_slots_5)} of them are missing and {len(display_slots_5 - expected_slots)} belong to another window")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a genuine transition is reported by the row it happened in, and by that row's detail slots")
+    selections = [{"entity_id": "sensor.status", "attribute": None}]
+    records = []
+    stamp = utc(20, 0, day=24)
+    while stamp < utc(23, 0, day=24):
+        records.append({"last_updated": stamp.strftime("%Y-%m-%dT%H:%M:%S%z"), "state": "Normal" if stamp < row_2130 else "Lost"})
+        stamp += timedelta(minutes=5)
+    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, {"sensor.status": make_history(records)})
+
+    value, changed, prev_value = filled_30[0][row_2130]
+    if value != "Lost" or not changed or prev_value != "Normal":
+        print(f"  ERROR: expected the 21:30 row to flag the Normal->Lost change, got value={value} changed={changed} prev={prev_value}")
+        failed += 1
+    if filled_30[0][utc(21, 0, day=24)][0] != "Normal":
+        print(f"  ERROR: expected the 21:00 row to still read 'Normal', got '{filled_30[0][utc(21, 0, day=24)][0]}'")
+        failed += 1
+    detail_values = {filled_5[0].get(row_2130 + timedelta(minutes=offset), ("-", False, None))[0] for offset in range(5, 30, 5)}
+    if detail_values != {"Lost"}:
+        print(f"  ERROR: expected the 21:30 row to expand to its own window (all 'Lost'), got {sorted(detail_values)}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a slot reports the state as of its own timestamp, not a reading taken later")
     selections = [{"entity_id": "sensor.x", "attribute": None}]
     fetch = {
         "sensor.x": make_history(
@@ -37,46 +94,16 @@ def run_web_history_table_tests(my_predbat):
     }
     filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
 
-    bucket_30 = datetime(2026, 7, 23, 10, 0, 0, tzinfo=timezone.utc)
-    value, is_known, prev_value = filled_30[0][bucket_30]
-    if value != "8":
-        print(f"  ERROR: expected 30-min bucket to hold the latest sample '8', got '{value}'")
-        failed += 1
-    if not is_known:
-        print("  ERROR: expected 30-min bucket to be flagged as directly known")
+    value, changed, prev_value = filled_30[0][utc(10, 0)]
+    if value != "-":
+        print(f"  ERROR: nothing had been recorded by 10:00, so the row should read '-', got '{value}'")
         failed += 1
     if prev_value is not None:
-        print(f"  ERROR: expected no prior value before the first bucket, got '{prev_value}'")
+        print(f"  ERROR: expected no prior value before the first row, got '{prev_value}'")
         failed += 1
-
-    # -------------------------------------------------------------------------
-    print("Test: 5-min bucket keeps the most recent sample, not the oldest, when several samples land in the same window")
-    selections = [{"entity_id": "sensor.x", "attribute": None}]
-    fetch = {
-        "sensor.x": make_history(
-            [
-                {"last_updated": "2026-07-23T10:26:00+00:00", "state": "5"},
-                {"last_updated": "2026-07-23T10:27:00+00:00", "state": "6"},
-                {"last_updated": "2026-07-23T10:28:00+00:00", "state": "7"},
-                {"last_updated": "2026-07-23T10:29:00+00:00", "state": "8"},
-                # A later sample in the next 30-min window, purely so 10:25 becomes a rendered detail slot
-                # (detail slots are the offsets -5..-25 leading up to each known 30-min bucket).
-                {"last_updated": "2026-07-23T10:35:00+00:00", "state": "9"},
-            ]
-        )
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-
-    bucket_5 = datetime(2026, 7, 23, 10, 25, 0, tzinfo=timezone.utc)
-    if bucket_5 not in display_slots_5:
-        print(f"  ERROR: test setup expected {bucket_5} to be a rendered detail slot, got {display_slots_5}")
-        failed += 1
-    value, is_known, prev_value = filled_5[0][bucket_5]
-    if value != "8":
-        print(f"  ERROR: expected 5-min bucket to hold the latest sample '8', got '{value}'")
-        failed += 1
-    if not is_known:
-        print("  ERROR: expected 5-min bucket to be flagged as directly known")
+    value, changed, _ = filled_5[0].get(utc(10, 5), ("-", False, None))
+    if value != "8" or not changed:
+        print(f"  ERROR: expected the 10:05 slot to report the latest reading '8' as a change, got value={value} changed={changed}")
         failed += 1
 
     # -------------------------------------------------------------------------
@@ -97,17 +124,17 @@ def run_web_history_table_tests(my_predbat):
     }
     filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
 
-    state_value, _, _ = filled_30[0][bucket_30]
-    attr_value, _, _ = filled_30[1][bucket_30]
+    state_value, _, _ = filled_5[0].get(utc(10, 5), ("-", False, None))
+    attr_value, _, _ = filled_5[1].get(utc(10, 5), ("-", False, None))
     if state_value != "8":
-        print(f"  ERROR: state column should pick the latest sample '8', got '{state_value}'")
+        print(f"  ERROR: state column should report the reading in effect at 10:05 ('8'), got '{state_value}'")
         failed += 1
     if attr_value != "o4":
-        print(f"  ERROR: attribute column should pick the latest sample 'o4', got '{attr_value}'")
+        print(f"  ERROR: attribute column should report the value in effect at 10:05 ('o4'), got '{attr_value}'")
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: 30-min bucket timestamps round down and never overflow the hour")
+    print("Test: 30-min row timestamps round down and never overflow the hour")
     selections = [{"entity_id": "sensor.y", "attribute": None}]
     fetch = {
         "sensor.y": make_history(
@@ -119,42 +146,16 @@ def run_web_history_table_tests(my_predbat):
     }
     filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
 
-    expected_30 = {
-        datetime(2026, 7, 23, 10, 0, 0, tzinfo=timezone.utc),
-        datetime(2026, 7, 23, 23, 30, 0, tzinfo=timezone.utc),
-    }
+    expected_30 = {utc(10, 0), utc(23, 30)}
     if set(sorted_ts_30) != expected_30:
-        print(f"  ERROR: expected 30-min buckets {expected_30}, got {set(sorted_ts_30)}")
+        print(f"  ERROR: expected 30-min rows {expected_30}, got {set(sorted_ts_30)}")
         failed += 1
     if sorted_ts_30 != sorted(sorted_ts_30, reverse=True):
         print("  ERROR: expected sorted_timestamps_30min in descending (newest-first) order")
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: display slots for detail rows are the 5-min offsets leading up to each 30-min bucket")
-    selections = [{"entity_id": "sensor.x", "attribute": None}]
-    fetch = {
-        "sensor.x": make_history(
-            [
-                {"last_updated": "2026-07-23T10:01:00+00:00", "state": "5"},
-                {"last_updated": "2026-07-23T10:35:00+00:00", "state": "9"},
-            ]
-        )
-    }
-    filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-
-    # Expected: the 5-min offsets (-5 to -25) leading up to each of the two known 30-min buckets (10:00 and 10:30)
-    expected_slots = set()
-    for base_hour, base_minute in ((10, 0), (10, 30)):
-        base = datetime(2026, 7, 23, base_hour, base_minute, 0, tzinfo=timezone.utc)
-        for offset in (5, 10, 15, 20, 25):
-            expected_slots.add(base - timedelta(minutes=offset))
-    if display_slots_5 != expected_slots:
-        print(f"  ERROR: expected display slots {expected_slots}, got {display_slots_5}")
-        failed += 1
-
-    # -------------------------------------------------------------------------
-    print("Test: a 30-min bucket with no direct sample carries forward the previous known value")
+    print("Test: a row with no sample of its own carries forward the previous known value")
     selections = [
         {"entity_id": "sensor.a", "attribute": None},
         {"entity_id": "sensor.b", "attribute": None},
@@ -165,43 +166,40 @@ def run_web_history_table_tests(my_predbat):
     }
     filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
 
-    ts_1000 = datetime(2026, 7, 23, 10, 0, 0, tzinfo=timezone.utc)
-    ts_1030 = datetime(2026, 7, 23, 10, 30, 0, tzinfo=timezone.utc)
-
-    value, is_known, prev_value = filled_30[0][ts_1030]
-    if value != "A1" or is_known:
-        print(f"  ERROR: expected sensor.a to carry forward 'A1' as unknown at 10:30, got value={value} is_known={is_known}")
+    value, changed, _ = filled_30[0][utc(10, 30)]
+    if value != "A1" or changed:
+        print(f"  ERROR: expected sensor.a to carry 'A1' forward unchanged at 10:30, got value={value} changed={changed}")
         failed += 1
 
-    value, is_known, prev_value = filled_30[1][ts_1000]
-    if value != "-" or is_known or prev_value is not None:
-        print(f"  ERROR: expected sensor.b to have no value before its first sample at 10:00, got value={value} is_known={is_known} prev_value={prev_value}")
+    value, changed, prev_value = filled_30[1][utc(10, 0)]
+    if value != "-" or changed or prev_value is not None:
+        print(f"  ERROR: expected sensor.b to have no value before its first sample, got value={value} changed={changed} prev={prev_value}")
         failed += 1
 
-    value, is_known, prev_value = filled_30[1][ts_1030]
-    if value != "B1" or not is_known:
-        print(f"  ERROR: expected sensor.b to show its own sample 'B1' at 10:30, got value={value} is_known={is_known}")
+    value, changed, _ = filled_30[1][utc(10, 30)]
+    if value != "B1" or not changed:
+        print(f"  ERROR: expected sensor.b to report its own sample 'B1' at 10:30 as a change, got value={value} changed={changed}")
         failed += 1
 
     # -------------------------------------------------------------------------
-    print("Test: records missing last_updated are skipped and a missing state renders as 'None'")
+    print("Test: records with a missing or unparseable last_updated are skipped and a missing state renders as 'None'")
     selections = [{"entity_id": "sensor.z", "attribute": None}]
     fetch = {
         "sensor.z": make_history(
             [
                 {"state": "no-timestamp"},
+                {"last_updated": "not-a-timestamp", "state": "unparseable"},
                 {"last_updated": "2026-07-23T12:00:00+00:00", "state": None},
             ]
         )
     }
     filled_30, filled_5, sorted_ts_30, display_slots_5 = build_entity_history_table_data(selections, fetch)
-    ts_1200 = datetime(2026, 7, 23, 12, 0, 0, tzinfo=timezone.utc)
-    value, is_known, _ = filled_30[0][ts_1200]
-    if value != "None" or not is_known:
-        print(f"  ERROR: expected a missing state to render as the string 'None', got value={value} is_known={is_known}")
+    value, changed, _ = filled_30[0][utc(12, 0)]
+    if value != "None" or not changed:
+        print(f"  ERROR: expected a missing state to render as the string 'None', got value={value} changed={changed}")
         failed += 1
     if len(sorted_ts_30) != 1:
-        print(f"  ERROR: expected the record without last_updated to be skipped, got buckets {sorted_ts_30}")
+        print(f"  ERROR: expected the unusable records to be skipped, got rows {sorted_ts_30}")
         failed += 1
 
     return failed

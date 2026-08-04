@@ -59,7 +59,7 @@ message InverterData {
 }
 
 message ControlStatus {
-  uint32 mode               = 1;  // OperatingMode enum (0=auto,1=manual)
+  reserved 1;
   bool   charge_enabled     = 2;
   bool   discharge_enabled  = 3;
   uint32 charge_rate_w      = 4;

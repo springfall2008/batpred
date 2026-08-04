@@ -26,6 +26,7 @@ import uuid
 import aiohttp
 
 from component_base import ComponentBase
+from mock_base import MockBase
 from predbat_metrics import record_api_call
 
 # Defined locally (not imported from utils) - every cloud component defines its own
@@ -45,6 +46,9 @@ ENPHASE_REFRESH_SETTINGS = 30  # profile, battery settings, schedule config - ch
 ENPHASE_REFRESH_STATUS = 5  # battery SOC/available energy - needs to stay fresh for planning
 ENPHASE_REFRESH_ENERGY = 5  # today energy totals
 ENPHASE_REFRESH_POWER = 5  # latest instantaneous power
+# How many intra-day buckets to step back when deriving power from the /today energy arrays.
+# 1 would be the just-closed bucket, which the cloud is still back-filling; 2 is settled.
+ENPHASE_SETTLED_BUCKETS = 2
 
 ENPHASE_CACHE_KEYS = ["sites", "battery_status", "battery_settings", "profile", "schedules", "site_settings", "today", "latest_power"]
 ENPHASE_CACHE_VERSION = 2
@@ -128,21 +132,26 @@ def today_channel_kwh(today_data, channel):
 
 
 def interval_power(values, start_time, interval_length, now_ts):
-    """Estimate current watts from the most recent completed intra-day energy bucket.
+    """Estimate current watts from the most recent SETTLED intra-day energy bucket.
 
     `values` is the /today array of per-interval energy in Wh (each bucket covers `interval_length`
     seconds starting at `start_time`, a Unix timestamp at local midnight). The bucket index for the
-    current time is (now - start_time) / interval_length; the last COMPLETED bucket is one before
-    that. Its energy divided by the bucket duration in hours gives average watts over that bucket -
-    a stable, correct instantaneous estimate that needs no cross-poll delta tracking. Returns 0.0
-    when the data is missing/empty or the timing is unusable.
+    current time is (now - start_time) / interval_length.
+
+    The bucket that has only just closed is NOT usable: the cloud keeps back-filling it for several
+    minutes, so its first read returns roughly a third of the eventual figure and later corrects
+    upward. Reading it made every power sensor saw-tooth by ~3x on each bucket rollover. Observed
+    revisions only ever touched the just-closed bucket, so stepping back ENPHASE_SETTLED_BUCKETS
+    gives a value that has stopped changing, at the cost of up to one extra bucket of lag.
+
+    Returns 0.0 when the data is missing/empty or the timing is unusable.
     """
     if not values or not interval_length or start_time is None or now_ts is None:
         return 0.0
     hours = interval_length / 3600.0
     if hours <= 0:
         return 0.0
-    index = int((now_ts - start_time) / interval_length) - 1
+    index = int((now_ts - start_time) / interval_length) - ENPHASE_SETTLED_BUCKETS
     if index < 0:
         index = 0
     if index >= len(values):
@@ -159,6 +168,11 @@ def enphase_time_to_ha(value):
     """Convert an Enphase 'HH:MM' time to the HA 'HH:MM:SS' option format."""
     text = str(value or "00:00")[:5]
     return text + ":00"
+
+
+def _schedule_id_of(entry):
+    """Return the cloud id of a schedule detail entry ('scheduleId', or 'id' on older shapes)."""
+    return entry.get("scheduleId") or entry.get("id")
 
 
 def schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
@@ -385,7 +399,6 @@ class EnphaseAPI(ComponentBase):
         profile = self.profile.get(site_id, {})
         settings = self.battery_settings.get(site_id, {})
         today = self.today.get(site_id, {})
-        power = self.latest_power.get(site_id, {})
 
         self.dashboard_item(
             f"{entity_base}_soc_percent",
@@ -483,14 +496,7 @@ class EnphaseAPI(ComponentBase):
                 app="enphase",
             )
 
-        self.dashboard_item(
-            f"{entity_base}_load_power",
-            state=power.get("watts"),
-            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase Load Power", "icon": "mdi:home-lightning-bolt"},
-            app="enphase",
-        )
-
-        # Instantaneous power from the most recent completed intra-day 15-minute energy bucket of
+        # Instantaneous power from the most recent settled intra-day 15-minute energy bucket of
         # the /today arrays (Wh per interval -> average watts over that interval). This reads a
         # single bucket value per poll, so it is inherently stable within an interval and needs no
         # cross-poll delta tracking.
@@ -501,9 +507,25 @@ class EnphaseAPI(ComponentBase):
         channel_watts = {channel: interval_power(arrays.get(channel, []), start_time, interval_length, now_ts) for channel in ("production", "import", "export", "charge", "discharge")}
 
         pv_power = channel_watts.get("production", 0.0)
-        grid_power = channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0)
-        battery_power = channel_watts.get("discharge", 0.0) - channel_watts.get("charge", 0.0)
+        grid_power = round(channel_watts.get("import", 0.0) - channel_watts.get("export", 0.0), 1)
+        battery_power = round(channel_watts.get("discharge", 0.0) - channel_watts.get("charge", 0.0), 1)
+        # House load is the energy-balance residual of the other three, taken from the same settled
+        # bucket so the four sensors agree and a power-flow display balances. This is exactly how the
+        # cloud derives its own consumption channel (verified equal to within 1 Wh on 80 of 96
+        # buckets), so nothing is gained by reading that channel instead.
+        #
+        # Being the residual, it also absorbs all the timing/rounding skew between the micros, the
+        # CT clamps and the battery telemetry. While the battery is cycling hard those terms dwarf
+        # the house term and the residual can go unphysical, so it is clamped at zero - a negative
+        # house load would render nonsensically. load_today remains the trustworthy energy figure.
+        load_power = max(0.0, round(pv_power + grid_power + battery_power, 1))
 
+        self.dashboard_item(
+            f"{entity_base}_load_power",
+            state=load_power,
+            attributes={"unit_of_measurement": "W", "device_class": "power", "state_class": "measurement", "friendly_name": "Enphase Load Power", "icon": "mdi:home-lightning-bolt"},
+            app="enphase",
+        )
         self.dashboard_item(
             f"{entity_base}_pv_power",
             state=pv_power,
@@ -735,12 +757,27 @@ class EnphaseAPI(ComponentBase):
         if limit is not None:
             payload["limit"] = int(limit)
         schedule_id = cloud_entry.get("id")
+        if schedule_id and not enabled:
+            # The cloud ignores isEnabled=False on a PUT (it answers 200 with isEnabled still true
+            # and keeps enforcing the window), so the only way to retire a window is to delete it.
+            # A lingering window would also conflict with the other family's next write.
+            self.log(f"Enphase: Deleting {family} schedule {schedule_id} on site {site_id} (window no longer required)")
+            if not await self._delete_schedule(site_id, schedule_id):
+                return False
+            # Drop the id/window so the next apply is a no-op while disabled, and a re-enable creates
+            # a fresh schedule rather than PUTting an id the cloud no longer knows.
+            cleared = dict(cloud_entry)
+            for field in ("id", "startTime", "endTime", "limit"):
+                cleared.pop(field, None)
+            cleared["enabled"] = False
+            self.schedules.setdefault(site_id, {})[family_key] = cleared
+            return True
         if schedule_id:
             self.log(f"Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
-            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
+            result = await self._put_schedule_with_conflict_retry(site_id, family_key, schedule_id, payload)
             if result is not None:
                 # Optimistically cache the new state, preserving the id and other fields.
-                updated = dict(cloud_entry)
+                updated = dict(self.schedules.get(site_id, {}).get(family_key) or cloud_entry)
                 updated.update({"startTime": start_hm, "endTime": end_hm, "limit": limit, "enabled": bool(enabled)})
                 self.schedules.setdefault(site_id, {})[family_key] = updated
         else:
@@ -750,6 +787,59 @@ class EnphaseAPI(ComponentBase):
                 # Re-read once so we learn the new schedule's cloud-assigned id for future edits.
                 await self.get_schedules(site_id)
         return result is not None
+
+    async def _put_schedule_with_conflict_retry(self, site_id, family_key, schedule_id, payload):
+        """PUT a schedule, re-reading and retrying once if the cloud reports a conflict.
+
+        HTTP 409 means some other schedule overlaps the window we asked for. Our cached view of the
+        account is up to 30 minutes stale, so re-read it: that both refreshes the id we should be
+        writing to and prunes any stray sibling that is causing the overlap. Retried once only - a
+        conflict that survives the re-read is a real clash (typically the other family's window)
+        and retrying it again would just burn API calls every cycle.
+        """
+        for attempt in range(2):
+            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
+            if result is not None or self.last_error_status != 409 or attempt:
+                return result
+            self.log(f"Enphase: Schedule {schedule_id} on site {site_id} conflicts with another schedule; re-reading schedules and retrying once")
+            await self.get_schedules(site_id)
+            schedule_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id") or schedule_id
+        return None
+
+    def _is_read_only(self):
+        """Return True when Predbat is in read-only mode and must not write to the account."""
+        return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
+
+    async def _delete_schedule(self, site_id, schedule_id):
+        """Delete one schedule by id. Returns True on success.
+
+        Deletion is a POST to the schedule's /delete sub-resource. The gateway does not allow the
+        DELETE verb here - it rejects it with "403 Invalid CORS request" - and because a 403 counts
+        as an auth failure, using it also burned a re-login on every attempt.
+        """
+        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True)
+        return result is not None
+
+    async def _prune_sibling_schedules(self, site_id, family_key, details, keep):
+        """Delete every schedule in a family except the one Predbat drives, and return the survivors.
+
+        Predbat owns one window per direction. A schedule it does not track cannot be updated or
+        cleared by it, but the cloud still enforces it and still rejects any overlapping write, so
+        a stray sibling wedges the family permanently. Read-only mode deletes nothing.
+        """
+        keep_id = _schedule_id_of(keep)
+        siblings = [item for item in details if _schedule_id_of(item) != keep_id]
+        if not siblings or self._is_read_only():
+            return details
+        survivors = [item for item in details if _schedule_id_of(item) == keep_id]
+        for item in siblings:
+            schedule_id = _schedule_id_of(item)
+            self.log(f"Enphase: Deleting duplicate {family_key.upper()} schedule {schedule_id} on site {site_id}: {item.get('startTime')}-{item.get('endTime')} (Predbat drives one window per direction)")
+            if await self._delete_schedule(site_id, schedule_id):
+                continue
+            self.log(f"Warn: Enphase: Failed to delete duplicate {family_key.upper()} schedule {schedule_id} on site {site_id}; it may conflict with Predbat's writes")
+            survivors.append(item)
+        return survivors
 
     def _is_schedule_pending(self, site_id, family):
         """Return True when the cached cloud schedule exists but is stuck in pending status."""
@@ -1083,8 +1173,12 @@ class EnphaseAPI(ComponentBase):
         Each family (cfg/dtg/rbd) reports ``scheduleStatus``, ``count`` and, when count > 0, a
         ``details`` list of schedule objects. A schedule object (confirmed against a battery
         account) carries ``scheduleId``, ``startTime``/``endTime`` (HH:MM), ``limit``, ``days``,
-        ``isEnabled`` and ``isDeleted``. Only the first schedule per family is used (Predbat drives
-        one window per direction); the ``scheduleId`` is what the write path updates in place.
+        ``isEnabled`` and ``isDeleted``. Predbat drives one window per direction, so exactly one
+        schedule per family is used: the one already adopted (matched by ``scheduleId``, which the
+        write path then updates in place), else the first non-deleted entry. The list order is not
+        stable - the cloud sorts by ``updatedAt`` - so the adopted id must be matched rather than
+        the position taken. In write mode any other schedule in the family is deleted, because a
+        schedule Predbat does not track still blocks overlapping writes with HTTP 409.
         """
         data = await self.request_json("GET", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config")
         if data is None:
@@ -1092,9 +1186,17 @@ class EnphaseAPI(ComponentBase):
         parsed = {}
         for family_key in ("cfg", "dtg", "rbd"):
             family_data = data.get(family_key) or {}
-            details = family_data.get("details") or []
-            # Prefer the first non-deleted schedule
-            entry = next((item for item in details if isinstance(item, dict) and not item.get("isDeleted")), details[0] if details else {})
+            details = [item for item in (family_data.get("details") or []) if isinstance(item, dict) and not item.get("isDeleted")]
+            # Stay on the schedule we already adopted. The cloud orders details by updatedAt, so
+            # writing to our schedule pushes it behind any sibling and taking details[0] would swap
+            # us onto that sibling; we would then write a window overlapping the one we just wrote
+            # and the cloud would reject it with HTTP 409 (CONFLICTING_SCHEDULE_*).
+            adopted_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id")
+            entry = next((item for item in details if _schedule_id_of(item) == adopted_id), None) if adopted_id else None
+            if entry is None:
+                # Nothing adopted yet, or the adopted schedule was removed outside Predbat.
+                entry = details[0] if details else {}
+            details = await self._prune_sibling_schedules(site_id, family_key, details, entry)
             # "supported" gates whether Predbat can use this schedule family. Real accounts report
             # a per-family scheduleStatus ("active" seen so far); treat the usable statuses as
             # supported, with a fallback to the (unverified) boolean flags.
@@ -1107,7 +1209,7 @@ class EnphaseAPI(ComponentBase):
                 "limit": safe_int(entry.get("limit"), None),
                 "enabled": bool(entry.get("isEnabled", False)),
                 "supported": supported,
-                "count": safe_int(family_data.get("count"), 0),
+                "count": len(details),
                 "status": family_data.get("scheduleStatus"),
             }
         self.schedules[site_id] = parsed
@@ -1393,7 +1495,7 @@ class EnphaseAPI(ComponentBase):
         stripped = (text or "").lstrip().lower()
         return stripped.startswith("<!doctype") or stripped.startswith("<html")
 
-    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None):
+    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None, allow_empty=False):
         """Perform an authenticated JSON request with retries and a single 401 re-login.
 
         Builds the request URL from BASE_URL + path and attaches family-appropriate headers
@@ -1405,6 +1507,8 @@ class EnphaseAPI(ComponentBase):
         - HTTP 429 and 5xx responses, plus timeouts/connection errors, are retried with
           jittered backoff up to ENPHASE_RETRIES times.
         - Any other non-200 status is treated as a terminal failure.
+        ``allow_empty`` additionally accepts a 204/empty body as success (returning {} rather than
+        None), as a DELETE returns no content.
         Every outcome is recorded via record_api_call("enphase", ...) for metrics/health.
         Returns the parsed JSON body on success, or None on failure (self.last_error_status is
         set to the last HTTP status seen, where available).
@@ -1445,7 +1549,7 @@ class EnphaseAPI(ComponentBase):
                 await asyncio.sleep(min(30, (retry + 1) * (2 + random.random() * 3)))
                 continue
 
-            if status != 200:
+            if status != 200 and not (allow_empty and status == 204):
                 self.log(f"Warn: Enphase: HTTP {status} on {path}")
                 record_api_call("enphase", False, "client_error")
                 self.last_error_status = status
@@ -1461,75 +1565,13 @@ class EnphaseAPI(ComponentBase):
 
             record_api_call("enphase", True)
             self.update_success_timestamp()
+            # A DELETE succeeds with 204/no body; callers passing allow_empty want success, not None.
+            if json_data is None and allow_empty:
+                return {}
             return json_data
 
         self.failures_total += 1
         return None
-
-
-class MockBase:  # pragma: no cover
-    """Minimal stand-in for the Predbat base object so EnphaseAPI can run standalone.
-
-    Provides just the attributes and methods ComponentBase and EnphaseAPI read
-    from ``self.base`` (prefix, args, timezone/clock, state/arg accessors and a
-    logger). It deliberately has no ``components`` attribute, so ``self.storage``
-    resolves to None and the disk cache is skipped for a standalone run.
-    """
-
-    def __init__(self):
-        """Initialise the mock base with the current clock and empty state stores."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.fatal_error = False
-        self.had_errors = False
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        """Return the stored state (or full record when raw) for an entity id."""
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        """Store an entity's state and attributes in memory."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print a timestamped log line to stdout."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and store a published entity, so a standalone run shows what it publishes."""
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return the default for any requested arg (no real config in standalone mode)."""
-        return default
-
-    def set_arg(self, key, value):
-        """Print an arg that automatic_config would set, resolving any referenced entity state."""
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_enphase_api(username, password, site_id):  # pragma: no cover

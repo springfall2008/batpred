@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 import aiohttp
 
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
 TESLEMETRY_DEFAULT_URL = "https://api.teslemetry.com"
@@ -831,7 +832,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return import_rate, export_rate
 
     @staticmethod
-    def _quantise_side(rate_dict, default_pence):
+    def _quantise_side(rate_dict, default_pence, exclude_ranges=()):
         """Quantise a per-minute pence rate dict into <=3 named GBP tiers over today+tomorrow.
 
         Samples every 30 minutes for today (minutes 0-1439) and tomorrow (1440-2879), converts to
@@ -839,6 +840,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         onto the real tiers (cheapest -> SUPER_OFF_PEAK) or splits [min,max] into 3 equal-width bands
         priced at each band's mean. Returns (tier_prices, today_tiers, tomorrow_tiers) where the slot
         lists only ever name tiers present in tier_prices (matched sets).
+
+        exclude_ranges is a list of (start_min, end_min) absolute-minute ranges (today 0-1439,
+        tomorrow 1440-2879) whose slots are a scheduled export - they are priced via the reserved
+        ON_PEAK boost band, not the 3 real bands, so they are kept OUT of the band definition here.
+        Otherwise a saving-session/export spike would blow up the [min,max] range and collapse the
+        whole normal day into a single tier. Excluded slots are still assigned a real tier (their
+        value clamped into the excluded-slot-free range) but that tier is later overwritten by the
+        boost, so the choice is immaterial. With no exclude_ranges this is byte-identical to before.
         """
 
         def slot_price(minute):
@@ -846,21 +855,40 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             pence = rate_dict.get(minute, default_pence)
             return round(max(0.0, pence) / 100.0, 2)
 
-        today = [slot_price(m) for m in range(0, 1440, SLOT_MINUTES)]
-        tomorrow = [slot_price(m) for m in range(1440, 2880, SLOT_MINUTES)]
-        combined = today + tomorrow
-        distinct = sorted(set(combined))
+        def is_excluded(minute):
+            """True if a sample minute falls in a scheduled-export range (priced via ON_PEAK instead)."""
+            return any(start <= minute < end for start, end in exclude_ranges)
+
+        sample_minutes = list(range(0, 2880, SLOT_MINUTES))
+        combined = [slot_price(minute) for minute in sample_minutes]
+        today = combined[:SLOTS_PER_DAY]
+        tomorrow = combined[SLOTS_PER_DAY:]
+        # Values that DEFINE the bands exclude scheduled-export slots so a spike cannot dominate.
+        band_values = [price for minute, price in zip(sample_minutes, combined) if not is_excluded(minute)]
+        if not band_values:
+            band_values = list(combined)
+        low, high = min(band_values), max(band_values)
+        distinct = sorted(set(band_values))
+
+        def clamp(value):
+            """Clamp a slot value into the (excluded-slot-free) band range before tier assignment."""
+            return min(max(value, low), high)
 
         if len(distinct) <= len(REAL_TIERS):
             value_to_tier = {value: REAL_TIERS[index] for index, value in enumerate(distinct)}
             tier_prices = {tier: value for value, tier in value_to_tier.items()}
 
             def band_of(value):
-                """Return the tier for an exact value in the small-distinct case."""
-                return value_to_tier[value]
+                """Return the tier for a value by nearest non-excluded distinct price.
+
+                An excluded (scheduled-export) slot can carry an in-range price that is not itself one
+                of the non-excluded distinct prices, so an exact lookup would KeyError; its tier is
+                overwritten by the boost anyway, so mapping to the nearest distinct price is safe.
+                """
+                target = clamp(value)
+                return value_to_tier.get(target) or value_to_tier[min(distinct, key=lambda price: abs(price - target))]
 
         else:
-            low, high = distinct[0], distinct[-1]
             width = (high - low) / len(REAL_TIERS)
             buckets = {index: [] for index in range(len(REAL_TIERS))}
 
@@ -870,13 +898,13 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                     return 0
                 return min(len(REAL_TIERS) - 1, int((value - low) / width))
 
-            for value in combined:
-                buckets[band_index(value)].append(value)
+            for price in band_values:
+                buckets[band_index(price)].append(price)
             tier_prices = {REAL_TIERS[index]: round(sum(values) / len(values), 2) for index, values in buckets.items() if values}
 
             def band_of(value):
-                """Return the tier name for the band a value falls in."""
-                return REAL_TIERS[band_index(value)]
+                """Return the tier name for the band a value falls in (clamped into the band range)."""
+                return REAL_TIERS[band_index(clamp(value))]
 
         today_tiers = [band_of(value) for value in today]
         tomorrow_tiers = [band_of(value) for value in tomorrow]
@@ -918,18 +946,45 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         return layout
 
     @staticmethod
+    def _day_runs(layout):
+        """Group days 0-6 sharing an identical interval list into maximal contiguous day-of-week runs.
+
+        _side_layout replicates tomorrow's shape onto every day except today, so 6 of the 7 entries
+        are typically byte-identical - grouping first means callers emit one ranged period per run
+        instead of one period per individual day. Returns [(from_day, to_day, intervals), ...],
+        sorted; runs never wrap past day 6 back to day 0, since a run only ever extends forward.
+        """
+        by_signature = {}
+        for day in range(7):
+            by_signature.setdefault(tuple(layout.get(day, [])), []).append(day)
+
+        runs = []
+        for intervals, days in by_signature.items():
+            days = sorted(days)
+            run_start = run_end = days[0]
+            for day in days[1:]:
+                if day == run_end + 1:
+                    run_end = day
+                else:
+                    runs.append((run_start, run_end, intervals))
+                    run_start = run_end = day
+            runs.append((run_start, run_end, intervals))
+        runs.sort()
+        return runs
+
+    @staticmethod
     def _render_side(layout, tier_prices):
         """Render a per-day interval layout into (energy_charges_side, tou_periods), matched tier sets only."""
         periods = {}
         used = set()
-        for day, intervals in layout.items():
+        for from_day, to_day, intervals in TeslemetryAPI._day_runs(layout):
             for frm, to, tier in intervals:
                 from_hour, from_minute = frm // 60, frm % 60
                 if to >= 1440:
                     to_hour, to_minute = 0, 0
                 else:
                     to_hour, to_minute = to // 60, to % 60
-                periods.setdefault(tier, {"periods": []})["periods"].append({"fromDayOfWeek": day, "toDayOfWeek": day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute})
+                periods.setdefault(tier, {"periods": []})["periods"].append({"fromDayOfWeek": from_day, "toDayOfWeek": to_day, "fromHour": from_hour, "fromMinute": from_minute, "toHour": to_hour, "toMinute": to_minute})
                 used.add(tier)
         rates = {tier: price for tier, price in tier_prices.items() if tier in used}
         energy_charges_side = {"ALL": {"rates": {"ALL": 0}}, "AllYear": {"rates": rates}}
@@ -985,17 +1040,18 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 day = (today_dow + offset) % 7
                 layout[day] = TeslemetryAPI._carve_interval(layout[day], seg_start, seg_end, BOOST_TIER)
 
-    def _rate_side(self, rate_dict, default_gbp):
+    def _rate_side(self, rate_dict, default_gbp, exclude_ranges=()):
         """Return the 4-tuple (energy_charges_side, tou_periods, tier_prices, layout) for one side.
 
         layout is None in the flat/fallback branch (no rates), signalling build_tariff to skip the boost;
-        otherwise it is the per-DOW interval layout the boost carves into.
+        otherwise it is the per-DOW interval layout the boost carves into. exclude_ranges names the
+        scheduled-export slots to keep out of the real-tier band definition (see _quantise_side).
         """
         if not rate_dict:
             flat = round(max(0.0, default_gbp), 2)
             return {"ALL": {"rates": {"ALL": flat}}}, {}, {"SUPER_OFF_PEAK": flat}, None
         today_dow = self._tesla_dow(self._local_today_weekday())
-        tier_prices, today_tiers, tomorrow_tiers = self._quantise_side(rate_dict, default_gbp * 100.0)
+        tier_prices, today_tiers, tomorrow_tiers = self._quantise_side(rate_dict, default_gbp * 100.0, exclude_ranges)
         layout = self._side_layout(today_tiers, tomorrow_tiers, today_dow)
         return (*self._render_side(layout, tier_prices), tier_prices, layout)
 
@@ -1035,22 +1091,30 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             now_min = self.get_minutes_now()
         import_gbp, export_gbp = self.current_rates()
         today_dow = self._tesla_dow(self._local_today_weekday())
-        buy_charges, buy_periods, buy_prices, buy_layout = self._rate_side(self._side_rates("import"), import_gbp)
-        sell_charges, sell_periods, sell_prices, sell_layout = self._rate_side(self._side_rates("export"), export_gbp)
+        # Compute the boost segments BEFORE quantising so the scheduled-export slots can be kept out of
+        # the real-tier band definition - they are priced via the reserved ON_PEAK band, and leaving a
+        # saving-session/export spike in would blow up the [min,max] range and flatten the normal day.
+        segments = self._boost_segments(discharge_window, now_min) if discharge_window is not None else []
+        exclude_ranges = [(offset * 1440 + seg_start, offset * 1440 + seg_end) for offset, seg_start, seg_end in segments]
+        buy_charges, buy_periods, buy_prices, buy_layout = self._rate_side(self._side_rates("import"), import_gbp, exclude_ranges)
+        sell_charges, sell_periods, sell_prices, sell_layout = self._rate_side(self._side_rates("export"), export_gbp, exclude_ranges)
         code = "PREDBAT"
         # buy_layout/sell_layout are None only in the flat-fallback branch (no rate data, priced via the
         # ALL field) - there are no per-day bands to carve a boost into, and that degenerate zero-rate-data
         # case is not a normal production state, so the boost is intentionally skipped there.
-        if discharge_window is not None and buy_layout is not None and sell_layout is not None:
+        if segments and buy_layout is not None and sell_layout is not None:
             boost = self._boost_price(buy_prices, sell_prices)
-            segments = self._boost_segments(discharge_window, now_min)
             self._apply_boost(buy_layout, sell_layout, segments, today_dow)
             buy_charges, buy_periods = self._render_side(buy_layout, {**buy_prices, BOOST_TIER: boost})
             sell_charges, sell_periods = self._render_side(sell_layout, {**sell_prices, BOOST_TIER: boost})
         return self._assemble_tariff(code, buy_charges, buy_periods, sell_charges, sell_periods)
 
     def _side_rates(self, kind):
-        """Return the base rate dict for 'import'/'export', or {} when no base is wired (tests/fallback)."""
+        """Return the base rate dict for 'import'/'export', or {} when no base is wired (tests/fallback).
+
+        Reads the live reference: fetch publishes rate_import/rate_export atomically (built into a
+        local and assigned once), so a reader always sees a complete dict, never a half-built one.
+        """
         base = getattr(self, "base", None)
         if base is None:
             return {}
@@ -1171,59 +1235,6 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
     async def final(self):
         """Cleanup on shutdown."""
         self.log("Info: TeslemetryAPI shutdown")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base object for standalone Teslemetry testing (stands in for the PredBat instance)."""
-
-    def __init__(self):
-        """Initialise the mock base with a local-time clock and empty entity/arg stores."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        """Return a configured arg value, consulting self.args so set_read_only actually gates the emulator's control writes (the CLI harness relies on this to run read-only)."""
-        return self.args.get(arg, default)
-
-    def set_arg(self, key, value):
-        """Print an arg assignment made by automatic_config, showing the referenced entity's current state."""
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_teslemetry_api(key, site_id=None, base_url=None, control=False):

@@ -615,6 +615,15 @@ class Prediction:
             pv_forecast_minute_step_flat = pv_forecast_minute_step
             load_minutes_step_flat = load_minutes_step
 
+        # PV forecast remaining from each step to the end of the forecast, used to work out how much PV a charge
+        # window still overlaps with as low power charging must be abandoned when the sun is contributing
+        pv_remaining_kwh = {}
+        if set_charge_low_power:
+            pv_remaining = 0.0
+            for minute_step in range(((self.forecast_minutes - 1) // step) * step, -1, -step):
+                pv_remaining += pv_forecast_minute_step_flat.get(minute_step, 0.0)
+                pv_remaining_kwh[minute_step] = pv_remaining
+
         # Simulate each forward minute
         minute = 0
         while minute < self.forecast_minutes:
@@ -1003,6 +1012,13 @@ class Prediction:
                     battery_rate_max_charge_combined = battery_rate_max_charge + min(battery_rate_max_charge_dc - battery_rate_max_charge, pv_above)
                 else:
                     battery_rate_max_charge_combined = battery_rate_max_charge
+
+                # How much PV is still to come before this charge window closes?
+                pv_window_kwh = 0.0
+                if set_charge_low_power:
+                    window_end_step = min(max(((charge_window[charge_window_n]["end"] - self.minutes_now) // step) * step, minute), self.forecast_minutes)
+                    pv_window_kwh = pv_remaining_kwh.get(minute, 0.0) - pv_remaining_kwh.get(window_end_step, 0.0)
+
                 charge_rate_now, charge_rate_now_curve = find_charge_rate(
                     minute_absolute,
                     soc,
@@ -1019,6 +1035,7 @@ class Prediction:
                     None,
                     battery_temperature,
                     self.battery_temperature_charge_curve,
+                    pv_window_kwh=pv_window_kwh,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
@@ -1287,8 +1304,11 @@ class Prediction:
                 predict_state[stamp] = "g" + grid_state + "b" + battery_state
                 predict_battery_power[stamp] = round(battery_draw * (60 / step), 3)
                 predict_battery_cycle[stamp] = round(battery_cycle, 3)
-                # Use plan_interval_minutes instead of hardcoded 30 for scaling
-                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (self.plan_interval_minutes / step), 3)
+                # Two consecutive `step`-sized energy chunks cover 2*step minutes; convert to an
+                # instantaneous kW reading with 60/(2*step) - a constant derived from `step` (the
+                # simulation's fixed PREDICT_STEP), not plan_interval_minutes, which is unrelated
+                # to how many raw steps are being summed here.
+                predict_pv_power[stamp] = round((pv_forecast_minute_step[minute] + pv_forecast_minute_step.get(minute + step, 0)) * (60 / (2 * step)), 3)
                 predict_grid_power[stamp] = round(diff * (60 / step), 3)
                 predict_load_power[stamp] = round(load_yesterday * (60 / step), 3)
                 if carbon_enable:

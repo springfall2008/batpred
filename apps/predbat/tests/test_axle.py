@@ -1072,7 +1072,7 @@ def _test_axle_load_slot_export(my_predbat=None):
 
     # Load the Axle export slot
     rate_replicate = {}
-    load_axle_slot(base, axle_sessions, export=True, rate_replicate=rate_replicate)
+    load_axle_slot(base, axle_sessions, base.rate_export, export=True, rate_replicate=rate_replicate)
 
     # Verify rates were increased by 100p/kWh during the event period
     for minute in range(start_minutes, end_minutes):
@@ -1155,7 +1155,7 @@ def _test_axle_load_slot_import(my_predbat=None):
     original_rate = base.rate_import[start_minutes]
 
     rate_replicate = {}
-    load_axle_slot(base, axle_sessions, export=False, rate_replicate=rate_replicate)
+    load_axle_slot(base, axle_sessions, base.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Verify import rates were decreased by pence_per_kwh during the event period
     for minute in range(start_minutes, end_minutes):
