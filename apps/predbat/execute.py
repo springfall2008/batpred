@@ -818,11 +818,15 @@ class Execute:
                     # Force off unsupported feature
                     self.log("Note: Inverter does not support charge freeze - disabled")
                     self.set_charge_freeze = False
-                elif not self.args.get("charge_freeze_service", ""):
-                    # The inverter type supports charge freeze in general, but this setup has no
-                    # charge_freeze_service configured - adjust_charge_immediate() would silently
-                    # fall back to a real charge_start_service call instead of a passive hold (#4424),
-                    # so treat it the same as an inverter type with no support at all.
+                elif not inverter.inv_has_target_soc and not self.args.get("charge_freeze_service", ""):
+                    # Inverters with a target SoC (GE, GEC, GEE, the cloud integrations, etc.) already
+                    # achieve a passive hold via adjust_battery_target() and never need
+                    # charge_freeze_service configured at all - GE's own default template doesn't set it.
+                    # Only inverters without that fallback (e.g. SIG, FoxESS) rely on charge_freeze_service
+                    # as their sole freeze mechanism - for those, a missing service means
+                    # adjust_charge_immediate() silently falls back to a real charge_start_service call
+                    # instead of a passive hold (#4424), so treat it the same as an inverter type with no
+                    # support at all.
                     self.log("Note: No charge_freeze_service configured - charge freeze disabled")
                     self.set_charge_freeze = False
                 if not inverter.inv_has_reserve_soc:
