@@ -985,6 +985,9 @@ def _billed_result(predbat, end_record, pv_step):
         "export_kwh": export_kwh,
         "pv_generated_kwh": pv_generated,
         "battery_throughput_kwh": battery_cycle,
+        # One full cycle is a full discharge plus a full charge, so throughput is
+        # divided by 2 * usable capacity to count equivalent full cycles.
+        "battery_cycles": round((battery_cycle / (2 * predbat.soc_max)) if predbat.soc_max else 0.0, 4),
     }
 
 
@@ -1247,7 +1250,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
 
 SCENARIO_KEYS = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]
 
-SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh"]
+SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh", "battery_cycles"]
 
 
 def _blend_results(with_car, without_car, fraction):
