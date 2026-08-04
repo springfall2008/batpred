@@ -1488,12 +1488,12 @@ def test_web_annual_results(my_predbat):
         print("  ERROR: the Predbat saving (2400p = £24.00) should be shown")
         failed = True
 
-    print("Test: the battery cycle metric appears in the annual results table")
-    if "cycles" not in html.lower():
-        print("  ERROR: expected the battery cycles column label or value in the rendered HTML, got:\n{}".format(html))
+    print("Test: the battery cycle metric appears in the payback table")
+    if "<th>Battery cycles</th>" not in html:
+        print("  ERROR: expected the Battery cycles column header in the rendered HTML, got:\n{}".format(html))
         failed = True
-    if "3.00" not in html:
-        print("  ERROR: expected the with Predbat battery cycles value (3.00) in the rendered HTML, got:\n{}".format(html))
+    if "3.00 (+1.00)" not in html:
+        print("  ERROR: expected the with Predbat battery cycles value (3.00 (+1.00)) in the rendered HTML, got:\n{}".format(html))
         failed = True
 
     print("Test: the validated colourblind-safe palette is used, not the house trio")
