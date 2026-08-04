@@ -72,6 +72,58 @@ def get_refresh_inverter_js():
     """
 
 
+def get_debug_history_js():
+    """
+    Returns JavaScript to populate and drive the rolling debug-history dropdown on the
+    dashboard Debug panel, for #4417.
+
+    Populated on focus (via an inline onfocus= attribute on the <select>, added where
+    this is rendered), not on a DOMContentLoaded/load-time listener. The dashboard's
+    60s auto-refresh replaces its content container with container.innerHTML = html
+    (see refreshDashContent() in html_dash's page script) - injected <script> tags do
+    not re-execute on an innerHTML assignment, so a load-time listener would only ever
+    populate the very first copy of this dropdown and go stale after the first refresh.
+    An inline event attribute is just markup, correctly re-applied on every refresh, and
+    fires the moment a user actually goes to use the control - also naturally lazy,
+    since it never fetches on a page/refresh the user never interacts with.
+    """
+    return """
+        <script>
+        function loadDebugHistory() {
+            var select = document.getElementById('debugHistorySelect');
+            if (!select) return;
+            fetch('./debug_history_list')
+                .then(function(r) { return r.json(); })
+                .then(function(snapshots) {
+                    select.innerHTML = '';
+                    if (!snapshots.length) {
+                        var opt = document.createElement('option');
+                        opt.textContent = 'No snapshots yet';
+                        select.appendChild(opt);
+                        select.disabled = true;
+                        return;
+                    }
+                    select.disabled = false;
+                    snapshots.forEach(function(s) {
+                        var opt = document.createElement('option');
+                        opt.value = s.id;
+                        var when = new Date(s.timestamp);
+                        opt.textContent = when.toLocaleString() + ' (' + s.steps_back + ' steps back)';
+                        select.appendChild(opt);
+                    });
+                })
+                .catch(function(e) { console.error('Failed to load debug history:', e); });
+        }
+        function downloadSelectedDebugHistory() {
+            var select = document.getElementById('debugHistorySelect');
+            if (select && select.value) {
+                window.location = './debug_history_download?id=' + encodeURIComponent(select.value);
+            }
+        }
+        </script>
+    """
+
+
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """
@@ -6412,7 +6464,41 @@ def get_plan_renderer_js():
     }
 
     // Render plan table from JSON data
-    function renderPlanTable(jsonData, overrides, showDebug, editable) {
+    // Find the retained debug-history snapshot nearest a plan row's timestamp, within a
+    // fixed tolerance, or null if none is close enough. window.debugHistoryData is a
+    // small array ({id, timestamp, steps_back}) fetched separately (see fetchAndRenderPlan) -
+    // matched here by wall-clock time rather than threaded through the plan JSON itself,
+    // since the History/Yesterday plan is a reconstruction (fed yesterday's real PV/load
+    // through the same renderer as the live plan) and has no inherent relationship to
+    // when a snapshot happened to be captured; only the row's own real timestamp does.
+    // A fixed +/-90 minute tolerance is simpler than threading debug_history_interval
+    // through to the JS layer just for this, at the cost of not auto-tracking a changed
+    // interval - acceptable given this is a "here's roughly what was captured near this
+    // time" pointer, not a precise lookup.
+    const DEBUG_SNAPSHOT_TOLERANCE_MS = 90 * 60 * 1000;
+    function findNearestDebugSnapshot(rowTimeStr) {
+        if (!rowTimeStr || !window.debugHistoryData || !window.debugHistoryData.length) {
+            return null;
+        }
+        const rowTime = new Date(rowTimeStr).getTime();
+        if (isNaN(rowTime)) {
+            return null;
+        }
+        let best = null;
+        let bestDiff = DEBUG_SNAPSHOT_TOLERANCE_MS;
+        for (const snap of window.debugHistoryData) {
+            const snapTime = new Date(snap.timestamp).getTime();
+            if (isNaN(snapTime)) { continue; }
+            const diff = Math.abs(snapTime - rowTime);
+            if (diff <= bestDiff) {
+                bestDiff = diff;
+                best = snap;
+            }
+        }
+        return best;
+    }
+
+    function renderPlanTable(jsonData, overrides, showDebug, editable, showHistoryLinks) {
         try {
             if (!jsonData || !jsonData.rows) {
                 return '<p style="color:red;">No plan data available</p>';
@@ -6487,6 +6573,9 @@ def get_plan_renderer_js():
             if (jsonData.carbon_enable) {
                 html += th('co2_rate', 'CO2 g/kWh');
                 html += th('co2_total', 'CO2 kg');
+            }
+            if (showHistoryLinks) {
+                html += '<th><b>Debug</b></th>';
             }
             html += '</tr>';
 
@@ -6645,6 +6734,16 @@ def get_plan_renderer_js():
                     html += `<td id=total_carbon bgcolor=${row.carbon_color || '#FFFFFF'}>${row.total_carbon || ''}</td>`;
                 }
 
+                // Debug history snapshot link (History/Yesterday view only)
+                if (showHistoryLinks) {
+                    const snap = findNearestDebugSnapshot(row.time);
+                    if (snap) {
+                        html += `<td bgcolor=#FFFFFF><a href="./debug_history_download?id=${encodeURIComponent(snap.id)}">&#8681; ${snap.steps_back} back</a></td>`;
+                    } else {
+                        html += '<td bgcolor=#FFFFFF></td>';
+                    }
+                }
+
                 html += '</tr>';
             }
 
@@ -6699,6 +6798,11 @@ def get_plan_renderer_js():
                 if (jsonData.carbon_enable) {
                     html += '<td></td>'; // Empty cell for carbon intensity
                     html += `<td bgcolor=#FFFFFF><b>${totals.total_carbon || ''}</b></td>`;
+                }
+
+                // Empty cell for the Debug history column
+                if (showHistoryLinks) {
+                    html += '<td></td>';
                 }
 
                 html += '</tr>';
@@ -7135,9 +7239,29 @@ def get_plan_renderer_js():
         }
     }
 
+    // Fetch the rolling debug-history snapshot index (small: at most a few dozen tiny
+    // entries) into window.debugHistoryData for the History/Yesterday view's Debug
+    // column. Called on initial load and whenever the user switches to that view,
+    // rather than on every 5s plan poll (fetchAndRenderPlan) - the underlying data only
+    // changes on an hours-long capture interval, so polling it that often would just be
+    // wasted requests for something that only matters while the Yesterday view is open.
+    async function loadDebugHistoryData() {
+        try {
+            const response = await fetch('./debug_history_list');
+            if (response.ok) {
+                window.debugHistoryData = await response.json();
+            }
+        } catch (error) {
+            console.error('Error fetching debug history list:', error);
+        }
+    }
+
     // Switch between plan views
     function switchView(view) {
         currentView = view;
+        if (view === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
 
         // Update button styling
         document.querySelectorAll('.view-button').forEach(btn => {
@@ -7199,7 +7323,11 @@ def get_plan_renderer_js():
 
         // Render table
         const editable = (currentView === 'plan');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable);
+        // Debug-history download links only make sense on the History/Yesterday view -
+        // its rows are entirely in the past, unlike the live Plan view which is mostly
+        // future predictions with no corresponding capture.
+        const showHistoryLinks = (currentView === 'yesterday');
+        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -7305,6 +7433,12 @@ def get_plan_renderer_js():
 
         // Initial render
         refreshPlan();
+
+        // Fetch the debug-history snapshot index once up front too, in case the page
+        // loads with currentView already set to 'yesterday' (e.g. restored state).
+        if (currentView === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
 
         // Set up polling every 5 seconds
         if (updateIntervalId) {

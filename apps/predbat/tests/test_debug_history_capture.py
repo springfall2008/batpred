@@ -1,0 +1,143 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt: off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+
+"""Tests for PredBat._capture_debug_history()'s throttling/force-capture logic (#4417).
+
+Mirrors test_plan_persistence.py's pattern for testing storage-backed predbat.py
+methods: a real StorageComponent/StorageLocalFiles backend wrapped in a minimal
+_MockComponents shim, rather than mocking the storage calls themselves.
+"""
+
+import shutil
+import tempfile
+from datetime import timedelta
+
+from debug_history import list_snapshots
+from storage import StorageComponent, StorageLocalFiles
+from tests.test_infra import run_async
+
+
+class _MockComponents:
+    """Minimal components mock returning a pre-configured storage component."""
+
+    def __init__(self, storage):
+        """Initialise with a storage instance (may be None to simulate unavailable)."""
+        self._storage = storage
+
+    def get_component(self, name):
+        """Return the mocked storage for 'storage', None for everything else."""
+        if name == "storage":
+            return self._storage
+        return None
+
+
+def _make_storage(predbat, tmpdir):
+    """Create a StorageComponent backed by a real local-file backend in tmpdir."""
+    storage = StorageComponent(predbat)
+    storage.backend = StorageLocalFiles(tmpdir, predbat.log)
+    return storage
+
+
+def test_debug_history_capture(my_predbat):
+    """Test _capture_debug_history()'s interval throttle, off-switch, and force-capture override."""
+    failed = 0
+    print("--- Debug history capture tests ---")
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        storage = _make_storage(my_predbat, tmpdir)
+        my_predbat.components = _MockComponents(storage)
+        # debug_history_count/interval/force_capture are input_number/switch CONFIG_ITEMS -
+        # get_arg() resolves those via config_index (see get_ha_config()), not self.args
+        # directly, so they must be set the same way the running app itself would (and the
+        # same way _capture_debug_history() resets the force-capture switch): expose_config().
+        my_predbat.expose_config("debug_history_count", 15)
+        my_predbat.expose_config("debug_history_interval", 3)
+        my_predbat.expose_config("debug_history_force_capture", False)
+        my_predbat.debug_history_last_capture = None
+
+        print("Test 1: first call (no prior capture) captures immediately")
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        if len(index) != 1:
+            print("  FAILED: expected 1 snapshot after the first call, got {}".format(len(index)))
+            failed += 1
+        if my_predbat.debug_history_last_capture != my_predbat.now_utc:
+            print("  FAILED: debug_history_last_capture should be updated to now_utc")
+            failed += 1
+
+        print("Test 2: a second call well within the interval is skipped")
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        if len(index) != 1:
+            print("  FAILED: expected still 1 snapshot (throttled), got {}".format(len(index)))
+            failed += 1
+
+        print("Test 3: a call once the interval has elapsed captures again")
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(hours=4)
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        if len(index) != 2:
+            print("  FAILED: expected 2 snapshots after the interval elapsed, got {}".format(len(index)))
+            failed += 1
+
+        print("Test 4: debug_history_count <= 0 disables routine capture entirely (zero storage calls)")
+        my_predbat.expose_config("debug_history_count", 0)
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(hours=4)
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        if len(index) != 2:
+            print("  FAILED: count=0 should not add a snapshot, got {} entries".format(len(index)))
+            failed += 1
+
+        print("Test 5: debug_history_force_capture fires immediately even with count=0 and mid-interval, and resets the switch")
+        my_predbat.expose_config("debug_history_force_capture", True)
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        # With count=0, max(count, 1) == 1 - a forced capture guarantees at least ONE
+        # snapshot survives (this one), but does not resurrect the ring the earlier
+        # count=0 setting had already stopped growing. The 2 snapshots from tests 1/3
+        # are correctly pruned away here, same as any other max_count=1 prune would.
+        if len(index) != 1:
+            print("  FAILED: forced capture with count=0 should leave exactly 1 snapshot (this one), got {} entries".format(len(index)))
+            failed += 1
+        if my_predbat.get_arg("debug_history_force_capture", None) is not False:
+            print("  FAILED: the force-capture switch should read back False after firing, got {}".format(my_predbat.get_arg("debug_history_force_capture", None)))
+            failed += 1
+
+        print("Test 6: a forced capture also resets the routine interval clock")
+        if my_predbat.debug_history_last_capture != my_predbat.now_utc:
+            print("  FAILED: a forced capture should update debug_history_last_capture too")
+            failed += 1
+
+        print("Test 6b: a forced capture with a normal positive count adds to the ring rather than truncating it")
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=1)  # distinct snapshot id from test 5's
+        my_predbat.expose_config("debug_history_count", 15)
+        my_predbat.expose_config("debug_history_force_capture", True)
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        if len(index) != 2:
+            print("  FAILED: forced capture with count=15 should add to the existing snapshot, got {} entries".format(len(index)))
+            failed += 1
+
+        print("Test 7: no storage component available is handled without raising")
+        my_predbat.components = _MockComponents(None)
+        my_predbat.expose_config("debug_history_count", 15)
+        my_predbat.debug_history_last_capture = None  # force past the interval throttle so the storage-unavailable branch is actually exercised
+        try:
+            my_predbat._capture_debug_history()
+        except Exception as e:
+            print("  FAILED: _capture_debug_history() raised with no storage component: {}".format(e))
+            failed += 1
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return failed

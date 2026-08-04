@@ -355,6 +355,7 @@ Okabe
 onblur
 onchange
 oncharge
+onfocus
 oninput
 onmouseout
 onmouseover

@@ -230,6 +230,8 @@ from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
 from tests.test_annual_costs import test_annual_costs
+from tests.test_debug_history import test_debug_history
+from tests.test_debug_history_capture import test_debug_history_capture
 
 # Mock the components and plugin system
 
@@ -573,6 +575,8 @@ def main():
         # Production-scale ML training harness against a captured history fixture
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
+        ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
+        ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
     ]
 
     # Parse command line arguments
