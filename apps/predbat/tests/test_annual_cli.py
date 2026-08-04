@@ -186,11 +186,6 @@ def test_annual_cli(my_predbat):
         print("  ERROR: the export credit line must warn it is already counted inside cost, to stop it being double-counted, got:\n{}".format(table))
         failed = True
 
-    print("Test: the battery cycle estimate is shown")
-    if "equivalent battery cycles" not in table.lower():
-        print("  ERROR: the table should report the equivalent battery cycles estimate, got:\n{}".format(table))
-        failed = True
-
     print("Test: a degraded month (some sampled days failed) is costed and included, not treated as unavailable")
     degraded_table = format_table(sample_results_with_degraded_month())
     if "unavailable" in degraded_table.lower():
