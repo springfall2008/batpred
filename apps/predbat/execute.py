@@ -814,6 +814,17 @@ class Execute:
                     self.log("Note: Inverter does not support discharge freeze - disabled")
                     self.set_export_freeze = False
                     self.set_export_freeze_only = False
+                elif not (inverter.inv_has_target_soc and inverter.inv_target_soc_used_for_discharge) and not self.args.get("discharge_freeze_service", ""):
+                    # Same class of bug as #4424/charge_freeze_service above, but on the export side,
+                    # and with a different fallback condition: adjust_battery_target() only writes a
+                    # target SoC during export when inv_target_soc_used_for_discharge is also set
+                    # (inverter.py:1899) - GE/GEC have a target SoC but target_soc_used_for_discharge is
+                    # False for them, so they get no passive-hold protection from it at all and depend
+                    # entirely on discharge_freeze_service. Without it, adjust_export_immediate() would
+                    # silently fall back to a real discharge_start_service call instead of a passive hold.
+                    self.log("Note: No discharge_freeze_service configured - discharge freeze disabled")
+                    self.set_export_freeze = False
+                    self.set_export_freeze_only = False
                 if not inverter.inv_support_charge_freeze:
                     # Force off unsupported feature
                     self.log("Note: Inverter does not support charge freeze - disabled")
