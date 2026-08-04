@@ -19,6 +19,7 @@ from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
+from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_execute import run_execute_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests
@@ -26,6 +27,8 @@ from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_fetch_config_options import test_fetch_config_options
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_window2minutes import test_window2minutes
+from tests.test_hass_watcher import test_hass_watcher
+from tests.test_new_install_detection import test_new_install_detection
 from tests.test_history_attribute import test_history_attribute
 from tests.test_inverter import run_inverter_tests
 from tests.test_basic_rates import test_basic_rates
@@ -43,6 +46,8 @@ from tests.test_active_flag import test_active_flag
 from tests.test_component_health_status import test_component_health_status
 from tests.test_optimise_levels import run_optimise_levels_tests
 from tests.test_trim_export import run_trim_export_tests
+from tests.test_plan_tiebreak import run_plan_tiebreak_tests
+from tests.test_plan_preclip import run_plan_preclip_tests
 from tests.test_export_commitment import run_export_commitment_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
@@ -65,13 +70,30 @@ from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_web_if import run_test_web_if
+from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol
+from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
+from tests.test_web_annual import (
+    test_web_annual,
+    test_web_annual_error_isolation,
+    test_web_annual_form,
+    test_web_annual_pages,
+    test_web_annual_plan_route,
+    test_web_annual_post_numeric_coercion,
+    test_web_annual_results,
+    test_web_annual_routes,
+    test_web_annual_routes_registered,
+    test_web_annual_run_refuses_while_running,
+    test_web_annual_store_failure_surfaces,
+    test_web_annual_terminal_state,
+    test_web_annual_validation_error_preserves_input,
+)
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
-from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
+from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_times import run_test_manual_times
@@ -121,17 +143,24 @@ from tests.test_deye_api import run_deye_api_tests
 from tests.test_deye_oauth import run_deye_oauth_tests
 from tests.test_deye_control import run_deye_control_tests
 from tests.test_deye_publish import run_deye_publish_tests
+from tests.test_deye_storage import run_deye_storage_tests
 from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_open_meteo import run_open_meteo_tests
+from tests.test_solar_model import test_solar_model
+from tests.test_annual_profiles import test_annual_profiles
+from tests.test_annual_load import test_annual_load, test_annual_load_octopus
+from tests.test_annual_weather import test_annual_weather
+from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
 from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer, test_config_item_range_clamp, test_config_item_step_min_max_types_consistent
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
-from tests.test_validate_config import test_validate_config
+from tests.test_validate_config import test_validate_config, test_validate_config_retry
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
+from tests.test_plan_why_reason import run_test_plan_why_reason
 from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario
@@ -142,6 +171,7 @@ from tests.test_github import test_github
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_component_base import test_component_base_all
+from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
 from tests.test_temperature import test_temperature
@@ -159,6 +189,17 @@ from tests.test_marginal_costs import test_marginal_costs
 from tests.test_savings_stability import test_savings_stability
 from tests.test_calculate_yesterday import test_calculate_yesterday
 from tests.test_load_today_comparison import test_load_today_comparison
+from tests.test_annual_config import test_annual_config
+from tests.test_annual_bootstrap import test_annual_bootstrap
+from tests.test_annual_sampling import test_annual_sampling
+from tests.test_annual_scenarios import test_annual_scenarios
+from tests.test_annual_results import test_annual_results
+from tests.test_annual_integration import test_annual_integration
+from tests.test_annual_cli import test_annual_cli, test_annual_cli_machine, test_annual_cli_machine_end_to_end
+from tests.test_annual_job import test_annual_job
+from tests.test_tariff_catalogue import test_tariff_catalogue
+from tests.test_annual_store import test_annual_store
+from tests.test_annual_costs import test_annual_costs
 
 # Mock the components and plugin system
 
@@ -220,6 +261,7 @@ def main():
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
+        ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
@@ -228,6 +270,8 @@ def main():
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("window_sort", run_window_sort_tests, "Window sort tests", False),
         ("window2minutes", test_window2minutes, "Window to minutes tests", False),
+        ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
+        ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("minute_array", test_minute_array, "MinuteArray class tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
@@ -282,7 +326,22 @@ def main():
         ("manual_times", run_test_manual_times, "Manual times tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
+        ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
+        ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
+        ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
+        ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),
+        ("web_annual_routes", test_web_annual_routes, "Annual web tab route tests", False),
+        ("web_annual_results", test_web_annual_results, "Annual web tab results tests", False),
+        ("web_annual_terminal_state", test_web_annual_terminal_state, "Annual web tab terminal-state claim/no-redirect-loop tests", False),
+        ("web_annual_error_isolation", test_web_annual_error_isolation, "Annual web tab per-request error isolation tests", False),
+        ("web_annual_routes_registered", test_web_annual_routes_registered, "Annual web tab route registration test", False),
+        ("web_annual_validation_error_preserves_input", test_web_annual_validation_error_preserves_input, "Annual web tab validation error keeps posted form input tests", False),
+        ("web_annual_run_refuses_while_running", test_web_annual_run_refuses_while_running, "Annual web tab second-run refusal tests", False),
+        ("web_annual_store_failure_surfaces", test_web_annual_store_failure_surfaces, "Annual web tab storage-failure visibility tests", False),
+        ("web_annual_post_numeric_coercion", test_web_annual_post_numeric_coercion, "Annual web tab posted-form numeric coercion tests", False),
+        ("web_annual_plan_route", test_web_annual_plan_route, "Annual web tab captured-plan route tests", False),
+        ("web_annual_pages", test_web_annual_pages, "Annual web tab config/viewer/compare page split and nav tests", False),
         ("web_history_table", run_web_history_table_tests, "Web /entity history table bucketing tests", False),
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),
         ("web_chart_grouping", run_web_chart_grouping_tests, "Web /entity chart numeric vs timeline grouping tests", False),
@@ -295,6 +354,7 @@ def main():
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
+        ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
@@ -314,9 +374,16 @@ def main():
         ("deye_oauth", run_deye_oauth_tests, "DEYE auth tests", False),
         ("deye_control", run_deye_control_tests, "DEYE control-logic tests", False),
         ("deye_publish", run_deye_publish_tests, "DEYE publish/config tests", False),
+        ("deye_storage", run_deye_storage_tests, "DEYE storage persistence tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),
+        ("solar_model", test_solar_model, "Shared solar GTI conversion model tests", False),
+        ("annual_profiles", test_annual_profiles, "Annual prediction load profile table tests", False),
+        ("annual_load", test_annual_load, "Annual prediction load profile tests", False),
+        ("annual_load_octopus", test_annual_load_octopus, "Annual prediction Octopus consumption tests", False),
+        ("annual_weather", test_annual_weather, "Annual prediction Open-Meteo weather tests", False),
+        ("annual_tariff", test_annual_tariff, "Annual prediction tariff tests", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
@@ -331,11 +398,13 @@ def main():
         ("teslemetry", test_teslemetry, "Teslemetry Tesla Powerwall component tests (data path, control, tariff)", False),
         ("integer_config", test_integer_config_entities, "Integer config entities tests", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
+        ("validate_config_retry", test_validate_config_retry, "Config validation retry-after-failure tests (#4379)", False),
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         ("config_item_range_clamp", test_config_item_range_clamp, "Config item min/max range clamp tests", False),
         ("config_item_step_min_max_types", test_config_item_step_min_max_types_consistent, "Config item step/min/max type consistency tests", False),
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
+        ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
         # Download tests
         ("download", test_download, "Predbat download/update comprehensive tests (GitHub API, SHA1, install check, file ops)", False),
         # Axle Energy VPP unit tests
@@ -364,6 +433,8 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
+        # Shared MockBase tests
+        ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),
         # Solis Cloud API unit tests
         ("solis", run_solis_tests, "Solis Cloud API tests (V1/V2 time window writes, change detection)", False),
         # External Temperature API tests
@@ -388,6 +459,8 @@ def main():
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
+        ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
+        ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         # ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
@@ -395,6 +468,19 @@ def main():
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", True),
+        ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
+        ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
+        ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
+        ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
+        ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
+        ("annual_integration", test_annual_integration, "Annual prediction integration tests", True),
+        ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
+        ("annual_cli_machine", test_annual_cli_machine, "Annual CLI machine mode tests", False),
+        ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
+        ("annual_job", test_annual_job, "Annual subprocess job control tests", False),
+        ("annual_store", test_annual_store, "Annual run store tests", False),
+        ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
+        ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
     ]
 
     # Parse command line arguments

@@ -111,6 +111,23 @@ def test_rate_min_forward_calc(my_predbat):
     # Every minute in the output range should see 1.0 as the forward minimum
     failed |= _check_range(result, output_start, output_end, 1.0, "min at end of array")
 
+    # --- Test 7: rate_scan derives rate_min_forward from its `rates` argument, not self.rate_import ---
+    # Regression: fetch's atomic rebuild defers publishing self.rate_import to the end of the block, so
+    # during the build it still holds the previous cycle's data. rate_scan must scan its argument, not
+    # self.rate_import, or rate_min_forward (which drives plan.py charge/discharge economics) goes stale.
+    print("*** rate_min_forward_calc test 7: rate_scan uses passed rates, not stale self.rate_import")
+    # rate_scan mutates several shared fields; snapshot and restore them all so later tests are unaffected.
+    saved = {attr: getattr(my_predbat, attr, None) for attr in ("rate_import", "rate_min", "rate_max", "rate_average", "rate_min_minute", "rate_max_minute", "rate_min_forward")}
+    total = my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60
+    my_predbat.rate_import = {m: 99.0 for m in range(total)}  # stale previous-cycle rates (expensive)
+    my_predbat.rate_scan({m: 5.0 for m in range(total)}, print=True)  # freshly-built current-cycle rates (cheap)
+    sample = my_predbat.rate_min_forward.get(my_predbat.minutes_now)
+    if sample is None or sample > 50:
+        print("ERROR: test 7: rate_min_forward {} reflects stale self.rate_import, not the scanned rates".format(sample))
+        failed = 1
+    for attr, value in saved.items():
+        setattr(my_predbat, attr, value)
+
     # Restore
     my_predbat.forecast_minutes = old_forecast_minutes
     my_predbat.minutes_now = old_minutes_now

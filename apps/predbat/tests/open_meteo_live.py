@@ -41,6 +41,7 @@ if _PREDBAT_DIR not in sys.path:
 
 from const import TIME_FORMAT  # noqa: E402
 from solcast import SolarAPI  # noqa: E402
+from solar_model import convert_azimuth  # noqa: E402
 from tests.test_solcast import MockBase  # noqa: E402
 
 # ── Solar array definitions ────────────────────────────────────────────────────
@@ -225,9 +226,8 @@ async def run(fs_api_key: str = None, solcast_api_key: str = None, solcast_host:
     print(f"Predbat PV forecast pipeline comparison  —  {today_str} UTC  ({tz_name})")
     print()
     print(f"Arrays ({len(ARRAYS)} configured):")
-    _tmp = SolarAPI.__new__(SolarAPI)
     for i, a in enumerate(ARRAYS, 1):
-        az_api = SolarAPI.convert_azimuth(_tmp, a["azimuth"])
+        az_api = convert_azimuth(a["azimuth"])
         print(f"  [{i}] postcode={a['postcode']}  kwp={a['kwp']}  declination={a['declination']}°  azimuth={a['azimuth']}° (→API: {az_api:.0f}°)  efficiency={a.get('efficiency', 1.0):.0%}")
     print(f"  cache: {_CACHE_ROOT}/cache/")
 

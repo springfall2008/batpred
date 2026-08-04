@@ -164,6 +164,14 @@ The optional `azimuth_zero_south` (default False) can be set to True if you pref
   forecast_solar_max_age: 4
 ```
 
+Setting `forecast_solar_open_meteo_first: true` makes Predbat use Open-Meteo as the primary forecast
+source and fall back to Forecast.solar only if Open-Meteo returns no data. Your existing
+`forecast_solar` per-array settings (postcode, latitude, longitude, azimuth, declination, kwp,
+efficiency) are reused unchanged, but `forecast_solar_max_age` is not — the refresh interval instead
+comes from `open_meteo_forecast_max_age` while this flag is set. See the
+[Using Open-Meteo as the primary source](apps-yaml.md#using-open-meteo-as-the-primary-source) section
+of the apps.yaml documentation for details.
+
 or you can set longitude and latitude if you are not in the UK or postcode does not work:
 
 ```yaml

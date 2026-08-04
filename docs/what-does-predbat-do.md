@@ -9,15 +9,22 @@ Predbat will automatically decide when to charge and discharge your battery to a
 It uses the solar production forecast from Solcast, Open-Meteo, or Forecast.solar combined with your historical energy usage to make this prediction.
 
 - The output is a prediction of the battery levels, solar generation, house load, charging activity, discharging activity, costs and import and export amounts based on (by default) 30-minute slots.
-- Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or by using the Octopus Energy integration
+- Costs are based on energy pricing data, either manually configured (e.g. 7p from 11pm-4pm and 35p otherwise) or taken from your supplier
+    - Octopus Energy, either directly through their API or via the Home Assistant integration.
+    - Kraken, for EDF and E.ON Next.
+    - Energidataservice and Strømligning for Denmark, Nordpool and other spot-rate sensors elsewhere - see [Energy rates](energy-rates.md).
     - Both import and export rates are supported.
-    - Intelligent Octopus is also supported and takes into account allocated charging slots.  
+    - Intelligent Octopus is also supported and takes into account allocated charging slots.
+    - [Axle VPP](energy-rates.md#axle-vpp) export events are supported, with Predbat standing aside for the duration of an event.
 - The solar forecast used is the central scenario from Solcast/Open-Meteo/Forecast.solar (50%) with a configurable weighting towards the more pessimistic (10%) scenario.
 - Predbat automatically programs your inverter with the appropriate charging and discharging controls. Both Hybrid inverters and AC-coupled inverters are supported by Predbat.
 - Automatic planning of export slots is also supported, when enabled Predbat can start a forced discharge of the battery if the export rates are high and you have spare capacity.
 - Historical load data is used to predict your consumption, optionally car charging load can be filtered out of this data.
 - Predbat can be configured to manage the charging of your EV or to use a Solar Diverter, and take into account these loads on the house during these periods.
 - Multiple inverter support is included but depends on all inverters running in lockstep.
+- Load can be predicted from your history, or by a [neural network trained on it](load-ml.md) that also learns time-of-day and day-of-week patterns.
+- [Compare](compare.md) prices your actual usage against different tariffs, so you can see whether switching would pay.
+- [What If](annual-prediction.md) projects a whole year under four scenarios — no PV or battery, PV only, PV and battery on a timer, and PV and battery with Predbat — and works out install costs and payback. It needs no hardware and no configured Predbat, so it answers "is this worth buying?" as well as "was mine worth it?".
 
 ## Terminology
 

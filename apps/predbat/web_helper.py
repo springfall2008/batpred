@@ -5697,6 +5697,41 @@ def get_plan_css():
         z-index: 2000;
     }
 
+    .clickable-state-cell {
+        cursor: pointer;
+        position: relative;
+        transition: background-color 0.2s;
+        z-index: 1;
+    }
+
+    .clickable-state-cell:has(.dropdown-content[style*="display: block"]) {
+        z-index: 2000;
+    }
+
+    .clickable-state-cell:hover {
+        filter: brightness(0.9);
+    }
+
+    .clickable-state-cell:focus-visible {
+        outline: 2px solid #2196F3;
+        outline-offset: -2px;
+    }
+
+    body.dark-mode .clickable-state-cell:hover {
+        filter: brightness(1.2);
+    }
+
+    .reason-text {
+        font-size: 13px;
+        line-height: 1.4;
+        color: #333;
+        max-width: 260px;
+    }
+
+    body.dark-mode .reason-text {
+        color: #eee;
+    }
+
     .clickable-time-cell:hover {
         filter: brightness(0.9);
     }
@@ -6313,7 +6348,7 @@ def get_plan_css():
 
     // Close dropdowns when clicking outside
     document.addEventListener("click", function(event) {
-        if (!event.target.matches('.clickable-time-cell') && !event.target.closest('.dropdown-content')) {
+        if (!event.target.matches('.clickable-time-cell') && !event.target.matches('.clickable-state-cell') && !event.target.closest('.dropdown-content')) {
             closeDropdowns();
         }
     });
@@ -6377,6 +6412,10 @@ def get_plan_renderer_js():
             // absolute minutes for next-day slots (e.g., tomorrow 00:00 = 1440 min,
             // not 0 which is what a plain hours*60+minutes calculation would return).
             window.planMidnightRef = jsonData.time || null;
+
+            // Reason templates come from the dataset being rendered, not from window.planData -
+            // the History/Yesterday views publish their own copy alongside their own rows.
+            const reasonTemplates = jsonData.reason_templates;
 
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
@@ -6462,15 +6501,16 @@ def get_plan_renderer_js():
                 // State cells (with rowspan and split handling)
                 if (!row.skip_state_cell) {
                     if (editable) {
-                        html += renderStateCell(row, timeDisplay, overrides);
+                        html += renderStateCell(row, timeDisplay, overrides, reasonTemplates);
                     } else {
                         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
                         const colspanAttr = row.split ? '' : ' colspan=2';
-                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}>${row.state_text || ''}</td>`;
+                        const titleAttr = reasonTitleAttr(row, reasonTemplates);
+                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}${titleAttr}>${row.state_text || ''}</td>`;
 
-                        // Second state cell if split
+                        // Second state cell if split - same combined reason text as the first half
                         if (row.split && row.state2_text) {
-                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${titleAttr}>${row.state2_text}</td>`;
                         }
                     }
                 }
@@ -6685,8 +6725,44 @@ def get_plan_renderer_js():
         return html;
     }
 
+    // Escape text for safe use inside an HTML attribute (e.g. title="...")
+    function escapeAttr(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML.replace(/"/g, '&quot;');
+    }
+
+    // Render a row's "reasons" (list of {code, params}) into a single sentence, filling in
+    // each entry's template (looked up from the shared reason_templates table, published once
+    // per response rather than duplicating the rendered sentence on every row) with its params.
+    function renderReasonText(reasons, templates) {
+        if (!reasons || !templates) {
+            return '';
+        }
+        return reasons
+            .map(function (entry) {
+                const template = templates[entry.code];
+                if (!template) {
+                    return '';
+                }
+                return template.replace(/\\{(\\w+)\\}/g, function (match, key) {
+                    return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
+                });
+            })
+            .filter(Boolean)
+            .join(' ');
+    }
+
+    // Build the ` title="..."` tooltip attribute for a row's state cell, or '' when the row
+    // has no reasons. Shared by both the editable (renderStateCell) and read-only state-cell
+    // paths so the History/Yesterday views get the same tooltips as the plan view.
+    function reasonTitleAttr(row, templates) {
+        const reasonText = renderReasonText(row.reasons, templates);
+        return reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
+    }
+
     // Render state cell without dropdown (dropdown moved to time column)
-    function renderStateCell(row, timeDisplay, overrides) {
+    function renderStateCell(row, timeDisplay, overrides, templates) {
         const cellStyle = 'style="padding: 4px;"';
         const timeStr = row.time;
         const minutesFromMidnight = row.slot_minute !== undefined ? row.slot_minute : getMinutesFromTimeString(timeStr);
@@ -6714,14 +6790,45 @@ def get_plan_renderer_js():
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
         const colspanAttr = row.split ? '' : ' colspan=2';
+        // reasonText is needed raw (not just as a title= attribute) for reasonCellAttrs() below,
+        // which also uses it for the tap/focus panel content - templates comes from the dataset
+        // being rendered (jsonData.reason_templates), not window.planData, so History/Yesterday
+        // views look up against their own template table rather than the plan view's.
+        const reasonText = renderReasonText(row.reasons, templates);
+        // Keep both title= (free instant hover for desktop/mouse) and the tap/focus panel below
+        // (for touch and keyboard, neither of which can trigger a hover state at all) - the two
+        // never fire together in practice, since a touch interaction can't trigger :hover/title
+        // in the first place, so there's nothing to reconcile between them.
+        const titleAttr = reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
 
-        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}">`;
+        function reasonCellAttrs(extraClass) {
+            if (!reasonText) {
+                return { clickAttrs: extraClass ? ` class="${extraClass}"` : '', panel: '' };
+            }
+            const dropdownId = `reasonDropdown_${dropdownCounter++}`;
+            const classAttr = `clickable-state-cell${extraClass ? ' ' + extraClass : ''}`;
+            // tabindex + onkeydown make this reachable and operable by keyboard, not just tap -
+            // a bare onclick on a <td> (the existing pattern used for time/rate cell dropdowns)
+            // is mouse/touch-only, since <td> isn't focusable by default.
+            const keydown = `if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleForceDropdown('${dropdownId}')}`;
+            return {
+                clickAttrs: ` onclick="toggleForceDropdown('${dropdownId}')" onkeydown="${keydown}" tabindex="0" role="button" aria-label="Why this slot" class="${classAttr}"`,
+                panel: `<div class="dropdown"><div id="${dropdownId}" class="dropdown-content"><div class="reason-text">${escapeAttr(reasonText)}</div></div></div>`,
+            };
+        }
+
+        const first = reasonCellAttrs(overrideClass);
+        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor}${first.clickAttrs}${titleAttr}>`;
         html += row.state_text || '';
+        html += first.panel;
         html += '</td>';
 
-        // Second state cell if split
+        // Second state cell if split - same combined reason text as the first half, since
+        // row.reasons is a single list covering both halves of a split (e.g. charging and
+        // freeze-exporting in the same slot), not two separately-attributed sentences.
         if (row.split && row.state2_text) {
-            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+            const second = reasonCellAttrs('');
+            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${second.clickAttrs}${titleAttr}>${row.state2_text}${second.panel}</td>`;
         }
 
         return html;
@@ -7856,6 +7963,36 @@ menuLinks.forEach(link => {
     }
 });
 
+// Second pass: a sub-page belongs to its parent menu entry.
+// Some pages are sub-pages of a menu item and have no entry of their own - /annual_view
+// and /annual_compare both live under the ./annual tab. Without this they matched
+// nothing and fell through to the default below, which highlighted Dashboard while the
+// user was plainly on another tab.
+//
+// Only runs when the first pass found no exact match, so a page that DOES have its own
+// entry can never be captured by a shorter one - /apps_editor keeps its own highlight
+// rather than lighting up /apps. The longest matching prefix wins for the same reason.
+if (!activeFound && menuLinks.length > 0) {
+    let bestLink = null;
+    let bestLength = 0;
+    menuLinks.forEach(link => {
+        const linkPath = new URL(link.href).pathname;
+        const cleanLinkPath = linkPath.endsWith('/') ? linkPath.slice(0, -1) : linkPath;
+        const cleanCurrentPage = currentPage.endsWith('/') ? currentPage.slice(0, -1) : currentPage;
+        // Require a separator so /annual matches /annual_view but /app never matches
+        // /apps - a bare prefix would capture unrelated pages that merely start alike.
+        if (cleanLinkPath.length > bestLength &&
+            (cleanCurrentPage.startsWith(cleanLinkPath + '_') || cleanCurrentPage.startsWith(cleanLinkPath + '/'))) {
+            bestLink = link;
+            bestLength = cleanLinkPath.length;
+        }
+    });
+    if (bestLink) {
+        bestLink.classList.add('active');
+        activeFound = true;
+    }
+}
+
 // If no active item was found, set default
 if (!activeFound && menuLinks.length > 0) {
     const defaultLink = menuLinks[0]; // Set first menu item as default
@@ -7991,6 +8128,7 @@ setTimeout(function() {
 <a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
 <a href='./compare'>Compare</a>
+<a href='./annual'>WhatIf</a>
 <a href='./log'>Log</a>
 <a href='./config'>Config</a>
 <a href='./apps'>Apps"""

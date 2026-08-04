@@ -354,6 +354,75 @@ def run_multi_car_iog_unplugged_car_test(testname, my_predbat):
     return failed
 
 
+def run_multi_car_shared_charger_exclusive_test(testname, my_predbat):
+    """
+    Regression test for issue #4305: two car profiles sharing one physical charger (e.g. a single
+    Zappi serving two configured car entries) can both read car_charging_planned/now = True off
+    the same shared sensor, even though only one car is actually plugged in. The exclusive-charging
+    break in fetch_sensor_data_car_planning() used to fire on car 0 regardless of whether car 0
+    actually had anything to charge, silently preventing car 1 - the one genuinely plugged in and
+    charging - from ever being planned at all.
+
+    Car 0 here has SoC already equal to its own limit (no real charging need, so
+    plan_car_charging() correctly returns an empty list for it) but still reads planned=True and
+    exclusive=True off the shared sensor. Car 1 has a genuine SoC/limit gap. The fix only lets the
+    exclusive break fire once a car has produced an actual non-empty plan, so car 1 must still get
+    a chance to be planned.
+    """
+    failed = False
+    print("**** Running Test: multi_car_iog {} ****".format(testname))
+
+    my_predbat.num_cars = 2
+    my_predbat.octopus_intelligent_charging = False
+    my_predbat.car_charging_now = [True, True]
+    my_predbat.car_charging_planned = [True, True]
+    my_predbat.car_charging_exclusive = [True, True]
+    my_predbat.car_charging_plan_smart = [False, False]
+    my_predbat.car_charging_plan_max_price = [0, 0]
+    my_predbat.car_charging_plan_time = ["23:59:00", "23:59:00"]
+    my_predbat.car_charging_battery_size = [77.0, 84.0]
+    my_predbat.car_charging_rate = [7.4, 7.4]
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_soc_next = [None, None]
+    my_predbat.car_charging_slots = [[], []]
+
+    # Car 0 (not really plugged in - shared sensor false positive): SoC already at its own limit,
+    # so plan_car_charging() should correctly produce nothing to do.
+    # Car 1 (the one actually plugged in and charging): a genuine gap to close.
+    my_predbat.car_charging_soc = [61.6, 63.0]
+    my_predbat.car_charging_limit = [61.6, 67.2]
+
+    # Windows relative to minutes_now - plan_car_charging() skips windows that fall before
+    # minutes_now, so absolute offsets would go stale depending on what time the test runs.
+    now = my_predbat.minutes_now
+    my_predbat.low_rates = [
+        {"start": now, "end": now + 30, "average": 5.0},
+        {"start": now + 60, "end": now + 90, "average": 5.0},
+        {"start": now + 120, "end": now + 150, "average": 5.0},
+    ]
+
+    my_predbat.fetch_sensor_data_car_planning()
+
+    if my_predbat.car_charging_slots[0]:
+        print("ERROR: car 0 should have an empty plan (SoC already at its own limit), got: {}".format(my_predbat.car_charging_slots[0]))
+        failed = True
+    else:
+        print("OK: car 0 correctly produced an empty plan")
+
+    if not my_predbat.car_charging_slots[1]:
+        print("ERROR: car 1 should have been planned (issue #4305 regression) - the exclusive break on car 0's empty plan silently skipped car 1")
+        failed = True
+    else:
+        print("OK: car 1 was planned despite car 0's planned=True/exclusive=True (issue #4305 fix)")
+
+    if failed:
+        print("Test: {} FAILED".format(testname))
+    else:
+        print("Test: {} PASSED".format(testname))
+
+    return failed
+
+
 def run_multi_car_iog_tests(my_predbat):
     """
     Run all multi-car IOG tests
@@ -362,4 +431,5 @@ def run_multi_car_iog_tests(my_predbat):
     failed |= run_multi_car_iog_test("multi_car_iog_basic", my_predbat)
     failed |= run_multi_car_iog_load_slots_test("multi_car_iog_load_slots_regression", my_predbat)
     failed |= run_multi_car_iog_unplugged_car_test("multi_car_iog_unplugged_car_3592", my_predbat)
+    failed |= run_multi_car_shared_charger_exclusive_test("multi_car_shared_charger_exclusive_4305", my_predbat)
     return failed

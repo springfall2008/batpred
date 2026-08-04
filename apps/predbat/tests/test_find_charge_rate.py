@@ -68,6 +68,68 @@ def test_find_charge_rate(my_predbat):
     return failed
 
 
+def test_find_charge_rate_pv_overlap(my_predbat):
+    """
+    Test that low power charging is bypassed when the charge window overlaps with PV production
+
+    Throttling the charge rate while the sun is shining stops PV going into the battery, the surplus
+    is exported cheaply and the target is then made up with grid import, which increases the plan cost.
+    """
+    failed = 0
+
+    log_to = print
+    minutes_now = my_predbat.minutes_now
+    soc = 1.0
+    soc_max = 10.0
+    target_soc = 5.0
+    # Plenty of time left in the window so low power mode has room to slow the charge right down
+    window = {"start": minutes_now - 30, "end": minutes_now + 300}
+    # Flat curves so the rate is not capped by the battery or its temperature
+    battery_charge_power_curve = my_predbat.validate_curve({100: 1.0, 99: 1.0, 98: 1.0, 97: 1.0, 96: 1.0, 95: 1.0, 94: 1.0, 93: 1.0, 92: 1.0, 91: 1.0, 90: 1.0}, "test_flat_charge_curve")
+    battery_temperature_curve = my_predbat.validate_curve({20: 1.0, 19: 1.0, 18: 1.0, 17: 1.0, 16: 1.0, 15: 1.0}, "test_flat_temperature_curve")
+    max_rate = 3000
+
+    args = [
+        minutes_now,
+        soc,
+        window,
+        target_soc,
+        max_rate / MINUTE_WATT,
+        soc_max,
+        battery_charge_power_curve,
+        True,
+        my_predbat.charge_low_power_margin,
+        0,
+        1,
+        0.96,
+        log_to,
+    ]
+    kwargs = {"battery_temperature": 17.0, "battery_temperature_curve": battery_temperature_curve, "current_charge_rate": max_rate / MINUTE_WATT}
+
+    # Without PV low power mode should slow the charge down below the max rate
+    dark_rate, dark_rate_real = find_charge_rate(*args, **kwargs)
+    print("No PV - Best_rate {} Best_rate_real {}".format(dark_rate * MINUTE_WATT, dark_rate_real * MINUTE_WATT))
+    if dark_rate * MINUTE_WATT >= max_rate:
+        print("**** ERROR: Low power mode should reduce the rate below {}W when there is no PV, got {}W ****".format(max_rate, dark_rate * MINUTE_WATT))
+        failed = 1
+
+    # A trace of PV in the window is not enough to matter, low power mode should still apply
+    trace_rate, trace_rate_real = find_charge_rate(*args, pv_window_kwh=0.05, **kwargs)
+    print("Trace PV - Best_rate {} Best_rate_real {}".format(trace_rate * MINUTE_WATT, trace_rate_real * MINUTE_WATT))
+    if trace_rate != dark_rate:
+        print("**** ERROR: 0.05kWh of PV in the window should not change the rate, expected {}W got {}W ****".format(dark_rate * MINUTE_WATT, trace_rate * MINUTE_WATT))
+        failed = 1
+
+    # Real PV production in the window means we must charge at full rate so the PV is not throttled away
+    sun_rate, sun_rate_real = find_charge_rate(*args, pv_window_kwh=2.0, **kwargs)
+    print("With PV - Best_rate {} Best_rate_real {}".format(sun_rate * MINUTE_WATT, sun_rate_real * MINUTE_WATT))
+    if sun_rate * MINUTE_WATT != max_rate:
+        print("**** ERROR: PV production in the window should force the max rate {}W, got {}W ****".format(max_rate, sun_rate * MINUTE_WATT))
+        failed = 1
+
+    return failed
+
+
 def test_find_charge_rate_string_temperature(my_predbat):
     """
     Test find_charge_rate with string temperature indices in the curve

@@ -25,6 +25,7 @@ import asyncio
 import json
 import aiohttp
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 from utils import str2time, minutes_to_time, TIME_FORMAT
 
@@ -647,9 +648,9 @@ def fetch_axle_sessions(base):
     return axle_events_deduplicated
 
 
-def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
+def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
     """
-    Load Axle VPP session slot
+    Load Axle VPP session slot into rate_dict (in place)
     """
     if rate_replicate is None:
         rate_replicate = {}
@@ -679,11 +680,11 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
                 base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
+                        rate_dict[minute] = rate_dict.get(minute, 0) + pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_saving
                         rate_replicate[minute] = "saving"
                     else:
-                        base.rate_import[minute] = base.rate_import.get(minute, 0) - pence_per_kwh
+                        rate_dict[minute] = rate_dict.get(minute, 0) - pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_free
                         rate_replicate[minute] = "saving"
 
@@ -706,60 +707,12 @@ def fetch_axle_active(base):
     return str(state).lower() == "on"
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for testing the Axle API from the command line."""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Axle command-line harness, with its own cache directory."""
 
     def __init__(self):
-        """Initialise a minimal mock of the PredBat base object."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.now_utc_exact = self.now_utc
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-        self.config_root = "./temp_axle"
-        self.plan_interval_minutes = 30
-        self.fatal_error = False
-        self.had_errors = False
-        self.components = None
-
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
-        """Return stored state or attribute for an entity."""
-        entity = self.entities.get(entity_id, {})
-        if raw:
-            return entity
-        if attribute is not None:
-            return entity.get("attributes", {}).get(attribute, default)
-        return entity.get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
-        """Store state and attributes for an entity."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print a timestamped log message."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and store a dashboard item."""
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            print(f"  Attributes: {json.dumps(attributes, indent=2, default=str)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None, indirect=True, attribute=None, combine=False, index=None, domain=None, can_override=False, required_unit=None):
-        """Return the default value for any requested argument."""
-        return default
-
-    def set_arg(self, key, value):
-        """Print a set argument request."""
-        print(f"Set arg {key} = {value}")
-
-    def call_notify(self, message):
-        """Print a notification message."""
-        print(f"NOTIFY: {message}")
+        """Initialise the shared mock with the Axle cache root."""
+        super().__init__(config_root="./temp_axle")
 
 
 async def test_axle_api(api_key, pence_per_kwh):  # pragma: no cover

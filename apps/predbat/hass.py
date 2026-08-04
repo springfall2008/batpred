@@ -39,6 +39,51 @@ def check_modified(py_files, start_time):
     return False
 
 
+def resolve_apps_yaml_path():
+    """
+    Resolve the one real apps.yaml path this instance is actually configured to use, using the
+    same PREDBAT_APPS_FILE resolution applied when the config itself is loaded.
+    """
+    return os.path.abspath(os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
+
+
+def collect_watch_files(roots, apps_file_path):
+    """
+    Build the list of files to watch for changes: every .py file under the given root
+    directories, plus the one real apps.yaml file this instance is actually configured to use.
+
+    Deliberately does NOT match a file just because it happens to be named "apps.yaml" -
+    tools that write their own scratch apps.yaml-shaped files elsewhere under the same tree
+    (e.g. the Annual prediction tool's isolated headless work directory, see annual.py's
+    write_minimal_apps_yaml()) would otherwise be indistinguishable from the real config file,
+    forcing an unwanted restart of the live instance whenever they run (#4397, #4396).
+    """
+    apps_file_path = os.path.abspath(apps_file_path)
+    py_files = []
+    seen_files = set()
+    for root_dir in roots:
+        for root, dirs, files in os.walk(root_dir):
+            for file in files:
+                if file.startswith("."):
+                    continue
+                full_path = os.path.abspath(os.path.join(root, file))
+                if full_path in seen_files:
+                    continue
+                if file.endswith(".py") or full_path == apps_file_path:
+                    py_files.append(full_path)
+                    seen_files.add(full_path)
+
+    # The real configured apps.yaml might not live under any of the walked roots at all
+    # (e.g. PREDBAT_APPS_FILE pointing somewhere the roots don't reach) - always include it
+    # explicitly if it exists, rather than silently dropping config-change watching entirely
+    # just because the walk never happened to encounter it (Copilot review on #4401).
+    if apps_file_path not in seen_files and os.path.exists(apps_file_path):
+        py_files.append(apps_file_path)
+        seen_files.add(apps_file_path)
+
+    return py_files
+
+
 async def main():
     print("**** Starting Standalone Predbat ****")
     start_time = datetime.now()
@@ -65,19 +110,10 @@ async def main():
     # List of root directories to search
     roots = [".", "/addon"]
 
-    # Find all .py files in the directory hierarchy
-    py_files = []
-    seen_files = set()
-
-    # Directories to walk through
-    for root_dir in roots:
-        for root, dirs, files in os.walk(root_dir):
-            for file in files:
-                if (file.endswith(".py") or file == "apps.yaml") and not file.startswith("."):
-                    full_path = os.path.abspath(os.path.join(root, file))
-                    if full_path not in seen_files:
-                        py_files.append(full_path)
-                        seen_files.add(full_path)
+    # Find all .py files in the directory hierarchy, plus the one real apps.yaml this
+    # instance is actually configured to use (not any file that merely happens to share
+    # that name elsewhere in the tree - see #4397/#4396)
+    py_files = collect_watch_files(roots, resolve_apps_yaml_path())
 
     print("Watching {} for changes".format(py_files))
 

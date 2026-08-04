@@ -585,6 +585,10 @@ Connects Predbat to the Enphase Enlighten cloud for monitoring and battery contr
 - Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use
 - Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules, freeze-export windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. `automatic_config` requires both CFG and DTG support and fails configuration if either is missing
 - On a successful write, Predbat optimistically updates its local cache and moves on rather than waiting to re-read the cloud - the periodic schedule/profile re-read (every 30 minutes) corrects the cache later if a write didn't actually land
+- The PV, grid, battery and load power sensors are all derived from the same 15-minute energy bucket of the cloud's intra-day data, so they agree with each other and a power-flow display balances. The cloud keeps back-filling a bucket for several minutes after it closes, so Predbat reads a bucket that has settled - which means these sensors lag real time by roughly 15 to 30 minutes. Only the energy (`*_today`) sensors are real-time-ish
+- Load power is the energy-balance residual (PV + grid + battery), which is how the Enphase cloud derives its own consumption figure. Because it is a small difference between much larger numbers, it becomes unreliable while the battery is charging or discharging hard - it is clamped at zero so it can never show a negative house load, but treat it as indicative only during battery activity. `load_today` is unaffected and remains accurate
+- **Predbat owns the battery schedules**: it drives exactly one window per direction, so unless it is in read-only mode it deletes any other CFG/DTG/RBD schedule it finds on the site, including ones you created in the Enlighten app. Do not add your own battery schedules while Predbat is in write mode - the Enphase cloud rejects any overlapping schedule with an HTTP 409 conflict, which would stop Predbat from controlling the battery. Set Predbat to read-only mode if you want to manage schedules yourself
+- A window that is no longer needed is deleted rather than disabled, because the Enphase cloud ignores a request to disable a schedule (it reports success but keeps enforcing the window)
 - Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
 
 #### Configuration Options (enphase)
@@ -935,7 +939,8 @@ On first run the component queries your account for active meter point agreement
 - **EDF and E.ON Next only** — this component uses the Kraken GraphQL schema specific to those providers and will not work with Octopus Energy (use the `octopus` component instead)
 - The component automatically sets `metric_octopus_import` and `metric_standing_charge` in Predbat, and will also set `metric_octopus_export` **when an export tariff is discovered** — no manual `apps.yaml` edits are needed for those settings once the relevant tariffs have been detected and the component is running
 - E.ON Next customers who have solar export may have their import and export on **separate account numbers** — in this case the component will attempt to discover the export account automatically via an address-matching strategy, or you can provide `export_account_id` explicitly
-- For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically
+- For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically. If you can't find a way to generate a separate API key for your provider, use the `email` auth method with the same email/password you use to sign into your normal EDF or E.ON Next online account — no separate key is required for that method
+- For accounts with a SmartFlex-managed EV device, an `intelligent_dispatch` binary sensor is published per device (see [Published entities](#published-entities-kraken)) and automatically wired into `octopus_intelligent_slot`, exactly like Octopus Intelligent Go — no manual `apps.yaml` configuration is needed for this. Make sure **switch.predbat_octopus_intelligent_charging** (see [car charging docs](car-charging.md)) is turned On so Predbat actually uses the dispatch slots for planning
 
 #### Configuration Options (kraken)
 
@@ -1007,6 +1012,7 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 | `sensor.predbat_kraken_a_12345678_import_rates` | Import rate periods — consumed by Predbat automatically |
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
+| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
 

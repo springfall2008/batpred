@@ -54,15 +54,29 @@ _PLAN_REPUBLISH_INTERVAL = 5 * 60
 # Telemetry staleness threshold (seconds)
 _TELEMETRY_STALE_THRESHOLD = 120
 
+# Total startup wait budget, in 0.5 s ticks, shared by the connection and auto-config waits
+_STARTUP_WAIT_TICKS = 120 * 2
+_STARTUP_WAIT_SECONDS = _STARTUP_WAIT_TICKS * 0.5
+
 # Time options for schedule select entities (HH:MM:SS, one per minute across 24 h)
 _GATEWAY_BASE_TIME = datetime.datetime.strptime("00:00", "%H:%M")
 _GATEWAY_OPTIONS_TIME = [(_GATEWAY_BASE_TIME + datetime.timedelta(seconds=m * 60)).strftime("%H:%M:%S") for m in range(0, 24 * 60, 5)]
 
 
-# Operating mode selector (0=AUTO, 1=MANUAL; higher values reserved)
-GATEWAY_OPERATING_MODE_NAMES = {0: "AUTO", 1: "MANUAL"}
-GATEWAY_OPERATING_MODE_VALUES = {"AUTO": 0, "MANUAL": 1}
-GATEWAY_OPERATING_MODE_OPTIONS = ["AUTO", "MANUAL"]
+def _serial_suffix(serial):
+    """Return the entity-name suffix for an inverter serial.
+
+    Entity IDs use the last six characters of the serial, lower-cased; serials of
+    six characters or fewer are used whole.
+
+    Args:
+        serial: Inverter serial string.
+
+    Returns:
+        str: The lower-cased suffix used in gateway entity IDs.
+    """
+    return serial[-6:].lower() if len(serial) > 6 else serial.lower()
+
 
 PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
@@ -105,8 +119,6 @@ GATEWAY_ATTRIBUTE_TABLE = {
     # Control switches
     "charge_enabled": {"friendly_name": "Charge Enabled", "icon": "mdi:battery-plus"},
     "discharge_enabled": {"friendly_name": "Discharge Enabled", "icon": "mdi:battery-minus"},
-    # Operating mode selector
-    "mode_select": {"friendly_name": "Operating Mode", "icon": "mdi:cog", "options": GATEWAY_OPERATING_MODE_OPTIONS},
     # Control numbers
     "export_limit_w": {"friendly_name": "Export Limit", "icon": "mdi:transmission-tower", "unit_of_measurement": "W", "device_class": "power"},
     "charge_rate": {"friendly_name": "Charge Rate", "icon": "mdi:battery-plus", "unit_of_measurement": "W", "min": 0, "max": 10000, "step": 10},
@@ -197,23 +209,27 @@ class GatewayMQTT(ComponentBase):
         self.mqtt_port = mqtt_port
         self.mqtt_token = mqtt_token
 
-        # Normalise serial filter to a list (or None if not set)
+        # Normalise the serial filter to a list. Whitespace-only values are
+        # equivalent to an unset filter, including when they arrive inside a
+        # list or a JSON-encoded list.
         if gateway_inverter_serial is None:
-            self.gateway_inverter_serial = []
+            serials = []
         elif isinstance(gateway_inverter_serial, list):
-            self.gateway_inverter_serial = gateway_inverter_serial
+            serials = gateway_inverter_serial
         else:
-            if isinstance(gateway_inverter_serial, str) and (gateway_inverter_serial.startswith("{") or gateway_inverter_serial.startswith("[")):
+            serial_value = gateway_inverter_serial.strip() if isinstance(gateway_inverter_serial, str) else gateway_inverter_serial
+            if isinstance(serial_value, str) and (serial_value.startswith("{") or serial_value.startswith("[")):
                 try:
-                    parsed = json.loads(gateway_inverter_serial)
+                    parsed = json.loads(serial_value)
                     if isinstance(parsed, list):
-                        self.gateway_inverter_serial = [str(s) for s in parsed]
+                        serials = parsed
                     else:
-                        self.gateway_inverter_serial = [str(parsed)]
+                        serials = [parsed]
                 except json.JSONDecodeError:
-                    self.gateway_inverter_serial = [str(gateway_inverter_serial)]
+                    serials = [serial_value]
             else:
-                self.gateway_inverter_serial = [gateway_inverter_serial]
+                serials = [serial_value]
+        self.gateway_inverter_serial = [serial for value in serials if value is not None and (serial := str(value).strip())]
         self.mqtt_token_expires_at = 0
 
         # MQTT topic strings
@@ -228,6 +244,13 @@ class GatewayMQTT(ComponentBase):
         self._mqtt_client = None
         self._mqtt_task = None
         self._mqtt_connected = False
+        # Event loop that owns self._mqtt_client (captured in run()). Control writes
+        # arrive via ha.py::run_async(), which runs on its own throwaway loop on the
+        # calling thread — publishing directly from there would bind the aiomqtt
+        # publish-confirmation Future to the wrong loop and stall for the client's
+        # ~10s default timeout instead of completing near-instantly. _publish_raw()
+        # dispatches onto this loop when called from elsewhere.
+        self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
         self._last_plan_data = None
@@ -482,6 +505,21 @@ class GatewayMQTT(ComponentBase):
         """
         await self._publish_raw(self.topic_ev_command, json.dumps(command).encode())
 
+    async def _startup_wait(self, ticks, ready):
+        """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
+
+        Args:
+            ticks: Ticks already consumed by earlier waits in this startup.
+            ready: Zero-argument callable returning True once the wait can end.
+
+        Returns:
+            int: The total ticks consumed, to pass to the next wait in the chain.
+        """
+        while ticks < _STARTUP_WAIT_TICKS and not self.api_stop and not ready():
+            await asyncio.sleep(0.5)
+            ticks += 1
+        return ticks
+
     async def run(self, seconds, first):
         """Component run loop — called every 60 seconds by ComponentBase.start().
 
@@ -505,26 +543,27 @@ class GatewayMQTT(ComponentBase):
             return False
 
         if first:
+            # Capture the loop that will own the MQTT client/listener task, so
+            # cross-loop callers (ha.py::run_async()) can dispatch onto it later.
+            self._loop = asyncio.get_running_loop()
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
             self.log("Info: GatewayMQTT: MQTT listener task started")
-            # Wait up to a minute for first connection attempt before declaring started
-            for _ in range(60 * 2):
-                if self._first_connection_attempted or self.api_stop:
-                    break
-                await asyncio.sleep(0.5)
-            else:
+            # Wait for the first connection attempt and then for the first telemetry →
+            # auto-config, so the inverter args are wired up before startup continues.
+            # Both waits share the single _STARTUP_WAIT_TICKS budget so an offline gateway
+            # device can never stall startup for longer than that.
+            ticks = await self._startup_wait(0, lambda: self._first_connection_attempted)
+            if not self._first_connection_attempted and not self.api_stop:
                 self.log("Warn: GatewayMQTT: First connection attempt not yet complete, continuing startup")
-            # After a successful connection, wait briefly for the first telemetry → auto-config so
-            # that inverter args are wired up before other components start.  Cap at 60 s so an
-            # offline gateway device does not stall startup indefinitely.
-            if self._mqtt_connected and not self.api_stop:
-                for _ in range(60 * 2):
-                    if self._auto_configured or self.api_stop:
-                        break
-                    await asyncio.sleep(0.5)
-                else:
-                    self.log("Warn: GatewayMQTT: Auto-config not complete after 60s — gateway device may be offline, continuing startup")
+            # The auto-config wait runs even when the first attempt failed: the MQTT loop
+            # retries with backoff in the background, so a transient broker failure at
+            # startup usually still yields telemetry inside the window. Returning early
+            # here declares the component started with no inverter args set, which lets
+            # PredBat's startup race ahead of auto-config.
+            await self._startup_wait(ticks, lambda: self._auto_configured)
+            if not self._auto_configured and not self.api_stop:
+                self.log(f"Warn: GatewayMQTT: Auto-config not complete after {_STARTUP_WAIT_SECONDS:.0f}s — gateway device may be offline or MQTT broker unreachable, continuing startup")
             return True
 
         # Housekeeping on subsequent runs
@@ -713,14 +752,36 @@ class GatewayMQTT(ComponentBase):
         self._last_telemetry_time = time.time()
         self.update_success_timestamp()
 
-        if not self.api_started:
-            self.api_started = True
-            self.log("Info: GatewayMQTT: First telemetry received, API started")
-
         self._inject_entities(status)
 
         if self._needs_reconfigure(status):
             self.automatic_config()
+
+        # Declare the API started only once auto-config has wired up the inverter args.
+        # ComponentManager.start() polls api_started from the main thread while this
+        # handler runs in the component's own thread, so setting it any earlier releases
+        # PredBat startup with num_inverters / soc_percent unset. When auto-config cannot
+        # complete (e.g. a serial filter matching nothing) the run() startup path still
+        # releases the component after its timeout.
+        if self._auto_configured and not self.api_started:
+            self.api_started = True
+            self.log("Info: GatewayMQTT: First telemetry received and auto-config complete, API started")
+
+    def _is_bound_target(self, inv):
+        """Whether automatic_config bound PredBat's args to this inverter's suffix.
+
+        ``_suffix_to_serial`` is populated by ``automatic_config`` with exactly the
+        control-target suffixes, so it is the authoritative record of which entities
+        PredBat reads. Empty before the first auto-config, in which case no unit is
+        bound yet and the primary-only path applies.
+
+        Args:
+            inv: A ``predbat_InverterEntry`` from the gateway status.
+
+        Returns:
+            bool: True if this unit's entities are read by PredBat.
+        """
+        return _serial_suffix(inv.serial) in self._suffix_to_serial
 
     def _inject_entities(self, status):
         """Inject inverter entities into PredBat state cache.
@@ -738,10 +799,14 @@ class GatewayMQTT(ComponentBase):
             app="gateway",
         )
 
-        # Inverter time from gateway timestamp — use first primary inverter's serial
+        # Inverter time from gateway timestamp — write it under the suffix PredBat
+        # actually reads (the control target), not the primary's, or the bound
+        # inverter_time arg is never updated and silently freezes.
         if status.timestamp > 0 and len(status.inverters) > 0:
-            primary_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
-            ts_suffix = primary_inv.serial[-6:].lower() if len(primary_inv.serial) > 6 else primary_inv.serial.lower()
+            ts_inv = next((inv for inv in status.inverters if self._is_bound_target(inv)), None)
+            if ts_inv is None:
+                ts_inv = next((inv for inv in status.inverters if inv.primary), status.inverters[0])
+            ts_suffix = _serial_suffix(ts_inv.serial)
             dt = datetime.datetime.fromtimestamp(status.timestamp, tz=self.local_tz)
             self.dashboard_item(
                 f"sensor.{self.prefix}_gateway_{ts_suffix}_inverter_time",
@@ -751,12 +816,15 @@ class GatewayMQTT(ComponentBase):
             )
 
         for inv in status.inverters:
-            # Skip non-primary inverters — EMS/gateway units report overlapping
-            # power readings that would cause doubled values on the dashboard.
-            if not inv.primary:
+            # Inject primary (battery-bearing) units, plus whichever unit automatic_config
+            # bound PredBat's args to. On a multi-AIO site the control target is the
+            # Gateway/EMS, which firmware never flags primary — skipping it left every
+            # bound arg unwritten and frozen at its last value. Non-primary units that are
+            # NOT the control target stay skipped: they report overlapping power readings
+            # that would double up on the dashboard.
+            if not inv.primary and not self._is_bound_target(inv):
                 continue
-            suffix = inv.serial[-6:].lower() if len(inv.serial) > 6 else inv.serial.lower()
-            self._inject_inverter_entities(inv, suffix)
+            self._inject_inverter_entities(inv, _serial_suffix(inv.serial))
 
         # EV charger entities (device-level, present only when a charge point is connected)
         self._inject_ev_entities(status)
@@ -833,9 +901,6 @@ class GatewayMQTT(ComponentBase):
         self.dashboard_item(f"number.{pfx}_discharge_rate", control.discharge_rate_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("discharge_rate", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_reserve_soc", control.reserve_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("reserve_soc", {}), app="gateway")
         self.dashboard_item(f"number.{pfx}_target_soc", control.target_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("target_soc", {}), app="gateway")
-        mode_name = GATEWAY_OPERATING_MODE_NAMES.get(getattr(control, "mode", 0), "AUTO")
-        self.dashboard_item(f"select.{pfx}_mode_select", mode_name, attributes=GATEWAY_ATTRIBUTE_TABLE.get("mode_select", {}), app="gateway")
-
         # Schedule times (convert HHMM uint32 → HH:MM:SS string)
         # Always set with defaults so PredBat doesn't crash on missing charge_start_time
         sched = inv.schedule if inv.schedule.ByteSize() > 0 else None
@@ -1550,8 +1615,8 @@ class GatewayMQTT(ComponentBase):
         """Build and publish a JSON command to the gateway.
 
         Args:
-            command: Command name (set_mode, set_charge_rate, etc.)
-            **kwargs: Command-specific fields (mode, power_w, target_soc).
+            command: Command name (set_charge_rate, set_reserve, etc.)
+            **kwargs: Command-specific fields (power_w, target_soc, etc.).
         """
         self._command_id += 1
         cmd_json = self.build_command(command, command_id=self._command_id, **kwargs)
@@ -1567,12 +1632,30 @@ class GatewayMQTT(ComponentBase):
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
 
+        Must run the actual client.publish() on the event loop that owns
+        self._mqtt_client (self._loop). Callers reached via ha.py::run_async()
+        (i.e. every control write issued from the synchronous engine thread)
+        run on a different, throwaway loop — publishing directly from there
+        binds aiomqtt's publish-confirmation Future to the wrong loop and
+        stalls for the client's ~10s default timeout instead of completing
+        near-instantly. When we're already on the owning loop (e.g. internal
+        periodic publishes from run()/housekeeping), publish directly.
+
         Args:
             topic: MQTT topic string.
             payload: Bytes to publish.
             retain: Whether to set the retain flag.
         """
-        if self._mqtt_client and self._mqtt_connected:
+        if not (self._mqtt_client and self._mqtt_connected):
+            return
+
+        if self._loop is not None and self._loop is not asyncio.get_running_loop():
+            future = asyncio.run_coroutine_threadsafe(
+                self._mqtt_client.publish(topic, payload, qos=1, retain=retain),
+                self._loop,
+            )
+            await asyncio.wrap_future(future)
+        else:
             await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
 
     def is_alive(self):
@@ -1624,11 +1707,11 @@ class GatewayMQTT(ComponentBase):
         return serial
 
     async def select_event(self, entity_id, value):
-        """Handle select entity changes (mode, schedule times).
+        """Handle schedule select entity changes.
 
         Args:
             entity_id: The entity ID that changed.
-            value: The new selected value (HH:MM:SS for times, or mode name).
+            value: The new selected value (HH:MM:SS).
         """
 
         self.log("Info: GatewayMQTT: select_event: entity_id={}, value={}".format(entity_id, value))
@@ -1636,13 +1719,6 @@ class GatewayMQTT(ComponentBase):
         if serial is None:
             self.log(f"Warn: GatewayMQTT: select_event: cannot resolve serial for entity '{entity_id}' — command not sent")
             return
-        # Operating mode selector
-        if "_mode_select" in entity_id:
-            mode_int = GATEWAY_OPERATING_MODE_VALUES.get(str(value).strip(), 0)
-            await self.publish_command("set_mode", mode=mode_int, serial=serial)
-            self.log(f"Info: GatewayMQTT: Operating mode set to {value} ({mode_int})")
-            return
-
         # Schedule time changes — convert HH:MM:SS to HHMM and send slot command
         time_str = str(value).strip()
         parts = time_str.split(":")
@@ -2034,6 +2110,11 @@ class GatewayMQTT(ComponentBase):
         if "enable" in kwargs:
             cmd["enable"] = bool(kwargs["enable"])
         if "serial" in kwargs:
-            cmd["dongle_serial"] = kwargs["serial"]
+            # The value here is the inverter serial (e.g. "CH2330G499"), not the
+            # dongle serial, so the wire key is "serial". The gateway resolver
+            # matches either the dongle or the inverter serial, and firmware
+            # accepts both "serial" and "dongle_serial" — do not rename this to
+            # "dongle_serial" (it would mislabel an inverter serial).
+            cmd["serial"] = kwargs["serial"]
 
         return json.dumps(cmd)

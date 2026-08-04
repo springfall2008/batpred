@@ -217,6 +217,7 @@ def run_execute_test(
     car_soc=0,
     battery_temperature=20,
     assert_immediate_charge_soc_freeze_array=[],
+    pv_forecast=0.0,
 ):
     print("> Run scenario {}".format(name))
     my_predbat.log("> Run scenario {}".format(name))
@@ -231,6 +232,8 @@ def run_execute_test(
     my_predbat.charge_low_power_margin = charge_low_power_margin
     my_predbat.minutes_now = minutes_now
     my_predbat.battery_temperature_charge_curve = {20: 1.0, 10: 0.5, 9: 0.5, 8: 0.5, 7: 0.5, 6: 0.3, 5: 0.3, 4: 0.3, 3: 0.262, 2: 0.1, 1: 0.1, 0: 0}
+    # Flat PV forecast of pv_forecast kW, reset every scenario so a solar run does not leak into the next one
+    my_predbat.pv_forecast_minute = {minute: pv_forecast / 60.0 for minute in range(minutes_now, minutes_now + my_predbat.forecast_minutes)}
 
     charge_window_best = charge_window_best.copy()
     charge_limit_best = charge_limit_best.copy()
@@ -848,6 +851,49 @@ def run_execute_tests(my_predbat):
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         assert_charge_rate=600,
         battery_max_rate=2000,
+    )
+    if failed:
+        return failed
+
+    # Same window, but 1kW of PV forecast across the 60 minutes (1kWh, over the 0.1kWh threshold).
+    # Throttling would cap how much of that PV reaches the battery, so charge at the max rate instead
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power_pv",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=9,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=2000,
+        battery_max_rate=2000,
+        pv_forecast=1.0,
+    )
+    if failed:
+        return failed
+
+    # A trace of PV (0.05kWh over the window) is under the threshold, low power charging still applies
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_low_power_pv_trace",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        soc_kw=9,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_charge_rate=600,
+        battery_max_rate=2000,
+        pv_forecast=0.05,
     )
     if failed:
         return failed

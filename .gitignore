@@ -115,3 +115,6 @@ apps_ha.yaml
 
 # Superpowers planning artifacts (not project docs)
 docs/superpowers/
+
+# Claude Code local worktrees
+.claude/worktrees/

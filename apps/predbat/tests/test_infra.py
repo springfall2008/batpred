@@ -636,6 +636,7 @@ def simple_scenario(
     clipping_cost_weight=0,
     clipping_amplification=1.0,
     clipping_limit_override=0,
+    pv_hours=None,
 ):
     """
     No PV, No Load
@@ -760,11 +761,11 @@ def simple_scenario(
     load10_step = {}
 
     for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv_step[minute] = pv_amount / (60 / 5) if not pv10 else 0
+        # pv_hours limits PV to the first N hours of the forecast, otherwise it runs at pv_amount all day
+        pv_now = 0 if (pv_hours is not None and minute >= pv_hours * 60) else pv_amount
+        pv_step[minute] = pv_now / (60 / 5) if not pv10 else 0
         load_step[minute] = load_amount / (60 / 5) if not pv10 else 0
-
-    for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv10_step[minute] = pv_amount / (60 / 5) if pv10 else 0
+        pv10_step[minute] = pv_now / (60 / 5) if pv10 else 0
         load10_step[minute] = load_amount / (60 / 5) if pv10 else 0
 
     if charge_car:
