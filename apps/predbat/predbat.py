@@ -68,6 +68,7 @@ from const import (
     INVERTER_QUICK_UPDATE_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
+import debug_history
 from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
@@ -437,6 +438,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.set_soc_minutes = 5
         self.set_window_minutes = 5
         self.debug_enable = False
+        self.debug_history_last_capture = None
         self.import_today = {}
         self.import_today_now = 0
         self.export_today = {}
@@ -747,6 +749,42 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+
+    def _capture_debug_history(self):
+        """Capture a rolling debug-history snapshot if due, for #4417.
+
+        Independent of switch.predbat_debug_enable - runs on a coarse interval so
+        there is always some recent history to replay a bug report against, rather
+        than only when the switch happened to already be on before the problem
+        occurred. debug_history_count <= 0 disables the routine capture entirely,
+        but debug_history_force_capture still works even then - an explicit "give me
+        one right now" request (e.g. from an automation that just noticed something
+        worth investigating) is a different intent to "keep a rolling background
+        history" and must not be silently pruned away by that setting.
+        """
+        count = int(self.get_arg("debug_history_count", 15))
+        forced = self.get_arg("debug_history_force_capture", False)
+        if forced:
+            # Reset the switch immediately regardless of outcome below - it's a
+            # momentary trigger, an automation should never have to remember to
+            # turn it back off.
+            self.expose_config("debug_history_force_capture", False)
+        if count <= 0 and not forced:
+            return
+        if not forced:
+            interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
+            if self.debug_history_last_capture is not None and (self.now_utc - self.debug_history_last_capture) < timedelta(hours=interval_hours):
+                return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            self.log("Warning: Storage component unavailable, cannot capture debug history")
+            return
+        try:
+            yaml_text = self.create_debug_yaml(write_file=False)
+            run_async(debug_history.capture_snapshot(storage, yaml_text, self.now_utc, max(count, 1)))
+        except Exception as e:
+            self.log("Warning: Failed to capture debug history snapshot: {}".format(e))
+        self.debug_history_last_capture = self.now_utc
 
     def record_final_run_status(self, status, status_extra):
         """
@@ -1091,6 +1129,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         if self.debug_enable:
             self.create_debug_yaml()
+        self._capture_debug_history()
 
         self.record_final_run_status(status, status_extra)
 

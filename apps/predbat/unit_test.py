@@ -199,6 +199,8 @@ from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
 from tests.test_annual_costs import test_annual_costs
+from tests.test_debug_history import test_debug_history
+from tests.test_debug_history_capture import test_debug_history_capture
 
 # Mock the components and plugin system
 
@@ -479,6 +481,8 @@ def main():
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
+        ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
+        ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
     ]
 
     # Parse command line arguments
