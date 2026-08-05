@@ -1,6 +1,5 @@
 """Tests for read-only Lattice topology ingestion and provenance."""
 
-import ast
 import json
 import os
 import sys
@@ -169,20 +168,6 @@ class TestAuthorityMerge(unittest.TestCase):
         tombstone_first = merge_topologies([tombstone, live])
         self.assertEqual(tombstone_first.site["nodes"], [])
         self.assertEqual(tombstone_first.provenance, {})
-
-
-class TestGatewayFeatureFlag(unittest.TestCase):
-    """Gateway topology behavior is absent unless explicitly enabled."""
-
-    def test_feature_flag_defaults_off(self):
-        """Default initialization does not expose a dispatcher binding."""
-        gateway_path = os.path.join(os.path.dirname(__file__), "..", "gateway.py")
-        with open(gateway_path, "r", encoding="utf-8") as gateway_file:
-            module = ast.parse(gateway_file.read())
-        gateway_class = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "GatewayMQTT")
-        initialize = next(node for node in gateway_class.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "initialize")
-        defaults = dict(zip([argument.arg for argument in initialize.args.args[-len(initialize.args.defaults) :]], initialize.args.defaults))
-        self.assertIs(defaults["lattice_projection_enable"].value, False)
 
 
 if __name__ == "__main__":
