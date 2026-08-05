@@ -333,9 +333,14 @@ pred_bat:
     - 'waiting'
     - 'waiting_car'
 
-  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots)
-  # The car charging now can be set to a sensor to indicate the car is charging and to plan
-  # for it to charge during this 30 minute slot
+  # In some cases car planning is difficult (e.g. Ohme with Intelligent doesn't report slots).
+  # car_charging_now can be set to a sensor that indicates the car is charging, so Predbat plans
+  # for it to charge during this 30 minute slot. It's also the most reliable real-time confirmation
+  # that a daytime Octopus Intelligent Go dispatch slot is genuinely being used - see
+  # switch.predbat_octopus_intelligent_confirm_slots in docs/car-charging.md. If you're on that
+  # tariff's dynamic slot scheme, setting this is recommended even if slot detection already works.
+  # It doesn't have to be the car's own sensor - a charger-level "currently charging" sensor often
+  # works better, e.g. for a Hypervolt charger: car_charging_now: sensor.hypervolt_charging
   #car_charging_now:
   #  - off
 
