@@ -200,7 +200,7 @@ from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
 from tests.test_annual_costs import test_annual_costs
 from tests.test_debug_history import test_debug_history
-from tests.test_debug_history_capture import test_debug_history_capture
+from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment
 
 # Mock the components and plugin system
 
@@ -483,6 +483,7 @@ def main():
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
         ("debug_history_capture", test_debug_history_capture, "Debug history capture throttle/force-capture tests", False),
+        ("debug_history_capture_alignment", test_debug_history_capture_slot_alignment, "Debug history capture timestamp is floored to the plan slot grid", False),
     ]
 
     # Parse command line arguments
