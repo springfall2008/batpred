@@ -1393,6 +1393,109 @@ def test_charge_window_none_value(test_name, my_predbat, dummy_items):
     return failed
 
 
+def test_charge_window_no_source_configured(test_name, my_predbat, dummy_items):
+    """
+    Test charge window handling when neither a REST API (givtcp_rest) nor a charge_start_time/
+    charge_end_time config source is configured at all (issue #4179 / PR #4288 review). This is a
+    permanent setup gap, not a transient one, so update_status() should raise a clear, informative
+    ValueError (unlike the original bare `raise ValueError` with no message) rather than silently
+    retrying forever on a config gap that will never close itself - maintainer call on #4288.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+    inv.rest_api = None
+    inv.rest_data = None
+
+    # Remove charge_start_time/charge_end_time from config entirely, so neither the REST nor the
+    # config-arg branch can produce a value
+    original_charge_start_time = my_predbat.args.pop("charge_start_time", None)
+    original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    try:
+        inv.update_status(my_predbat.minutes_now)
+        print(f"ERROR: {test_name} - update_status should raise ValueError when no charge window source is configured at all")
+        failed = True
+    except ValueError as e:
+        if "neither REST, charge_start_time or charge_start_hour are set" not in str(e):
+            print(f"ERROR: {test_name} - ValueError message should explain the cause, got: {e}")
+            failed = True
+        if "Error: Inverter" not in my_predbat.current_status:
+            print(f"ERROR: {test_name} - current_status should reflect the error, got: {my_predbat.current_status}")
+            failed = True
+    finally:
+        # Restore config so this doesn't affect later tests
+        if original_charge_start_time is not None:
+            my_predbat.args["charge_start_time"] = original_charge_start_time
+        if original_charge_end_time is not None:
+            my_predbat.args["charge_end_time"] = original_charge_end_time
+
+    return failed
+
+
+def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, dummy_items):
+    """
+    Test charge window handling when a REST API (givtcp_rest) *is* configured but rest_data hasn't
+    successfully returned anything yet this cycle (issue #4179's actual production trigger -
+    GivEnergy cloud "no devices" or a fresh start before the first poll). Unlike the "nothing
+    configured at all" case above, this is genuinely transient - the data source is legitimate, it
+    just hasn't produced a value yet - so it should fall through to the same safe-defaults/
+    retry-next-update handling as a configured-but-currently-unusable value, not raise.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+    inv.rest_api = "http://givtcp:6345"
+    inv.rest_data = None
+
+    original_charge_start_time = my_predbat.args.pop("charge_start_time", None)
+    original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    try:
+        inv.update_status(my_predbat.minutes_now)
+    except ValueError as e:
+        print(f"ERROR: {test_name} - update_status should not raise while a configured REST source just hasn't returned data yet, got ValueError({e})")
+        failed = True
+        if original_charge_start_time is not None:
+            my_predbat.args["charge_start_time"] = original_charge_start_time
+        if original_charge_end_time is not None:
+            my_predbat.args["charge_end_time"] = original_charge_end_time
+        return failed
+
+    # Should set the same safe defaults as the "value is None" case
+    if inv.charge_enable_time != False:
+        print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
+        failed = True
+    if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_start_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_start_time_minutes}")
+        failed = True
+    if inv.charge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - charge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_end_time_minutes}")
+        failed = True
+    if inv.track_charge_start != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_start should be '00:00:00', got {inv.track_charge_start}")
+        failed = True
+    if inv.track_charge_end != "00:00:00":
+        print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
+        failed = True
+
+    # Restore config for later tests
+    if original_charge_start_time is not None:
+        my_predbat.args["charge_start_time"] = original_charge_start_time
+    if original_charge_end_time is not None:
+        my_predbat.args["charge_end_time"] = original_charge_end_time
+
+    return failed
+
+
 def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     """
     Test discharge window handling when time is illegal (e.g., 'unknown')
@@ -2830,6 +2933,14 @@ charge_start_service:
         return failed
 
     failed |= test_charge_window_none_value("charge_window_none_value", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_charge_window_no_source_configured("charge_window_no_source_configured", my_predbat, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_charge_window_rest_configured_but_no_data_yet("charge_window_rest_configured_but_no_data_yet", my_predbat, dummy_items)
     if failed:
         return failed
 
