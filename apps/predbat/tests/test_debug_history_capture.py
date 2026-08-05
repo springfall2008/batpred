@@ -118,7 +118,10 @@ def test_debug_history_capture(my_predbat):
             failed += 1
 
         print("Test 6b: a forced capture with a normal positive count adds to the ring rather than truncating it")
-        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=1)  # distinct snapshot id from test 5's
+        # Advance by a full plan slot, not just any amount - the captured timestamp is floored to
+        # the plan_interval_minutes grid (see _capture_debug_history()), so a smaller advance could
+        # floor right back to test 5's slot and collide instead of producing a distinct id.
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=my_predbat.plan_interval_minutes)
         my_predbat.expose_config("debug_history_count", 15)
         my_predbat.expose_config("debug_history_force_capture", True)
         my_predbat._capture_debug_history()
@@ -136,6 +139,59 @@ def test_debug_history_capture(my_predbat):
         except Exception as e:
             print("  FAILED: _capture_debug_history() raised with no storage component: {}".format(e))
             failed += 1
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return failed
+
+
+def test_debug_history_capture_slot_alignment(my_predbat):
+    """
+    Test that a snapshot's stored timestamp is floored to the plan's own slot grid
+    (midnight_utc + N * plan_interval_minutes), not the arbitrary moment the ~5-minute cycle
+    happened to trigger the capture.
+
+    This is what lets the plan History view match a snapshot to exactly the one row it
+    corresponds to by a direct timestamp comparison, rather than a fuzzy nearest-within-a-window
+    search that could let several adjacent rows all claim the same snapshot.
+    """
+    failed = 0
+    print("--- Debug history capture slot-alignment test ---")
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        storage = _make_storage(my_predbat, tmpdir)
+        my_predbat.components = _MockComponents(storage)
+        my_predbat.expose_config("debug_history_count", 15)
+        my_predbat.expose_config("debug_history_interval", 3)
+        my_predbat.expose_config("debug_history_force_capture", False)
+        my_predbat.debug_history_last_capture = None
+
+        # Land deliberately mid-slot, not on a slot boundary, so a capture that skipped flooring
+        # would produce a different timestamp than what's being asserted below.
+        slot_minutes = my_predbat.plan_interval_minutes
+        minutes_since_midnight = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() // 60)
+        floored_minutes = (minutes_since_midnight // slot_minutes) * slot_minutes
+        expected_slot_start = my_predbat.midnight_utc + timedelta(minutes=floored_minutes)
+        my_predbat.now_utc = expected_slot_start + timedelta(minutes=min(7, slot_minutes - 1))
+
+        my_predbat._capture_debug_history()
+        index = run_async(list_snapshots(storage))
+        if len(index) != 1:
+            print("  FAILED: expected exactly 1 snapshot, got {}".format(len(index)))
+            failed += 1
+        else:
+            stored_timestamp = index[0]["timestamp"]
+            if stored_timestamp != expected_slot_start.isoformat():
+                print("  FAILED: expected snapshot timestamp {} (floored to the slot boundary), got {}".format(expected_slot_start.isoformat(), stored_timestamp))
+                failed += 1
+            # The throttle-tracking timestamp is deliberately the real capture moment, not the
+            # floored label - it governs how long until the next routine capture is due, which
+            # should track real elapsed time regardless of how the snapshot itself gets labelled.
+            if my_predbat.debug_history_last_capture != my_predbat.now_utc:
+                print("  FAILED: debug_history_last_capture should track the real capture moment, not the floored slot start")
+                failed += 1
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

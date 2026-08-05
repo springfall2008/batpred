@@ -108,7 +108,7 @@ def get_debug_history_js():
                         var opt = document.createElement('option');
                         opt.value = s.id;
                         var when = new Date(s.timestamp);
-                        opt.textContent = when.toLocaleString() + ' (' + s.steps_back + ' steps back)';
+                        opt.textContent = when.toLocaleString();
                         select.appendChild(opt);
                     });
                     // Rebuilding the option list via appendChild does not reliably repaint the
@@ -6470,27 +6470,22 @@ def get_plan_renderer_js():
     }
 
     // Render plan table from JSON data
-    // Find the retained debug-history snapshot most relevant to a plan row's timestamp,
-    // or null if none qualifies. window.debugHistoryData is a small array
-    // ({id, timestamp, steps_back}) fetched separately (see fetchAndRenderPlan) - matched
-    // here by wall-clock time rather than threaded through the plan JSON itself, since the
-    // History/Yesterday plan is a reconstruction (fed yesterday's real PV/load through the
-    // same renderer as the live plan) and has no inherent relationship to when a snapshot
-    // happened to be captured; only the row's own real timestamp does.
+    // Find the retained debug-history snapshot for a plan row's timestamp, or null if none
+    // qualifies. window.debugHistoryData is a small array ({id, timestamp, steps_back}) fetched
+    // separately (see fetchAndRenderPlan) - matched here by wall-clock time rather than threaded
+    // through the plan JSON itself, since the History/Yesterday plan is a reconstruction (fed
+    // yesterday's real PV/load through the same renderer as the live plan) and has no inherent
+    // relationship to when a snapshot happened to be captured; only the row's own real timestamp
+    // does.
     //
-    // Deliberately asymmetric, not a simple nearest-within-N-minutes window: a snapshot
-    // captures Predbat's full live state (including its plan) at one moment, so it can only
-    // meaningfully describe a row at or shortly after that moment - a row well *after* the
-    // snapshot may have had its plan revised in the meantime (Predbat replans every cycle),
-    // so a snapshot captured later than a row tells you nothing about that row at all, and
-    // one captured much earlier than a row is increasingly unlikely to still describe it by
-    // the time that row's slot arrived. FORWARD_GRACE covers a snapshot landing a little
-    // after a row's start but still inside the same slot (e.g. a 17:00 row, snapshot at
-    // 17:25); BACKWARD_WINDOW is generous enough to always find the last real capture at the
-    // default 3-hourly interval, with margin, without needing to thread the configured
-    // interval through to the JS layer just for this.
-    const DEBUG_SNAPSHOT_FORWARD_GRACE_MS = 30 * 60 * 1000;
-    const DEBUG_SNAPSHOT_BACKWARD_WINDOW_MS = 210 * 60 * 1000;
+    // Snapshots are captured server-side with their timestamp floored to the plan's own slot grid
+    // (self.midnight_utc + N * plan_interval_minutes, see predbat.py's _capture_debug_history) -
+    // the same anchor and step output.py uses to build each row's own row.time - so a snapshot's
+    // timestamp is either an exact match for one row or it isn't a match at all. That also gives
+    // each snapshot at most one owning row for free: two rows can never both claim the same
+    // snapshot, since row times a plan_interval_minutes apart can never both equal the same
+    // floored capture instant.
+    const DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS = 1000; // guards only against sub-second formatting noise
     function findNearestDebugSnapshot(rowTimeStr) {
         if (!rowTimeStr || !window.debugHistoryData || !window.debugHistoryData.length) {
             return null;
@@ -6499,21 +6494,14 @@ def get_plan_renderer_js():
         if (isNaN(rowTime)) {
             return null;
         }
-        let best = null;
-        let bestDiff = null;
         for (const snap of window.debugHistoryData) {
             const snapTime = new Date(snap.timestamp).getTime();
             if (isNaN(snapTime)) { continue; }
-            const diff = rowTime - snapTime; // positive: snapshot before the row (good); negative: snapshot after (only a little grace)
-            if (diff < -DEBUG_SNAPSHOT_FORWARD_GRACE_MS || diff > DEBUG_SNAPSHOT_BACKWARD_WINDOW_MS) {
-                continue;
-            }
-            if (bestDiff === null || Math.abs(diff) < Math.abs(bestDiff)) {
-                bestDiff = diff;
-                best = snap;
+            if (Math.abs(rowTime - snapTime) <= DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS) {
+                return snap;
             }
         }
-        return best;
+        return null;
     }
 
     function renderPlanTable(jsonData, overrides, showDebug, editable, showHistoryLinks) {
@@ -6756,7 +6744,9 @@ def get_plan_renderer_js():
                 if (showHistoryLinks) {
                     const snap = findNearestDebugSnapshot(row.time);
                     if (snap) {
-                        html += `<td bgcolor=#FFFFFF><a href="./debug_history_download?id=${encodeURIComponent(snap.id)}">&#8681; ${snap.steps_back} back</a></td>`;
+                        const snapWhen = new Date(snap.timestamp);
+                        const snapLabel = isNaN(snapWhen.getTime()) ? snap.id : snapWhen.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                        html += `<td bgcolor=#FFFFFF><a href="./debug_history_download?id=${encodeURIComponent(snap.id)}">&#8681; ${snapLabel}</a></td>`;
                     } else {
                         html += '<td bgcolor=#FFFFFF></td>';
                     }

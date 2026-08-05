@@ -772,7 +772,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
         try:
             yaml_text = self.create_debug_yaml(write_file=False)
-            run_async(debug_history.capture_snapshot(storage, yaml_text, self.now_utc, max(count, 1)))
+            # Label the snapshot with the plan slot it falls in, not the arbitrary moment the
+            # ~5-minute cycle happened to trigger the capture - so it lines up exactly with one
+            # plan row's own timestamp (both are minute_relative offsets from self.midnight_utc
+            # in steps of self.plan_interval_minutes, see output.py's raw_plan builder) instead of
+            # needing a fuzzy nearest-match window in the plan's History view.
+            slot_minutes = max(1, self.plan_interval_minutes)
+            minutes_since_midnight = int((self.now_utc - self.midnight_utc).total_seconds() // 60)
+            capture_time = self.midnight_utc + timedelta(minutes=(minutes_since_midnight // slot_minutes) * slot_minutes)
+            run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, max(count, 1)))
         except Exception as e:
             self.log("Warning: Failed to capture debug history snapshot: {}".format(e))
         self.debug_history_last_capture = self.now_utc
