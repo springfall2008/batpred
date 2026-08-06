@@ -3409,9 +3409,18 @@ chart.render();
                 text += "<div id='chart_marginal_hist'></div>\n"
                 text += self.render_chart(line_series, curr, "Marginal Energy Rates \u2014 History & Forecast", now_str, tagname="chart_marginal_hist", daily_chart=False)
         elif chart == "SoCPlanDrift":
+            drift_series = await self.get_soc_drift_series()
             series_data = [{"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8"}]
-            series_data += await self.get_soc_drift_series()
+            series_data += drift_series
             text += self.render_chart(series_data, "kWh", "SoC Forecast Drift", now_str)
+            # "Deselect all plans" needs the actual list of plan series names, which only
+            # exists once get_soc_drift_series() has run - the button itself is emitted
+            # earlier by html_charts (so it sits above the chart, not after it); this just
+            # defines the function it calls. hideSeries()/showSeries() are ApexCharts'
+            # own API - individual series can still be toggled by clicking their legend
+            # entry as normal, this just saves clicking all of them one at a time first.
+            plan_names_json = json.dumps([series["name"] for series in drift_series])
+            text += "<script>\nfunction deselectAllPlans() {{\n  ({names}).forEach(function(name) {{ chart.hideSeries(name); }});\n}}\n</script>\n".format(names=plan_names_json)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
@@ -3502,6 +3511,12 @@ chart.render();
         description = CHART_DESCRIPTIONS.get(chart)
         if description:
             text += '<p class="chart-description">{}</p>'.format(html_module.escape(description))
+
+        if chart == "SoCPlanDrift":
+            # deselectAllPlans() itself is defined later, in get_chart()'s SoCPlanDrift
+            # branch (it needs the actual snapshot list, fetched there) - that's fine, the
+            # button only calls it on click, long after every <script> on the page has run.
+            text += "<button onclick='deselectAllPlans()' style='margin-bottom: 8px; padding: 4px 10px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer;'>Deselect all plans</button>"
 
         if chart != "MarginalCosts":
             text += '<div id="chart"></div>'

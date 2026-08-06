@@ -132,6 +132,21 @@ def test_soc_drift_chart(my_predbat):
         if "name: 'Actual'" not in chart_html:
             print("  ERROR: expected the live Actual series to still be present alongside the drift series")
             failed = True
+
+        print("Test: deselectAllPlans() is defined and lists every plan series name (but not 'Actual', which should stay visible)")
+        if "function deselectAllPlans()" not in chart_html:
+            print("  ERROR: expected a deselectAllPlans() function in the rendered chart output")
+            failed = True
+        else:
+            plan_names_in_page = [s["name"] for s in series]
+            for name in plan_names_in_page:
+                if name not in chart_html:
+                    print("  ERROR: expected deselectAllPlans() output to reference plan series {!r}".format(name))
+                    failed = True
+            deselect_block = chart_html[chart_html.index("function deselectAllPlans()") :]
+            if "'Actual'" in deselect_block.split("</script>")[0]:
+                print("  ERROR: 'Actual' should not be one of the series deselectAllPlans() hides")
+                failed = True
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
