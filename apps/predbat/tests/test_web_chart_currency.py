@@ -14,6 +14,7 @@ configured currency's minor unit rather than a hardcoded "p/kWh" - see issue #41
 user configured for NZ dollars/cents saw "p/kWh" (pence) in the chart legend regardless.
 """
 
+import asyncio
 import re
 
 from web import WebInterface
@@ -67,7 +68,7 @@ def test_rates_chart_series_names_use_currency_symbol(my_predbat):
         for currency_symbols, expected_minor in [("£p", "p"), ("$c", "c"), ("€c", "c")]:
             my_predbat.currency_symbols = currency_symbols
 
-            result = w.get_chart("Rates")
+            result = asyncio.run(w.get_chart("Rates"))
             series_names = re.findall(r"name: '([^']*)'", result)
 
             expected_hourly = "Hourly {}/kWh".format(expected_minor)

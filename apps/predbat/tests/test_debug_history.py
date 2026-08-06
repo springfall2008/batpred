@@ -16,7 +16,7 @@ import tempfile
 import shutil
 import tarfile
 
-from debug_history import STORAGE_MODULE, _discard_snapshot, annotate_steps_back, build_archive, capture_snapshot, list_snapshots, load_all_snapshots, load_snapshot, snapshot_filename
+from debug_history import STORAGE_MODULE, _discard_snapshot, annotate_steps_back, build_archive, capture_snapshot, extract_snapshot_fields, list_snapshots, load_all_snapshots, load_snapshot, snapshot_filename
 from storage import StorageLocalFiles
 
 
@@ -75,6 +75,29 @@ class FakeStorageNoDelete:
 def sample_yaml_text(marker):
     """Return debug-yaml-shaped text (colons, nesting, a newline) with a distinguishing marker."""
     return "CONFIG_ITEMS:\n- name: marker\n  value: {}\nnested:\n  a: 1\n".format(marker)
+
+
+def sample_debug_yaml_document():
+    """Return text shaped like a real debug.yaml: an untagged field before the target keys that
+    would break a full yaml.unsafe_load() outside the main app (a custom !!python/object tag,
+    same as export_today's real MinuteArray), the fields extract_snapshot_fields is meant to
+    read, and another plain field after - proving the block boundary stops at the right place
+    rather than bleeding into whatever follows.
+    """
+    return (
+        "export_today: !!python/object:utils.MinuteArray\n"
+        "  _data: !!python/object/apply:array.array\n"
+        "  - d\n"
+        "  - - 114.19\n"
+        "    - 114.15\n"
+        "now_utc: &id009 2026-08-05 20:20:00+01:00\n"
+        "predict_soc_best:\n"
+        "  0: 9.854\n"
+        "  5: 9.844\n"
+        "  10: 9.836\n"
+        "soc_max: 18.08\n"
+        "soc_percent: 55\n"
+    )
 
 
 def test_debug_history(my_predbat):
@@ -370,5 +393,55 @@ def test_debug_history(my_predbat):
         if tar.getnames() != []:
             print("  ERROR: expected an empty archive, got members {}".format(tar.getnames()))
             failed = True
+
+    print("Test: extract_snapshot_fields reads a dict-valued block field (predict_soc_best) without touching unrelated tagged fields")
+    document = sample_debug_yaml_document()
+    fields = extract_snapshot_fields(document, ["predict_soc_best"])
+    if fields.get("predict_soc_best") != {0: 9.854, 5: 9.844, 10: 9.836}:
+        print("  ERROR: unexpected predict_soc_best {}".format(fields.get("predict_soc_best")))
+        failed = True
+
+    print("Test: extract_snapshot_fields reads a plain scalar field (soc_max)")
+    fields = extract_snapshot_fields(document, ["soc_max"])
+    if fields.get("soc_max") != 18.08:
+        print("  ERROR: unexpected soc_max {!r}".format(fields.get("soc_max")))
+        failed = True
+
+    print("Test: extract_snapshot_fields reads an anchored datetime scalar field (now_utc) as a real datetime")
+    fields = extract_snapshot_fields(document, ["now_utc"])
+    now_utc = fields.get("now_utc")
+    if not isinstance(now_utc, datetime.datetime) or now_utc.replace(tzinfo=None) != datetime.datetime(2026, 8, 5, 20, 20, 0):
+        print("  ERROR: unexpected now_utc {!r}".format(now_utc))
+        failed = True
+
+    print("Test: extract_snapshot_fields reads multiple keys in one pass and omits keys that are not present")
+    fields = extract_snapshot_fields(document, ["soc_max", "predict_soc_best", "does_not_exist"])
+    if set(fields.keys()) != {"soc_max", "predict_soc_best"}:
+        print("  ERROR: expected exactly soc_max and predict_soc_best, got keys {}".format(list(fields.keys())))
+        failed = True
+
+    print("Test: a field using a custom !!python/object tag is safely skipped (yaml.safe_load refuses it) rather than raising")
+    # document opens with export_today: !!python/object:utils.MinuteArray - the same shape as
+    # the real debug.yaml's field of that name. A full yaml.unsafe_load() of the whole document
+    # would raise here since 'utils' is not on this test's import path; extract_snapshot_fields
+    # must not raise either, whether or not the field it's asked for is itself the tagged one.
+    fields = extract_snapshot_fields(document, ["export_today"])
+    if "export_today" in fields:
+        print("  ERROR: safe_load should refuse the custom tag, so export_today should be absent, got {}".format(fields))
+        failed = True
+
+    print("Test: extracting other keys is unaffected by the custom-tagged field appearing earlier in the same document")
+    fields = extract_snapshot_fields(document, ["export_today", "soc_max"])
+    if fields.get("soc_max") != 18.08 or "export_today" in fields:
+        print("  ERROR: expected only soc_max to come back, got {}".format(fields))
+        failed = True
+
+    print("Test: extract_snapshot_fields on an empty document or empty key list returns an empty dict")
+    if extract_snapshot_fields("", ["soc_max"]) != {}:
+        print("  ERROR: an empty document should give an empty dict")
+        failed = True
+    if extract_snapshot_fields(document, []) != {}:
+        print("  ERROR: an empty key list should give an empty dict")
+        failed = True
 
     return failed

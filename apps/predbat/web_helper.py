@@ -4191,6 +4191,17 @@ tabindex="0"  <!-- Make the menu focusable -->
     color: white;
 }
 
+.chart-description {
+    color: #555;
+    font-size: 13px;
+    margin: 0 0 10px 0;
+    max-width: 900px;
+}
+
+body.dark-mode .chart-description {
+    color: #aaa;
+}
+
 /* Dark mode charts menu styles */
 body.dark-mode .charts-menu {
     background-color: #1e1e1e;

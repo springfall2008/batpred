@@ -15,7 +15,10 @@ there may not be one.
 
 import datetime
 import io
+import re
 import tarfile
+
+import yaml
 
 STORAGE_MODULE = "debug_history"
 INDEX_NAME = "snapshots_index"
@@ -196,3 +199,38 @@ def build_archive(named_snapshots):
             info.mtime = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
             tar.addfile(info, io.BytesIO(data))
     return buffer.getvalue()
+
+
+_TOP_LEVEL_KEY_BLOCK_RE = r"^{}:.*\n(?:[ \t].*\n?)*"
+
+
+def extract_snapshot_fields(yaml_text, keys):
+    """Extract and parse only the given top-level keys from a debug-yaml document.
+
+    A full yaml.unsafe_load() on a whole snapshot is both expensive (multi-MB of
+    unrelated fields - CONFIG_ITEMS, load_minutes, full forecast arrays) and fragile
+    outside the main app's own process: several fields elsewhere in the document use
+    custom !!python/object tags (e.g. utils.MinuteArray) that only resolve when that
+    class happens to be importable in the caller's environment, which callers reading
+    the debug-history buffer for a lightweight purpose (a chart, say) should not need
+    to depend on. Slicing out only the requested keys' own text - each key's line
+    through to the line before the next top-level key - and parsing just those small
+    fragments with yaml.safe_load sidesteps both problems, since the fields this is
+    meant for (predict_soc_best, soc_max, now_utc, ...) are plain dicts/numbers/
+    timestamps with no custom tags of their own.
+
+    Returns a dict of whichever requested keys were present and parsed successfully;
+    a missing or unparsable key is simply absent from the result rather than raising.
+    """
+    result = {}
+    for key in keys:
+        match = re.search(_TOP_LEVEL_KEY_BLOCK_RE.format(re.escape(key)), yaml_text, re.MULTILINE)
+        if not match:
+            continue
+        try:
+            parsed = yaml.safe_load(match.group(0))
+        except yaml.YAMLError:
+            continue
+        if isinstance(parsed, dict) and key in parsed:
+            result[key] = parsed[key]
+    return result

@@ -290,6 +290,20 @@ def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, liv
     return unit or "(no unit)", friendly_name or entity_id
 
 
+# Short explanation shown above a chart on the /charts page, for chart types where what's
+# actually being plotted isn't obvious from the name/legend alone. Charts without an entry
+# here render with no description, same as before this existed - add to this as other
+# charts turn out to need it too, rather than writing all of them in one pass.
+CHART_DESCRIPTIONS = {
+    "SoCPlanDrift": (
+        "The solid line is the battery's actual measured SoC. Each faint line is what the plan predicted "
+        "would happen, starting from one retained debug-history snapshot's capture moment - so you can see "
+        "how the forecast for a given period changed as Predbat replanned over time, not just what today's "
+        "plan currently expects. Newer snapshots are drawn more solid; older ones fade out."
+    ),
+}
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -2946,7 +2960,7 @@ chart.render();
         # Redirect back to dashboard
         raise web.HTTPFound("./dash")
 
-    def get_chart(self, chart):
+    async def get_chart(self, chart):
         """
         Return the HTML for a chart
         """
@@ -3386,10 +3400,62 @@ chart.render();
                 ]
                 text += "<div id='chart_marginal_hist'></div>\n"
                 text += self.render_chart(line_series, curr, "Marginal Energy Rates \u2014 History & Forecast", now_str, tagname="chart_marginal_hist", daily_chart=False)
+        elif chart == "SoCPlanDrift":
+            series_data = [{"name": "Actual", "data": soc_kw_h0, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "smooth", "color": "#3291a8"}]
+            series_data += await self.get_soc_drift_series()
+            text += self.render_chart(series_data, "kWh", "SoC Forecast Drift", now_str)
         else:
             text += "<br><h2>Unknown chart type</h2>"
 
         return text
+
+    async def get_soc_drift_series(self):
+        """
+        Build one ApexCharts series per retained debug-history snapshot, each showing
+        that snapshot's own predict_soc_best forward projection from its own capture
+        moment - overlaid together (and against the live "Actual" series from get_chart)
+        this shows how the plan's forecast for a given period changed as it was
+        replanned over time, rather than just what the most recent plan expects now.
+
+        Older snapshots are drawn more transparent than newer ones so the most recent
+        plan (closest to what's actually happened since) stands out without needing a
+        distinct colour per line - there can be as many lines as debug_history_count.
+        """
+        storage = self._storage()
+        if not storage:
+            return []
+
+        snapshots = await debug_history.list_snapshots(storage)
+        count = len(snapshots)
+        series = []
+        for i, entry in enumerate(snapshots):
+            text = await debug_history.load_snapshot(storage, entry["id"])
+            if not text:
+                continue
+            fields = debug_history.extract_snapshot_fields(text, ["predict_soc_best", "now_utc"])
+            predict_soc_best = fields.get("predict_soc_best")
+            snapshot_now_utc = fields.get("now_utc")
+            if not predict_soc_best or not snapshot_now_utc:
+                continue
+
+            data = {}
+            for minute_offset, kwh in predict_soc_best.items():
+                timestamp = snapshot_now_utc + timedelta(minutes=minute_offset)
+                data[timestamp.strftime(TIME_FORMAT)] = kwh
+
+            age_fraction = i / max(count - 1, 1)  # 0 = newest snapshot .. 1 = oldest
+            opacity = round(0.85 - 0.55 * age_fraction, 2)
+            series.append(
+                {
+                    "name": "Plan @ {}".format(snapshot_now_utc.strftime("%d %H:%M")),
+                    "data": data,
+                    "opacity": str(opacity),
+                    "stroke_width": "1",
+                    "stroke_curve": "smooth",
+                    "color": "#eb2323",
+                }
+            )
+        return series
 
     async def html_charts(self, request):
         """
@@ -3415,15 +3481,20 @@ chart.render();
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
+        text += f'<a href="./charts?chart=SoCPlanDrift" class="{"active" if chart == "SoCPlanDrift" else ""}">SoCPlanDrift</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
             text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
+        description = CHART_DESCRIPTIONS.get(chart)
+        if description:
+            text += '<p class="chart-description">{}</p>'.format(html_module.escape(description))
+
         if chart != "MarginalCosts":
             text += '<div id="chart"></div>'
-        text += self.get_chart(chart=chart)
+        text += await self.get_chart(chart=chart)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
