@@ -20,7 +20,7 @@ composition, but publishes no PRIMARY/CONTROL role assignment and no
 configuration projection ready for materialization.
 """
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig materializable
 
 import threading
 from dataclasses import dataclass
@@ -28,12 +28,20 @@ from typing import Optional
 
 from lattice_autoconfig import (
     AliasRole,
+    ProjectionCardinality,
+    ProjectionRouting,
+    ProjectionValueKind,
     ProviderAlias,
+    ProviderConfigProjection,
     ProviderHealth,
     ProviderIdentityAlias,
+    ProviderProjectionValue,
+    ProviderRoleAssignment,
     ProviderSnapshot,
+    _fingerprint_snapshot,
     _plain,
 )
+from gateway_autoconfig import GatewayAutoConfigPlan
 from lattice_fragment_adapters import (
     DurableFragmentAdapter,
     FragmentAdapterReadError,
@@ -43,6 +51,228 @@ from lattice_topology import TopologyValidationError, decode_topology
 
 
 _LIVENESS_UNCHANGED = object()
+_CONFIG_ACCESS_PATH = "predbat-config"
+
+_CONTROL_ARGUMENTS = frozenset(
+    (
+        "charge_rate",
+        "discharge_rate",
+        "reserve",
+        "charge_limit",
+        "charge_start_time",
+        "charge_end_time",
+        "discharge_start_time",
+        "discharge_end_time",
+        "scheduled_charge_enable",
+        "scheduled_discharge_enable",
+        "export_limit",
+        "charge_rate_percent",
+        "discharge_rate_percent",
+        "pause_mode",
+        "pause_start_time",
+        "pause_end_time",
+        "discharge_target_soc",
+        "idle_start_time",
+        "idle_end_time",
+    )
+)
+_FIRST_SOURCE_ARGUMENTS = frozenset(
+    (
+        "pv_today",
+        "import_today",
+        "export_today",
+        "load_today",
+        "battery_scaling",
+        "battery_rate_max",
+        "inverter_time",
+    )
+)
+_SCALAR_ARGUMENTS = frozenset(
+    (
+        "num_inverters",
+        "battery_temperature_history",
+        "givtcp_rest",
+        "ge_cloud_serial",
+        "ge_cloud_data",
+        "ge_cloud_direct",
+        "ems_total_soc",
+        "ems_total_charge",
+        "ems_total_discharge",
+        "ems_total_grid",
+        "ems_total_pv",
+        "ems_total_load",
+    )
+)
+
+
+def _serial_nodes(document):
+    """Index retained nodes by normalized physical serial identity."""
+    result = {}
+    for node in _live_nodes(document):
+        attributes = node.get("attributes") or {}
+        serial = attributes.get("serial")
+        if isinstance(serial, str) and serial.strip():
+            result[serial.strip().upper()] = str(node["id"])
+    return result
+
+
+def _projection_sources(plan, argument, value):
+    """Return the selected serial owning each raw legacy value."""
+    serials = plan.selected_serials
+    if not serials:
+        raise TopologyValidationError("Gateway auto-config plan has no targets")
+    if isinstance(value, tuple):
+        if argument in _FIRST_SOURCE_ARGUMENTS:
+            return (serials[0],) * len(value)
+        if len(value) == len(serials):
+            return serials
+        raise TopologyValidationError(
+            "Gateway projection {} has {} values for {} targets".format(
+                argument,
+                len(value),
+                len(serials),
+            )
+        )
+    return (serials[0],)
+
+
+def _projection_group(argument):
+    """Keep variable-width source arrays independent from inverter slots."""
+    if argument == "pv_power":
+        return "pv_power_sources"
+    if argument == "pv_today":
+        return "pv_energy_sources"
+    if argument in ("import_today", "export_today", "load_today"):
+        return "grid_energy_sources"
+    if argument in ("battery_scaling", "battery_rate_max", "inverter_time"):
+        return "battery_metadata_sources"
+    if argument == "num_inverters" or not isinstance(argument, str):
+        return "site"
+    return "inverters"
+
+
+def _value_kind(value):
+    """Map a raw immutable mapper value to the compiler value kind."""
+    if value is None:
+        return ProjectionValueKind.NONE
+    if isinstance(value, str) and "." in value:
+        return ProjectionValueKind.ENTITY
+    return ProjectionValueKind.CONSTANT
+
+
+def _materializable_snapshot(document, plan, provider_id, generation, health):
+    """Bind one pure Gateway plan to retained topology identities."""
+    if not isinstance(plan, GatewayAutoConfigPlan):
+        raise TypeError("plan must be GatewayAutoConfigPlan")
+    document = _plain(document)
+    nodes_by_serial = _serial_nodes(document)
+    missing = sorted(serial for serial in plan.selected_serials if serial.upper() not in nodes_by_serial)
+    if missing:
+        raise TopologyValidationError("Gateway auto-config serials are absent from retained topology: {}".format(", ".join(missing)))
+    node_lookup = {str(node["id"]): node for node in document.get("nodes", ())}
+    selected_nodes = tuple(nodes_by_serial[serial.upper()] for serial in plan.selected_serials)
+    if any(node_lookup[node_id].get("kind") == "energy-management-system" for node_id in selected_nodes):
+        raise TopologyValidationError("Gateway EMS plans require the multi-battery coordinator model")
+
+    assignments = set()
+    for index, node_id in enumerate(selected_nodes):
+        assignments.add((AliasRole.PRIMARY, "inverters", index, node_id))
+        assignments.add((AliasRole.CONTROL, "inverters", index, node_id))
+
+    projections = []
+    for argument, raw_value in sorted(plan.arguments.items()):
+        if not isinstance(raw_value, tuple) and argument not in _SCALAR_ARGUMENTS:
+            raw_value = tuple(raw_value for _serial in plan.selected_serials)
+        values = raw_value if isinstance(raw_value, tuple) else (raw_value,)
+        serials = _projection_sources(plan, argument, raw_value)
+        node_ids = tuple(nodes_by_serial[serial.upper()] for serial in serials)
+        cardinality = ProjectionCardinality.PER_INDEX if isinstance(raw_value, tuple) else ProjectionCardinality.SCALAR
+        group = _projection_group(argument) if cardinality is ProjectionCardinality.PER_INDEX else "site"
+        role = AliasRole.CONTROL if argument in _CONTROL_ARGUMENTS else AliasRole.PRIMARY
+        for index, node_id in enumerate(node_ids):
+            assignments.add((role, group, index, node_id))
+
+        projection_values = []
+        for node_id, serial, value in zip(node_ids, serials, values):
+            kind = _value_kind(value)
+            capability = None
+            access_path_id = None
+            identity_kind = None
+            identity_value = None
+            if kind is not ProjectionValueKind.NONE:
+                identity_kind = "serial"
+                identity_value = serial.upper()
+                access_path_id = _CONFIG_ACCESS_PATH
+            if kind is ProjectionValueKind.ENTITY:
+                capability = "predbat.config.{}".format(argument)
+                node = node_lookup[node_id]
+                access_paths = node.setdefault("accessPaths", [])
+                if not any(str(path.get("id")) == _CONFIG_ACCESS_PATH for path in access_paths):
+                    access_paths.append(
+                        {
+                            "id": _CONFIG_ACCESS_PATH,
+                            "provider": provider_id,
+                            "preference": 100,
+                        }
+                    )
+                capabilities = node.setdefault("capabilities", [])
+                if not any(offer.get("capability") == capability and offer.get("accessPath") == _CONFIG_ACCESS_PATH for offer in capabilities):
+                    capabilities.append(
+                        {
+                            "capability": capability,
+                            "accessPath": _CONFIG_ACCESS_PATH,
+                            "read": {
+                                "protocol": "home-assistant",
+                                "address": value,
+                            },
+                        }
+                    )
+            projection_values.append(
+                ProviderProjectionValue(
+                    node_id=node_id,
+                    kind=kind,
+                    value=value,
+                    capability=capability,
+                    identity_kind=identity_kind,
+                    identity_value=identity_value,
+                    access_path_id=access_path_id,
+                )
+            )
+        projections.append(
+            ProviderConfigProjection(
+                argument=argument,
+                role=role,
+                group=group,
+                routing=ProjectionRouting.LEAF,
+                cardinality=cardinality,
+                values=tuple(projection_values),
+                required=False,
+            )
+        )
+
+    for node in document.get("nodes", ()):
+        attributes = node.get("attributes")
+        if isinstance(attributes, dict):
+            serial = attributes.get("serial")
+            if isinstance(serial, str) and serial.strip():
+                attributes["serial"] = serial.strip().upper()
+    roles = tuple(
+        ProviderRoleAssignment(role, group, index, node_id)
+        for role, group, index, node_id in sorted(
+            assignments,
+            key=lambda item: (item[1], item[0].value, item[2], item[3]),
+        )
+    )
+    return ProviderSnapshot(
+        provider_id=provider_id,
+        generation=generation,
+        health=health,
+        topology_fragment=document,
+        aliases=_reference_aliases(document),
+        identity_aliases=_identity_aliases(document),
+        role_assignments=roles,
+        config_projections=tuple(projections),
+    )
 
 
 @dataclass(frozen=True)
@@ -377,12 +607,48 @@ class GatewayRetainedTopologyFragmentPublisher:
                 topology_fragment=_plain(previous.topology_fragment),
                 aliases=previous.aliases,
                 identity_aliases=previous.identity_aliases,
-                role_assignments=(),
-                config_projections=(),
+                role_assignments=previous.role_assignments,
+                config_projections=previous.config_projections,
             )
             return self._adapter.publish(
                 snapshot,
                 "gateway liveness changed to {}".format(health.value),
+            )
+
+    def ingest_auto_config(self, plan):
+        """Attach one pure mapper plan to the current retained fragment."""
+        if not self._enabled:
+            return False
+        with self._lock:
+            current = self._current_state()
+            if current is None:
+                raise FragmentAdapterReadError("Gateway topology must be seeded before auto-config")
+            if current.removed:
+                raise FragmentAdapterRemoved(
+                    "provider {} was removed at generation {}".format(
+                        self.provider_id,
+                        current.generation,
+                    )
+                )
+            snapshot = _materializable_snapshot(
+                current.snapshot.topology_fragment,
+                plan,
+                self.provider_id,
+                current.generation,
+                current.snapshot.health,
+            )
+            if _fingerprint_snapshot(snapshot) == _fingerprint_snapshot(current.snapshot):
+                return False
+            snapshot = _materializable_snapshot(
+                current.snapshot.topology_fragment,
+                plan,
+                self.provider_id,
+                current.generation + 1,
+                current.snapshot.health,
+            )
+            return self._adapter.publish(
+                snapshot,
+                "gateway auto-config plan changed",
             )
 
     def remove(self):

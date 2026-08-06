@@ -1,6 +1,6 @@
 """Tests for the pure Gateway retained-topology Lattice fragment publisher."""
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig materializable
 
 import os
 import sys
@@ -29,6 +29,7 @@ from lattice_gateway_fragment import (  # noqa: E402
     GatewayTopologyProjection,
 )
 from lattice_topology import TopologyValidationError  # noqa: E402
+from gateway_autoconfig import compile_gateway_auto_config  # noqa: E402
 
 
 def topology(
@@ -160,6 +161,39 @@ class TestGatewayRetainedTopologyFragmentPublisher(unittest.TestCase):
                 ("lattice-node-id", "GW-INV-1"),
                 ("serial", "GW-INV-1"),
             ),
+        )
+
+    def test_pure_plan_publishes_materializable_roles_and_config(self):
+        """A plan generation compiles real Gateway PredBat arguments."""
+        adapter, _state_store = publisher()
+        adapter.ingest_retained_topology(topology(), online=True)
+        plan = compile_gateway_auto_config(
+            (
+                {
+                    "serial": "GW-INV-1",
+                    "kind": "inverter",
+                    "battery_present": True,
+                    "battery_capacity_wh": 9600,
+                },
+            )
+        )
+
+        self.assertTrue(adapter.ingest_auto_config(plan))
+        snapshot = adapter.read_snapshot()
+        compiled = compile_auto_config((snapshot,))
+
+        self.assertTrue(snapshot.role_assignments)
+        self.assertTrue(snapshot.config_projections)
+        self.assertEqual(compiled.primary_targets[0].index, 0)
+        self.assertEqual(compiled.control_targets[0].index, 0)
+        self.assertEqual(compiled.projected_config["num_inverters"], 1)
+        self.assertEqual(
+            compiled.projected_config["battery_power"],
+            ("sensor.predbat_gateway_-inv-1_battery_power",),
+        )
+        self.assertEqual(
+            snapshot.identity_aliases[-1].value,
+            "GW-INV-1",
         )
 
     def test_projection_metadata_retains_provider_local_capability_coordinates(self):

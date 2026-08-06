@@ -17,7 +17,7 @@ and provider-local topology for composition, but grants no materialization-ready
 PRIMARY/CONTROL roles and publishes no PredBat configuration or control write.
 """
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig materializable
 
 import threading
 from dataclasses import dataclass
@@ -25,11 +25,24 @@ from typing import Optional
 
 from lattice_autoconfig import (
     AliasRole,
+    ProjectionCardinality,
+    ProjectionRouting,
+    ProjectionValueKind,
     ProviderAlias,
+    ProviderConfigProjection,
     ProviderHealth,
     ProviderIdentityAlias,
+    ProviderProjectionValue,
+    ProviderRoleAssignment,
     ProviderSnapshot,
+    _fingerprint_snapshot,
     _plain,
+)
+from gecloud_autoconfig import (
+    GECloudAutoConfigError,
+    GECloudAutoConfigInput,
+    GECloudAutoConfigPlan,
+    compile_gecloud_auto_config,
 )
 from lattice_fragment_adapters import (
     DurableFragmentAdapter,
@@ -40,6 +53,256 @@ from lattice_fragment_adapters import (
 
 
 _HEALTH_UNCHANGED = object()
+_CONTROL_ARGUMENTS = frozenset(
+    (
+        "charge_rate",
+        "discharge_rate",
+        "reserve",
+        "charge_limit",
+        "charge_limit_enable",
+        "charge_start_time",
+        "charge_end_time",
+        "discharge_start_time",
+        "discharge_end_time",
+        "scheduled_charge_enable",
+        "scheduled_discharge_enable",
+        "charge_rate_percent",
+        "discharge_rate_percent",
+        "pause_mode",
+        "pause_start_time",
+        "pause_end_time",
+        "discharge_target_soc",
+        "idle_start_time",
+        "idle_end_time",
+    )
+)
+_METADATA_ARGUMENTS = frozenset(("battery_scaling", "battery_rate_max", "inverter_time"))
+_SCALAR_ARGUMENTS = frozenset(
+    (
+        "num_inverters",
+        "battery_temperature_history",
+        "givtcp_rest",
+        "ge_cloud_serial",
+        "ge_cloud_data",
+        "ge_cloud_direct",
+    )
+)
+
+
+def _plan_group(argument):
+    """Select the role group matching one raw legacy source list."""
+    if argument == "pv_power":
+        return "pv_power_sources"
+    if argument == "pv_today":
+        return "pv_energy_sources"
+    if argument in ("import_today", "export_today", "load_today"):
+        return "grid_energy_sources"
+    if argument in _METADATA_ARGUMENTS:
+        return "battery_metadata_sources"
+    return "inverters"
+
+
+def _plan_kind(value):
+    """Map one raw mapper value to the compiler projection kind."""
+    if value is None:
+        return ProjectionValueKind.NONE
+    if isinstance(value, str) and "." in value:
+        return ProjectionValueKind.ENTITY
+    return ProjectionValueKind.CONSTANT
+
+
+def _nodes_by_serial(document):
+    """Index GE topology nodes using normalized serial identity."""
+    result = {}
+    for node in document.get("nodes", ()):
+        attributes = node.get("attributes") or {}
+        serial = attributes.get("serial")
+        if isinstance(serial, str) and serial.strip():
+            result[serial.strip().upper()] = str(node["id"])
+    return result
+
+
+def _devices_from_document(document):
+    """Restore normalized device snapshots from durable GE topology."""
+    devices = []
+    for node in document.get("nodes", ()):
+        attributes = node.get("attributes") or {}
+        devices.append(
+            GECloudDeviceSnapshot(
+                serial=attributes.get("serial"),
+                kind=attributes.get("geCloudKind", "inverter"),
+                online=attributes.get("online"),
+                model=attributes.get("model"),
+                site_id=attributes.get("siteId"),
+                uuid=attributes.get("geCloudUuid"),
+            )
+        )
+    return _normalize_devices(devices)
+
+
+_EMS_COORDINATOR_ARGUMENTS = frozenset(
+    (
+        "battery_power",
+        "pv_power",
+        "load_power",
+        "grid_power",
+        "charge_start_time",
+        "charge_end_time",
+        "idle_start_time",
+        "idle_end_time",
+        "charge_limit",
+        "discharge_start_time",
+        "discharge_end_time",
+    )
+)
+
+
+def _plan_sources(config, plan, argument, raw_value):
+    """Return the physical source serial for every raw mapper value."""
+    if not isinstance(raw_value, tuple):
+        source = plan.ems_serial or plan.primary_targets[0]
+        return (source,)
+    if plan.ems_serial and argument in _EMS_COORDINATOR_ARGUMENTS:
+        return tuple(plan.ems_serial for _value in raw_value)
+    if argument in ("pv_power", "pv_today"):
+        sources = plan.pv_sources
+    elif argument in ("import_today", "export_today", "load_today"):
+        sources = plan.grid_energy_sources
+    else:
+        sources = plan.primary_targets
+    if len(sources) != len(raw_value):
+        raise GECloudAutoConfigError(
+            "GE projection {} has {} values for {} sources".format(
+                argument,
+                len(raw_value),
+                len(sources),
+            )
+        )
+    return tuple(sources)
+
+
+def _materializable_snapshot(
+    document,
+    devices,
+    config,
+    plan,
+    provider_id,
+    generation,
+    health,
+):
+    """Bind one pure GE mapper plan to its discovered topology nodes."""
+    if not isinstance(config, GECloudAutoConfigInput):
+        raise TypeError("config must be GECloudAutoConfigInput")
+    if not isinstance(plan, GECloudAutoConfigPlan):
+        raise TypeError("plan must be GECloudAutoConfigPlan")
+    document = _plain(document)
+    nodes_by_serial = _nodes_by_serial(document)
+    referenced = set(plan.primary_targets)
+    referenced.update(plan.inverter_targets)
+    referenced.update(plan.pv_sources)
+    referenced.update(plan.grid_energy_sources)
+    if plan.ems_serial:
+        referenced.add(plan.ems_serial)
+    missing = sorted(serial for serial in referenced if serial.upper() not in nodes_by_serial)
+    if missing:
+        raise GECloudAutoConfigError("GE auto-config serials are absent from discovery: {}".format(", ".join(missing)))
+    node_lookup = {str(node["id"]): node for node in document.get("nodes", ())}
+    assignments = set()
+    for index, serial in enumerate(plan.primary_targets):
+        assignments.add(
+            (
+                AliasRole.PRIMARY,
+                "inverters",
+                index,
+                nodes_by_serial[serial.upper()],
+            )
+        )
+
+    projections = []
+    for argument, raw_value in plan.arguments:
+        if not isinstance(raw_value, tuple) and argument not in _SCALAR_ARGUMENTS:
+            raw_value = tuple(raw_value for _serial in plan.primary_targets)
+        values = raw_value if isinstance(raw_value, tuple) else (raw_value,)
+        sources = _plan_sources(config, plan, argument, raw_value)
+        node_ids = tuple(nodes_by_serial[serial.upper()] for serial in sources)
+        cardinality = ProjectionCardinality.PER_INDEX if isinstance(raw_value, tuple) else ProjectionCardinality.SCALAR
+        coordinator = bool(plan.ems_serial and argument in _EMS_COORDINATOR_ARGUMENTS)
+        if coordinator:
+            role = AliasRole.CONTROL
+            group = "ems_controls"
+            routing = ProjectionRouting.COORDINATOR
+        else:
+            role = AliasRole.CONTROL if argument in _CONTROL_ARGUMENTS else AliasRole.PRIMARY
+            group = _plan_group(argument) if cardinality is ProjectionCardinality.PER_INDEX else "site"
+            routing = ProjectionRouting.LEAF
+        for index, node_id in enumerate(node_ids):
+            assignments.add((role, group, index, node_id))
+
+        projection_values = []
+        for node_id, serial, value in zip(node_ids, sources, values):
+            kind = _plan_kind(value)
+            capability = None
+            identity_kind = None
+            identity_value = None
+            if kind is not ProjectionValueKind.NONE:
+                identity_kind = "serial"
+                identity_value = serial.upper()
+            if kind is ProjectionValueKind.ENTITY:
+                capability = "predbat.config.{}".format(argument)
+                node = node_lookup[node_id]
+                capabilities = node.setdefault("capabilities", [])
+                if not any(offer.get("capability") == capability and offer.get("accessPath") == "ge-cloud-api" for offer in capabilities):
+                    capabilities.append(
+                        {
+                            "capability": capability,
+                            "accessPath": "ge-cloud-api",
+                            "read": {
+                                "protocol": "home-assistant",
+                                "address": value,
+                            },
+                        }
+                    )
+            projection_values.append(
+                ProviderProjectionValue(
+                    node_id=node_id,
+                    kind=kind,
+                    value=value,
+                    capability=capability,
+                    identity_kind=identity_kind,
+                    identity_value=identity_value,
+                )
+            )
+        projections.append(
+            ProviderConfigProjection(
+                argument=argument,
+                role=role,
+                group=group,
+                routing=routing,
+                cardinality=cardinality,
+                values=tuple(projection_values),
+                required=False,
+            )
+        )
+
+    roles = tuple(
+        ProviderRoleAssignment(role, group, index, node_id)
+        for role, group, index, node_id in sorted(
+            assignments,
+            key=lambda item: (item[1], item[0].value, item[2], item[3]),
+        )
+    )
+    return ProviderSnapshot(
+        provider_id=provider_id,
+        generation=generation,
+        health=health,
+        topology_fragment=document,
+        aliases=_reference_aliases(devices),
+        identity_aliases=_identity_aliases(devices),
+        role_assignments=roles,
+        config_projections=tuple(projections),
+    )
+
+
 _DEVICE_KINDS = frozenset(
     (
         "battery-inverter",
@@ -429,12 +692,54 @@ class GECloudFragmentPublisher:
                 topology_fragment=_plain(previous.topology_fragment),
                 aliases=previous.aliases,
                 identity_aliases=previous.identity_aliases,
-                role_assignments=(),
-                config_projections=(),
+                role_assignments=previous.role_assignments,
+                config_projections=previous.config_projections,
             )
             return self._adapter.publish(
                 snapshot,
                 "GE Cloud liveness changed to {}".format(health.value),
+            )
+
+    def ingest_auto_config(self, config):
+        """Compile and attach one complete GE discovery/config snapshot."""
+        if not self._enabled:
+            return False
+        plan = compile_gecloud_auto_config(config)
+        with self._lock:
+            current = self._current_state()
+            if current is None:
+                raise FragmentAdapterReadError("GE Cloud discovery must be seeded before auto-config")
+            if current.removed:
+                raise FragmentAdapterRemoved(
+                    "provider {} was removed at generation {}".format(
+                        self.provider_id,
+                        current.generation,
+                    )
+                )
+            document = _plain(current.snapshot.topology_fragment)
+            snapshot = _materializable_snapshot(
+                document,
+                _devices_from_document(document),
+                config,
+                plan,
+                self.provider_id,
+                current.generation,
+                current.snapshot.health,
+            )
+            if _fingerprint_snapshot(snapshot) == _fingerprint_snapshot(current.snapshot):
+                return False
+            snapshot = _materializable_snapshot(
+                document,
+                _devices_from_document(document),
+                config,
+                plan,
+                self.provider_id,
+                current.generation + 1,
+                current.snapshot.health,
+            )
+            return self._adapter.publish(
+                snapshot,
+                "GE Cloud auto-config plan changed",
             )
 
     def remove(self):

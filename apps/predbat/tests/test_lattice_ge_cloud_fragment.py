@@ -1,6 +1,6 @@
 """Tests for the pure GivEnergy Cloud Lattice fragment publisher."""
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig materializable
 
 import os
 import sys
@@ -31,6 +31,7 @@ from lattice_ge_cloud_fragment import (  # noqa: E402
     GECloudDeviceSnapshot,
     GECloudFragmentPublisher,
 )
+from gecloud_autoconfig import GECloudAutoConfigInput  # noqa: E402
 
 
 def device(
@@ -157,6 +158,51 @@ class TestGECloudFragmentPublisher(unittest.TestCase):
                 ("serial", "EVC-1", "ge-cloud:EVC-1"),
                 ("serial", "SA2243G277", "ge-cloud:SA2243G277"),
             ),
+        )
+
+    def test_pure_plan_publishes_materializable_roles_and_config(self):
+        """A complete GE input compiles real PredBat arguments."""
+        adapter, _state_store = publisher()
+        adapter.ingest_discovery(
+            1,
+            (device(serial="bat1", model="Hybrid"),),
+            health=ProviderHealth.HEALTHY,
+        )
+        config = GECloudAutoConfigInput(
+            batteries=("bat1",),
+            ems=None,
+            gateway=None,
+            pv=(),
+            battery_meters=(("bat1", ("meter1",)),),
+            register_names=(
+                (
+                    "bat1",
+                    (
+                        "battery_charge_power",
+                        "battery_discharge_power",
+                        "battery_reserve_percent_limit",
+                    ),
+                ),
+            ),
+            models=(("bat1", "Hybrid"),),
+            prefix="predbat",
+        )
+
+        self.assertTrue(adapter.ingest_auto_config(config))
+        self.assertFalse(adapter.ingest_auto_config(config))
+        snapshot = adapter.read_snapshot()
+        compiled = compile_auto_config((snapshot,))
+
+        self.assertTrue(snapshot.role_assignments)
+        self.assertTrue(snapshot.config_projections)
+        self.assertEqual(compiled.projected_config["num_inverters"], 1)
+        self.assertEqual(
+            compiled.projected_config["battery_power"],
+            ("sensor.predbat_gecloud_bat1_battery_power",),
+        )
+        self.assertEqual(
+            compiled.projected_config["charge_rate"],
+            ("number.predbat_gecloud_bat1_battery_charge_power",),
         )
 
     def test_device_order_and_serial_case_are_replay_stable(self):
