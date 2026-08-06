@@ -20,7 +20,7 @@ import tempfile
 import shutil
 from types import SimpleNamespace
 
-from web import WebInterface, SOC_DRIFT_RAMP
+from web import WebInterface, SOC_DRIFT_CATEGORICAL
 from debug_history import capture_snapshot
 from storage import StorageLocalFiles
 
@@ -96,8 +96,8 @@ def test_soc_drift_chart(my_predbat):
                 failed = True
 
             colors = [s["color"] for s in series]
-            if colors[0] != SOC_DRIFT_RAMP[-1] or colors[-1] != SOC_DRIFT_RAMP[0]:
-                print("  ERROR: expected newest to use the ramp's darkest step and oldest the lightest, got {}".format(colors))
+            if colors != SOC_DRIFT_CATEGORICAL[:3]:
+                print("  ERROR: expected the first 3 categorical hues in snapshot order, got {}".format(colors))
                 failed = True
             if len(set(colors)) < 2:
                 print("  ERROR: expected distinguishable colours across snapshots, all three came back the same: {}".format(colors))
@@ -119,6 +119,19 @@ def test_soc_drift_chart(my_predbat):
         if len(series) != 3:
             print("  ERROR: the unusable snapshot should have been skipped, still expected 3 series, got {}".format(len(series)))
             failed = True
+
+        print("Test: colour cycles back to the start past the 8th snapshot rather than running out")
+        for offset in range(4, 10):
+            asyncio.run(capture_snapshot(storage, _snapshot_yaml(now + datetime.timedelta(hours=offset), {0: float(offset)}, "extra_{}".format(offset)), now + datetime.timedelta(hours=offset), max_count=15))
+        series = asyncio.run(w.get_soc_drift_series())
+        if len(series) != 9:
+            print("  ERROR: expected 9 series after adding 6 more (the unusable one from the previous test stays skipped), got {}".format(len(series)))
+            failed = True
+        else:
+            colors = [s["color"] for s in series]
+            if colors[0] != colors[8]:
+                print("  ERROR: expected the 9th (index 8) series to cycle back to the same hue as the 1st, got {} vs {}".format(colors[0], colors[8]))
+                failed = True
 
         print("Test: the SoCPlanDrift chart branch renders end to end with its description and at least one 'Plan @' series")
         # get_chart()'s whole elif chain (every chart type, not just SoCPlanDrift) is gated behind

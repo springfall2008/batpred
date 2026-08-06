@@ -303,13 +303,20 @@ CHART_DESCRIPTIONS = {
     ),
 }
 
-# Validated ordinal ramp for the SoCPlanDrift chart's per-snapshot lines (one hue, monotone
-# lightness - age is a position in a sequence, not an independent identity, so this is the
-# "ordinal" job per the dataviz skill, not categorical). Lightest = oldest snapshot, darkest =
-# newest. Passes both light (white) and dark (#1e1e1e, this page's actual dark-mode chart
-# background) surface checks via scripts/validate_palette.js --ordinal - Actual's existing
-# teal (#3291a8) stays a separate, uninvolved hue so the two never compete.
-SOC_DRIFT_RAMP = ["#e89c91", "#df8272", "#cf5c48", "#bb3c26", "#9c2916"]
+# Colour for the SoCPlanDrift chart's per-snapshot lines. A single-hue ordinal ramp (age
+# as lightness) is the textbook-correct job for "age is a sequence position, not an
+# identity" - tried first, but dogfooding showed several shades of one red are genuinely
+# hard for a human to tell apart in a busy, overlapping line chart, no matter how well
+# they validate pairwise. Since the actual workflow is "Deselect all, then re-enable a
+# handful" (not "read all 12 simultaneously"), distinct hue *identity* per line serves
+# that better than an age ramp - this is the dataviz skill's validated 8-hue categorical
+# theme (palette.md), cycling past 8 rather than folding to "Other" (no natural "other"
+# bucket for a specific past plan). Confirmed via scripts/validate_palette.js against
+# this app's actual surfaces (white light / #1e1e1e dark) - light mode carries a
+# contrast WARN on 3 of the 8 hues, mitigated by the legend's visible series-name labels
+# (the skill's documented relief for that WARN band). Opacity still fades by age as a
+# secondary, non-essential cue on top.
+SOC_DRIFT_CATEGORICAL = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 
 
 class WebInterface(ComponentBase):
@@ -3434,11 +3441,10 @@ chart.render();
         this shows how the plan's forecast for a given period changed as it was
         replanned over time, rather than just what the most recent plan expects now.
 
-        Older snapshots are drawn lighter (via SOC_DRIFT_RAMP) and more transparent than
-        newer ones, so the most recent plan (closest to what's actually happened since)
-        stands out and adjacent-in-time lines stay visually distinguishable even where
-        they overlap heavily - opacity alone doesn't separate two overlapping same-hue
-        lines well, so lightness carries the age signal and opacity is secondary.
+        Each line gets a distinct hue from SOC_DRIFT_CATEGORICAL (cycling past 8) so a
+        human can actually track one specific line through a busy, overlapping chart -
+        opacity still fades slightly for newer-vs-older, but only as a secondary cue on
+        top of colour, not the primary way to tell lines apart.
         """
         storage = self._storage()
         if not storage:
@@ -3447,7 +3453,7 @@ chart.render();
         snapshots = await debug_history.list_snapshots(storage)
         count = len(snapshots)
         series = []
-        for i, entry in enumerate(snapshots):
+        for entry in snapshots:
             text = await debug_history.load_snapshot(storage, entry["id"])
             if not text:
                 continue
@@ -3462,8 +3468,11 @@ chart.render();
                 timestamp = snapshot_now_utc + timedelta(minutes=minute_offset)
                 data[timestamp.strftime(TIME_FORMAT)] = kwh
 
-            age_fraction = i / max(count - 1, 1)  # 0 = newest snapshot .. 1 = oldest
-            ramp_index = round((1 - age_fraction) * (len(SOC_DRIFT_RAMP) - 1))
+            # Position among snapshots actually being plotted, not among every one attempted -
+            # a snapshot skipped just above (unusable text/fields) must not leave a gap in the
+            # colour cycle or a dead spot in the opacity spread for everything plotted after it.
+            plotted_index = len(series)
+            age_fraction = plotted_index / max(count - 1, 1)  # 0 = newest snapshot .. 1 = oldest
             opacity = round(0.9 - 0.35 * age_fraction, 2)
             series.append(
                 {
@@ -3472,7 +3481,7 @@ chart.render();
                     "opacity": str(opacity),
                     "stroke_width": "1",
                     "stroke_curve": "smooth",
-                    "color": SOC_DRIFT_RAMP[ramp_index],
+                    "color": SOC_DRIFT_CATEGORICAL[plotted_index % len(SOC_DRIFT_CATEGORICAL)],
                 }
             )
         return series
