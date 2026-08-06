@@ -299,9 +299,17 @@ CHART_DESCRIPTIONS = {
         "The solid line is the battery's actual measured SoC. Each faint line is what the plan predicted "
         "would happen, starting from one retained debug-history snapshot's capture moment - so you can see "
         "how the forecast for a given period changed as Predbat replanned over time, not just what today's "
-        "plan currently expects. Newer snapshots are drawn more solid; older ones fade out."
+        "plan currently expects. Newer snapshots are drawn darker and more solid; older ones lighter and fainter."
     ),
 }
+
+# Validated ordinal ramp for the SoCPlanDrift chart's per-snapshot lines (one hue, monotone
+# lightness - age is a position in a sequence, not an independent identity, so this is the
+# "ordinal" job per the dataviz skill, not categorical). Lightest = oldest snapshot, darkest =
+# newest. Passes both light (white) and dark (#1e1e1e, this page's actual dark-mode chart
+# background) surface checks via scripts/validate_palette.js --ordinal - Actual's existing
+# teal (#3291a8) stays a separate, uninvolved hue so the two never compete.
+SOC_DRIFT_RAMP = ["#e89c91", "#df8272", "#cf5c48", "#bb3c26", "#9c2916"]
 
 
 class WebInterface(ComponentBase):
@@ -3417,9 +3425,11 @@ chart.render();
         this shows how the plan's forecast for a given period changed as it was
         replanned over time, rather than just what the most recent plan expects now.
 
-        Older snapshots are drawn more transparent than newer ones so the most recent
-        plan (closest to what's actually happened since) stands out without needing a
-        distinct colour per line - there can be as many lines as debug_history_count.
+        Older snapshots are drawn lighter (via SOC_DRIFT_RAMP) and more transparent than
+        newer ones, so the most recent plan (closest to what's actually happened since)
+        stands out and adjacent-in-time lines stay visually distinguishable even where
+        they overlap heavily - opacity alone doesn't separate two overlapping same-hue
+        lines well, so lightness carries the age signal and opacity is secondary.
         """
         storage = self._storage()
         if not storage:
@@ -3444,7 +3454,8 @@ chart.render();
                 data[timestamp.strftime(TIME_FORMAT)] = kwh
 
             age_fraction = i / max(count - 1, 1)  # 0 = newest snapshot .. 1 = oldest
-            opacity = round(0.85 - 0.55 * age_fraction, 2)
+            ramp_index = round((1 - age_fraction) * (len(SOC_DRIFT_RAMP) - 1))
+            opacity = round(0.9 - 0.35 * age_fraction, 2)
             series.append(
                 {
                     "name": "Plan @ {}".format(snapshot_now_utc.strftime("%d %H:%M")),
@@ -3452,7 +3463,7 @@ chart.render();
                     "opacity": str(opacity),
                     "stroke_width": "1",
                     "stroke_curve": "smooth",
-                    "color": "#eb2323",
+                    "color": SOC_DRIFT_RAMP[ramp_index],
                 }
             )
         return series

@@ -20,7 +20,7 @@ import tempfile
 import shutil
 from types import SimpleNamespace
 
-from web import WebInterface
+from web import WebInterface, SOC_DRIFT_RAMP
 from debug_history import capture_snapshot
 from storage import StorageLocalFiles
 
@@ -91,8 +91,16 @@ def test_soc_drift_chart(my_predbat):
             if opacities != sorted(opacities, reverse=True):
                 print("  ERROR: expected opacity to strictly decrease from newest to oldest, got {}".format(opacities))
                 failed = True
-            if opacities[0] != 0.85 or opacities[-1] != 0.3:
-                print("  ERROR: expected newest opacity 0.85 and oldest 0.3, got {} and {}".format(opacities[0], opacities[-1]))
+            if opacities[0] != 0.9 or opacities[-1] != 0.55:
+                print("  ERROR: expected newest opacity 0.9 and oldest 0.55, got {} and {}".format(opacities[0], opacities[-1]))
+                failed = True
+
+            colors = [s["color"] for s in series]
+            if colors[0] != SOC_DRIFT_RAMP[-1] or colors[-1] != SOC_DRIFT_RAMP[0]:
+                print("  ERROR: expected newest to use the ramp's darkest step and oldest the lightest, got {}".format(colors))
+                failed = True
+            if len(set(colors)) < 2:
+                print("  ERROR: expected distinguishable colours across snapshots, all three came back the same: {}".format(colors))
                 failed = True
 
             newest = series[0]
