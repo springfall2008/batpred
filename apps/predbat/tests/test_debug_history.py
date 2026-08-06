@@ -110,6 +110,61 @@ def test_debug_history(my_predbat):
         print("  ERROR: expected newest first, got {}".format([entry["id"] for entry in index]))
         failed = True
 
+    print("Test: two captures in the same calendar minute keep only the newer, deleting the older (regression - this used to reach the UI as two identically-named chart series and broke 'Deselect all', which keys off series name)")
+    minute_storage = FakeStorage()
+    moment = datetime.datetime(2026, 8, 6, 8, 20, 0, tzinfo=datetime.timezone.utc)
+    older_id = asyncio.run(capture_snapshot(minute_storage, sample_yaml_text("older"), moment, max_count=15))
+    newer_id = asyncio.run(capture_snapshot(minute_storage, sample_yaml_text("newer"), moment + datetime.timedelta(seconds=37), max_count=15))
+    if older_id == newer_id:
+        print("  ERROR: test setup bug - the two captures should have distinct ids, got the same {!r} twice".format(older_id))
+        failed = True
+    minute_index = asyncio.run(list_snapshots(minute_storage))
+    if len(minute_index) != 1 or minute_index[0]["id"] != newer_id:
+        print("  ERROR: expected only the newer same-minute capture to survive, got {}".format(minute_index))
+        failed = True
+    if asyncio.run(load_snapshot(minute_storage, older_id)) is not None:
+        print("  ERROR: the older same-minute capture should have been discarded from storage, not just the index")
+        failed = True
+    if "snapshot_{}".format(older_id) not in minute_storage.deleted:
+        print("  ERROR: expected the older same-minute capture to go through the normal discard path, deletions were {}".format(minute_storage.deleted))
+        failed = True
+
+    print("Test: captures in different minutes are unaffected by the same-minute dedup")
+    distinct_storage = FakeStorage()
+    for offset_minutes in (0, 1, 2):
+        asyncio.run(capture_snapshot(distinct_storage, sample_yaml_text(offset_minutes), moment + datetime.timedelta(minutes=offset_minutes), max_count=15))
+    if len(asyncio.run(list_snapshots(distinct_storage))) != 3:
+        print("  ERROR: three captures a minute apart should all survive, got {}".format(asyncio.run(list_snapshots(distinct_storage))))
+        failed = True
+
+    print("Test: max_age prunes a snapshot older than the window even though max_count has not been reached")
+    age_storage = FakeStorage()
+    old_id = asyncio.run(capture_snapshot(age_storage, sample_yaml_text("ancient"), now, max_count=15))
+    new_id = asyncio.run(capture_snapshot(age_storage, sample_yaml_text("recent"), now + datetime.timedelta(hours=50), max_count=15, max_age=datetime.timedelta(hours=45)))
+    age_index = asyncio.run(list_snapshots(age_storage))
+    if len(age_index) != 1 or age_index[0]["id"] != new_id:
+        print("  ERROR: expected the too-old snapshot pruned by max_age despite being well under max_count, got {}".format(age_index))
+        failed = True
+    if asyncio.run(load_snapshot(age_storage, old_id)) is not None:
+        print("  ERROR: the too-old snapshot should have been discarded from storage, not just the index")
+        failed = True
+
+    print("Test: max_age does not prune anything still within the window")
+    within_storage = FakeStorage()
+    asyncio.run(capture_snapshot(within_storage, sample_yaml_text("still fresh"), now, max_count=15))
+    asyncio.run(capture_snapshot(within_storage, sample_yaml_text("later"), now + datetime.timedelta(hours=10), max_count=15, max_age=datetime.timedelta(hours=45)))
+    if len(asyncio.run(list_snapshots(within_storage))) != 2:
+        print("  ERROR: neither capture is older than the 45h window yet, both should survive, got {}".format(asyncio.run(list_snapshots(within_storage))))
+        failed = True
+
+    print("Test: max_age=None (the default) does no age-based pruning at all")
+    no_age_storage = FakeStorage()
+    asyncio.run(capture_snapshot(no_age_storage, sample_yaml_text("very old"), now, max_count=15))
+    asyncio.run(capture_snapshot(no_age_storage, sample_yaml_text("much later"), now + datetime.timedelta(days=30), max_count=15))
+    if len(asyncio.run(list_snapshots(no_age_storage))) != 2:
+        print("  ERROR: with no max_age given, only max_count should apply - both should survive, got {}".format(asyncio.run(list_snapshots(no_age_storage))))
+        failed = True
+
     print("Test: pruning to a configured count (not a fixed constant) evicts the oldest and deletes it (delete-capable backend)")
     storage = FakeStorage()
     max_count = 5

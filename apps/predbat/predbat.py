@@ -754,6 +754,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         history" and must not be silently pruned away by that setting.
         """
         count = int(self.get_arg("debug_history_count", 15))
+        interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
         forced = self.get_arg("debug_history_force_capture", False)
         if forced:
             # Reset the switch immediately regardless of outcome below - it's a
@@ -763,7 +764,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if count <= 0 and not forced:
             return
         if not forced:
-            interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
             if self.debug_history_last_capture is not None and (self.now_utc - self.debug_history_last_capture) < timedelta(hours=interval_hours):
                 return
         storage = self.components.get_component("storage") if self.components else None
@@ -780,7 +780,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             slot_minutes = max(1, self.plan_interval_minutes)
             minutes_since_midnight = int((self.now_utc - self.midnight_utc).total_seconds() // 60)
             capture_time = self.midnight_utc + timedelta(minutes=(minutes_since_midnight // slot_minutes) * slot_minutes)
-            run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, max(count, 1)))
+            # The window this buffer is meant to cover, e.g. 15 x 3h = 45h - a snapshot older
+            # than that gets pruned even if max_count hasn't been reached yet, so a burst of
+            # close-together captures (several force-captures, or a shortened interval) can't
+            # leave something far older than the intended window lingering just because the
+            # count cap alone hasn't caught up to it. Skip it when count<=0 (forced-only mode,
+            # no routine window to speak of).
+            max_age = timedelta(hours=interval_hours * count) if count > 0 else None
+            run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, max(count, 1), max_age=max_age))
         except Exception as e:
             self.log("Warning: Failed to capture debug history snapshot: {}".format(e))
         self.debug_history_last_capture = self.now_utc

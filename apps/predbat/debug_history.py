@@ -83,8 +83,8 @@ async def _discard_snapshot(storage, snapshot_id):
     await storage.save(STORAGE_MODULE, key, None, format="text", expiry=expired)
 
 
-async def capture_snapshot(storage, yaml_text, now_utc, max_count):
-    """Save a new debug snapshot and prune the ring to max_count. Returns the snapshot id.
+async def capture_snapshot(storage, yaml_text, now_utc, max_count, max_age=None):
+    """Save a new debug snapshot and prune the ring. Returns the snapshot id.
 
     ``yaml_text`` must be ``create_debug_yaml(write_file=False)``'s already-rendered
     YAML string - saved with ``format="text"`` (raw passthrough), NOT ``format="yaml"``,
@@ -95,6 +95,16 @@ async def capture_snapshot(storage, yaml_text, now_utc, max_count):
     ``max_count`` is passed in per call (the live config value) rather than a fixed
     module constant, so a change to the retention count takes effect on the very next
     capture with no migration step.
+
+    ``max_age`` (an optional ``datetime.timedelta``) additionally prunes anything older
+    than ``now_utc - max_age``, even if ``max_count`` hasn't been reached yet - a burst
+    of close-together captures (several force-captures, or a shortened interval) should
+    not be able to leave something far older than the buffer's intended window sitting
+    there just because the count cap alone hasn't caught up to it.
+
+    Two captures landing in the same calendar minute (a routine capture and a
+    close-by force-capture, say) are pruned to just the newer one here too, rather
+    than left for a display layer to cope with two near-identical, same-named entries.
     """
     if not storage:
         return None
@@ -105,6 +115,34 @@ async def capture_snapshot(storage, yaml_text, now_utc, max_count):
     index = await list_snapshots(storage)
     index = [existing for existing in index if existing.get("id") != snapshot_id]
     index.insert(0, {"id": snapshot_id, "timestamp": now_utc.isoformat()})
+
+    # Newest-first, so keeping only the first occurrence of each calendar minute
+    # keeps the newer of any same-minute pair and discards the older.
+    seen_minutes = set()
+    deduped = []
+    for existing in index:
+        minute_key = existing["id"][:-2]  # id is %Y%m%d-%H%M%S - drop the seconds
+        if minute_key in seen_minutes:
+            await _discard_snapshot(storage, existing["id"])
+            continue
+        seen_minutes.add(minute_key)
+        deduped.append(existing)
+    index = deduped
+
+    if max_age is not None:
+        cutoff = now_utc - max_age
+        kept = []
+        for existing in index:
+            try:
+                existing_time = datetime.datetime.fromisoformat(existing["timestamp"])
+            except (KeyError, ValueError, TypeError):
+                kept.append(existing)  # malformed/missing timestamp - leave it for max_count to catch instead of guessing
+                continue
+            if existing_time < cutoff:
+                await _discard_snapshot(storage, existing["id"])
+            else:
+                kept.append(existing)
+        index = kept
 
     for dropped in index[max_count:]:
         await _discard_snapshot(storage, dropped["id"])
