@@ -11,10 +11,12 @@
 
 import asyncio
 import datetime
+import io
 import tempfile
 import shutil
+import tarfile
 
-from debug_history import STORAGE_MODULE, _discard_snapshot, annotate_steps_back, capture_snapshot, list_snapshots, load_snapshot
+from debug_history import STORAGE_MODULE, _discard_snapshot, annotate_steps_back, build_archive, capture_snapshot, list_snapshots, load_all_snapshots, load_snapshot, snapshot_filename
 from storage import StorageLocalFiles
 
 
@@ -239,5 +241,64 @@ def test_debug_history(my_predbat):
     if "snapshot_{}".format(ids_before[0]) not in direct_storage.deleted:
         print("  ERROR: _discard_snapshot should call delete when the backend supports it")
         failed = True
+
+    print("Test: snapshot_filename matches the naming used by both the single-download route and the bulk archive")
+    if snapshot_filename("20260804-140000", 2) != "predbat_debug_20260804-140000_-2steps.yaml":
+        print("  ERROR: unexpected snapshot_filename output {!r}".format(snapshot_filename("20260804-140000", 2)))
+        failed = True
+
+    print("Test: load_all_snapshots returns newest-first (filename, text) pairs for every retained snapshot")
+    bulk_storage = FakeStorage()
+    for offset in range(3):
+        asyncio.run(capture_snapshot(bulk_storage, sample_yaml_text(offset), now + datetime.timedelta(hours=offset), max_count=15))
+    named = asyncio.run(load_all_snapshots(bulk_storage))
+    if len(named) != 3:
+        print("  ERROR: expected 3 named snapshots, got {}".format(len(named)))
+        failed = True
+    if [steps for _, steps in [(name, name.split("-")[-1]) for name, _ in named]] != ["0steps.yaml", "1steps.yaml", "2steps.yaml"]:
+        print("  ERROR: expected filenames with steps_back 0,1,2 in newest-first order, got {}".format([name for name, _ in named]))
+        failed = True
+    if named[0][1] != sample_yaml_text(2):
+        print("  ERROR: newest snapshot's text should be first, got {!r}".format(named[0][1]))
+        failed = True
+
+    print("Test: load_all_snapshots skips an indexed snapshot whose text failed to load, rather than failing the whole batch")
+    partial_storage = FakeStorage()
+    asyncio.run(capture_snapshot(partial_storage, sample_yaml_text("keep"), now, max_count=15))
+    missing_id = asyncio.run(capture_snapshot(partial_storage, sample_yaml_text("gone"), now + datetime.timedelta(hours=1), max_count=15))
+    partial_storage.store.pop((STORAGE_MODULE, "snapshot_{}".format(missing_id)), None)  # simulate a corrupt/evicted entry still left in the index
+    named_partial = asyncio.run(load_all_snapshots(partial_storage))
+    if len(named_partial) != 1 or named_partial[0][1] != sample_yaml_text("keep"):
+        print("  ERROR: expected only the loadable snapshot to survive, got {}".format(named_partial))
+        failed = True
+
+    print("Test: load_all_snapshots with no storage/snapshots returns an empty list")
+    if asyncio.run(load_all_snapshots(None)) != []:
+        print("  ERROR: load_all_snapshots(None) should give an empty list")
+        failed = True
+    if asyncio.run(load_all_snapshots(FakeStorage())) != []:
+        print("  ERROR: load_all_snapshots with nothing captured should give an empty list")
+        failed = True
+
+    print("Test: build_archive produces a gzip tarball whose members match the input exactly")
+    archive_bytes = build_archive([("a.yaml", sample_yaml_text("a")), ("b.yaml", sample_yaml_text("b"))])
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
+        names = tar.getnames()
+        if names != ["a.yaml", "b.yaml"]:
+            print("  ERROR: expected archive members [a.yaml, b.yaml], got {}".format(names))
+            failed = True
+        for name, expected_marker in [("a.yaml", "a"), ("b.yaml", "b")]:
+            member = tar.extractfile(name)
+            content = member.read().decode("utf-8") if member else None
+            if content != sample_yaml_text(expected_marker):
+                print("  ERROR: archive member {} content mismatch, got {!r}".format(name, content))
+                failed = True
+
+    print("Test: build_archive with no snapshots produces a valid (empty) archive rather than raising")
+    empty_archive = build_archive([])
+    with tarfile.open(fileobj=io.BytesIO(empty_archive), mode="r:gz") as tar:
+        if tar.getnames() != []:
+            print("  ERROR: expected an empty archive, got members {}".format(tar.getnames()))
+            failed = True
 
     return failed

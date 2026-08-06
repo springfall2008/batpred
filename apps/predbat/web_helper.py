@@ -72,64 +72,6 @@ def get_refresh_inverter_js():
     """
 
 
-def get_debug_history_js():
-    """
-    Returns JavaScript to populate and drive the rolling debug-history dropdown on the
-    dashboard Debug panel, for #4417.
-
-    Populated on focus (via an inline onfocus= attribute on the <select>, added where
-    this is rendered), not on a DOMContentLoaded/load-time listener. The dashboard's
-    60s auto-refresh replaces its content container with container.innerHTML = html
-    (see refreshDashContent() in html_dash's page script) - injected <script> tags do
-    not re-execute on an innerHTML assignment, so a load-time listener would only ever
-    populate the very first copy of this dropdown and go stale after the first refresh.
-    An inline event attribute is just markup, correctly re-applied on every refresh, and
-    fires the moment a user actually goes to use the control - also naturally lazy,
-    since it never fetches on a page/refresh the user never interacts with.
-    """
-    return """
-        <script>
-        function loadDebugHistory() {
-            var select = document.getElementById('debugHistorySelect');
-            if (!select) return;
-            fetch('./debug_history_list')
-                .then(function(r) { return r.json(); })
-                .then(function(snapshots) {
-                    select.innerHTML = '';
-                    if (!snapshots.length) {
-                        var opt = document.createElement('option');
-                        opt.textContent = 'No snapshots yet';
-                        select.appendChild(opt);
-                        select.disabled = true;
-                        return;
-                    }
-                    select.disabled = false;
-                    snapshots.forEach(function(s) {
-                        var opt = document.createElement('option');
-                        opt.value = s.id;
-                        var when = new Date(s.timestamp);
-                        opt.textContent = when.toLocaleString();
-                        select.appendChild(opt);
-                    });
-                    // Rebuilding the option list via appendChild does not reliably repaint the
-                    // closed box's displayed label on its own (observed live: it kept showing
-                    // the placeholder text until the dropdown was actually opened once) -
-                    // explicitly (re)selecting the first option forces a real value-change the
-                    // control has to redraw for.
-                    select.selectedIndex = 0;
-                })
-                .catch(function(e) { console.error('Failed to load debug history:', e); });
-        }
-        function downloadSelectedDebugHistory() {
-            var select = document.getElementById('debugHistorySelect');
-            if (select && select.value) {
-                window.location = './debug_history_download?id=' + encodeURIComponent(select.value);
-            }
-        }
-        </script>
-    """
-
-
 def get_restart_button_js():
     # Add JavaScript for restart functionality
     text = """

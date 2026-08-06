@@ -14,6 +14,8 @@ there may not be one.
 """
 
 import datetime
+import io
+import tarfile
 
 STORAGE_MODULE = "debug_history"
 INDEX_NAME = "snapshots_index"
@@ -110,3 +112,47 @@ async def capture_snapshot(storage, yaml_text, now_utc, max_count):
 
     await storage.save(STORAGE_MODULE, INDEX_NAME, index, format="json")
     return snapshot_id
+
+
+def snapshot_filename(snapshot_id, steps_back):
+    """Return the filename used both for a single-snapshot download and inside the bulk archive.
+
+    Shared with html_debug_history_download() in web.py so a file pulled out of the
+    archive is indistinguishable from one downloaded individually - same name either way.
+    """
+    return "predbat_debug_{}_-{}steps.yaml".format(snapshot_id, steps_back)
+
+
+async def load_all_snapshots(storage):
+    """Return a newest-first list of (filename, yaml_text) for every retained snapshot.
+
+    Skips any snapshot whose text failed to load (evicted between listing and loading,
+    or a corrupt entry) rather than failing the whole archive for one bad snapshot.
+    """
+    if not storage:
+        return []
+    snapshots = annotate_steps_back(await list_snapshots(storage))
+    result = []
+    for entry in snapshots:
+        text = await load_snapshot(storage, entry["id"])
+        if text is not None:
+            result.append((snapshot_filename(entry["id"], entry["steps_back"]), text))
+    return result
+
+
+def build_archive(named_snapshots):
+    """Build a gzip tar archive in memory from a list of (filename, yaml_text) pairs.
+
+    Synchronous and storage-agnostic - the caller does the async storage fetching
+    (load_all_snapshots) first and hands the already-loaded text here, so this half is
+    trivially testable without an event loop or a fake storage backend.
+    """
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for filename, yaml_text in named_snapshots:
+            data = yaml_text.encode("utf-8")
+            info = tarfile.TarInfo(name=filename)
+            info.size = len(data)
+            info.mtime = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+            tar.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
