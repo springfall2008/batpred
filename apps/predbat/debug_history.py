@@ -114,13 +114,15 @@ async def capture_snapshot(storage, yaml_text, now_utc, max_count):
     return snapshot_id
 
 
-def snapshot_filename(snapshot_id, steps_back):
+def snapshot_filename(snapshot_id):
     """Return the filename used both for a single-snapshot download and inside the bulk archive.
 
-    Shared with html_debug_history_download() in web.py so a file pulled out of the
-    archive is indistinguishable from one downloaded individually - same name either way.
+    Deliberately keyed on snapshot_id alone (a capture timestamp, stable and unique) and
+    not on steps_back (the snapshot's position in the current ring, which shifts as newer
+    captures push it back) - two archives downloaded hours apart must name the same real
+    capture identically, or they can't be merged/deduplicated by filename.
     """
-    return "predbat_debug_{}_-{}steps.yaml".format(snapshot_id, steps_back)
+    return "predbat_debug_{}.yaml".format(snapshot_id)
 
 
 async def load_all_snapshots(storage):
@@ -131,12 +133,12 @@ async def load_all_snapshots(storage):
     """
     if not storage:
         return []
-    snapshots = annotate_steps_back(await list_snapshots(storage))
+    snapshots = await list_snapshots(storage)
     result = []
     for entry in snapshots:
         text = await load_snapshot(storage, entry["id"])
         if text is not None:
-            result.append((snapshot_filename(entry["id"], entry["steps_back"]), text))
+            result.append((snapshot_filename(entry["id"]), text))
     return result
 
 

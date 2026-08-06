@@ -242,9 +242,9 @@ def test_debug_history(my_predbat):
         print("  ERROR: _discard_snapshot should call delete when the backend supports it")
         failed = True
 
-    print("Test: snapshot_filename matches the naming used by both the single-download route and the bulk archive")
-    if snapshot_filename("20260804-140000", 2) != "predbat_debug_20260804-140000_-2steps.yaml":
-        print("  ERROR: unexpected snapshot_filename output {!r}".format(snapshot_filename("20260804-140000", 2)))
+    print("Test: snapshot_filename is keyed on the timestamp id alone, not on ring position")
+    if snapshot_filename("20260804-140000") != "predbat_debug_20260804-140000.yaml":
+        print("  ERROR: unexpected snapshot_filename output {!r}".format(snapshot_filename("20260804-140000")))
         failed = True
 
     print("Test: load_all_snapshots returns newest-first (filename, text) pairs for every retained snapshot")
@@ -255,11 +255,26 @@ def test_debug_history(my_predbat):
     if len(named) != 3:
         print("  ERROR: expected 3 named snapshots, got {}".format(len(named)))
         failed = True
-    if [steps for _, steps in [(name, name.split("-")[-1]) for name, _ in named]] != ["0steps.yaml", "1steps.yaml", "2steps.yaml"]:
-        print("  ERROR: expected filenames with steps_back 0,1,2 in newest-first order, got {}".format([name for name, _ in named]))
-        failed = True
     if named[0][1] != sample_yaml_text(2):
         print("  ERROR: newest snapshot's text should be first, got {!r}".format(named[0][1]))
+        failed = True
+
+    print("Test: a snapshot's archive filename is stable across downloads even as its ring position shifts")
+    stable_storage = FakeStorage()
+    target_id = asyncio.run(capture_snapshot(stable_storage, sample_yaml_text("target"), now, max_count=15))
+    named_before = {fname: text for fname, text in asyncio.run(load_all_snapshots(stable_storage))}
+    filename_before = next(fname for fname, text in named_before.items() if text == sample_yaml_text("target"))
+    # Push the target snapshot back in the ring (not out of it) with newer captures, simulating
+    # time passing between two separate "download the archive" actions against the same buffer.
+    for offset in range(1, 4):
+        asyncio.run(capture_snapshot(stable_storage, sample_yaml_text("newer_{}".format(offset)), now + datetime.timedelta(hours=offset), max_count=15))
+    named_after = {fname: text for fname, text in asyncio.run(load_all_snapshots(stable_storage))}
+    filename_after = next(fname for fname, text in named_after.items() if text == sample_yaml_text("target"))
+    if filename_before != filename_after:
+        print("  ERROR: the same snapshot's filename changed after its ring position shifted: {!r} -> {!r}".format(filename_before, filename_after))
+        failed = True
+    if filename_before != snapshot_filename(target_id):
+        print("  ERROR: expected filename to be exactly snapshot_filename(target_id), got {!r}".format(filename_before))
         failed = True
 
     print("Test: load_all_snapshots skips an indexed snapshot whose text failed to load, rather than failing the whole batch")
