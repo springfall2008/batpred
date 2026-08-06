@@ -2808,12 +2808,8 @@ chart.render();
         if snapshot_id == "latest":
             snapshots = await debug_history.list_snapshots(storage)
             snapshot_id = snapshots[0]["id"] if snapshots else snapshot_id
-            steps_back = 0
-        else:
-            annotated = debug_history.annotate_steps_back(await debug_history.list_snapshots(storage))
-            steps_back = next((entry["steps_back"] for entry in annotated if entry["id"] == snapshot_id), "?")
 
-        filename = debug_history.snapshot_filename(snapshot_id, steps_back)
+        filename = debug_history.snapshot_filename(snapshot_id)
         return await self.html_file(filename, data)
 
     async def html_debug_history_download_all(self, request):
