@@ -1,3 +1,4 @@
+# cspell:ignore autoconfig
 """
 Tests for GatewayMQTT component.
 """
@@ -11,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytz
 import gateway_status_pb2 as pb
-from gateway import _STARTUP_WAIT_TICKS
+from gateway import _STARTUP_WAIT_TICKS, _TELEMETRY_STALE_THRESHOLD
 
 import importlib.util
 
@@ -4486,6 +4487,245 @@ class TestPublishRawLoopSafety:
         assert observed.get("thread_ident") == owner_thread.ident, "client.publish() ran on the wrong thread/loop"
 
 
+class TestGatewayLatticeRuntimeWiring(unittest.TestCase):
+    """Default-off live Gateway telemetry routing into Lattice."""
+
+    class Runtime:
+        """Synchronous runtime double invoked through ``asyncio.to_thread``."""
+
+        enabled = True
+
+        def __init__(self, reject=None, selected_serials=("SER123",), discovered_serials=("SER123",)):
+            self.reject = reject
+            self.selected_serials = selected_serials
+            self.discovered_serials = discovered_serials
+            self.ingests = []
+            self.liveness = []
+
+        def ingest_gateway_status(self, status, prefix="predbat", serial_filter=()):
+            import threading
+            from types import SimpleNamespace
+
+            self.ingests.append((status, prefix, serial_filter, threading.get_ident()))
+            if self.reject:
+                raise ValueError(self.reject)
+            plan = SimpleNamespace(
+                selected_serials=self.selected_serials,
+                discovered_serials=self.discovered_serials,
+            )
+            return plan, SimpleNamespace(accepted=True)
+
+        def set_gateway_liveness(self, online):
+            import threading
+
+            self.liveness.append((online, threading.get_ident()))
+
+        def provider_active(self, provider_id):
+            return provider_id == "predbat-gateway"
+
+    class Message:
+        """Minimal aiomqtt message-shaped value."""
+
+        def __init__(self, topic, payload):
+            self.topic = topic
+            self.payload = payload
+
+    def _make_gateway(self, runtime=None):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.base.args = {}
+        if runtime is not None:
+            gw.base.lattice_autoconfig_runtime = runtime
+        else:
+            del gw.base.lattice_autoconfig_runtime
+        gw.args = gw.base.args
+        gw.log = MagicMock()
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="token",
+            gateway_inverter_serial=["SER123"],
+        )
+        gw.local_tz = pytz.timezone("Europe/London")
+        gw.api_started = False
+        gw.dashboard_item = MagicMock()
+        gw.update_success_timestamp = MagicMock()
+        return gw
+
+    def _status(self, include_ev=False, inverter_type=pb.INVERTER_TYPE_GIVENERGY):
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_test"
+        status.firmware = "1.0.0"
+        status.timestamp = 1741789200
+        inverter = status.inverters.add()
+        inverter.type = inverter_type
+        inverter.serial = "SER123"
+        inverter.primary = True
+        inverter.battery.soc_percent = 50
+        inverter.battery.capacity_wh = 9500
+        inverter.battery.rate_max_w = 5000
+        if include_ev:
+            status.ev_chargers.add().charge_point_id = "ev-1"
+        return status
+
+    def test_enabled_runtime_bypasses_legacy_and_starts_after_ingest(self):
+        import asyncio
+        import threading
+        from unittest.mock import MagicMock
+
+        runtime = self.Runtime(discovered_serials=("SER123", "SER999"))
+        gw = self._make_gateway(runtime)
+        gw.automatic_config = MagicMock(side_effect=AssertionError("legacy auto-config called"))
+        message = self.Message(gw.topic_status, self._status().SerializeToString())
+        caller_thread = threading.get_ident()
+
+        asyncio.run(gw._handle_message(message))
+
+        gw.automatic_config.assert_not_called()
+        assert runtime.ingests[0][1:3] == ("predbat", ("SER123",))
+        assert runtime.ingests[0][3] != caller_thread
+        assert gw._suffix_to_serial == {"ser123": "SER123"}
+        assert gw._configured_inverter_serials == frozenset(("SER123", "SER999"))
+        assert gw._auto_configured is True
+        assert gw.api_started is True
+        assert gw.base.args == {}
+        assert any(call.args[0] == "sensor.predbat_gateway_ser123_soc" for call in gw.dashboard_item.call_args_list)
+
+    def test_duplicate_telemetry_remains_accepted(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        runtime = self.Runtime()
+        gw = self._make_gateway(runtime)
+        gw.automatic_config = MagicMock(side_effect=AssertionError("legacy auto-config called"))
+        message = self.Message(gw.topic_status, self._status().SerializeToString())
+
+        asyncio.run(gw._handle_message(message))
+        asyncio.run(gw._handle_message(message))
+
+        assert len(runtime.ingests) == 2
+        assert gw._auto_configured is True
+        assert gw.api_started is True
+        gw.automatic_config.assert_not_called()
+
+    def test_disabled_runtime_keeps_legacy_telemetry_path(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        runtime = self.Runtime()
+        runtime.enabled = False
+        gw = self._make_gateway(runtime)
+
+        def legacy_config():
+            gw._auto_configured = True
+
+        gw.automatic_config = MagicMock(side_effect=legacy_config)
+        message = self.Message(gw.topic_status, self._status().SerializeToString())
+
+        asyncio.run(gw._handle_message(message))
+
+        gw.automatic_config.assert_called_once_with()
+        assert runtime.ingests == []
+        assert gw.api_started is True
+
+    def test_adapter_rejection_fails_closed_and_marks_liveness_offline(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        runtime = self.Runtime(reject="Gateway EV discovery is outside the Lattice auto-config slice")
+        gw = self._make_gateway(runtime)
+        gw.automatic_config = MagicMock(side_effect=AssertionError("legacy auto-config called"))
+        message = self.Message(
+            gw.topic_status,
+            self._status(include_ev=True).SerializeToString(),
+        )
+
+        asyncio.run(gw._handle_message(message))
+
+        gw.automatic_config.assert_not_called()
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+        assert gw._suffix_to_serial == {}
+        assert [online for online, _thread in runtime.liveness] == [False]
+        assert any("Lattice auto-config rejected" in str(call) for call in gw.log.call_args_list)
+
+    def test_entity_injection_failure_invalidates_accepted_publication(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        runtime = self.Runtime()
+        gw = self._make_gateway(runtime)
+        gw._inject_entities = MagicMock(side_effect=RuntimeError("injection failed"))
+        message = self.Message(gw.topic_status, self._status().SerializeToString())
+
+        asyncio.run(gw._handle_message(message))
+
+        assert len(runtime.ingests) == 1
+        assert [online for online, _thread in runtime.liveness] == [False]
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+
+    def test_ems_adapter_rejection_fails_closed(self):
+        import asyncio
+        from unittest.mock import MagicMock
+
+        runtime = self.Runtime(reject="Gateway EMS discovery requires the multi-battery coordinator model")
+        gw = self._make_gateway(runtime)
+        gw.automatic_config = MagicMock(side_effect=AssertionError("legacy auto-config called"))
+        message = self.Message(
+            gw.topic_status,
+            self._status(inverter_type=pb.INVERTER_TYPE_GIVENERGY_EMS).SerializeToString(),
+        )
+
+        asyncio.run(gw._handle_message(message))
+
+        gw.automatic_config.assert_not_called()
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+        assert gw._suffix_to_serial == {}
+        assert [online for online, _thread in runtime.liveness] == [False]
+
+    def test_lwt_changes_publish_lattice_liveness_off_event_loop(self):
+        import asyncio
+        import threading
+
+        runtime = self.Runtime()
+        gw = self._make_gateway(runtime)
+        caller_thread = threading.get_ident()
+
+        asyncio.run(gw._handle_message(self.Message(gw.topic_online, b"1")))
+        asyncio.run(gw._handle_message(self.Message(gw.topic_online, b"0")))
+
+        assert [online for online, _thread in runtime.liveness] == [True, False]
+        assert all(thread != caller_thread for _online, thread in runtime.liveness)
+
+    def test_stale_telemetry_invalidates_lattice_provider_once(self):
+        import asyncio
+        import time
+
+        runtime = self.Runtime()
+        gw = self._make_gateway(runtime)
+        gw._last_telemetry_time = time.time() - _TELEMETRY_STALE_THRESHOLD - 1
+
+        self.assertTrue(asyncio.run(gw._invalidate_stale_lattice_gateway()))
+        self.assertFalse(asyncio.run(gw._invalidate_stale_lattice_gateway()))
+
+        assert [online for online, _thread in runtime.liveness] == [False]
+
+    def test_stop_invalidates_long_lived_gateway_provider(self):
+        import asyncio
+
+        runtime = self.Runtime()
+        gw = self._make_gateway(runtime)
+
+        asyncio.run(gw.stop())
+
+        assert [online for online, _thread in runtime.liveness] == [False]
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -4523,6 +4763,7 @@ def run_gateway_tests(my_predbat=None):
         TestMaybeRefreshOnAuthError,
         TestRateAnchors,
         TestPublishRawLoopSafety,
+        TestGatewayLatticeRuntimeWiring,
     ]
     for cls in test_classes:
         instance = cls()

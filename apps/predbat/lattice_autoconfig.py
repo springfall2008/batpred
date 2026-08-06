@@ -1449,8 +1449,14 @@ def _field_provenance(
     return tuple(sorted(provenance, key=lambda item: (item.field_path, item.provider_id, item.generation, item.source_path)))
 
 
-def compile_auto_config(snapshots, user_overrides=()):
+def compile_auto_config(
+    snapshots,
+    user_overrides=(),
+    atomic_materializer=False,
+):
     """Compile usable provider snapshots into one deterministic immutable plan."""
+    if not isinstance(atomic_materializer, bool):
+        raise ValueError("atomic_materializer must be a boolean")
     snapshots = tuple(sorted(snapshots, key=lambda item: item.provider_id))
     if not snapshots:
         raise AutoConfigCompileError("no usable provider snapshots")
@@ -1516,9 +1522,11 @@ def compile_auto_config(snapshots, user_overrides=()):
         user_overrides,
     )
     if config_arguments:
-        blockers = tuple(blocker for blocker in readiness.blockers if blocker != "config_projection_bindings_missing") + ("atomic_materializer_missing",)
+        blockers = tuple(blocker for blocker in readiness.blockers if blocker != "config_projection_bindings_missing")
+        if not atomic_materializer:
+            blockers += ("atomic_materializer_missing",)
         readiness = MaterializationReadiness(
-            ready=False,
+            ready=not blockers,
             blockers=blockers,
         )
 
@@ -1666,10 +1674,22 @@ def compile_auto_config(snapshots, user_overrides=()):
 class LatticeAutoConfigCompiler:
     """Thread-safe invalidation, compilation, and last-known-good coordinator."""
 
-    def __init__(self, readers=None, materializer=None):
+    def __init__(
+        self,
+        readers=None,
+        materializer=None,
+        atomic_materializer=False,
+        allow_provider_failover=False,
+    ):
         """Create an idle compiler over provider snapshot readers."""
+        if not isinstance(atomic_materializer, bool):
+            raise ValueError("atomic_materializer must be a boolean")
+        if not isinstance(allow_provider_failover, bool):
+            raise ValueError("allow_provider_failover must be a boolean")
         self._readers = {}
         self._materializer = materializer
+        self._atomic_materializer = atomic_materializer
+        self._allow_provider_failover = allow_provider_failover
         self._lock = threading.RLock()
         self._compiling = False
         self._pending = False
@@ -1787,11 +1807,14 @@ class LatticeAutoConfigCompiler:
             active_providers = set(dict(self._active_plan.provider_generations)) if self._active_plan is not None else set()
         usable_providers = {snapshot.provider_id for snapshot in snapshots}
         unavailable_active = sorted(active_providers - usable_providers)
-        if unavailable_active:
+        if unavailable_active and not self._allow_provider_failover:
             detail = "previously active provider(s) unavailable: {}".format(", ".join(unavailable_active))
             return None, issues + (CompileIssue("active_provider_unavailable", detail), CompileIssue("compile_failed", detail))
         try:
-            plan = compile_auto_config(snapshots)
+            plan = compile_auto_config(
+                snapshots,
+                atomic_materializer=self._atomic_materializer,
+            )
         except (AutoConfigCompileError, TopologyValidationError, TypeError, ValueError) as exc:
             return None, issues + (CompileIssue("compile_failed", str(exc)),)
         return plan, issues

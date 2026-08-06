@@ -1,3 +1,4 @@
+# cspell:ignore autoconfig
 """ESP32 Gateway MQTT component.
 
 Provides full inverter telemetry and control via the ESP32 gateway's
@@ -253,6 +254,7 @@ class GatewayMQTT(ComponentBase):
         self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0
+        self._lattice_gateway_stale = False
         self._last_plan_data = None
         self._last_plan_publish_time = 0
         # Entries and timezone of the last built plan, kept so the periodic re-publish
@@ -576,6 +578,8 @@ class GatewayMQTT(ComponentBase):
                 self.log("Info: GatewayMQTT: Restarting MQTT listener task")
                 self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
 
+            await self._invalidate_stale_lattice_gateway()
+
             # Publish any queued plan from on_plan_executed hook
             if self._pending_plan:
                 plan_entries, tz = self._pending_plan
@@ -687,7 +691,14 @@ class GatewayMQTT(ComponentBase):
 
         try:
             if topic == self.topic_status:
-                self._process_telemetry(message.payload)
+                lattice_runtime = self._active_lattice_runtime()
+                if lattice_runtime is None:
+                    self._process_telemetry(message.payload)
+                else:
+                    await self._process_lattice_telemetry(
+                        message.payload,
+                        lattice_runtime,
+                    )
             elif topic == self.topic_online:
                 payload = message.payload.decode("utf-8", errors="replace").strip()
                 was_online = self._gateway_online
@@ -700,10 +711,107 @@ class GatewayMQTT(ComponentBase):
                         attributes=GATEWAY_ATTRIBUTE_TABLE.get("gateway_online", {}),
                         app="gateway",
                     )
+                    lattice_runtime = self._active_lattice_runtime()
+                    if lattice_runtime is not None:
+                        await self._set_lattice_gateway_liveness(
+                            lattice_runtime,
+                            self._gateway_online,
+                        )
         except Exception as e:
             self._error_count += 1
             self.log(f"Warn: GatewayMQTT: Error handling message on {topic}: {e}")
             self.log(f"Warn: {traceback.format_exc()}")
+
+    def _active_lattice_runtime(self):
+        """Return the enabled live Lattice runtime, if one is installed."""
+        runtime = getattr(self.base, "lattice_autoconfig_runtime", None)
+        if runtime is None or getattr(runtime, "enabled", False) is not True:
+            return None
+        if runtime.provider_active("predbat-gateway") is not True:
+            return None
+        return runtime
+
+    async def stop(self):
+        """Invalidate the long-lived provider before a component restart."""
+        runtime = self._active_lattice_runtime()
+        if runtime is not None:
+            await self._set_lattice_gateway_liveness(runtime, False)
+        await super().stop()
+
+    async def _set_lattice_gateway_liveness(self, runtime, online):
+        """Publish Gateway liveness without blocking the MQTT event loop."""
+        try:
+            await asyncio.to_thread(runtime.set_gateway_liveness, online)
+            return True
+        except Exception as e:
+            self._error_count += 1
+            self.log(f"Warn: GatewayMQTT: Lattice liveness update failed: {e}")
+            return False
+
+    async def _invalidate_stale_lattice_gateway(self):
+        """Invalidate one broker-connected provider after telemetry goes stale."""
+        runtime = self._active_lattice_runtime()
+        stale = self._last_telemetry_time and (time.time() - self._last_telemetry_time) >= _TELEMETRY_STALE_THRESHOLD
+        if runtime is None or not stale or self._lattice_gateway_stale:
+            return False
+        invalidated = await self._set_lattice_gateway_liveness(runtime, False)
+        if invalidated:
+            self._lattice_gateway_stale = True
+        return invalidated
+
+    def _synchronize_lattice_gateway_plan(self, plan):
+        """Install the pure plan's stable serial selection into Gateway state."""
+        selected_serials = tuple(getattr(plan, "selected_serials", ()))
+        discovered_serials = tuple(getattr(plan, "discovered_serials", ()))
+        if not selected_serials:
+            raise ValueError("Lattice Gateway plan selected no inverters")
+        suffix_to_serial = {_serial_suffix(serial): serial for serial in selected_serials}
+        if len(suffix_to_serial) != len(selected_serials):
+            raise ValueError("Lattice Gateway plan contains colliding serial suffixes")
+        self._suffix_to_serial = suffix_to_serial
+        self._configured_inverter_serials = frozenset(discovered_serials)
+        self._configured_ev_chargers = frozenset()
+        self._auto_configured = True
+
+    async def _process_lattice_telemetry(self, data, runtime):
+        """Decode, publish, and activate one Lattice-managed Gateway status."""
+        try:
+            status = pb.GatewayStatus()
+            status.ParseFromString(data)
+        except Exception as e:
+            self._error_count += 1
+            self.log(f"Warn: GatewayMQTT: Failed to decode telemetry: {e}")
+            return
+
+        self._debug_dump("RX telemetry", status, raw=data)
+        if len(status.inverters) == 0:
+            return
+
+        self._last_status = status
+        self._last_telemetry_time = time.time()
+        self.update_success_timestamp()
+
+        try:
+            plan, result = await asyncio.to_thread(
+                runtime.ingest_gateway_status,
+                status,
+                prefix=self.prefix,
+                serial_filter=tuple(self.gateway_inverter_serial),
+            )
+            if plan is None or not getattr(result, "accepted", False):
+                raise ValueError("Lattice runtime did not accept the Gateway status")
+            self._synchronize_lattice_gateway_plan(plan)
+            self._inject_entities(status)
+            self._lattice_gateway_stale = False
+        except Exception as e:
+            self._auto_configured = False
+            self.log(f"Warn: GatewayMQTT: Lattice auto-config rejected Gateway telemetry: {e}")
+            await self._set_lattice_gateway_liveness(runtime, False)
+            return
+
+        if not self.api_started:
+            self.api_started = True
+            self.log("Info: GatewayMQTT: First telemetry published to Lattice and auto-config complete, API started")
 
     def _debug_dump(self, label, message=None, raw=None, message_type=None):
         """Log a protobuf message as readable text when debug logging is enabled.

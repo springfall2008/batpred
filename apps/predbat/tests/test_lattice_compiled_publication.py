@@ -1,6 +1,6 @@
 """Tests for immutable durable publication of compiled Lattice state."""
 
-# cspell:ignore autoconfig
+# cspell:ignore autoconfig materializable
 
 import os
 import sys
@@ -1011,6 +1011,25 @@ class TestCompiledLatticePublication(unittest.TestCase):
         self.assertFalse(run.pending)
         self.assertEqual(provider.calls, 1)
         self.assertEqual(override_reader.calls, 1)
+
+    def test_runtime_capabilities_are_preserved_in_durable_publication(self):
+        """The publishing compiler records a runtime-materializable plan."""
+        provider = MutableReader(override_projection_snapshot())
+        compiler = CompiledLatticeCompiler(
+            {"gateway": provider},
+            state_store=InMemoryCompiledLatticeStateStore(),
+            atomic_materializer=True,
+            allow_provider_failover=True,
+        )
+
+        run = compiler.drain()
+
+        self.assertTrue(run.published)
+        self.assertTrue(run.publication.plan.materialization_readiness.ready)
+        self.assertEqual(
+            run.publication.plan.materialization_readiness.blockers,
+            (),
+        )
 
 
 if __name__ == "__main__":

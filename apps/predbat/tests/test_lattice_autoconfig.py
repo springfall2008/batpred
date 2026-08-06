@@ -636,6 +636,39 @@ class TestConfigProjectionCompilation(unittest.TestCase):
             ("atomic_materializer_missing",),
         )
 
+    def test_atomic_materializer_capability_makes_projected_plan_ready(self):
+        """Only an explicitly installed atomic materializer clears its blocker."""
+        provider = projection_snapshot(
+            "gateway",
+            ("GW1",),
+            indexed_roles(("GW1",)),
+            (
+                config_projection(
+                    "battery_power",
+                    (
+                        projection_value(
+                            "GW1",
+                            ProjectionValueKind.ENTITY,
+                            "sensor.gateway_battery_power",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        plan = compile_auto_config(
+            (provider,),
+            atomic_materializer=True,
+        )
+
+        self.assertTrue(plan.materialization_readiness.ready)
+        self.assertEqual(plan.materialization_readiness.blockers, ())
+        with self.assertRaisesRegex(ValueError, "must be a boolean"):
+            compile_auto_config(
+                (provider,),
+                atomic_materializer="yes",
+            )
+
     def test_provider_owned_slot_disambiguates_repeated_canonical_node(self):
         """Explicit roles place correlated providers in their owned slots."""
         identity = "SER-SHARED"

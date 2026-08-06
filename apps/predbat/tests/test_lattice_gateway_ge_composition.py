@@ -160,6 +160,83 @@ class TestGatewayGEComposition(unittest.TestCase):
             ("sensor.predbat_gecloud_ser123_battery_power",),
         )
 
+    def test_running_compiler_fails_over_to_cloud_when_gateway_goes_offline(self):
+        """The opt-in runtime policy replaces an unavailable local provider."""
+        serial = "SER123"
+        gateway = GatewayRetainedTopologyFragmentPublisher(
+            "predbat-gateway",
+            InMemoryFragmentAdapterStateStore(),
+            enabled=True,
+        )
+        gateway.ingest_retained_topology(
+            gateway_topology(serial),
+            online=True,
+        )
+        gateway.ingest_auto_config(
+            compile_gateway_auto_config(
+                (
+                    {
+                        "serial": serial,
+                        "kind": "inverter",
+                        "battery_present": True,
+                        "battery_capacity_wh": 9600,
+                        "model": "Hybrid",
+                    },
+                )
+            )
+        )
+        cloud = GECloudFragmentPublisher(
+            "ge-cloud",
+            InMemoryFragmentAdapterStateStore(),
+            enabled=True,
+        )
+        cloud.ingest_discovery(
+            1,
+            (
+                GECloudDeviceSnapshot(
+                    serial=serial.lower(),
+                    kind="battery-inverter",
+                    model="Hybrid",
+                    online=True,
+                ),
+            ),
+            health=True,
+        )
+        cloud.ingest_auto_config(ge_config(serial))
+        compiler = LatticeAutoConfigCompiler(
+            {
+                "predbat-gateway": gateway.read_snapshot,
+                "ge-cloud": cloud.read_snapshot,
+            },
+            atomic_materializer=True,
+            allow_provider_failover=True,
+        )
+
+        first = compiler.drain()
+        self.assertEqual(
+            first.plan.projected_config["battery_power"],
+            ("sensor.predbat_gateway_ser123_battery_power",),
+        )
+
+        self.assertTrue(gateway.set_liveness(False))
+        self.assertTrue(
+            compiler.invalidate(
+                "predbat-gateway",
+                gateway.generation,
+                "gateway offline",
+            )
+        )
+        fallback = compiler.drain()
+
+        self.assertEqual(
+            fallback.plan.projected_config["battery_power"],
+            ("sensor.predbat_gecloud_ser123_battery_power",),
+        )
+        self.assertNotIn(
+            "active_provider_unavailable",
+            {issue.code for issue in fallback.issues},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

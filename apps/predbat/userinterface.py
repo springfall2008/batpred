@@ -1,3 +1,4 @@
+# cspell:ignore autoconfig
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2026 - All Rights Reserved
@@ -238,19 +239,51 @@ class UserInterface:
                         self.log("Note: API Overridden arg {} value {}".format(arg, value))
                         break
 
+        generated_present = False
+        generated_value = None
+        generated_authoritative = False
+        generated_overlay = None
+        if not domain:
+            generated_overlay = getattr(self, "lattice_generated_overlay", None)
+            if generated_overlay is not None:
+                generated_present, generated_value = generated_overlay.read(arg)
+                generated_authoritative = generated_overlay.authoritative(arg)
+
+        # Topology-owned hardware facts take precedence over the legacy HA entity,
+        # but an explicit apps.yaml value remains an escape hatch. API overrides
+        # have already been resolved above. Ordinary generated arguments remain
+        # fallbacks and retain the legacy HA precedence.
+        if value is None and generated_authoritative:
+            if arg in self.args:
+                value = self.args[arg]
+            else:
+                value = generated_value
+
         # Get From HA config (not for domain specific which are apps.yaml options only)
         if value is None and not domain:
             value, default = self.get_ha_config(arg, default)
 
         # Resolve locally if no HA config
         if value is None:
-            if (arg not in self.args) and (default is not None) and (index is not None):
+            if not domain and arg not in self.args and generated_overlay is None:
+                # Generated Lattice configuration is an optional, default-off fallback.
+                # Its reader returns a detached value so API list overrides and other
+                # legacy resolution paths cannot mutate the immutable publication.
+                generated_overlay = getattr(self, "lattice_generated_overlay", None)
+                if generated_overlay is not None:
+                    generated_present, generated_value = generated_overlay.read(arg)
+            if (arg not in self.args) and (not generated_present) and (default is not None) and (index is not None):
                 # Allow default to apply to all indices if there is not config item set
                 index = None
             if domain:
                 value = self.args.get(domain, {}).get(arg, default)
+            elif arg in self.args:
+                # Explicit apps.yaml membership always wins, including an explicit None.
+                value = self.args[arg]
+            elif generated_present:
+                value = generated_value
             else:
-                value = self.args.get(arg, default)
+                value = default
             value = self.resolve_arg(arg, value, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, required_unit=required_unit)
 
         if isinstance(default, float):
@@ -932,6 +965,10 @@ class UserInterface:
         """
         Load config from HA
         """
+
+        lattice_runtime = getattr(self, "lattice_autoconfig_runtime", None)
+        if lattice_runtime is not None:
+            lattice_runtime.apply_pending()
 
         self.config_index = {}
         self.log("Refreshing Predbat configuration")
