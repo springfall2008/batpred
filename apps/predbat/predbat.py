@@ -1,3 +1,4 @@
+# cspell:ignore autoconfig
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2025-2026 - All Rights Reserved
@@ -85,6 +86,7 @@ from compare import Compare
 from plugin_system import PluginSystem
 from github import GitHub
 from ha import run_async
+from lattice_autoconfig_runtime import LatticeAutoConfigRuntime
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -305,6 +307,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.num_cars = 0
         self.fatal_error = False
         self.components = None
+        self.lattice_autoconfig_runtime = None
         self.CONFIG_ITEMS = copy.deepcopy(CONFIG_ITEMS)
         self.comparison = None
         self.predheat = None
@@ -1644,10 +1647,34 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_user_config(quiet=False, register=False, load_config=True)
             self.comparison = Compare(self)
 
+            lattice_enabled = self.get_arg(
+                "lattice_autoconfig_enable",
+                False,
+                indirect=False,
+            )
+            self.lattice_autoconfig_runtime = LatticeAutoConfigRuntime(
+                self,
+                self.components.get_component("storage"),
+                enabled=lattice_enabled,
+            )
+
             self.components.initialize(phase=1)
+            gecloud = self.components.get_component("gecloud")
+            providers = self.lattice_autoconfig_runtime.bind(
+                gateway_enabled=self.components.get_component("gateway") is not None,
+                gecloud_enabled=gecloud is not None and gecloud.automatic,
+            )
+            if providers:
+                self.log(
+                    "Lattice auto-config enabled for {}".format(
+                        ", ".join(providers),
+                    )
+                )
             if not self.components.start(phase=1):
                 self.log("Error: Some components failed to start (phase 1)")
                 self.record_status("Error: Some components failed to start (phase 1)", had_errors=True)
+
+            self.lattice_autoconfig_runtime.apply_pending()
 
             self.components.initialize(phase=2)
             if not self.components.start(phase=2):
@@ -1660,6 +1687,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
+            if self.lattice_autoconfig_runtime.enabled:
+                # Saved plans predate generated-config digests.  Keep their windows for
+                # diagnostics, but never activate one against a newly compiled overlay.
+                self.plan_valid = False
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))

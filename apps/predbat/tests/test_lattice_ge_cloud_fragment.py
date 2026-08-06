@@ -204,6 +204,44 @@ class TestGECloudFragmentPublisher(unittest.TestCase):
             compiled.projected_config["charge_rate"],
             ("number.predbat_gecloud_bat1_battery_charge_power",),
         )
+        self.assertTrue(compiled.projected_config["inverter_hybrid"])
+
+    def test_complete_ingest_publishes_discovery_and_config_in_one_generation(self):
+        """Live runtime never persists a discovery-only intermediate state."""
+        adapter, state_store = publisher()
+        devices = (device(serial="bat1", model="Hybrid"),)
+        config = GECloudAutoConfigInput(
+            batteries=("bat1",),
+            ems=None,
+            gateway=None,
+            pv=(),
+            battery_meters=(("bat1", ("meter1",)),),
+            register_names=(
+                (
+                    "bat1",
+                    (
+                        "battery_charge_power",
+                        "battery_discharge_power",
+                        "battery_reserve_percent_limit",
+                    ),
+                ),
+            ),
+            models=(("bat1", "Hybrid"),),
+            prefix="predbat",
+        )
+
+        self.assertTrue(
+            adapter.ingest_complete(
+                1,
+                devices,
+                config,
+                health=ProviderHealth.HEALTHY,
+            )
+        )
+
+        self.assertEqual(state_store.writes, 1)
+        self.assertEqual(adapter.generation, 1)
+        self.assertTrue(adapter.read_snapshot().config_projections)
 
     def test_device_order_and_serial_case_are_replay_stable(self):
         """Equivalent provider snapshots do not invent new generations."""

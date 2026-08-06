@@ -174,6 +174,7 @@ class TestGatewayRetainedTopologyFragmentPublisher(unittest.TestCase):
                     "kind": "inverter",
                     "battery_present": True,
                     "battery_capacity_wh": 9600,
+                    "model": "All-in-One",
                 },
             )
         )
@@ -191,10 +192,31 @@ class TestGatewayRetainedTopologyFragmentPublisher(unittest.TestCase):
             compiled.projected_config["battery_power"],
             ("sensor.predbat_gateway_-inv-1_battery_power",),
         )
+        self.assertFalse(compiled.projected_config["inverter_hybrid"])
         self.assertEqual(
             snapshot.identity_aliases[-1].value,
             "GW-INV-1",
         )
+
+    def test_complete_ingest_publishes_topology_and_config_in_one_generation(self):
+        """Live runtime never persists a topology-only intermediate state."""
+        adapter, state_store = publisher()
+        plan = compile_gateway_auto_config(
+            (
+                {
+                    "serial": "GW-INV-1",
+                    "kind": "inverter",
+                    "battery_present": True,
+                    "battery_capacity_wh": 9600,
+                },
+            )
+        )
+
+        self.assertTrue(adapter.ingest_complete(topology(), plan, online=True))
+
+        self.assertEqual(state_store.writes, 1)
+        self.assertEqual(adapter.generation, 1)
+        self.assertTrue(adapter.read_snapshot().config_projections)
 
     def test_projection_metadata_retains_provider_local_capability_coordinates(self):
         """Projection inspection exposes refs but no materialization authority."""

@@ -353,6 +353,8 @@ class CompiledLatticeCompiler(LatticeAutoConfigCompiler):
         readers=None,
         state_store=None,
         override_reader=None,
+        atomic_materializer=False,
+        allow_provider_failover=False,
     ):
         """Create a publisher over registered fragment and override readers."""
         if state_store is None:
@@ -362,7 +364,12 @@ class CompiledLatticeCompiler(LatticeAutoConfigCompiler):
         if override_reader is not None and not callable(override_reader):
             raise ValueError("override_reader must be callable")
 
-        super().__init__(readers=readers, materializer=None)
+        super().__init__(
+            readers=readers,
+            materializer=None,
+            atomic_materializer=atomic_materializer,
+            allow_provider_failover=allow_provider_failover,
+        )
         self._state_store = state_store
         self._override_reader = override_reader
         self._override_requested_generation = -1
@@ -540,7 +547,7 @@ class CompiledLatticeCompiler(LatticeAutoConfigCompiler):
             active_providers = set(dict(self._active_plan.provider_generations)) if self._active_plan is not None else set()
         usable_providers = {snapshot.provider_id for snapshot in snapshots}
         unavailable_active = sorted(active_providers - usable_providers)
-        if unavailable_active:
+        if unavailable_active and not self._allow_provider_failover:
             detail = "previously active provider(s) unavailable: {}".format(", ".join(unavailable_active))
             self._candidate_issues = issues + (
                 CompileIssue("active_provider_unavailable", detail),
@@ -549,7 +556,11 @@ class CompiledLatticeCompiler(LatticeAutoConfigCompiler):
             return None, self._candidate_issues
 
         try:
-            plan = compile_auto_config(snapshots, overrides)
+            plan = compile_auto_config(
+                snapshots,
+                overrides,
+                atomic_materializer=self._atomic_materializer,
+            )
         except (
             AutoConfigCompileError,
             TopologyValidationError,

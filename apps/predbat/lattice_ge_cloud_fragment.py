@@ -85,6 +85,7 @@ _SCALAR_ARGUMENTS = frozenset(
         "ge_cloud_serial",
         "ge_cloud_data",
         "ge_cloud_direct",
+        "inverter_hybrid",
     )
 )
 
@@ -219,7 +220,8 @@ def _materializable_snapshot(
         )
 
     projections = []
-    for argument, raw_value in plan.arguments:
+    arguments = tuple(plan.arguments) + (("inverter_hybrid", not plan.ac_coupled),)
+    for argument, raw_value in arguments:
         if not isinstance(raw_value, tuple) and argument not in _SCALAR_ARGUMENTS:
             raw_value = tuple(raw_value for _serial in plan.primary_targets)
         values = raw_value if isinstance(raw_value, tuple) else (raw_value,)
@@ -741,6 +743,79 @@ class GECloudFragmentPublisher:
                 snapshot,
                 "GE Cloud auto-config plan changed",
             )
+
+    def ingest_complete(
+        self,
+        discovery_version,
+        devices,
+        config,
+        health=_HEALTH_UNCHANGED,
+    ):
+        """Atomically publish complete discovery and mapper projections."""
+        if not self._enabled:
+            return False
+        discovery_version = _discovery_version(discovery_version)
+        devices = _normalize_devices(devices)
+        document = _topology_document(
+            self.provider_id,
+            discovery_version,
+            devices,
+        )
+        plan = compile_gecloud_auto_config(config)
+
+        with self._lock:
+            current = self._current_state()
+            if current is not None and current.removed:
+                raise FragmentAdapterRemoved(
+                    "provider {} was removed at generation {}".format(
+                        self.provider_id,
+                        current.generation,
+                    )
+                )
+            if current is None:
+                next_health = ProviderHealth.DEGRADED if health is _HEALTH_UNCHANGED else _provider_health(health)
+                generation = 1
+            else:
+                previous = _plain(current.snapshot.topology_fragment)
+                previous_version = previous["docVersion"]
+                if discovery_version < previous_version:
+                    return False
+                if discovery_version == previous_version and document != previous:
+                    raise FragmentAdapterConflict(
+                        "provider {} reused GE Cloud discovery version {} for different content".format(
+                            self.provider_id,
+                            discovery_version,
+                        )
+                    )
+                next_health = current.snapshot.health if health is _HEALTH_UNCHANGED else _provider_health(health)
+                candidate = _materializable_snapshot(
+                    document,
+                    devices,
+                    config,
+                    plan,
+                    self.provider_id,
+                    current.generation,
+                    next_health,
+                )
+                if _fingerprint_snapshot(candidate) == _fingerprint_snapshot(current.snapshot):
+                    return False
+                generation = current.generation + 1
+            snapshot = _materializable_snapshot(
+                document,
+                devices,
+                config,
+                plan,
+                self.provider_id,
+                generation,
+                next_health,
+            )
+            published = self._adapter.publish(
+                snapshot,
+                "GE Cloud discovery and auto-config changed",
+            )
+            if published:
+                self._seeded = True
+            return published
 
     def remove(self):
         """Publish an irreversible provider-removal tombstone."""

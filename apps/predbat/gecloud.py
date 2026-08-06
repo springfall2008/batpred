@@ -1,3 +1,4 @@
+# cspell:ignore autoconfig
 # -----------------------------------------------------------------------------
 # Predbat Home Battery System
 # Copyright Trefor Southwell 2026 - All Rights Reserved
@@ -821,6 +822,65 @@ class GECloudDirect(ComponentBase):
                 self.dashboard_item(entity_id, state="on" if state else "off", attributes=attributes, app="gecloud")
                 self.register_entity_map[entity_id] = {"device": device, "key": key}
 
+    def _lattice_autoconfig_runtime(self):
+        """Return the enabled runtime only for GE automatic configuration."""
+        if not self.automatic:
+            return None
+        runtime = getattr(self.base, "lattice_autoconfig_runtime", None)
+        if runtime is None or getattr(runtime, "enabled", False) is not True:
+            return None
+        if runtime.provider_active("ge-cloud") is not True:
+            return None
+        return runtime
+
+    async def stop(self):
+        """Invalidate the long-lived provider before a component restart."""
+        runtime = self._lattice_autoconfig_runtime()
+        if runtime is not None:
+            await self._set_lattice_liveness(False)
+        await super().stop()
+
+    async def _refresh_automatic_config(self):
+        """Select exactly one legacy or Lattice automatic-config writer."""
+        if not self.automatic:
+            return False
+        runtime = self._lattice_autoconfig_runtime()
+        if runtime is None:
+            await self.async_automatic_config(self.devices_dict)
+            return True
+        await asyncio.to_thread(
+            runtime.ingest_gecloud_state,
+            self.devices_dict,
+            self.settings,
+            self.info,
+            prefix=self.prefix,
+            load_today_ignore=self.get_arg(
+                "ge_cloud_load_today_ignore",
+                default=False,
+            ),
+            split_pv=self.get_arg(
+                "ge_cloud_automatic_split_pv",
+                default=False,
+            ),
+            split_ct=self.get_arg(
+                "ge_cloud_automatic_split_ct",
+                default=False,
+            ),
+            shared_ct=self.get_arg(
+                "ge_cloud_automatic_shared_ct",
+                default=False,
+            ),
+        )
+        return True
+
+    async def _set_lattice_liveness(self, health):
+        """Publish one bounded cloud-health transition when Lattice is active."""
+        runtime = self._lattice_autoconfig_runtime()
+        if runtime is None:
+            return False
+        await asyncio.to_thread(runtime.set_gecloud_liveness, health)
+        return True
+
     async def async_automatic_config(self, devices):
         """
         Automatically configure predbat using GE Cloud auto-detected devices.
@@ -1109,7 +1169,12 @@ class GECloudDirect(ComponentBase):
                 else:
                     self.log("GECloud: No valid settings found in storage cache, will poll")
 
+        lattice_runtime = self._lattice_autoconfig_runtime()
+        lattice_refresh_due = False
+        lattice_health = "unchanged"
+
         if first or (seconds % 120 == 0):
+            lattice_success_before = self.last_success_timestamp if lattice_runtime is not None else None
             inverter_auth_denied = False
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
@@ -1122,6 +1187,15 @@ class GECloudDirect(ComponentBase):
                 await self.publish_meter(device, self.meter[device])
                 self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
                 await self.publish_info(device, self.info[device])
+
+            if lattice_runtime is not None:
+                if inverter_auth_denied:
+                    lattice_health = False
+                elif self.last_success_timestamp != lattice_success_before:
+                    lattice_health = True
+                    lattice_refresh_due = True
+                else:
+                    lattice_health = None
 
             # Surface a clear, correct status when the GivEnergy cloud API denied access to the core
             # inverter data, rather than letting stale data be misdiagnosed downstream (e.g. as
@@ -1163,7 +1237,9 @@ class GECloudDirect(ComponentBase):
             # One shot tasks
             if first:
                 if self.automatic:
-                    await self.async_automatic_config(self.devices_dict)
+                    if lattice_runtime is None or lattice_health is True:
+                        await self._refresh_automatic_config()
+                    lattice_refresh_due = False
 
             now_utc = self.now_utc_exact
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
@@ -1171,6 +1247,12 @@ class GECloudDirect(ComponentBase):
                 self.default_options_stamp = now_utc
                 for device in self.device_list:
                     await self.enable_default_options(device, self.settings[device])
+
+        if lattice_runtime is not None:
+            if lattice_refresh_due and lattice_health is not False:
+                await self._refresh_automatic_config()
+            if lattice_health != "unchanged" and lattice_health is not True:
+                await self._set_lattice_liveness(lattice_health)
 
         # Clear pending writes
         for device in self.device_list:

@@ -95,6 +95,7 @@ _SCALAR_ARGUMENTS = frozenset(
         "ge_cloud_serial",
         "ge_cloud_data",
         "ge_cloud_direct",
+        "inverter_hybrid",
         "ems_total_soc",
         "ems_total_charge",
         "ems_total_discharge",
@@ -180,7 +181,10 @@ def _materializable_snapshot(document, plan, provider_id, generation, health):
         assignments.add((AliasRole.CONTROL, "inverters", index, node_id))
 
     projections = []
-    for argument, raw_value in sorted(plan.arguments.items()):
+    arguments = dict(plan.arguments)
+    if plan.hybrid is not None:
+        arguments["inverter_hybrid"] = plan.hybrid
+    for argument, raw_value in sorted(arguments.items()):
         if not isinstance(raw_value, tuple) and argument not in _SCALAR_ARGUMENTS:
             raw_value = tuple(raw_value for _serial in plan.selected_serials)
         values = raw_value if isinstance(raw_value, tuple) else (raw_value,)
@@ -650,6 +654,73 @@ class GatewayRetainedTopologyFragmentPublisher:
                 snapshot,
                 "gateway auto-config plan changed",
             )
+
+    def ingest_complete(self, payload, plan, online=_LIVENESS_UNCHANGED):
+        """Atomically publish retained topology and its complete mapper plan."""
+        if not self._enabled:
+            return False
+        document = decode_topology(payload)
+        _validate_fragment(document, self.provider_id)
+
+        with self._lock:
+            current = self._current_state()
+            if online is _LIVENESS_UNCHANGED and current is not None:
+                health = current.snapshot.health
+            elif online is _LIVENESS_UNCHANGED:
+                health = ProviderHealth.DEGRADED
+            else:
+                health = _health_from_liveness(online)
+            if current is not None and current.removed:
+                raise FragmentAdapterRemoved(
+                    "provider {} was removed at generation {}".format(
+                        self.provider_id,
+                        current.generation,
+                    )
+                )
+            if current is not None:
+                previous = _plain(current.snapshot.topology_fragment)
+                previous_explicit = "docVersion" in previous
+                incoming_explicit = "docVersion" in document
+                previous_version = _document_version(previous)
+                incoming_version = _document_version(document)
+                if previous_explicit and not incoming_explicit:
+                    return False
+                if previous_explicit and incoming_explicit:
+                    if incoming_version < previous_version:
+                        return False
+                    if incoming_version == previous_version and document != previous:
+                        raise TopologyValidationError(
+                            "provider {} reused docVersion {} for different content".format(
+                                self.provider_id,
+                                incoming_version,
+                            )
+                        )
+                candidate = _materializable_snapshot(
+                    document,
+                    plan,
+                    self.provider_id,
+                    current.generation,
+                    health,
+                )
+                if _fingerprint_snapshot(candidate) == _fingerprint_snapshot(current.snapshot):
+                    return False
+                generation = current.generation + 1
+            else:
+                generation = 1
+            snapshot = _materializable_snapshot(
+                document,
+                plan,
+                self.provider_id,
+                generation,
+                health,
+            )
+            published = self._adapter.publish(
+                snapshot,
+                "gateway topology and auto-config changed",
+            )
+            if published:
+                self._seeded = True
+            return published
 
     def remove(self):
         """Publish a durable provider-removal tombstone and invalidate."""

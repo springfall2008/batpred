@@ -511,7 +511,13 @@ class FragmentAdapterRegistry:
             del self._adapters[provider_id]
             return True
 
-    def create_compiler(self, state_store, override_reader=None):
+    def create_compiler(
+        self,
+        state_store,
+        override_reader=None,
+        atomic_materializer=False,
+        allow_provider_failover=False,
+    ):
         """Freeze membership and create the sole compiled-Lattice coordinator."""
         if not self._enabled:
             raise RuntimeError("fragment adapter registry is disabled")
@@ -533,6 +539,8 @@ class FragmentAdapterRegistry:
                 readers,
                 state_store=state_store,
                 override_reader=override_reader,
+                atomic_materializer=atomic_materializer,
+                allow_provider_failover=allow_provider_failover,
             )
 
             unsubscribers = []
