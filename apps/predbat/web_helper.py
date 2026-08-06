@@ -4196,6 +4196,9 @@ tabindex="0"  <!-- Make the menu focusable -->
     font-size: 13px;
     margin: 0 0 10px 0;
     max-width: 900px;
+    width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
 }
 
 body.dark-mode .chart-description {
