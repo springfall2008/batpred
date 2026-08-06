@@ -3476,6 +3476,11 @@ chart.render();
             opacity = round(0.9 - 0.35 * age_fraction, 2)
             series.append(
                 {
+                    # Two captures landing in the same calendar minute used to produce two
+                    # series sharing this exact name, which broke "Deselect all" (ApexCharts
+                    # keys hideSeries()/legend clicks by name) - fixed at the source instead
+                    # (debug_history.capture_snapshot dedupes same-minute captures on write),
+                    # so minute precision here is safe again rather than needing seconds.
                     "name": "Plan @ {}".format(snapshot_now_utc.strftime("%d %H:%M")),
                     "data": data,
                     "opacity": str(opacity),
@@ -3519,7 +3524,11 @@ chart.render();
 
         description = CHART_DESCRIPTIONS.get(chart)
         if description:
-            text += '<p class="chart-description">{}</p>'.format(html_module.escape(description))
+            # Inline style, not just the .chart-description class: the class alone was still
+            # observed running off-screen live, on a page whose exact cascade isn't fully
+            # mapped - an inline style wins over any external rule short of !important, so
+            # this can't be re-broken by something elsewhere in the stylesheet.
+            text += '<p class="chart-description" style="white-space: normal; overflow-wrap: break-word; max-width: 900px; width: 100%;">{}</p>'.format(html_module.escape(description))
 
         if chart == "SoCPlanDrift":
             # deselectAllPlans() itself is defined later, in get_chart()'s SoCPlanDrift

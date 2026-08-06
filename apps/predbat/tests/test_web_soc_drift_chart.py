@@ -113,6 +113,11 @@ def test_soc_drift_chart(my_predbat):
                 print("  ERROR: expected newest series point 5 minutes on to be 7.1, got {}".format(newest["data"].get(expected_second_point_ts)))
                 failed = True
 
+        # Same-minute-capture dedup is now handled at the source (debug_history.capture_snapshot
+        # itself, see test_debug_history.py) - two snapshots can no longer coexist in storage at
+        # all if they land in the same calendar minute, so there is nothing left for this layer
+        # to produce colliding series names from.
+
         print("Test: a snapshot missing predict_soc_best/now_utc is skipped rather than breaking the whole chart")
         asyncio.run(capture_snapshot(storage, "marker: no_soc_fields_here\n", now + datetime.timedelta(hours=1), max_count=15))
         series = asyncio.run(w.get_soc_drift_series())
