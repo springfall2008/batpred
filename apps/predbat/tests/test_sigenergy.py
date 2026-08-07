@@ -2269,11 +2269,11 @@ def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
     assert result is False, "offboard=True should return False"
     assert modes_set == [SIGENERGY_MODE_MSC], "Should leave VPP explicitly rather than assume offboard does it"
 
-    # current_mode is not refreshed once offboarded (MQTT goes quiet), so a repeat poll
-    # must not retry the mode switch forever.
+    # Once the exit has landed, current_mode stops being refreshed (MQTT goes quiet),
+    # so a repeat poll must not keep re-issuing the switch.
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should still return False"
-    assert modes_set == [SIGENERGY_MODE_MSC], "VPP exit should be attempted at most once per system"
+    assert modes_set == [SIGENERGY_MODE_MSC], "A confirmed VPP exit should not be repeated"
 
     return failed
 
@@ -2296,6 +2296,85 @@ def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should return False"
     assert not modes_set, "No mode switch needed"
+
+    return failed
+
+
+def test_sigenergy_offboard_defers_when_the_mode_switch_fails(my_predbat):
+    """A failed VPP exit must NOT offboard — that is the lockout this guards against."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.controls[sid] = {"offboard": False}
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+
+    offboarded = []
+    mode_attempts = []
+
+    async def mock_set_mode(system_id, mode_int):
+        mode_attempts.append(mode_int)
+        return False  # broker down / token expired
+
+    async def mock_offboard(system_ids):
+        offboarded.append(system_ids)
+        return True
+
+    async def mock_publish_controls(system_id=None):
+        pass
+
+    api.set_operating_mode = mock_set_mode
+    api.offboard_systems = mock_offboard
+    api.publish_controls = mock_publish_controls
+
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+    assert not offboarded, "Must not revoke authorisation while the system is still in VPP"
+
+    # Retried by the periodic check; once the switch lands the offboard follows.
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert len(mode_attempts) == 2, "A failed VPP exit must be retried, not latched"
+    assert not offboarded, "Still no offboard while the exit keeps failing"
+
+    api.set_operating_mode = _make_ok_set_mode(mode_attempts)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert offboarded, "Offboard proceeds once the system is out of VPP"
+
+    return failed
+
+
+def _make_ok_set_mode(recorder):
+    """Return a set_operating_mode stub that records and succeeds."""
+
+    async def _ok(system_id, mode_int):
+        recorder.append(mode_int)
+        return True
+
+    return _ok
+
+
+def test_sigenergy_offboard_retries_when_the_api_call_fails(my_predbat):
+    """A failed offboard is retried rather than reported as done."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_MSC  # already out of VPP
+
+    attempts = []
+
+    async def mock_offboard(system_ids):
+        attempts.append(system_ids)
+        return None if len(attempts) == 1 else []
+
+    api.offboard_systems = mock_offboard
+
+    done = run_async(api._offboard_system_if_needed(sid))
+    assert done is False, "A failed offboard must not be latched as complete"
+
+    done = run_async(api._offboard_system_if_needed(sid))
+    assert done is True, "The retry succeeds"
+    assert len(attempts) == 2, "Offboard retried exactly once after the failure"
+
+    run_async(api._offboard_system_if_needed(sid))
+    assert len(attempts) == 2, "A completed offboard is not repeated"
 
     return failed
 
@@ -2460,11 +2539,19 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
     assert api_pending.onboard_status[sid] == "pending_approval", "pending_approval derived from MSC mode"
     assert api_pending.dashboard_items[sensor_key]["state"] == "pending_approval"
 
-    # Offboard toggle on → offboarded regardless of mode
+    # Offboard COMPLETED → offboarded regardless of mode.
     api_offboard = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
+    api_offboard._offboard_done.add(sid)
     run_async(api_offboard.run(seconds=300, first=False))
-    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded when toggle is on"
+    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded once the offboard has landed"
     assert api_offboard.dashboard_items[sensor_key]["state"] == "offboarded"
+
+    # Toggle on but the offboard has NOT landed yet (mode switch or API call still
+    # failing): the status must not claim offboarded, or support reads a lie while
+    # the system is still live on the platform.
+    api_inflight = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
+    run_async(api_inflight.run(seconds=300, first=False))
+    assert api_inflight.onboard_status[sid] != "offboarded", "not offboarded until the offboard succeeds"
 
     return failed
 
@@ -2782,6 +2869,8 @@ def run_sigenergy_tests(my_predbat):
         ("offboard_toggle_in_vpp", test_sigenergy_offboard_toggle_in_vpp),
         ("offboard_toggle_not_in_vpp", test_sigenergy_offboard_toggle_not_in_vpp),
         ("offboard_toggle_switch_event", test_sigenergy_offboard_toggle_switch_event),
+        ("offboard_defers_when_mode_switch_fails", test_sigenergy_offboard_defers_when_the_mode_switch_fails),
+        ("offboard_retries_when_api_call_fails", test_sigenergy_offboard_retries_when_the_api_call_fails),
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
