@@ -132,6 +132,7 @@ SIGENERGY_CODE_DEVELOPER_NOT_APPROVED = 1604
 SIGENERGY_TOKEN_EXPIRY_BUFFER = 600   # refresh token 10 min before expiry
 SIGENERGY_MIN_REQUEST_INTERVAL = 6.0  # enforce ≥10 req/min API limit
 SIGENERGY_POLL_INTERVAL = 300         # realtime data poll every 5 minutes
+SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
@@ -149,6 +150,11 @@ SIGENERGY_MODE_MSC = 0   # Maximum Self-Consumption (eco)
 SIGENERGY_MODE_FFG = 5   # Fully Feed-in to Grid
 SIGENERGY_MODE_VPP = 6   # VPP mode
 SIGENERGY_MODE_NBI = 8   # NorthBound (defined for completeness; not switched to by this component)
+
+# Modes that mean a third party is driving the inverter rather than the owner's app.
+# A Sigenergy accepts one controller at a time, so finding the system in one of these
+# means Predbat's VPP registration has been displaced — see _manage_vpp_registration.
+SIGENERGY_THIRD_PARTY_MODES = (SIGENERGY_MODE_NBI,)
 
 # Human-readable names for operationalMode integer values
 SIGENERGY_MODE_NAMES = {
@@ -309,6 +315,7 @@ class SigenergyAPI(ComponentBase):
         self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
         self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
+        self.contended_by = {}    # systemId → mode name of the controller that last displaced Predbat
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
@@ -2176,6 +2183,15 @@ class SigenergyAPI(ComponentBase):
           readonly=False + VPP active   → nothing to do (ready for controls)
           readonly=False + VPP inactive → switch to VPP mode to enable controls
 
+        Note on contention: a Sigenergy accepts one controller at a time, and VPP mode
+        (Predbat) and the NorthBound Interface (used by Axle for VPP dispatches) are
+        mutually exclusive. Predbat is treated as the owner of the inverter, so finding
+        the system in NBI means reclaiming it — which overrides whatever the other
+        controller had scheduled. Predbat already ingests Axle sessions as its own export
+        windows (see load_axle_slot), so the event still runs; it runs under Predbat's
+        plan rather than Axle's dispatch. If Axle should instead own the inverter for the
+        duration of its events, that is what the ``axle_control`` option is for.
+
         Args:
             system_id: Sigenergy system unique identifier.
             is_readonly: Current state of the Predbat read-only switch.
@@ -2195,7 +2211,21 @@ class SigenergyAPI(ComponentBase):
             return False
 
         if not is_readonly and not in_vpp:
-            self.log("SigenergyAPI: System {} is not in VPP mode — switching to VPP to enable controls".format(system_id))
+            current = self.current_mode.get(system_id, -1)
+            if current in SIGENERGY_THIRD_PARTY_MODES:
+                # Another controller (typically an Axle VPP dispatch, which drives the
+                # system through the NorthBound Interface) has taken the inverter. VPP and
+                # NBI are mutually exclusive on a Sigenergy, so somebody has to lose.
+                # Predbat is the configured owner, so reclaim — and say so plainly, since
+                # this displaces the other controller's schedule.
+                self.contended_by[system_id] = SIGENERGY_MODE_NAMES.get(current, "Unknown")
+                self.log(
+                    "Warn: SigenergyAPI: System {} was taken by another controller ({}) — reclaiming VPP mode, which overrides that controller's schedule".format(
+                        system_id, SIGENERGY_MODE_NAMES.get(current, "Unknown ({})".format(current))
+                    )
+                )
+            else:
+                self.log("SigenergyAPI: System {} is not in VPP mode ({}) — switching to VPP to enable controls".format(system_id, SIGENERGY_MODE_NAMES.get(current, "Unknown")))
             await self.set_operating_mode(system_id, SIGENERGY_MODE_VPP)
             return False  # current_mode will be updated by MQTT/REST on the next cycle
 
@@ -2217,6 +2247,9 @@ class SigenergyAPI(ComponentBase):
                     "friendly_name": "Sigenergy {} Onboarding Status".format(sid),
                     "system_id": sid,
                     "in_vpp": self.current_mode.get(sid) == SIGENERGY_MODE_VPP,
+                    # Set when another controller last displaced Predbat's VPP registration,
+                    # so support can tell contention apart from a genuine onboarding problem.
+                    "contended_by": self.contended_by.get(sid),
                 },
                 app="sigenergy",
             )
@@ -2379,10 +2412,19 @@ class SigenergyAPI(ComponentBase):
             for sid in list(self.systems.keys()):
                 await self.fetch_device_list(sid)
 
-        # VPP registration management — runs at startup and every 5 minutes.
+        # VPP registration management — runs at startup and every minute.
+        #
+        # This used to run on the 5 minute poll interval, which meant that when another
+        # controller (an Axle NBI dispatch, say) grabbed the system, it could hold it for
+        # up to 5 minutes before Predbat noticed and reclaimed VPP. Predbat is the owner
+        # of the inverter, so re-assert that promptly and keep the contended window short
+        # rather than leaving control ambiguous for minutes at a time. set_operating_mode
+        # is an MQTT publish and only fires when the mode is actually wrong, so the faster
+        # cadence costs nothing against the REST rate limit.
+        #
         # Skips any system whose operating mode is not yet known (REST bootstrap
         # may have failed; MQTT will populate current_mode once it arrives).
-        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
+        if first or seconds % SIGENERGY_VPP_RECLAIM_INTERVAL == 0:
             is_readonly_vpp = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
             for sid in list(self.systems.keys()):
                 if sid not in self.current_mode:
@@ -2392,12 +2434,26 @@ class SigenergyAPI(ComponentBase):
                 is_offboard = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
                 await self._manage_vpp_registration(sid, is_readonly_vpp, is_offboard)
                 # Derive the user-facing onboarding status for the visible system.
+                #
+                # A system sitting in a third-party mode is fully onboarded — another
+                # controller has simply taken it for a moment. Reporting "pending_approval"
+                # there makes the SaaS UI show an amber "waiting for your approval in the
+                # Sigenergy app" banner for the length of every Axle event, telling the user
+                # to go and approve something that needs no approval. Keep it "active" and
+                # expose the contention through the sensor attributes instead.
                 if is_offboard:
                     self.onboard_status[str(sid)] = "offboarded"
                 elif self.current_mode.get(sid) == SIGENERGY_MODE_VPP:
                     self.onboard_status[str(sid)] = "active"
+                    self.contended_by.pop(sid, None)
+                elif self.current_mode.get(sid) in SIGENERGY_THIRD_PARTY_MODES:
+                    self.onboard_status[str(sid)] = "active"
                 else:
                     self.onboard_status[str(sid)] = "pending_approval"
+
+        # Persist the derived status on the slower poll cadence — the reclaim check above
+        # runs every minute and the cache does not need rewriting that often.
+        if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
             await self._save_cache("onboard_status", self.onboard_status)
 
         # Publish onboarding status for the SaaS UI.
@@ -2469,11 +2525,21 @@ class SigenergyAPI(ComponentBase):
             if first or seconds % 60 == 0:
                 for sid in list(self.systems.keys()):
                     if self.current_mode.get(sid) != SIGENERGY_MODE_VPP:
-                        self.log(
-                            "Warn: SigenergyAPI: System {} is not in VPP mode ({}) — controls skipped until onboard is approved".format(
-                                sid, SIGENERGY_MODE_NAMES.get(self.current_mode.get(sid, -1), "Unknown")
+                        current = self.current_mode.get(sid, -1)
+                        if current in SIGENERGY_THIRD_PARTY_MODES:
+                            # Nothing to approve — another controller holds the system and the
+                            # reclaim check will take it back within a minute.
+                            self.log(
+                                "Warn: SigenergyAPI: System {} is held by another controller ({}) — controls skipped until VPP mode is reclaimed".format(
+                                    sid, SIGENERGY_MODE_NAMES.get(current, "Unknown")
+                                )
                             )
-                        )
+                        else:
+                            self.log(
+                                "Warn: SigenergyAPI: System {} is not in VPP mode ({}) — controls skipped until onboard is approved".format(
+                                    sid, SIGENERGY_MODE_NAMES.get(current, "Unknown")
+                                )
+                            )
                         continue
                     await self.apply_controls(sid)
         else:

@@ -22,7 +22,9 @@ from sigenergy import (
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_MODE_MSC,
+    SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
     _safe_float,
     _safe_int,
@@ -2466,6 +2468,118 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     return failed
 
 
+def _make_contended_api(sid, mode):
+    """Build a MockSigenergyAPI whose system sits in the given operating mode.
+
+    Args:
+        sid: System ID to register.
+        mode: Operating mode integer to report as the system's current mode.
+
+    Returns:
+        A MockSigenergyAPI with run()'s async helpers stubbed out.
+    """
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: mode}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock()
+    api.fetch_history_totals = AsyncMock()
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    return api
+
+
+def test_sigenergy_reclaims_vpp_from_third_party_controller(my_predbat):
+    """A system taken into NBI by another controller is reclaimed into VPP, and says so."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert api.contended_by[sid] == "Northbound Integration", "records which controller displaced Predbat"
+
+    # The log must name the displacement rather than implying an onboarding problem.
+    reclaim_logs = [m for m in api.log_messages if "reclaiming VPP mode" in m]
+    assert len(reclaim_logs) == 1, "reclaim is logged once, got {}".format(api.log_messages)
+    assert "Northbound Integration" in reclaim_logs[0], "log names the displacing controller"
+    assert "onboard" not in reclaim_logs[0].lower(), "reclaim log must not blame onboarding"
+
+    return failed
+
+
+def test_sigenergy_contention_does_not_report_pending_approval(my_predbat):
+    """Contention must not surface as pending_approval — that shows a false 'approve in app' banner."""
+    failed = False
+    sid = "SIG001"
+    sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
+
+    # Held by another controller → still active (it IS onboarded), contention in attributes.
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    api.contended_by[sid] = "Northbound Integration"
+    run_async(api.run(seconds=300, first=False))
+    assert api.onboard_status[sid] == "active", "contended system stays active, not pending_approval"
+    assert api.dashboard_items[sensor_key]["attributes"]["contended_by"] == "Northbound Integration"
+
+    # A genuinely un-onboarded system (MSC) still reports pending_approval.
+    api_msc = _make_contended_api(sid, SIGENERGY_MODE_MSC)
+    api_msc._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api_msc.run(seconds=300, first=False))
+    assert api_msc.onboard_status[sid] == "pending_approval", "MSC still means pending approval"
+
+    # Once VPP is regained the contention marker is cleared.
+    api_back = _make_contended_api(sid, SIGENERGY_MODE_VPP)
+    api_back._manage_vpp_registration = AsyncMock(return_value=True)
+    api_back.contended_by[sid] = "Northbound Integration"
+    run_async(api_back.run(seconds=300, first=False))
+    assert api_back.onboard_status[sid] == "active"
+    assert api_back.dashboard_items[sensor_key]["attributes"]["contended_by"] is None, "contention cleared once back in VPP"
+
+    return failed
+
+
+def test_sigenergy_reclaim_runs_on_the_minute(my_predbat):
+    """The reclaim check runs every minute, so a displaced system is not left contended for a full poll."""
+    failed = False
+    sid = "SIG001"
+
+    assert SIGENERGY_VPP_RECLAIM_INTERVAL == 60, "reclaim cadence is one minute"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+
+    # A 60s tick that is NOT a 300s poll tick must still run the reclaim check.
+    run_async(api.run(seconds=60, first=False))
+    api._manage_vpp_registration.assert_awaited_once()
+
+    return failed
+
+
+def test_sigenergy_controls_skipped_message_distinguishes_contention(my_predbat):
+    """Skipping controls because another controller holds the system must not blame onboarding."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+
+    skip_logs = [m for m in api.log_messages if "controls skipped" in m]
+    assert skip_logs, "controls-skipped message is logged"
+    assert any("held by another controller" in m for m in skip_logs), "message names contention, got {}".format(skip_logs)
+    assert not any("onboard is approved" in m for m in skip_logs), "must not tell the user to approve onboarding"
+    api.apply_controls.assert_not_awaited()
+
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -2542,6 +2656,10 @@ def run_sigenergy_tests(my_predbat):
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
+        ("reclaims_vpp_from_third_party_controller", test_sigenergy_reclaims_vpp_from_third_party_controller),
+        ("contention_does_not_report_pending_approval", test_sigenergy_contention_does_not_report_pending_approval),
+        ("reclaim_runs_on_the_minute", test_sigenergy_reclaim_runs_on_the_minute),
+        ("controls_skipped_message_distinguishes_contention", test_sigenergy_controls_skipped_message_distinguishes_contention),
     ]
 
     for name, fn in tests:
