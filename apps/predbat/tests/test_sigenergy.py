@@ -22,6 +22,7 @@ from sigenergy import (
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_MODE_MSC,
+    SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
     SIGENERGY_OPTIONS_TIME,
     _safe_float,
@@ -2466,6 +2467,117 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     return failed
 
 
+def _make_axle_api(sid, mode, axle_active):
+    """Build a MockSigenergyAPI with an Axle event either running or not.
+
+    Args:
+        sid: System ID to register.
+        mode: Operating mode integer to report as the system's current mode.
+        axle_active: Value for the parent's set_read_only_axle flag.
+
+    Returns:
+        A MockSigenergyAPI with run()'s async helpers stubbed out.
+    """
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: mode}
+    api.system_id_filter = {sid}
+    api.base = MagicMock()
+    api.base.set_read_only_axle = axle_active
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock()
+    api.fetch_history_totals = AsyncMock()
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    return api
+
+
+def test_sigenergy_axle_event_leaves_mode_alone(my_predbat):
+    """During an Axle event Predbat must not touch the operating mode in either direction."""
+    failed = False
+    sid = "SIG001"
+
+    # Axle has already taken the system into NBI — leave it there.
+    api_nbi = _make_axle_api(sid, SIGENERGY_MODE_NBI, axle_active=True)
+    result = run_async(api_nbi._manage_vpp_registration(sid, is_readonly=False))
+    assert result is False, "controls do not proceed while Axle owns the inverter"
+    api_nbi.set_operating_mode.assert_not_awaited()
+    assert any("standing down" in m for m in api_nbi.log_messages), "stand-down is logged, got {}".format(api_nbi.log_messages)
+
+    # Event started but Axle has not switched yet — do NOT drop to MSC, which would hand
+    # control to the owner's app rather than to Axle.
+    api_vpp = _make_axle_api(sid, SIGENERGY_MODE_VPP, axle_active=True)
+    run_async(api_vpp._manage_vpp_registration(sid, is_readonly=False))
+    api_vpp.set_operating_mode.assert_not_awaited()
+
+    # Without an Axle event the existing reclaim behaviour is unchanged.
+    api_off = _make_axle_api(sid, SIGENERGY_MODE_NBI, axle_active=False)
+    run_async(api_off._manage_vpp_registration(sid, is_readonly=False))
+    api_off.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+
+    return failed
+
+
+def test_sigenergy_axle_event_skips_controls(my_predbat):
+    """Predbat must not issue battery commands while Axle is dispatching."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_axle_api(sid, SIGENERGY_MODE_VPP, axle_active=True)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api.apply_controls.assert_not_awaited()
+
+    # Same system, no Axle event → controls run as normal.
+    api_off = _make_axle_api(sid, SIGENERGY_MODE_VPP, axle_active=False)
+    api_off._manage_vpp_registration = AsyncMock(return_value=True)
+    run_async(api_off.run(seconds=60, first=False))
+    api_off.apply_controls.assert_awaited_once_with(sid)
+
+    return failed
+
+
+def test_sigenergy_axle_event_end_resumes_control(my_predbat):
+    """When the event ends Predbat reclaims VPP and says it has resumed."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_axle_api(sid, SIGENERGY_MODE_NBI, axle_active=True)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
+
+    # Event ends — Axle no longer owns the inverter.
+    api.base.set_read_only_axle = False
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert any("resuming control" in m for m in api.log_messages), "resume is logged, got {}".format(api.log_messages)
+
+    return failed
+
+
+def test_sigenergy_axle_nbi_not_reported_pending_approval(my_predbat):
+    """A system in NBI is onboarded, so it must not raise the 'approve in app' banner."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_axle_api(sid, SIGENERGY_MODE_NBI, axle_active=True)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=300, first=False))
+    assert api.onboard_status[sid] == "active", "NBI is an onboarded system, not pending approval"
+
+    # MSC still means the user really has not approved onboarding.
+    api_msc = _make_axle_api(sid, SIGENERGY_MODE_MSC, axle_active=False)
+    api_msc._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api_msc.run(seconds=300, first=False))
+    assert api_msc.onboard_status[sid] == "pending_approval", "MSC still means pending approval"
+
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -2542,6 +2654,10 @@ def run_sigenergy_tests(my_predbat):
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
+        ("axle_event_leaves_mode_alone", test_sigenergy_axle_event_leaves_mode_alone),
+        ("axle_event_skips_controls", test_sigenergy_axle_event_skips_controls),
+        ("axle_event_end_resumes_control", test_sigenergy_axle_event_end_resumes_control),
+        ("axle_nbi_not_reported_pending_approval", test_sigenergy_axle_nbi_not_reported_pending_approval),
     ]
 
     for name, fn in tests:

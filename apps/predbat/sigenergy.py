@@ -309,6 +309,7 @@ class SigenergyAPI(ComponentBase):
         self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
         self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
+        self._axle_standoff_logged = {}  # systemId → True while the Axle stand-down has been announced
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
@@ -2161,12 +2162,33 @@ class SigenergyAPI(ComponentBase):
     # VPP registration management
     # -----------------------------------------------------------------------
 
+    def _axle_has_control(self):
+        """Return True while Predbat has stood down for an active Axle VPP event.
+
+        Predbat sets ``set_read_only_axle`` in Fetch.fetch_config_options() when the
+        ``axle_control`` option is enabled and the Axle event sensor is on. That flag is
+        the signal that Axle — not Predbat — is driving the battery for the duration of
+        the event, so this component must leave the inverter alone rather than pulling it
+        back into VPP mode and cutting across Axle's NBI dispatch.
+
+        Read defensively: unit tests build the component without a ComponentBase parent.
+
+        Returns:
+            True if an Axle event currently owns the inverter, False otherwise.
+        """
+        return bool(getattr(getattr(self, "base", None), "set_read_only_axle", False))
+
     async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
         """Align the operating mode with the read-only and offboard switch settings.
 
         Assumes the system is already visible in self.systems (i.e. onboarded).
         Onboarding of missing systems is handled separately by the missing_ids
         block in run().
+
+        An active Axle event takes priority over every case below: Predbat stands down
+        and leaves the operating mode untouched so Axle can drive the battery through the
+        NorthBound Interface. This only engages when the ``axle_control`` option is set —
+        without it Predbat keeps ownership and reclaims VPP as before.
 
         Cases (offboard takes priority over readonly):
           offboard=True  + VPP active   → switch to MSC so the user's app regains control
@@ -2188,6 +2210,20 @@ class SigenergyAPI(ComponentBase):
 
         if is_offboard:
             return False
+
+        # Axle owns the inverter for the duration of its event. VPP mode and the
+        # NorthBound Interface are mutually exclusive on a Sigenergy, so reclaiming VPP
+        # here would evict Axle mid-dispatch. Leave the mode exactly as it is: if Axle has
+        # already moved the system to NBI it stays there, and if the event has started but
+        # Axle has not switched it yet, do not pull it to MSC either — that would hand
+        # control to the owner's app rather than to Axle.
+        if self._axle_has_control():
+            if not self._axle_standoff_logged.get(system_id):
+                self.log("SigenergyAPI: Axle VPP event active — leaving system {} in {} and standing down until the event ends".format(system_id, SIGENERGY_MODE_NAMES.get(self.current_mode.get(system_id, -1), "Unknown")))
+                self._axle_standoff_logged[system_id] = True
+            return False
+        if self._axle_standoff_logged.pop(system_id, False):
+            self.log("SigenergyAPI: Axle VPP event ended — resuming control of system {}".format(system_id))
 
         if is_readonly and in_vpp:
             self.log("SigenergyAPI: Read-only mode active — switching system {} from VPP to MSC".format(system_id))
@@ -2392,9 +2428,15 @@ class SigenergyAPI(ComponentBase):
                 is_offboard = self.get_state_wrapper("switch.{}_sigenergy_{}_offboard".format(self.prefix, slug), default="off") == "on"
                 await self._manage_vpp_registration(sid, is_readonly_vpp, is_offboard)
                 # Derive the user-facing onboarding status for the visible system.
+                # A system sitting in NBI is fully onboarded — Axle is simply driving it.
+                # Reporting "pending_approval" there makes the SaaS UI show an amber
+                # "approve this in the Sigenergy app" banner for the length of every Axle
+                # event, telling the user to approve something that needs no approval.
                 if is_offboard:
                     self.onboard_status[str(sid)] = "offboarded"
                 elif self.current_mode.get(sid) == SIGENERGY_MODE_VPP:
+                    self.onboard_status[str(sid)] = "active"
+                elif self.current_mode.get(sid) == SIGENERGY_MODE_NBI:
                     self.onboard_status[str(sid)] = "active"
                 else:
                     self.onboard_status[str(sid)] = "pending_approval"
@@ -2464,7 +2506,9 @@ class SigenergyAPI(ComponentBase):
             await self.automatic_config()
 
         # Apply controls
-        is_readonly = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+        # Treat an active Axle event as read-only: Axle is driving the battery, so Predbat
+        # must not also be issuing charge/discharge commands at it.
+        is_readonly = self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on" or self._axle_has_control()
         if self.enable_controls and not is_readonly:
             if first or seconds % 60 == 0:
                 for sid in list(self.systems.keys()):
