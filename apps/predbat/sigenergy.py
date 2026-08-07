@@ -318,6 +318,7 @@ class SigenergyAPI(ComponentBase):
         self.current_mode = {}    # systemId → energyStorageOperationMode int
         self.last_contended_by = {}  # systemId → mode name of the controller that last displaced Predbat
         self._axle_standoff_logged = {}  # systemId → True while the Axle stand-down has been announced
+        self._offboard_vpp_exit_attempted = set()  # systemIds we have already pulled out of VPP for offboarding
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
@@ -2003,9 +2004,16 @@ class SigenergyAPI(ComponentBase):
         self.log("SigenergyAPI: Control update system={} direction={} field={} value={}".format(system_id, direction, field, value))
         await self.publish_controls(system_id)
 
-        if field == "offboard" and value is True:
-            self.log("SigenergyAPI: Offboard toggle turned on for {} — offboarding".format(system_id))
-            await self.offboard_systems(system_id)
+        if field == "offboard":
+            if value is True:
+                self.log("SigenergyAPI: Offboard toggle turned on for {} — offboarding".format(system_id))
+                # Exit VPP first: after offboarding we may no longer be authorised to
+                # change the operating mode, which would leave the owner locked out.
+                await self._exit_vpp_for_offboard(system_id)
+                await self.offboard_systems(system_id)
+            else:
+                # Re-onboarding — allow a future offboard to pull the system out of VPP again.
+                self._offboard_vpp_exit_attempted.discard(system_id)
 
     def _parse_entity_system(self, entity_id):
         """Extract (system_id, direction, field) from a control entity ID.
@@ -2191,6 +2199,30 @@ class SigenergyAPI(ComponentBase):
             return False
         return fetch_axle_active(self)
 
+    async def _exit_vpp_for_offboard(self, system_id):
+        """Leave VPP mode so the owner's app regains control of an offboarded system.
+
+        Sigenergy's offboard endpoint is not documented to drop the system out of VPP,
+        so we do it explicitly rather than relying on it as a side-effect. Getting this
+        wrong strands the owner in the worst possible state: still in VPP, so their
+        mySigen app cannot control the battery, but with Predbat no longer driving it
+        either.
+
+        Attempted at most once per system per process. Once offboarded we may no longer
+        be authorised to set the mode, and current_mode stops being refreshed (the MQTT
+        feed goes quiet), so retrying on every poll would never terminate.
+
+        Args:
+            system_id: Sigenergy system unique identifier.
+        """
+        if system_id in self._offboard_vpp_exit_attempted:
+            return
+        self._offboard_vpp_exit_attempted.add(system_id)
+        if self.current_mode.get(system_id) != SIGENERGY_MODE_VPP:
+            return
+        self.log("SigenergyAPI: Offboarding system {} — switching VPP to MSC so the owner's app regains control".format(system_id))
+        await self.set_operating_mode(system_id, SIGENERGY_MODE_MSC)
+
     async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
         """Align the operating mode with the read-only and offboard switch settings.
 
@@ -2227,6 +2259,7 @@ class SigenergyAPI(ComponentBase):
         in_vpp = self.current_mode.get(system_id) == SIGENERGY_MODE_VPP
 
         if is_offboard:
+            await self._exit_vpp_for_offboard(system_id)
             return False
 
         # Axle owns the inverter for the duration of its event. Leave the mode exactly as

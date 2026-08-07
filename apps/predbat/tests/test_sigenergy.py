@@ -2251,7 +2251,7 @@ def test_sigenergy_update_control_time_validation(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
-    """offboard=True → return False immediately regardless of VPP state (no mode switch)."""
+    """offboard=True + VPP active → explicitly switch to MSC, once, and return False."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2267,7 +2267,13 @@ def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
 
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should return False"
-    assert not modes_set, "Should not call set_operating_mode — offboard API already changes mode"
+    assert modes_set == [SIGENERGY_MODE_MSC], "Should leave VPP explicitly rather than assume offboard does it"
+
+    # current_mode is not refreshed once offboarded (MQTT goes quiet), so a repeat poll
+    # must not retry the mode switch forever.
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert result is False, "offboard=True should still return False"
+    assert modes_set == [SIGENERGY_MODE_MSC], "VPP exit should be attempted at most once per system"
 
     return failed
 
@@ -2295,21 +2301,25 @@ def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_switch_event(my_predbat):
-    """Turning on the offboard switch triggers offboard_systems (no mode switch)."""
+    """Turning on the offboard switch leaves VPP first, then calls offboard_systems."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
     api.controls[sid] = {"offboard": False}
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
 
     offboarded = []
     modes_set = []
+    order = []
 
     async def mock_offboard(system_ids):
         offboarded.append(system_ids)
+        order.append("offboard")
         return True
 
     async def mock_set_mode(system_id, mode_int):
         modes_set.append((system_id, mode_int))
+        order.append("mode")
         return True
 
     async def mock_publish_controls(system_id=None):
@@ -2323,7 +2333,15 @@ def test_sigenergy_offboard_toggle_switch_event(my_predbat):
 
     assert api.controls[sid]["offboard"] is True, "offboard control should be True after turn_on"
     assert offboarded, "offboard_systems should be called"
-    assert not modes_set, "set_operating_mode should NOT be called — offboard API changes the mode"
+    assert modes_set == [(sid, SIGENERGY_MODE_MSC)], "Should hand control back to the owner's app explicitly"
+    assert order == ["mode", "offboard"], "Must leave VPP before offboarding, while still authorised to set the mode"
+
+    # Toggling back off clears the latch so a later offboard exits VPP again.
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_off", None, "offboard", sid))
+    assert api.controls[sid]["offboard"] is False, "offboard control should be False after turn_off"
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+    assert modes_set == [(sid, SIGENERGY_MODE_MSC), (sid, SIGENERGY_MODE_MSC)], "Re-onboard then offboard should exit VPP again"
 
     return failed
 
