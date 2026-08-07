@@ -221,7 +221,7 @@ SIGENERGY_HISTORY_NODES = [
 # Storage cache keys for poll-interval system state persisted between restarts (see
 # load_cached_data()). System/device discovery is deliberately excluded — it is always
 # re-fetched fresh on startup.
-SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status"]
+SIGENERGY_CACHE_KEYS = ["energy_flow", "daily_summary", "history_totals", "onboard_status", "offboard_done"]
 
 # Sentinel returned by _request() when the API responds with code=0 but an empty/null data field.
 # Distinguishes "success with no payload" from None which always means "request failed".
@@ -320,6 +320,7 @@ class SigenergyAPI(ComponentBase):
         self._axle_standoff_logged = {}  # systemId → True while the Axle stand-down has been announced
         self._offboard_vpp_exit_done = set()  # systemIds confirmed out of VPP ahead of an offboard
         self._offboard_done = set()           # systemIds successfully offboarded
+        self._offboard_done_loaded = set()    # subset of the above restored from cache, not yet reconciled
         self.onboard_status = {}  # systemId → onboarding status string (published for the SaaS UI)
 
         # Age (datetime of last update) of each SIGENERGY_CACHE_KEYS category, used to avoid an
@@ -2014,6 +2015,10 @@ class SigenergyAPI(ComponentBase):
                 # Re-onboarding — let a future offboard run both steps again.
                 self._offboard_vpp_exit_done.discard(system_id)
                 self._offboard_done.discard(system_id)
+                self.onboard_status[str(system_id)] = "not_onboarded"
+                await self._save_offboard_done()
+                await self._save_cache("onboard_status", self.onboard_status)
+                self._publish_onboard_status()
 
     def _parse_entity_system(self, entity_id):
         """Extract (system_id, direction, field) from a control entity ID.
@@ -2208,27 +2213,35 @@ class SigenergyAPI(ComponentBase):
         mySigen app cannot control the battery, but with Predbat no longer driving it
         either.
 
-        Only a confirmed exit is latched. A failed publish (broker down, token expired)
-        must be retried on the next poll rather than recorded as done — treating an
-        attempt as success is what would let the offboard proceed over a system still
-        in VPP, producing exactly the lockout this is here to avoid.
+        Only an exit observed in current_mode is latched. A successful MQTT publish only
+        confirms that the command was accepted by the broker; it does not confirm that
+        the inverter has changed mode. Offboarding must wait for MQTT/REST telemetry to
+        report a non-VPP mode, otherwise the REST offboard can race the mode command and
+        revoke our authorisation while the system is still in VPP.
 
         Args:
             system_id: Sigenergy system unique identifier.
 
         Returns:
-            True if the system is known to be out of VPP, False if the switch failed.
+            True if telemetry confirms the system is out of VPP, False while the switch
+            is unknown, failed, or still waiting for confirmation.
         """
-        if system_id in self._offboard_vpp_exit_done:
-            return True
-        if self.current_mode.get(system_id) != SIGENERGY_MODE_VPP:
-            self._offboard_vpp_exit_done.add(system_id)
-            return True
-        self.log("SigenergyAPI: Offboarding system {} — switching VPP to MSC so the owner's app regains control".format(system_id))
-        if not await self.set_operating_mode(system_id, SIGENERGY_MODE_MSC):
-            self.log("Warn: SigenergyAPI: Could not leave VPP for {} — deferring offboard rather than locking the owner out".format(system_id))
+        current_mode = self.current_mode.get(system_id)
+        if current_mode == SIGENERGY_MODE_VPP:
+            # Live telemetry always wins over a stale latch: the system may have been
+            # moved back into VPP while an earlier offboard attempt was failing.
+            self._offboard_vpp_exit_done.discard(system_id)
+            self.log("SigenergyAPI: Offboarding system {} — switching VPP to MSC so the owner's app regains control".format(system_id))
+            if not await self.set_operating_mode(system_id, SIGENERGY_MODE_MSC):
+                self.log("Warn: SigenergyAPI: Could not leave VPP for {} — deferring offboard rather than locking the owner out".format(system_id))
+            else:
+                self.log("SigenergyAPI: VPP exit requested for {} — waiting for operating-mode confirmation before offboarding".format(system_id))
             return False
-        self._offboard_vpp_exit_done.add(system_id)
+        if current_mode is None:
+            self.log("Warn: SigenergyAPI: Operating mode unknown for {} — deferring offboard until it can be confirmed out of VPP".format(system_id))
+            return False
+        if system_id not in self._offboard_vpp_exit_done:
+            self._offboard_vpp_exit_done.add(system_id)
         return True
 
     async def _offboard_system_if_needed(self, system_id):
@@ -2250,10 +2263,17 @@ class SigenergyAPI(ComponentBase):
         if not await self._exit_vpp_for_offboard(system_id):
             return False
         self.log("SigenergyAPI: Offboarding system {}".format(system_id))
-        if await self.offboard_systems(system_id) is None:
+        result = await self.offboard_systems(system_id)
+        result_items = result if isinstance(result, list) else [result]
+        item_failed = any(isinstance(item, dict) and item.get("result") is False for item in result_items)
+        if result is None or item_failed:
             self.log("Warn: SigenergyAPI: Offboard failed for {} — will retry on the next poll".format(system_id))
             return False
         self._offboard_done.add(system_id)
+        self.onboard_status[str(system_id)] = "offboarded"
+        await self._save_offboard_done()
+        await self._save_cache("onboard_status", self.onboard_status)
+        self._publish_onboard_status()
         return True
 
     async def _manage_vpp_registration(self, system_id, is_readonly, is_offboard=False):
@@ -2364,6 +2384,33 @@ class SigenergyAPI(ComponentBase):
     # Storage cache
     # -----------------------------------------------------------------------
 
+    async def _save_offboard_done(self):
+        """Persist completed offboards without the one-day telemetry-cache expiry.
+
+        Offboarding remains true until the user explicitly re-onboards, so expiring this
+        latch like energy telemetry would make a later process restart forget the external
+        action and publish an untrue status.
+        """
+        if self.storage:
+            await self.storage.save("sigenergy", "offboard_done", sorted(self._offboard_done), format="json")
+
+    async def _reconcile_restored_offboards(self):
+        """Clear restored completions for systems now visible as authorised.
+
+        This runs after any startup onboarding attempt, because a system that was absent
+        on the first discovery can become visible in the second fetch. Visibility proves
+        the durable offboard latch is stale and a future offboard must run both steps.
+        """
+        restored_visible = set(self.systems.keys()) & self._offboard_done_loaded
+        if not restored_visible:
+            return
+        for sid in restored_visible:
+            self._offboard_done.discard(sid)
+            self._offboard_done_loaded.discard(sid)
+            self.onboard_status[str(sid)] = "active"
+        await self._save_offboard_done()
+        await self._save_cache("onboard_status", self.onboard_status)
+
     def _data_age_minutes(self, key):
         """Return the age in minutes of the in-memory data for a cache key, or None if unknown."""
         timestamp = self.data_age.get(key, None)
@@ -2443,6 +2490,15 @@ class SigenergyAPI(ComponentBase):
         if onboard_status is not None:
             self.onboard_status = onboard_status
 
+        offboard_done = await self._load_cache("offboard_done")
+        if offboard_done is not None:
+            self._offboard_done = set(offboard_done)
+            # Keep track of restored entries separately. A freshly discovered authorised
+            # system proves a cached completion is stale and must be offboarded again.
+            self._offboard_done_loaded = set(offboard_done)
+            for sid in self._offboard_done:
+                self.onboard_status[str(sid)] = "offboarded"
+
         self.log("SigenergyAPI: Restored cached poll-interval state from storage")
 
     # -----------------------------------------------------------------------
@@ -2494,7 +2550,16 @@ class SigenergyAPI(ComponentBase):
                     return False
                 await self.fetch_system_list()
 
+            # The completion latch survives restarts, but the final live authorised-system
+            # list is authoritative. Reconcile after onboarding because its second fetch can
+            # make a previously absent system visible during this same startup.
+            await self._reconcile_restored_offboards()
+
             if not self.systems:
+                # An intentionally offboarded system is absent from the authorised list.
+                # Publish the restored completion state before returning for retry so a
+                # restart does not replace a truthful "offboarded" sensor with silence.
+                self._publish_onboard_status()
                 self.log("Warn: SigenergyAPI: No systems available after discovery, will retry")
                 return False
 
@@ -2547,6 +2612,10 @@ class SigenergyAPI(ComponentBase):
                 # and approve something that needs no approval.
                 if is_offboard and sid in self._offboard_done:
                     self.onboard_status[str(sid)] = "offboarded"
+                elif is_offboard:
+                    # The system is still authorised while the VPP exit or offboard call
+                    # is pending. It is not waiting for onboarding approval.
+                    self.onboard_status[str(sid)] = "active"
                 elif self.current_mode.get(sid) == SIGENERGY_MODE_VPP:
                     self.onboard_status[str(sid)] = "active"
                 elif self.current_mode.get(sid) in SIGENERGY_THIRD_PARTY_MODES:
