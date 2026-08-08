@@ -295,11 +295,13 @@ misdetect
 misdetected
 misdetecting
 misdetection
+mispairing
 Mixergy
 mkdocs
 mlugg
 Modbus
 mogons
+monkeypatched
 monokai
 Mosquitto
 mpan

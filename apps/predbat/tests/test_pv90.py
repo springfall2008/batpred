@@ -10,6 +10,7 @@
 """Tests for the pv90 upside forecast scenario."""
 
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
+from plan import DummyThread
 from tests.test_infra import reset_inverter, reset_rates
 
 
@@ -610,6 +611,173 @@ def test_pv90_weight_nonzero_runs_simulation(my_predbat):
     return failed
 
 
+def test_pv90_charge_limit_results_paired_with_try_soc(my_predbat):
+    """optimise_charge_limit's pv90 results must stay paired with the try_soc that produced them.
+
+    Neither a launch count nor a count of distinct try_soc values launched (see
+    test_pv90_weight_nonzero_runs_simulation) can catch a pop-side desync: a wrong index into
+    results90, a pop gated differently from its launch, or a wrong dict key would still often launch
+    and pop the right *number* of pv90 predictions for the right *set* of try_soc values - it would
+    just hand one candidate's pv90 result to a different candidate's nominal result when both are
+    scored together in compute_metric.
+
+    This test makes mispairing observable directly. Both launch_run_prediction_charge (the dynamic
+    results/results10/results90 lists) and launch_run_prediction_charge_min_max (the loop_soc/
+    best_soc_min pre-fill candidates that seed resultmid/result10/result90 directly) are monkeypatched
+    so both the nominal (PV_SCENARIO_NOMINAL) and pv90 (PV_SCENARIO_PV90) cost returned for a given
+    try_soc are replaced with try_soc itself - an invertible encoding shared by both scenarios and
+    both launch paths, so every candidate in optimise_charge_limit's ranking loop is covered, not just
+    the dynamically-launched ones.
+
+    compute_metric is also called by optimise_charge_limit_price_threads (optimise_levels) and
+    optimise_export within the same calculate_plan() run, via launch functions this test does not
+    encode - so the check below is scoped to only fire while execution is genuinely inside
+    optimise_charge_limit (tracked via a depth counter around a wrapped optimise_charge_limit, which
+    also catches the "levelling on best_all_n" call optimise_charge_limit_price_threads makes back
+    into optimise_charge_limit). Without that scoping this test would false-positive on
+    optimise_levels'/optimise_export's own, unrelated, unencoded compute_metric calls.
+
+    A wrapped compute_metric then asserts, on every in-scope call that carries a pv90 term, that the
+    nominal cost and the pv90 cost decode back to the *same* try_soc (cost == cost90). That equality
+    can only hold if the pv90 result reaching compute_metric was actually produced for the same
+    try_soc as the nominal result sitting next to it - exactly the property a positional desync would
+    break.
+    """
+    failed = False
+    my_predbat.pv_metric90_weight = 0.1
+    mismatches = []
+    encoded_scenarios = (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV90)
+    in_scope = {"depth": 0}
+
+    original_launch = my_predbat.launch_run_prediction_charge
+
+    def encoding_launch(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Launch for real, then replace the returned cost with try_soc (loop_soc) for nominal/pv90 scenarios only."""
+        handle = original_launch(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+        if pv_scenario in encoded_scenarios:
+            encoded_result = list(handle.get())
+            encoded_result[0] = loop_soc
+            handle = DummyThread(tuple(encoded_result))
+        return handle
+
+    original_launch_min_max = my_predbat.launch_run_prediction_charge_min_max
+
+    def encoding_launch_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Same encoding as encoding_launch, for the min/max pre-fill launches (11 fields plus min_soc/max_soc)."""
+        handle = original_launch_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+        if pv_scenario in encoded_scenarios:
+            encoded_result = list(handle.get())
+            encoded_result[0] = loop_soc
+            handle = DummyThread(tuple(encoded_result))
+        return handle
+
+    original_optimise_charge_limit = my_predbat.optimise_charge_limit
+
+    def scoped_optimise_charge_limit(*args, **kwargs):
+        """Mark every compute_metric call made while inside optimise_charge_limit as in-scope for the pairing check."""
+        in_scope["depth"] += 1
+        try:
+            return original_optimise_charge_limit(*args, **kwargs)
+        finally:
+            in_scope["depth"] -= 1
+
+    original_compute_metric = my_predbat.compute_metric
+
+    def checking_compute_metric(*args, **kwargs):
+        """Assert the nominal cost (args[3]) and cost90 decode back to the same try_soc, only while inside optimise_charge_limit."""
+        cost90 = kwargs.get("cost90")
+        if cost90 is not None and in_scope["depth"] > 0:
+            cost = args[3]
+            if cost != cost90:
+                mismatches.append((cost, cost90))
+        return original_compute_metric(*args, **kwargs)
+
+    my_predbat.launch_run_prediction_charge = encoding_launch
+    my_predbat.launch_run_prediction_charge_min_max = encoding_launch_min_max
+    my_predbat.optimise_charge_limit = scoped_optimise_charge_limit
+    my_predbat.compute_metric = checking_compute_metric
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_charge = original_launch
+        my_predbat.launch_run_prediction_charge_min_max = original_launch_min_max
+        my_predbat.optimise_charge_limit = original_optimise_charge_limit
+        my_predbat.compute_metric = original_compute_metric
+        my_predbat.pv_metric90_weight = 0.0
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+
+    if mismatches:
+        print("ERROR: {} candidate(s) were scored with a pv90 cost decoding to a different try_soc than the nominal cost sitting next to it (desync): {}".format(len(mismatches), mismatches))
+        failed = True
+    return failed
+
+
+def test_pv90_weight_nonzero_runs_export_simulation(my_predbat):
+    """optimise_export must also launch pv90 predictions when the weight is active.
+
+    test_pv90_weight_nonzero_runs_simulation only patches launch_run_prediction_charge, so it cannot
+    tell whether optimise_export's results90 wiring is present at all - deleting the results90 lines
+    from optimise_export would leave every other pv90 test in this module green. This test patches
+    launch_run_prediction_export instead and asserts the same launch behaviour for the export path.
+    """
+    failed = False
+    my_predbat.pv_metric90_weight = 0.1
+    calls = {"count": 0}
+    original = my_predbat.launch_run_prediction_export
+
+    def counting(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
+        """Count pv90 launches from optimise_export so the wiring can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["count"] += 1
+        return original(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
+
+    my_predbat.launch_run_prediction_export = counting
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_export = original
+        my_predbat.pv_metric90_weight = 0.0
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+    if calls["count"] == 0:
+        print("ERROR: no pv90 predictions were launched from optimise_export with pv_metric90_weight=0.1")
+        failed = True
+    return failed
+
+
+def test_pv90_weight_nonzero_runs_levels_simulation(my_predbat):
+    """optimise_charge_limit_price_threads (optimise_levels) must also launch pv90 predictions when the weight is active.
+
+    Same coverage gap as test_pv90_weight_nonzero_runs_export_simulation above but for the levels
+    path: deleting the handle90 line from optimise_charge_limit_price_threads would leave every other
+    pv90 test in this module green, since none of them patch launch_run_prediction_single.
+    """
+    failed = False
+    my_predbat.pv_metric90_weight = 0.1
+    calls = {"count": 0}
+    original = my_predbat.launch_run_prediction_single
+
+    def counting(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
+        """Count pv90 launches from optimise_levels so the wiring can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["count"] += 1
+        return original(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step=step)
+
+    my_predbat.launch_run_prediction_single = counting
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_single = original
+        my_predbat.pv_metric90_weight = 0.0
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+    if calls["count"] == 0:
+        print("ERROR: no pv90 predictions were launched from optimise_levels with pv_metric90_weight=0.1")
+        failed = True
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -636,10 +804,23 @@ def run_pv90_tests(my_predbat):
 
     launch_state = save_metric_state(my_predbat)
     original_launch_run_prediction_charge = my_predbat.launch_run_prediction_charge
+    original_launch_run_prediction_charge_min_max = my_predbat.launch_run_prediction_charge_min_max
+    original_launch_run_prediction_export = my_predbat.launch_run_prediction_export
+    original_launch_run_prediction_single = my_predbat.launch_run_prediction_single
+    original_optimise_charge_limit = my_predbat.optimise_charge_limit
+    original_compute_metric = my_predbat.compute_metric
     try:
         failed |= test_pv90_weight_zero_skips_simulation(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_simulation(my_predbat)
+        failed |= test_pv90_charge_limit_results_paired_with_try_soc(my_predbat)
+        failed |= test_pv90_weight_nonzero_runs_export_simulation(my_predbat)
+        failed |= test_pv90_weight_nonzero_runs_levels_simulation(my_predbat)
     finally:
         my_predbat.launch_run_prediction_charge = original_launch_run_prediction_charge
+        my_predbat.launch_run_prediction_charge_min_max = original_launch_run_prediction_charge_min_max
+        my_predbat.launch_run_prediction_export = original_launch_run_prediction_export
+        my_predbat.launch_run_prediction_single = original_launch_run_prediction_single
+        my_predbat.optimise_charge_limit = original_optimise_charge_limit
+        my_predbat.compute_metric = original_compute_metric
         restore_metric_state(my_predbat, launch_state)
     return failed

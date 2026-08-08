@@ -840,7 +840,12 @@ class Plan:
 
     def run_prediction_metric(self, charge_limit_best, charge_window_best, export_window_best, export_limits_best, end_record=None, save=None):
         """
-        Run a single datapoint for PV and PV10 and return the metric
+        Run a single datapoint for PV and PV10 (and PV90, when enabled) and return the metric
+
+        Every optimiser comparison (optimise_charge_limit_price_threads, optimise_charge_limit,
+        optimise_export) that this baseline is measured against now blends in a pv90 term whenever
+        pv_metric90_weight > 0, so this baseline must too - otherwise the two sides of every
+        `n_best_metric < best_metric` comparison sit on different scales.
         """
 
         if end_record is None:
@@ -888,7 +893,21 @@ class Plan:
             end_record=end_record,
             save=save,
         )
-        metric, battery_value = self.compute_metric(self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+        soc90 = None
+        cost90 = None
+        final_iboost90 = 0.0
+        if self.pv_metric90_weight > 0:
+            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
+                charge_limit_best,
+                charge_window_best,
+                export_window_best,
+                export_limits_best,
+                PV_SCENARIO_PV90,
+                end_record=end_record,
+            )
+        metric, battery_value = self.compute_metric(
+            self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
+        )
         return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
 
     def in_charge_window(self, charge_window, minute_abs):
@@ -1574,6 +1593,15 @@ class Plan:
             hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, all_n, end_record))
             hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record))
             hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, all_n, end_record))
+            # These two candidates (full-charge loop_soc and best_soc_min) are pre-simulated here and
+            # never re-launched by the results/results10/results90 block below (they are excluded there
+            # by the `if try_soc not in resultmid` gate), so they must get a pv90 result of their own
+            # here too - otherwise they are scored with cost90=None while every other candidate in the
+            # same ranking loop gets the three-scenario blend, systematically advantaging these two
+            # extreme candidates (see task-7 fix round 1, Finding 2).
+            if run_pv90:
+                hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, all_n, end_record))
+                hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, all_n, end_record))
             id = 0
             for han in hans:
                 (
@@ -1637,6 +1665,34 @@ class Plan:
                     ]
                 elif id == 3:
                     result10[best_soc_min] = [
+                        cost,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        final_carbon_g,
+                    ]
+                elif id == 4:
+                    result90[loop_soc] = [
+                        cost,
+                        import_kwh_battery,
+                        import_kwh_house,
+                        export_kwh,
+                        soc_min,
+                        soc,
+                        soc_min_minute,
+                        battery_cycle,
+                        metric_keep,
+                        final_iboost,
+                        final_carbon_g,
+                    ]
+                elif id == 5:
+                    result90[best_soc_min] = [
                         cost,
                         import_kwh_battery,
                         import_kwh_house,
