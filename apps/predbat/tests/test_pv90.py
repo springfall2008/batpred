@@ -272,9 +272,9 @@ def _force_python_engine(pred):
     Setting prediction_kernel_enable = False alone is not sufficient here: fetch.py defaults the shared
     my_predbat fixture's prediction_kernel_enable to True, so Prediction.__init__ already built a
     kernel_handle before this function runs, and kernel_supported() gates on kernel_handle - not on the
-    enable flag. Until Task 5 teaches the kernel about the three-valued pv_scenario, PV_SCENARIO_PV90 (2)
-    is truthy and the kernel would silently simulate it as pv10, so both must be cleared to reach the
-    Python engine these tests are actually exercising.
+    enable flag, so both must be cleared. The kernel now understands all three pv_scenario values and is
+    held to them by the parity suite (tests/test_kernel_parity.py); these tests deliberately pin the
+    Python engine's own behaviour, which is the reference the kernel is compared against.
     """
     pred.prediction_kernel_enable = False
     pred.kernel_handle = 0
