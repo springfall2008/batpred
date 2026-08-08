@@ -490,6 +490,126 @@ def test_pv90_identical_scenarios_are_identity(my_predbat):
     return failed
 
 
+def _setup_calculate_plan_with_real_windows(my_predbat):
+    """Give calculate_plan() an actual charge and export window to optimise, and snapshot what it touches.
+
+    reset_inverter() alone leaves self.low_rates and self.high_export_rates empty (they are normally
+    populated by fetch.py's rate scan, which these launch-counting tests never run), and with both empty
+    calculate_plan() completes having found nothing to optimise - so optimise_charge_limit/optimise_export/
+    optimise_charge_limit_price_threads are never even called, and a pv90-launch count of zero would be
+    vacuously true regardless of whether the pv90 wiring is correct. Populating low_rates/high_export_rates
+    directly (calculate_best_charge/calculate_best_export are True by default) gives calculate_plan() a real
+    window in each direction to search, so the counting assertions below are actually exercised.
+
+    threads is forced to 0 - the same idiom already used by test_execute.py, test_random_scenarios.py and
+    test_single_debug.py - so calculate_plan() takes the synchronous DummyThread fallback instead of
+    spinning up a real multiprocessing Pool, keeping the test fast and deterministic.
+
+    Returns a snapshot dict for _restore_calculate_plan_with_real_windows.
+    """
+    snapshot = {
+        "low_rates": my_predbat.low_rates,
+        "high_export_rates": my_predbat.high_export_rates,
+        "threads": my_predbat.args.get("threads"),
+        "charge_window_best": my_predbat.charge_window_best,
+        "export_window_best": my_predbat.export_window_best,
+        "charge_limit_best": my_predbat.charge_limit_best,
+        "export_limits_best": my_predbat.export_limits_best,
+        "plan_valid": my_predbat.plan_valid,
+    }
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 10.0, 5.0)
+    my_predbat.args["threads"] = 0
+    my_predbat.low_rates = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 5.0}]
+    my_predbat.high_export_rates = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 90, "average": 20.0}]
+    my_predbat.plan_valid = False
+    return snapshot
+
+
+def _restore_calculate_plan_with_real_windows(my_predbat, snapshot):
+    """Undo the mutations made by _setup_calculate_plan_with_real_windows."""
+    my_predbat.low_rates = snapshot["low_rates"]
+    my_predbat.high_export_rates = snapshot["high_export_rates"]
+    if snapshot["threads"] is None:
+        my_predbat.args.pop("threads", None)
+    else:
+        my_predbat.args["threads"] = snapshot["threads"]
+    my_predbat.charge_window_best = snapshot["charge_window_best"]
+    my_predbat.export_window_best = snapshot["export_window_best"]
+    my_predbat.charge_limit_best = snapshot["charge_limit_best"]
+    my_predbat.export_limits_best = snapshot["export_limits_best"]
+    my_predbat.plan_valid = snapshot["plan_valid"]
+
+
+def test_pv90_weight_zero_skips_simulation(my_predbat):
+    """With the weight at 0 no pv90 prediction may be run, so plan time is unaffected."""
+    failed = False
+    my_predbat.pv_metric90_weight = 0.0
+    calls = {"count": 0}
+    original = my_predbat.launch_run_prediction_charge
+
+    def counting(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["count"] += 1
+        return original(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+
+    my_predbat.launch_run_prediction_charge = counting
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_charge = original
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+    if calls["count"] != 0:
+        print("ERROR: {} pv90 predictions were launched with pv_metric90_weight=0".format(calls["count"]))
+        failed = True
+    return failed
+
+
+def test_pv90_weight_nonzero_runs_simulation(my_predbat):
+    """With a non-zero weight pv90 predictions must actually run, each one paired with the try_soc that launched it.
+
+    Counting alone cannot catch a desync between the launch list and the pop list in optimise_charge_limit
+    (the two could go out of step in a way that still leaves the counts matching by coincidence), so this
+    test additionally records the try_soc that was active at every pv90 launch and checks, from the outer
+    result, that the search still considered more than one candidate SoC - the desync failure mode this
+    guards against is results being silently attributed to the wrong try_soc, which a bare count cannot
+    distinguish from correct pairing.
+    """
+    failed = False
+    my_predbat.pv_metric90_weight = 0.1
+    calls = {"count": 0}
+    launched_socs = []
+    original = my_predbat.launch_run_prediction_charge
+
+    def counting(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches, and record the try_soc each one was launched for, so pairing can be checked."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["count"] += 1
+            launched_socs.append(loop_soc)
+        return original(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+
+    my_predbat.launch_run_prediction_charge = counting
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_charge = original
+        my_predbat.pv_metric90_weight = 0.0
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+    if calls["count"] == 0:
+        print("ERROR: no pv90 predictions were launched with pv_metric90_weight=0.1")
+        failed = True
+    elif len(set(launched_socs)) < 2:
+        # A desynced results/results90 pop would still often produce a non-zero count, but the search
+        # explores several distinct try_soc candidates per window - seeing only one (or none) here is a
+        # sign the pv90 launches were not actually keyed to the candidates being searched.
+        print("ERROR: pv90 predictions were only launched for {} distinct try_soc value(s): {} - expected the search to try several".format(len(set(launched_socs)), launched_socs))
+        failed = True
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -513,4 +633,13 @@ def run_pv90_tests(my_predbat):
         failed |= test_pv90_identical_scenarios_are_identity(my_predbat)
     finally:
         restore_metric_state(my_predbat, metric_state)
+
+    launch_state = save_metric_state(my_predbat)
+    original_launch_run_prediction_charge = my_predbat.launch_run_prediction_charge
+    try:
+        failed |= test_pv90_weight_zero_skips_simulation(my_predbat)
+        failed |= test_pv90_weight_nonzero_runs_simulation(my_predbat)
+    finally:
+        my_predbat.launch_run_prediction_charge = original_launch_run_prediction_charge
+        restore_metric_state(my_predbat, launch_state)
     return failed

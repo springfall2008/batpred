@@ -103,6 +103,8 @@ dend
 denorm
 derate
 derating
+desync
+desynced
 devcontainer
 devcontainers
 dexport

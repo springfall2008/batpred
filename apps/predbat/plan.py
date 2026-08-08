@@ -21,7 +21,7 @@ import copy
 import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, TIME_FORMAT, MINUTE_WATT
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 from prediction_kernel import kernel_status_summary
@@ -494,6 +494,7 @@ class Plan:
                                 pred_item = {}
                                 pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, PV_SCENARIO_NOMINAL, end_record=end_record, step=step)
                                 pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, PV_SCENARIO_PV10, end_record=end_record, step=step)
+                                pred_item["handle90"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, PV_SCENARIO_PV90, end_record=end_record, step=step) if self.pv_metric90_weight > 0 else None
                                 pred_item["charge_limit"] = try_charge_limit
                                 pred_item["export_limit"] = try_export
                                 pred_item["loop_price"] = loop_price
@@ -506,6 +507,7 @@ class Plan:
                 for pred in pred_table:
                     handle = pred["handle"]
                     handle10 = pred["handle10"]
+                    handle90 = pred.get("handle90")
                     try_charge_limit = pred["charge_limit"]
                     try_export = pred["export_limit"]
                     loop_price = pred["loop_price"]
@@ -516,8 +518,15 @@ class Plan:
 
                     cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
                     cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10 = handle10.get()
+                    soc90 = None
+                    cost90 = None
+                    final_iboost90 = 0.0
+                    if handle90 is not None:
+                        (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = handle90.get()
 
-                    metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+                    metric, battery_value = self.compute_metric(
+                        end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
+                    )
 
                     tried_list[try_hash] = metric
 
@@ -1533,6 +1542,8 @@ class Plan:
         try_charge_limit = list(charge_limit)
         resultmid = {}
         result10 = {}
+        result90 = {}
+        run_pv90 = self.pv_metric90_weight > 0
 
         if not self.set_charge_freeze:
             allow_freeze = False
@@ -1682,12 +1693,15 @@ class Plan:
         # Run the simulations in parallel
         results = []
         results10 = []
+        results90 = []
         for try_soc in try_socs:
             if try_soc not in resultmid:
                 hanres = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record)
                 results.append(hanres)
                 hanres10 = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, all_n, end_record)
                 results10.append(hanres10)
+                if run_pv90:
+                    results90.append(self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, all_n, end_record))
 
         # Get results from sims if we simulated them
         for try_soc in try_socs:
@@ -1696,6 +1710,8 @@ class Plan:
                 hanres10 = results10.pop(0)
                 resultmid[try_soc] = hanres.get()
                 result10[try_soc] = hanres10.get()
+                if run_pv90:
+                    result90[try_soc] = results90.pop(0).get()
 
         window_results = {}
         # Now we have all the results, we can pick the best SoC
@@ -1714,9 +1730,16 @@ class Plan:
             # Simulate with medium PV
             (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g) = resultmid[try_soc]
             (cost10, import_kwh_battery10, import_kwh_house10, export_kwh10, soc_min10, soc10, soc_min_minute10, battery_cycle10, metric_keep10, final_iboost10, final_carbon_g10) = result10[try_soc]
+            soc90 = None
+            cost90 = None
+            final_iboost90 = 0.0
+            if try_soc in result90:
+                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = result90[try_soc]
 
             # Compute the metric from simulation results
-            metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+            metric, battery_value = self.compute_metric(
+                end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
+            )
 
             # Keep the unadjusted metric: the adjustments below are ranking hints for this function only, so a
             # caller checking whether the plan actually improved has to compare on this instead
@@ -1871,6 +1894,8 @@ class Plan:
         # Collect all options
         results = []
         results10 = []
+        results90 = []
+        run_pv90 = self.pv_metric90_weight > 0
         try_options = []
         for loop_limit in loop_options:
             # Loop on window size
@@ -1906,6 +1931,8 @@ class Plan:
 
                 results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))
                 results10.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV10, all_n, end_record))
+                if run_pv90:
+                    results90.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV90, all_n, end_record))
 
         # Get results from sims
         try_results = []
@@ -1914,11 +1941,12 @@ class Plan:
             hanres10 = results10.pop(0)
             result = hanres.get()
             result10 = hanres10.get()
-            try_results.append(try_option + [result, result10])
+            result90 = results90.pop(0).get() if run_pv90 else None
+            try_results.append(try_option + [result, result10, result90])
 
         window_results = {}
         for try_option in try_results:
-            start, this_export_limit, hanres, hanres10 = try_option
+            start, this_export_limit, hanres, hanres10, hanres90 = try_option
 
             # Simulate with medium PV
             cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = hanres
@@ -1935,9 +1963,16 @@ class Plan:
                 final_iboost10,
                 final_carbon_g10,
             ) = hanres10
+            soc90 = None
+            cost90 = None
+            final_iboost90 = 0.0
+            if hanres90 is not None:
+                (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = hanres90
 
             # Compute the metric from simulation results
-            metric, battery_value = self.compute_metric(end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh)
+            metric, battery_value = self.compute_metric(
+                end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
+            )
 
             # Keep the unadjusted metric: the adjustments below are ranking hints for this function only, so a
             # caller checking whether the plan actually improved has to compare on this instead
