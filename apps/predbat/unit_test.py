@@ -17,6 +17,7 @@ import argparse
 from predbat import PredBat
 from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
+from tests.test_pv90 import run_pv90_tests
 from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
@@ -272,6 +273,7 @@ def main():
         ("hass_watcher", test_hass_watcher, "Standalone-mode file watcher tests (#4397/#4396)", False),
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
+        ("pv90", run_pv90_tests, "pv90 upside scenario tests", False),
         ("minute_array", test_minute_array, "MinuteArray class tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
