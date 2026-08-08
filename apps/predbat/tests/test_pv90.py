@@ -55,17 +55,32 @@ def test_pv90_config_items(my_predbat):
 
 
 def test_pv90_config_read(my_predbat):
-    """fetch_config_options must populate the two new attributes."""
+    """fetch_config_options must actually read the two new attributes via get_arg, not merely leave __init__'s defaults untouched.
+
+    Both attributes are forced to a sentinel that matches neither the PredBat.__init__ default nor the CONFIG_ITEMS
+    default before fetch_config_options() is called for real. If the get_arg reads were ever deleted from fetch.py,
+    the sentinel would survive the call unchanged and this test would fail - unlike a test that only inspects the
+    value left over from __init__, which would pass regardless of whether the read ever happened.
+
+    The whole instance dict is snapshotted first and restored afterwards, so this test cannot leak state - such as
+    the sentinel itself, or any of the many other attributes fetch_config_options() also populates - into tests
+    that run after it.
+    """
     failed = False
-    for name, default in (("pv_metric90_weight", 0.0), ("load_scaling90", 0.9)):
-        if not hasattr(my_predbat, name):
-            print("ERROR: my_predbat has no attribute {} - fetch_config_options did not read it".format(name))
-            failed = True
-            continue
-        value = getattr(my_predbat, name)
-        if value != default:
-            print("ERROR: {} is {}, expected the default {}".format(name, value, default))
-            failed = True
+    sentinel = -999.0
+    saved_state = my_predbat.__dict__.copy()
+    try:
+        my_predbat.pv_metric90_weight = sentinel
+        my_predbat.load_scaling90 = sentinel
+        my_predbat.fetch_config_options()
+        for name, default in (("pv_metric90_weight", 0.0), ("load_scaling90", 0.9)):
+            value = getattr(my_predbat, name, None)
+            if value != default:
+                print("ERROR: {} is {} after fetch_config_options, expected the default {} (sentinel {} was not overwritten - the get_arg read is missing)".format(name, value, default, sentinel))
+                failed = True
+    finally:
+        my_predbat.__dict__.clear()
+        my_predbat.__dict__.update(saved_state)
     return failed
 
 
