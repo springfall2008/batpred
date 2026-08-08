@@ -84,18 +84,58 @@ def test_pv90_config_read(my_predbat):
     return failed
 
 
+def _snapshot_pv_forecast_raw_sensor(my_predbat):
+    """Capture the pre-test state of every place dashboard_item() mutates for the raw PV forecast sensor.
+
+    dashboard_item() (output.py) touches three separate stores, not one: it writes state+attributes into the
+    mocked HA state layer (my_predbat.ha_interface.dummy_items via set_state_wrapper), appends the entity id to
+    self.dashboard_index if not already present, and unconditionally overwrites self.dashboard_values[entity_id].
+    All three must be captured here and restored by _restore_pv_forecast_raw_sensor, or a test that publishes to
+    this entity leaks its fixture into every test that runs afterwards in the shared-instance TEST_REGISTRY loop
+    - including web.py surfaces that read dashboard_values for this entity directly.
+    """
+    entity_id = "sensor." + my_predbat.prefix + "_pv_forecast_raw"
+    return {
+        "entity_id": entity_id,
+        "had_dummy_item": entity_id in my_predbat.ha_interface.dummy_items,
+        "dummy_item": my_predbat.ha_interface.dummy_items.get(entity_id),
+        "had_index_entry": entity_id in my_predbat.dashboard_index,
+        "had_dashboard_value": entity_id in my_predbat.dashboard_values,
+        "dashboard_value": my_predbat.dashboard_values.get(entity_id),
+    }
+
+
+def _restore_pv_forecast_raw_sensor(my_predbat, snapshot):
+    """Undo every mutation dashboard_item() made to the raw PV forecast sensor, from a snapshot taken beforehand.
+
+    Restores all three stores dashboard_item() can touch: ha_interface.dummy_items, dashboard_index membership
+    and dashboard_values. See _snapshot_pv_forecast_raw_sensor for why all three matter.
+    """
+    entity_id = snapshot["entity_id"]
+    if snapshot["had_dummy_item"]:
+        my_predbat.ha_interface.dummy_items[entity_id] = snapshot["dummy_item"]
+    else:
+        my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+    if not snapshot["had_index_entry"] and entity_id in my_predbat.dashboard_index:
+        my_predbat.dashboard_index.remove(entity_id)
+    if snapshot["had_dashboard_value"]:
+        my_predbat.dashboard_values[entity_id] = snapshot["dashboard_value"]
+    else:
+        my_predbat.dashboard_values.pop(entity_id, None)
+
+
 def test_pv90_forecast_fallback_to_p50(my_predbat):
     """With no forecast90 attribute published, pv_forecast_minute90 must be a copy of the p50 series.
 
-    Publishing the raw forecast sensor writes into the shared mock HA state layer (my_predbat.ha_interface.dummy_items),
-    which persists for the rest of the test run since every test in TEST_REGISTRY shares one PredBat instance. The
-    previous value of that one entity is snapshotted and restored afterwards so this test cannot leak the tiny
-    two-point forecast used here into any test that runs later and happens to read the same sensor.
+    Publishing the raw forecast sensor mutates three shared stores on my_predbat (see
+    _snapshot_pv_forecast_raw_sensor), which persist for the rest of the test run since every test in
+    TEST_REGISTRY shares one PredBat instance. All three are snapshotted and restored afterwards so this test
+    cannot leak the tiny two-point forecast used here into any test that runs later and happens to read the same
+    sensor's state, dashboard_index membership or dashboard_values entry.
     """
     failed = False
     entity_id = "sensor." + my_predbat.prefix + "_pv_forecast_raw"
-    had_previous_state = entity_id in my_predbat.ha_interface.dummy_items
-    previous_state = my_predbat.ha_interface.dummy_items.get(entity_id)
+    snapshot = _snapshot_pv_forecast_raw_sensor(my_predbat)
     try:
         my_predbat.dashboard_item(
             entity_id,
@@ -119,23 +159,20 @@ def test_pv90_forecast_fallback_to_p50(my_predbat):
             print("ERROR: pv90 is the same object as pv50 - must be a copy so later scaling cannot alias")
             failed = True
     finally:
-        if had_previous_state:
-            my_predbat.ha_interface.dummy_items[entity_id] = previous_state
-        else:
-            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+        _restore_pv_forecast_raw_sensor(my_predbat, snapshot)
     return failed
 
 
 def test_pv90_forecast_uses_published_p90(my_predbat):
     """When forecast90 is published it must be used verbatim, not the p50 fallback.
 
-    Same shared-state hazard as test_pv90_forecast_fallback_to_p50 above: the raw forecast sensor is snapshotted
-    and restored so this test cannot leak its published forecast90 attribute into later tests.
+    Same shared-state hazard as test_pv90_forecast_fallback_to_p50 above: all three stores dashboard_item()
+    mutates for the raw forecast sensor (mock HA state, dashboard_index, dashboard_values) are snapshotted and
+    restored so this test cannot leak its published forecast90 attribute into later tests.
     """
     failed = False
     entity_id = "sensor." + my_predbat.prefix + "_pv_forecast_raw"
-    had_previous_state = entity_id in my_predbat.ha_interface.dummy_items
-    previous_state = my_predbat.ha_interface.dummy_items.get(entity_id)
+    snapshot = _snapshot_pv_forecast_raw_sensor(my_predbat)
     try:
         my_predbat.dashboard_item(
             entity_id,
@@ -158,10 +195,7 @@ def test_pv90_forecast_uses_published_p90(my_predbat):
             print("ERROR: pv90 fell back to p50 despite forecast90 being published")
             failed = True
     finally:
-        if had_previous_state:
-            my_predbat.ha_interface.dummy_items[entity_id] = previous_state
-        else:
-            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+        _restore_pv_forecast_raw_sensor(my_predbat, snapshot)
     return failed
 
 
