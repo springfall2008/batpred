@@ -484,7 +484,7 @@ class GECloudDirect(ComponentBase):
         """
         Publish the customer account details and the account timezone as sensors.
 
-        Each sensor holds the name as its state and the remaining values in a 'data' attribute.
+        The account sensor uses the account name as its state; the timezone sensor uses the timezone name as its state. All remaining values are stored in a 'data' attribute.
         """
         if not account:
             return
