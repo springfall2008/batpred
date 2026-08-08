@@ -222,18 +222,46 @@ def test_pv90_step_arrays_built(my_predbat):
     return failed
 
 
-def test_pv90_missing_series_does_not_crash(my_predbat):
-    """A replayed debug dump has no pv_forecast_minute90; the plan must still build its step array."""
+def test_pv90_missing_series_falls_back_to_p50(my_predbat):
+    """A replayed debug dump has no pv_forecast_minute90; the plan must fall back to the p50 series, not silently zero it out.
+
+    step_data_history's forward-mode read is `item.get(minute + minutes_now + offset, 0.0)` - a dict .get() with a
+    default, so an empty pv_forecast_minute90 can never raise KeyError there; without the guard it would instead
+    silently produce an all-zero step array, which inverts pv90's meaning (a "high PV" scenario predicting zero
+    PV). Asserting only that no exception is raised cannot catch that failure mode, so this test compares the
+    actual values: after blanking pv_forecast_minute90 and recomputing, pv_forecast_minute90_step must equal
+    pv_forecast_minute_step exactly (the guard copies p50 verbatim, and step_data_history is deterministic given
+    identical inputs).
+
+    The shared my_predbat fixture carries an empty pv_forecast_minute by default (nothing in run_pv90_tests'
+    earlier calls populates it), which would make that comparison vacuous - both sides would be all-zero
+    regardless of whether the guard runs. This test therefore seeds a synthetic non-zero pv_forecast_minute of
+    its own before recomputing, so the comparison is meaningful independent of fixture state, and restores it
+    (alongside pv_forecast_minute90) in the finally block. A sanity check also confirms the resulting nominal
+    step array is not itself all zero, so the comparison cannot pass vacuously even if the seeding is broken.
+    """
     failed = False
-    saved = my_predbat.pv_forecast_minute90
+    saved_pv90 = my_predbat.pv_forecast_minute90
+    saved_pv50 = my_predbat.pv_forecast_minute
+    minutes_now = my_predbat.minutes_now
+    horizon = my_predbat.forecast_minutes + my_predbat.plan_interval_minutes + 10
+    my_predbat.pv_forecast_minute = {minutes_now + offset: 0.01 for offset in range(horizon)}
     my_predbat.pv_forecast_minute90 = {}
     try:
         my_predbat.calculate_plan(recompute=True)
+        nominal_total = sum(my_predbat.pv_forecast_minute_step.values())
+        if nominal_total <= 0:
+            print("ERROR: pv_forecast_minute_step is all zero despite seeding a synthetic PV series - the fallback comparison would be vacuous")
+            return True
+        if my_predbat.pv_forecast_minute90_step != my_predbat.pv_forecast_minute_step:
+            print("ERROR: pv_forecast_minute90_step does not match the p50 fallback pv_forecast_minute_step - the guard is missing or broken (falling back to silent zeros, not p50)")
+            failed = True
     except KeyError as error:
         print("ERROR: calculate_plan raised KeyError {} with an empty pv_forecast_minute90 - the p50 guard is missing".format(error))
         failed = True
     finally:
-        my_predbat.pv_forecast_minute90 = saved
+        my_predbat.pv_forecast_minute90 = saved_pv90
+        my_predbat.pv_forecast_minute = saved_pv50
     return failed
 
 
@@ -248,5 +276,5 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_forecast_uses_published_p90(my_predbat)
     my_predbat.calculate_plan(recompute=True)
     failed |= test_pv90_step_arrays_built(my_predbat)
-    failed |= test_pv90_missing_series_does_not_crash(my_predbat)
+    failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     return failed
