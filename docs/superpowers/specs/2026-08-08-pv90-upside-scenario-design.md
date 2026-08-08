@@ -128,16 +128,22 @@ charging; it has no upside counterpart.
 Source chain, first available wins:
 
 1. `forecast90` attribute on `sensor.<prefix>_pv_forecast_raw` (new)
-2. Derived fallback, mirroring the downside spread about p50:
-   `pv90[m] = max(pv50[m], 2 * pv50[m] - pv10[m])`
+2. Fallback: `pv90[m] = pv50[m]` — the nominal series, unchanged
 
-The derived form uses the raw minute series `pv_forecast_minute` / `pv_forecast_minute10`, not
-the stepped arrays. The `max` floor means a source that reports `pv10 == pv50` yields
-`pv90 == pv50`, so the pv90 scenario degenerates to nominal-PV-with-reduced-load. That is
-accepted behaviour: with no forecast spread to work from there is no defensible upside to
-synthesise. Mirroring will overstate the upside relative to a true p90, since solar upside is
-bounded by clear-sky while the downside is not — a reason to prefer the real Solcast p90 where it
-is available, and a caveat on any result obtained through the fallback.
+No upside is synthesised. Solcast generates a real p90 in practice, so the fallback only covers
+sources that do not (`solar_model.py`, Open-Meteo) and historical debug dumps captured before
+`forecast90` existed. Mirroring the p10 spread about p50 was considered and rejected: solar
+upside is bounded by clear-sky while the downside is not, so a mirrored p90 would overstate the
+upside and contaminate any result measured through it.
+
+The consequence is that under the fallback the pv90 scenario differs from nominal **only** by
+`load_scaling90`. That is deliberate. It makes the fallback strictly conservative — the scenario
+can only ever be milder than a real p90 would be, never more aggressive — so a result obtained
+through it is a lower bound on the effect, and real p90 data can strengthen the conclusion but
+not overturn it.
+
+If `load_scaling90` is also left at 1.0 the pv90 scenario becomes identical to nominal,
+`metric90 == metric`, and the blend degenerates to an identity. Harmless, and worth a test.
 
 `solcast.py` already computes `pv_estimate90` per period and a `best_day_scaling` in the
 calibration path, but only ever builds a *minute* array for p10. Changes:
@@ -149,10 +155,10 @@ calibration path, but only ever builds a *minute* array for p10. Changes:
 `fetch.py`:
 
 - `fetch_pv_forecast()` (fetch.py:1292) returns a third dict, reading `forecast90` when present
-  and deriving it when absent
+  and copying the p50 series when absent
 - stored as `self.pv_forecast_minute90`
 
-`solar_model.py` and Open-Meteo produce no p90 and fall through to the derived path.
+`solar_model.py` and Open-Meteo produce no p90 and fall through to the p50 fallback.
 
 `plan.py` builds `pv_forecast_minute90_step` and `load_minutes_step90` alongside the existing
 step arrays, using `load_scaling90` for the load series.
@@ -277,7 +283,8 @@ hash distinctly, so the prediction cache stays correct.
 
 New `tests/test_pv90.py`, registered in `TEST_REGISTRY` in `unit_test.py`:
 
-- derived fallback maths, including the `max(pv50, ...)` floor and the missing-p10 edge case
+- the p50 fallback returns the nominal series unchanged when no `forecast90` is present, and
+  `pv_forecast_minute90` is always populated so downstream step-array building cannot KeyError
 - `fetch_pv_forecast()` reads `forecast90` when present and derives it when absent
 - both config items exist, are expert-gated, and carry the specified defaults
 - `compute_metric` blend: weights sum correctly, renormalisation when `w10 + w90 > 1`,
@@ -310,6 +317,17 @@ attributable purely to the clamp removal; review and accept or adjust.
 runtime to 0, 0.05, 0.1 and 0.2, reporting the chosen charge limits and the plan duration at each.
 Decide whether the feature is worth keeping.
 
+The dump predates `forecast90`, so pv90 falls back to p50 and this measures the **load-only**
+upside: 10% lower load, identical PV. That makes Stage B a lower bound. If it moves the plan off
+100% on load alone, real p90 data can only push harder in the same direction. If it does *not*
+move the plan, the result is inconclusive rather than negative, and the next step is to re-run
+against a dump carrying real Solcast p90 before drawing a conclusion.
+
+Also worth recording at each weight: whether the plan moves to the bottom of the 66-100% plateau
+or somewhere in between. Landing at 66% would mean pv90 is merely overpowering the pv10 hedge and
+letting the plateau's lower tiebreak win, rather than genuinely pricing the spill risk — a
+different and weaker outcome than landing at an interior value.
+
 **Stage C** — only if the feature is kept, and a separate decision: flip the
 `pv_metric90_weight` default to 0.1 and regenerate the `debug_cases` `.expected.json` references
 with manual review.
@@ -323,4 +341,5 @@ state: opt-in, no reference regeneration, and no change for existing users.
   defect (~15.3% over-valuation) but is independent of this change, does not fix this scenario on
   its own, and would shift every plan. Tracked separately.
 - Changing the `metric -= 0.002` bias towards `soc_max` in `optimise_charge_limit`.
-- Plumbing p90 into `solar_model.py` or Open-Meteo; both use the derived fallback.
+- Plumbing p90 into `solar_model.py` or Open-Meteo; both fall back to p50, so for those sources
+  pv90 is a load-only scenario until real p90 data is added.
