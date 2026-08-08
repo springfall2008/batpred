@@ -175,6 +175,12 @@ Note that the output data entity predbat.load_energy_h0 will be scaled according
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
 The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
+**input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the PV90% upside scenario.
+Unlike `load_scaling10` above, this factor composes _relatively_ with `load_scaling` rather than replacing it: the load used for the PV90% scenario is
+`load_scaling * load_scaling90` of the historical load, so the default of 0.9 always means "10% below whatever load you have already configured
+via load_scaling", regardless of what that value is. This guarantees the PV90% scenario stays the low-load case it is meant to model, however
+pessimistic or optimistic `load_scaling` itself has been set. This will only have an impact if the PV 90% weighting is non-zero.
+
 **input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving session or Axle export events.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
 The default is 1.0, i.e. no change to load in saving sessions.

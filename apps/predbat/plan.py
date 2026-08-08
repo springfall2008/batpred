@@ -851,6 +851,25 @@ class Plan:
         if end_record is None:
             end_record = self.forecast_minutes
 
+        # Run pv90 first (when active), and the nominal scenario last. Plan.run_prediction
+        # unconditionally overwrites self.predict_soc, self.car_charging_soc_next, self.iboost_next
+        # and self.iboost_running* on every call - so whichever scenario runs last is the one those
+        # attributes are left holding. Every traced consumer only reads them after this function's
+        # final (nominal, save=save) run anyway, so this ordering does not change any output; it just
+        # removes the latent trap of pv90 being the one left behind when pv_metric90_weight > 0.
+        soc90 = None
+        cost90 = None
+        final_iboost90 = 0.0
+        if self.pv_metric90_weight > 0:
+            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
+                charge_limit_best,
+                charge_window_best,
+                export_window_best,
+                export_limits_best,
+                PV_SCENARIO_PV90,
+                end_record=end_record,
+            )
+
         (
             cost10,
             import_kwh_battery10,
@@ -893,18 +912,6 @@ class Plan:
             end_record=end_record,
             save=save,
         )
-        soc90 = None
-        cost90 = None
-        final_iboost90 = 0.0
-        if self.pv_metric90_weight > 0:
-            (cost90, _, _, _, _, soc90, _, _, _, final_iboost90, _) = self.run_prediction(
-                charge_limit_best,
-                charge_window_best,
-                export_window_best,
-                export_limits_best,
-                PV_SCENARIO_PV90,
-                end_record=end_record,
-            )
         metric, battery_value = self.compute_metric(
             self.end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=soc90, cost90=cost90, final_iboost90=final_iboost90
         )
@@ -1160,12 +1167,20 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
+        # load_scaling90 composes RELATIVELY with load_scaling, unlike load_scaling10 above which is an
+        # absolute multiplier of its own. If it were absolute too, a user's own load_scaling would not
+        # cancel out of it: e.g. load_scaling=0.5 with the load_scaling90 default of 0.9 would scale the
+        # pv90 load to 0.9x of the *raw* history - 1.8x the nominal load the user actually configured -
+        # making pv90 a same-PV, higher-load scenario, i.e. a second downside case, defeating the point
+        # of the feature (see plan.py's compute_metric docstring/premise on pv90 being the upside case).
+        # Multiplying by load_scaling here means load_scaling90's default of 0.9 always means "10% below
+        # whatever nominal load the user has configured", regardless of what load_scaling itself is.
         load_minutes_step90 = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
-            scale_fixed=self.load_scaling90,
+            scale_fixed=self.load_scaling * self.load_scaling90,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
@@ -1599,6 +1614,12 @@ class Plan:
             # here too - otherwise they are scored with cost90=None while every other candidate in the
             # same ranking loop gets the three-scenario blend, systematically advantaging these two
             # extreme candidates (see task-7 fix round 1, Finding 2).
+            #
+            # These two extra launches also feed the same `hans` loop that computes all_min_soc/
+            # all_max_soc below, so at run_pv90 the SoC-pruning envelope is built from three scenarios
+            # instead of two. This only ever widens the envelope (min/max over a superset can only move
+            # outward or stay put, never inward), so it can only relax the pruning below, never discard
+            # a candidate that would otherwise have been tried - it cannot silently drop a viable SoC.
             if run_pv90:
                 hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, all_n, end_record))
                 hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV90, all_n, end_record))

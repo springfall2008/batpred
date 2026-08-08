@@ -224,6 +224,53 @@ def test_pv90_step_arrays_built(my_predbat):
     return failed
 
 
+def test_pv90_load_scaling90_composes_relatively(my_predbat):
+    """load_scaling90 must compose relatively with load_scaling, not replace it as an independent absolute multiplier.
+
+    This pins fix-round-2 Item 2. If load_scaling90 were an absolute multiplier (scale_fixed=self.load_scaling90
+    alone, the pre-fix code), a user's own load_scaling would not cancel out of it: on
+    coverage/cases/predbat_debug_agile1.yaml, load_scaling=0.5 with load_scaling90 at its default 0.9 gave
+    0.9/0.5 = 1.8x - a same-PV, HIGHER-load scenario, the opposite of the "upside" pv90 is meant to model.
+    load_scaling=1.05 (this file's earlier test_pv90_step_arrays_built, and most default configs) is too
+    close to 1.0 for that inversion to show up in a totals comparison, so this test deliberately sets
+    load_scaling well away from 1.0 (0.5, matching the debug case that surfaced the bug) - under the
+    absolute convention this assertion fails (total90 > total), which is exactly the regression being
+    pinned; under the relative convention (self.load_scaling * self.load_scaling90) it always holds,
+    because the two load_scaling factors are the same on both sides and only load_scaling90's 0.9 discount
+    remains.
+    """
+    failed = False
+    saved_load_scaling = my_predbat.load_scaling
+    saved_load_minutes = my_predbat.load_minutes
+    saved_load_forecast_only = my_predbat.load_forecast_only
+    try:
+        my_predbat.load_scaling = 0.5
+        # The historical-load path (step_data_history's type_load and not forward branch) reads
+        # load_minutes as a HA-style incrementing/cumulative series via get_filtered_load_minute ->
+        # get_from_incrementing (a plain per-minute dict, as most other array-based tests in this file
+        # seed, is read by the *forward* PV path only and is not what the load path consults). Index 0
+        # is "now", larger indices are further back in time with a *lower* cumulative value, and
+        # load_forecast_only must be False or the historical path is skipped entirely and returns zero
+        # regardless of what load_minutes contains.
+        my_predbat.load_forecast_only = False
+        rate = 0.02  # kWh/minute
+        my_predbat.load_minutes = {minute: (1440 - minute) * rate for minute in range(0, 1441)}
+        my_predbat.calculate_plan(recompute=True)
+        total = sum(my_predbat.load_minutes_step.values())
+        total90 = sum(my_predbat.load_minutes_step90.values())
+        if total <= 0:
+            print("ERROR: load_minutes_step is all zero despite seeding a synthetic load series - the comparison would be vacuous")
+            return True
+        if total90 >= total:
+            print("ERROR: load_minutes_step90 total {} is not below the nominal {} at load_scaling=0.5 - load_scaling90 is not composing relatively with load_scaling".format(total90, total))
+            failed = True
+    finally:
+        my_predbat.load_scaling = saved_load_scaling
+        my_predbat.load_minutes = saved_load_minutes
+        my_predbat.load_forecast_only = saved_load_forecast_only
+    return failed
+
+
 def test_pv90_missing_series_falls_back_to_p50(my_predbat):
     """A replayed debug dump has no pv_forecast_minute90; the plan must fall back to the p50 series, not silently zero it out.
 
@@ -778,6 +825,69 @@ def test_pv90_weight_nonzero_runs_levels_simulation(my_predbat):
     return failed
 
 
+def test_pv90_run_prediction_metric_carries_cost90(my_predbat):
+    """run_prediction_metric must include a pv90 term at a non-zero weight, or every comparison against its result is on the wrong scale.
+
+    This pins fix-round-1 Finding 1 (Critical): run_prediction_metric seeds/re-seeds the best_metric that
+    optimise_charge_limit_price_threads, optimise_charge_limit and optimise_export's pv90-inclusive
+    candidate metrics are compared against. Before that fix, none of the other pv90 tests in this module
+    caught the gap - replacing `if self.pv_metric90_weight > 0:` inside run_prediction_metric with `if
+    False:` left `--test pv90 --test optimise_levels --test compute_metric` and the whole `--quick` suite
+    green, because every other test either checks that pv90 predictions were *launched* (not that the
+    resulting metric ever reached compute_metric with cost90 populated) or checks compute_metric's blend
+    arithmetic directly with hand-supplied costs (never through run_prediction_metric itself).
+
+    This test closes that gap by scoping a wrapped compute_metric to only record calls made while
+    execution is genuinely inside run_prediction_metric (a depth counter around a wrapped
+    run_prediction_metric, the same technique test_pv90_charge_limit_results_paired_with_try_soc uses to
+    scope its own check to optimise_charge_limit), and asserting every such call carries a non-None
+    cost90 at pv_metric90_weight=0.1.
+    """
+    failed = False
+    my_predbat.pv_metric90_weight = 0.1
+    calls = {"count": 0, "missing_cost90": 0}
+    in_scope = {"depth": 0}
+
+    original_rpm = my_predbat.run_prediction_metric
+
+    def scoped_run_prediction_metric(*args, **kwargs):
+        """Mark every compute_metric call made while inside run_prediction_metric as in-scope for the cost90 check."""
+        in_scope["depth"] += 1
+        try:
+            return original_rpm(*args, **kwargs)
+        finally:
+            in_scope["depth"] -= 1
+
+    original_compute_metric = my_predbat.compute_metric
+
+    def checking_compute_metric(*args, **kwargs):
+        """Record whether cost90 was supplied, only while inside run_prediction_metric."""
+        if in_scope["depth"] > 0:
+            calls["count"] += 1
+            if kwargs.get("cost90") is None:
+                calls["missing_cost90"] += 1
+        return original_compute_metric(*args, **kwargs)
+
+    my_predbat.run_prediction_metric = scoped_run_prediction_metric
+    my_predbat.compute_metric = checking_compute_metric
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.run_prediction_metric = original_rpm
+        my_predbat.compute_metric = original_compute_metric
+        my_predbat.pv_metric90_weight = 0.0
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+
+    if calls["count"] == 0:
+        print("ERROR: run_prediction_metric never reached compute_metric during calculate_plan - test setup problem")
+        failed = True
+    elif calls["missing_cost90"] > 0:
+        print("ERROR: {} of {} run_prediction_metric -> compute_metric call(s) had cost90=None at pv_metric90_weight=0.1".format(calls["missing_cost90"], calls["count"]))
+        failed = True
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -789,6 +899,7 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_forecast_uses_published_p90(my_predbat)
     my_predbat.calculate_plan(recompute=True)
     failed |= test_pv90_step_arrays_built(my_predbat)
+    failed |= test_pv90_load_scaling90_composes_relatively(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)
@@ -808,6 +919,7 @@ def run_pv90_tests(my_predbat):
     original_launch_run_prediction_export = my_predbat.launch_run_prediction_export
     original_launch_run_prediction_single = my_predbat.launch_run_prediction_single
     original_optimise_charge_limit = my_predbat.optimise_charge_limit
+    original_run_prediction_metric = my_predbat.run_prediction_metric
     original_compute_metric = my_predbat.compute_metric
     try:
         failed |= test_pv90_weight_zero_skips_simulation(my_predbat)
@@ -815,12 +927,14 @@ def run_pv90_tests(my_predbat):
         failed |= test_pv90_charge_limit_results_paired_with_try_soc(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_export_simulation(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_levels_simulation(my_predbat)
+        failed |= test_pv90_run_prediction_metric_carries_cost90(my_predbat)
     finally:
         my_predbat.launch_run_prediction_charge = original_launch_run_prediction_charge
         my_predbat.launch_run_prediction_charge_min_max = original_launch_run_prediction_charge_min_max
         my_predbat.launch_run_prediction_export = original_launch_run_prediction_export
         my_predbat.launch_run_prediction_single = original_launch_run_prediction_single
         my_predbat.optimise_charge_limit = original_optimise_charge_limit
+        my_predbat.run_prediction_metric = original_run_prediction_metric
         my_predbat.compute_metric = original_compute_metric
         restore_metric_state(my_predbat, launch_state)
     return failed
