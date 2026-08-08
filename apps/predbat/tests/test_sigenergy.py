@@ -2306,6 +2306,32 @@ def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
     return failed
 
 
+def test_sigenergy_offboard_overrides_axle_control(my_predbat):
+    """An explicit offboard exits Axle's NBI mode before removing authorisation."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_NBI
+    api.args["axle_control"] = True
+    api.args["axle_session"] = "binary_sensor.predbat_axle_event"
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": "on"}
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.offboard_systems = AsyncMock(return_value=[])
+
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+
+    assert api.set_operating_mode.await_count == 2, "MSC is retried while telemetry still reports NBI"
+    api.set_operating_mode.assert_awaited_with(sid, SIGENERGY_MODE_MSC)
+    api.offboard_systems.assert_not_awaited()
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    api.offboard_systems.assert_awaited_once_with(sid)
+
+    return failed
+
+
 def test_sigenergy_offboard_defers_when_the_mode_switch_fails(my_predbat):
     """A failed VPP exit must NOT offboard — that is the lockout this guards against."""
     failed = False
@@ -2406,7 +2432,7 @@ def test_sigenergy_offboard_retries_per_item_failure(my_predbat):
 
 
 def test_sigenergy_offboard_unknown_mode_defers(my_predbat):
-    """An absent current_mode is unknown, not proof that the system is out of VPP."""
+    """An absent or unrecognised mode is not proof that the owner's app has control."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2415,6 +2441,11 @@ def test_sigenergy_offboard_unknown_mode_defers(my_predbat):
     assert run_async(api._offboard_system_if_needed(sid)) is False
     api.offboard_systems.assert_not_awaited()
     assert sid not in api._offboard_vpp_exit_done, "Unknown mode must not latch the VPP exit"
+
+    api.current_mode[sid] = 42
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    api.offboard_systems.assert_not_awaited()
+    assert sid not in api._offboard_vpp_exit_done, "Unrecognised mode must not latch the VPP exit"
 
     return failed
 
@@ -2443,16 +2474,18 @@ def test_sigenergy_offboard_latches_survive_restart_safely(my_predbat):
     assert api_restarted.onboard_status[sid] == "offboarded", "Restart restores truthful status"
 
     api_restarted.system_id_filter = {sid}
-    api_restarted.dashboard_items["switch.predbat_sigenergy_sig001_offboard"] = {"state": "on"}
     api_restarted.get_access_token = AsyncMock(return_value="tok")
     api_restarted.fetch_system_list = AsyncMock()  # Correctly absent after offboarding.
+    api_restarted.onboard_systems = AsyncMock()
     assert run_async(api_restarted.run(seconds=0, first=True)) is False
+    api_restarted.onboard_systems.assert_not_awaited()
     sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
-    assert api_restarted.dashboard_items[sensor_key]["state"] == "offboarded", "Restart publishes completion even though the system is no longer authorised"
+    assert api_restarted.dashboard_items[sensor_key]["state"] == "offboarded", "Restart publishes completion even when the switch state is temporarily unavailable"
 
-    # If the system is re-onboarded after restart, its live visibility invalidates the
-    # restored completion and persists that clearing for the next process too.
+    # If the owner explicitly requests re-onboarding after restart, live visibility
+    # invalidates the restored completion and persists that clearing for the next process.
     api_restarted.systems[sid] = {}
+    api_restarted.dashboard_items["switch.predbat_sigenergy_sig001_offboard"] = {"state": "off"}
     run_async(api_restarted._reconcile_restored_offboards())
     assert sid not in api_restarted._offboard_done, "Visible authorised system clears restored completion"
     assert api_restarted.onboard_status[sid] == "active", "Re-onboarded system no longer reports offboarded"
@@ -2460,6 +2493,42 @@ def test_sigenergy_offboard_latches_survive_restart_safely(my_predbat):
     api_after_re_onboard._mock_storage = storage
     run_async(api_after_re_onboard.load_cached_data())
     assert sid not in api_after_re_onboard._offboard_done, "Cleared completion remains cleared after another restart"
+
+    return failed
+
+
+def test_sigenergy_visible_restored_offboard_keeps_recovery_point(my_predbat):
+    """A lagging authorised list must not erase a completed offboard before its retry lands."""
+    failed = False
+    sid = "SIG001"
+    storage = FakeStorage()
+    storage.data[("sigenergy", "offboard_done")] = [sid]
+
+    api = MockSigenergyAPI()
+    api._mock_storage = storage
+    run_async(api.load_cached_data())
+    api.systems[sid] = {}
+    run_async(api._reconcile_restored_offboards())
+
+    assert sid not in api._offboard_done, "Visible system is retried rather than accepted as complete"
+    assert sid in api._offboard_done_loaded, "Durable recovery point remains until the retry lands"
+    assert storage.data[("sigenergy", "offboard_done")] == [sid], "Lagging visibility must not clear durable completion"
+    assert api.onboard_status[sid] == "active", "Visible authorised system is reported active while retrying"
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    api.offboard_systems = AsyncMock(return_value=None)
+    api.enable_controls = False
+    mqtt_task = MagicMock()
+    mqtt_task.done = MagicMock(return_value=False)
+    api._mqtt_task = mqtt_task
+    assert run_async(api.run(seconds=60, first=False)) is True
+    api.offboard_systems.assert_awaited_once_with(sid)
+    assert api.onboard_status[sid] == "active", "Unavailable switch state preserves the offboard retry instead of reclaiming VPP"
+
+    api_after_failure = MockSigenergyAPI()
+    api_after_failure._mock_storage = storage
+    run_async(api_after_failure.load_cached_data())
+    assert sid in api_after_failure._offboard_done, "A restart after retry failure restores the last confirmed completion"
 
     return failed
 
@@ -2959,12 +3028,14 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_skipped_when_not_vpp", test_sigenergy_apply_controls_skipped_when_not_vpp),
         ("offboard_toggle_in_vpp", test_sigenergy_offboard_toggle_in_vpp),
         ("offboard_toggle_not_in_vpp", test_sigenergy_offboard_toggle_not_in_vpp),
+        ("offboard_overrides_axle_control", test_sigenergy_offboard_overrides_axle_control),
         ("offboard_toggle_switch_event", test_sigenergy_offboard_toggle_switch_event),
         ("offboard_defers_when_mode_switch_fails", test_sigenergy_offboard_defers_when_the_mode_switch_fails),
         ("offboard_retries_when_api_call_fails", test_sigenergy_offboard_retries_when_the_api_call_fails),
         ("offboard_retries_per_item_failure", test_sigenergy_offboard_retries_per_item_failure),
         ("offboard_unknown_mode_defers", test_sigenergy_offboard_unknown_mode_defers),
         ("offboard_latches_survive_restart_safely", test_sigenergy_offboard_latches_survive_restart_safely),
+        ("visible_restored_offboard_keeps_recovery_point", test_sigenergy_visible_restored_offboard_keeps_recovery_point),
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
