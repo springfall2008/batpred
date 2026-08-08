@@ -10,6 +10,7 @@
 """Tests for the pv90 upside forecast scenario."""
 
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
+from tests.test_infra import reset_inverter, reset_rates
 
 
 def test_pv90_scenario_constants():
@@ -265,6 +266,99 @@ def test_pv90_missing_series_falls_back_to_p50(my_predbat):
     return failed
 
 
+def _force_python_engine(pred):
+    """Force a Prediction onto the pure-Python engine, bypassing the C++ kernel.
+
+    Setting prediction_kernel_enable = False alone is not sufficient here: fetch.py defaults the shared
+    my_predbat fixture's prediction_kernel_enable to True, so Prediction.__init__ already built a
+    kernel_handle before this function runs, and kernel_supported() gates on kernel_handle - not on the
+    enable flag. Until Task 5 teaches the kernel about the three-valued pv_scenario, PV_SCENARIO_PV90 (2)
+    is truthy and the kernel would silently simulate it as pv10, so both must be cleared to reach the
+    Python engine these tests are actually exercising.
+    """
+    pred.prediction_kernel_enable = False
+    pred.kernel_handle = 0
+
+
+def test_pv90_scenario_selects_arrays(my_predbat):
+    """Each scenario must simulate against its own PV and load series.
+
+    unit_test.py shares one PredBat instance across the whole TEST_REGISTRY loop, so every
+    economically-relevant attribute Prediction.__init__ copies from my_predbat (inverter_limit,
+    battery_rate_max_charge, reserve, io_adjusted, ...) can carry incidental values left behind by
+    whichever test happened to run first. reset_inverter/reset_rates pin those to a known baseline
+    (the same helpers every other prediction-array test in this suite relies on), soc_max=0 removes
+    the battery as a confound so PV surplus/deficit must flow to export/import rather than being
+    buffered, and io_adjusted is cleared so this test measures only the array selection, not the
+    pv10 worst-case rate substitution covered separately below.
+    """
+    from prediction import Prediction
+
+    failed = False
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 10.0, 5.0)
+    n = my_predbat.forecast_minutes + my_predbat.minutes_now
+    pv50 = {minute: 0.02 for minute in range(0, n, 5)}
+    pv10 = {minute: 0.01 for minute in range(0, n, 5)}
+    pv90 = {minute: 0.03 for minute in range(0, n, 5)}
+    load = {minute: 0.02 for minute in range(0, n, 5)}
+    load10 = {minute: 0.03 for minute in range(0, n, 5)}
+    load90 = {minute: 0.01 for minute in range(0, n, 5)}
+
+    pred = Prediction(my_predbat, pv50, pv10, load, load10, pv90, load90, soc_kw=0, soc_max=0)
+    _force_python_engine(pred)
+    pred.io_adjusted = {}
+
+    costs = {}
+    for name, scenario in (("nominal", PV_SCENARIO_NOMINAL), ("pv10", PV_SCENARIO_PV10), ("pv90", PV_SCENARIO_PV90)):
+        result = pred.run_prediction([], [], [], [], scenario, my_predbat.forecast_minutes)
+        costs[name] = result[0]
+
+    # pv10 is the worst case (least PV, most load), pv90 the best - so cost must order strictly
+    if not (costs["pv10"] > costs["nominal"] > costs["pv90"]):
+        print("ERROR: scenario costs are not ordered pv10 > nominal > pv90: {}".format(costs))
+        failed = True
+    return failed
+
+
+def test_pv90_no_charge_derate_and_no_io_penalty(my_predbat):
+    """pv90 must use the full charge rate and must not apply the pv10 io_adjusted worst-case rate.
+
+    See test_pv90_scenario_selects_arrays for why reset_inverter/reset_rates and soc_max=0 are needed
+    to keep this deterministic under the shared TEST_REGISTRY instance. rate_max is overridden to a
+    value distinct from the flat import rate set by reset_rates, since the io_adjusted worst-case
+    substitution (import_rate = self.rate_max) would otherwise be a silent no-op when it happens to
+    equal the rate that would have applied anyway.
+    """
+    from prediction import Prediction
+
+    failed = False
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 10.0, 5.0)
+    n = my_predbat.forecast_minutes + my_predbat.minutes_now
+    flat_pv = {minute: 0.0 for minute in range(0, n, 5)}
+    flat_load = {minute: 0.01 for minute in range(0, n, 5)}
+
+    # Identical series for every scenario: any remaining difference is the de-rate / io penalty
+    pred = Prediction(my_predbat, flat_pv, flat_pv, flat_load, flat_load, flat_pv, flat_load, soc_kw=0, soc_max=0)
+    _force_python_engine(pred)
+    pred.charge_scaling10 = 0.5
+    pred.io_adjusted = {minute: 1 for minute in range(0, n)}
+    pred.rate_max = 50.0
+
+    nominal = pred.run_prediction([], [], [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes)
+    pv90 = pred.run_prediction([], [], [], [], PV_SCENARIO_PV90, my_predbat.forecast_minutes)
+    pv10 = pred.run_prediction([], [], [], [], PV_SCENARIO_PV10, my_predbat.forecast_minutes)
+
+    if abs(pv90[0] - nominal[0]) > 1e-6:
+        print("ERROR: pv90 cost {} differs from nominal {} on identical series - a pv10-only penalty leaked into pv90".format(pv90[0], nominal[0]))
+        failed = True
+    if abs(pv10[0] - nominal[0]) < 1e-6:
+        print("ERROR: pv10 cost matches nominal on identical series - the io_adjusted penalty is not being applied at all, so the pv90 check above is vacuous")
+        failed = True
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -277,4 +371,6 @@ def run_pv90_tests(my_predbat):
     my_predbat.calculate_plan(recompute=True)
     failed |= test_pv90_step_arrays_built(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
+    failed |= test_pv90_scenario_selects_arrays(my_predbat)
+    failed |= test_pv90_no_charge_derate_and_no_io_penalty(my_predbat)
     return failed

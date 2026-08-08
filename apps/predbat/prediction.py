@@ -18,7 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, RUN_EVERY, TIME_FORMAT
+from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT
 from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
@@ -33,32 +33,36 @@ def reset_prediction_globals():
     PRED_GLOBAL = {}
 
 
-def wrapped_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step):
+def wrapped_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
+    """Reconstruct a Prediction from the global shared state and run a single-scenario prediction in a worker process."""
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step)
+    return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step)
 
 
-def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+    """Reconstruct a Prediction from the global shared state and run a charge-window trial prediction in a worker process."""
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
+    return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
 
-def wrapped_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+def wrapped_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+    """Reconstruct a Prediction from the global shared state and run a charge min/max trial prediction in a worker process."""
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
+    return pred.thread_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
 
-def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+    """Reconstruct a Prediction from the global shared state and run an export-window trial prediction in a worker process."""
     global PRED_GLOBAL
     pred = Prediction()
     pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record)
+    return pred.thread_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
 
 def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp):
@@ -93,7 +97,12 @@ class Prediction:
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, soc_kw=None, soc_max=None):
+    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, pv_forecast_minute90_step=None, load_minutes_step90=None, soc_kw=None, soc_max=None):
+        """Build a Prediction, optionally copying simulation state from a base PredBat instance.
+
+        pv_forecast_minute90_step and load_minutes_step90 fall back to the nominal step arrays when None, so
+        every existing call site that never requests the pv90 scenario keeps working unchanged.
+        """
         global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
@@ -186,6 +195,8 @@ class Prediction:
             self.pv_forecast_minute10_step = pv_forecast_minute10_step
             self.load_minutes_step = load_minutes_step
             self.load_minutes_step10 = load_minutes_step10
+            self.pv_forecast_minute90_step = pv_forecast_minute90_step if pv_forecast_minute90_step is not None else pv_forecast_minute_step
+            self.load_minutes_step90 = load_minutes_step90 if load_minutes_step90 is not None else load_minutes_step
             self.carbon_intensity = base.carbon_intensity
             self.all_active_keep = base.all_active_keep
             self.iboost_running = False
@@ -206,7 +217,7 @@ class Prediction:
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
 
-    def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step):
+    def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
         """
         Run single prediction in a thread
         """
@@ -229,10 +240,10 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, step=step, cache=self.prediction_cache_enable)
+        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, step=step, cache=self.prediction_cache_enable)
         return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
-    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+    def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Run prediction in a thread
         """
@@ -262,7 +273,7 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
+        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, cache=self.prediction_cache_enable)
         return (
             cost,
             import_kwh_battery,
@@ -277,7 +288,7 @@ class Prediction:
             final_carbon_g,
         )
 
-    def thread_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+    def thread_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Run prediction in a thread
         """
@@ -307,7 +318,7 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=False)
+        ) = self.run_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, cache=False)
         min_soc = self.soc_max
         max_soc = 0
         if not all_n:
@@ -337,7 +348,7 @@ class Prediction:
             max_soc,
         )
 
-    def thread_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+    def thread_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Run prediction in a thread
         """
@@ -372,7 +383,7 @@ class Prediction:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record=end_record, cache=self.prediction_cache_enable)
+        ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, cache=self.prediction_cache_enable)
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
     def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
@@ -389,7 +400,7 @@ class Prediction:
                     charge_window_optimised[minute] = window_n
         return charge_window_optimised
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP, cache=False):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False):
         """
         Run a prediction scenario given a charge limit, return the results
 
@@ -404,7 +415,7 @@ class Prediction:
         for window in export_window:
             window_hash ^= hash(window["start"]) ^ hash(window["end"])
 
-        sim_hash = hash(tuple(charge_limit)) ^ window_hash ^ hash(tuple(export_limits)) ^ hash(pv10) ^ hash(end_record) ^ hash(step)
+        sim_hash = hash(tuple(charge_limit)) ^ window_hash ^ hash(tuple(export_limits)) ^ hash(pv_scenario) ^ hash(end_record) ^ hash(step)
 
         if not save and cache and sim_hash in self.prediction_cache:
             # Return cached result
@@ -412,7 +423,7 @@ class Prediction:
 
         # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine
         if kernel_supported(self, save, step):
-            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, cache)
+            kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache)
             if kernel_result is not None:
                 if not save and cache:
                     # Store in cache without the SoC/car data to save memory, mirroring the Python engine
@@ -420,9 +431,12 @@ class Prediction:
                 return kernel_result
 
         # Fetch data from globals, optimised away from class to avoid passing it between threads
-        if pv10:
+        if pv_scenario == PV_SCENARIO_PV10:
             pv_forecast_minute_step = self.pv_forecast_minute10_step
             load_minutes_step = self.load_minutes_step10
+        elif pv_scenario == PV_SCENARIO_PV90:
+            pv_forecast_minute_step = self.pv_forecast_minute90_step
+            load_minutes_step = self.load_minutes_step90
         else:
             pv_forecast_minute_step = self.pv_forecast_minute_step
             load_minutes_step = self.load_minutes_step
@@ -565,8 +579,9 @@ class Prediction:
         battery_temperature_discharge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_discharge_curve)
         calculate_export_on_pv = self.calculate_export_on_pv
 
-        # For the PV10 case we apply some de-rating to the battery charge rate to be more pessimistic
-        if pv10:
+        # For the PV10 case we apply some de-rating to the battery charge rate to be more pessimistic.
+        # PV90 is the upside case and gets no de-rate.
+        if pv_scenario == PV_SCENARIO_PV10:
             battery_rate_max_scaling = self.battery_rate_max_scaling * self.charge_scaling10
         else:
             battery_rate_max_scaling = self.battery_rate_max_scaling
@@ -605,7 +620,7 @@ class Prediction:
             prev_soc = soc
             reserve_expected = reserve
             import_rate = rate_import.get(minute_absolute, 0)
-            if io_adjusted.get(minute_absolute, 0) and pv10 and minute > 30:
+            if io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30:
                 import_rate = self.rate_max  # Assume in worst case that slot goes away and max rate applies
             export_rate = rate_export.get(minute_absolute, 0)
 

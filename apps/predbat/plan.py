@@ -21,7 +21,7 @@ import copy
 import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
-from const import PREDICT_STEP, TIME_FORMAT, MINUTE_WATT
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, TIME_FORMAT, MINUTE_WATT
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
 from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
 from prediction_kernel import kernel_status_summary
@@ -492,8 +492,8 @@ class Plan:
                                     try_export[window_n] = 99.0 if freeze else min_freeze_percent
 
                                 pred_item = {}
-                                pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, False, end_record=end_record, step=step)
-                                pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, True, end_record=end_record, step=step)
+                                pred_item["handle"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, PV_SCENARIO_NOMINAL, end_record=end_record, step=step)
+                                pred_item["handle10"] = self.launch_run_prediction_single(try_charge_limit, charge_window, export_window, try_export, PV_SCENARIO_PV10, end_record=end_record, step=step)
                                 pred_item["charge_limit"] = try_charge_limit
                                 pred_item["export_limit"] = try_export
                                 pred_item["loop_price"] = loop_price
@@ -626,49 +626,49 @@ class Plan:
             best_max_export_slots,
         )
 
-    def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step=PREDICT_STEP):
+    def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step=PREDICT_STEP):
         """
         Launch a thread to run a prediction
         """
         charge_limit = list(charge_limit)
         export_limits = list(export_limits)
         if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv10, end_record, step))
+            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step))
         else:
-            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv10, end_record, step))
+            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step))
         return han
 
-    def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+    def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Launch a thread to run a prediction
         """
         if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
+            han = self.pool.apply_async(wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
         else:
-            han = DummyThread(self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
+            han = DummyThread(self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
         return han
 
-    def launch_run_prediction_charge_min_max(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record):
+    def launch_run_prediction_charge_min_max(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Launch a thread to run a prediction
         """
         if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_charge_min_max, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
+            han = self.pool.apply_async(wrapped_run_prediction_charge_min_max, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
         else:
-            han = DummyThread(self.prediction.thread_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv10, all_n, end_record))
+            han = DummyThread(self.prediction.thread_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
         return han
 
-    def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv10, all_n, end_record):
+    def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
         """
         Launch a thread to run a prediction
         """
         if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(
                 wrapped_run_prediction_export,
-                (this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv10, all_n, end_record),
+                (this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record),
             )
         else:
-            han = DummyThread(self.prediction.thread_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv10, all_n, end_record))
+            han = DummyThread(self.prediction.thread_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record))
         return han
 
     def scenario_summary_title(self, record_time):
@@ -1165,7 +1165,7 @@ class Plan:
             self.calculate_yesterday()
 
         # Creation prediction object
-        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10)
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
 
@@ -1549,10 +1549,10 @@ class Plan:
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
-            hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record))
-            hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
-            hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record))
-            hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record))
+            hans.append(self.launch_run_prediction_charge_min_max(best_soc_min, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, all_n, end_record))
             id = 0
             for han in hans:
                 (
@@ -1674,9 +1674,9 @@ class Plan:
         results10 = []
         for try_soc in try_socs:
             if try_soc not in resultmid:
-                hanres = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, False, all_n, end_record)
+                hanres = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record)
                 results.append(hanres)
-                hanres10 = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, True, all_n, end_record)
+                hanres10 = self.launch_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_PV10, all_n, end_record)
                 results10.append(hanres10)
 
         # Get results from sims if we simulated them
@@ -1894,8 +1894,8 @@ class Plan:
                 this_export_limit = this_export_limit + loop_limit - int(loop_limit)
                 try_options.append([start, this_export_limit])
 
-                results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, False, all_n, end_record))
-                results10.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, True, all_n, end_record))
+                results.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_NOMINAL, all_n, end_record))
+                results10.append(self.launch_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, PV_SCENARIO_PV10, all_n, end_record))
 
         # Get results from sims
         try_results = []
@@ -3878,7 +3878,7 @@ class Plan:
                 else:
                     self.export_limits_best[window_n] = 100.0
 
-    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP):
         """
         Run a prediction scenario given a charge limit, options to save the results or not to HA entity
         """
@@ -3903,7 +3903,7 @@ class Plan:
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save, step)
+        ) = pred.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save, step)
         self.predict_soc = predict_soc
         self.car_charging_soc_next = car_charging_soc_next
         self.iboost_next = iboost_next
