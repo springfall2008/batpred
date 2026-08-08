@@ -26,6 +26,7 @@ import random
 import subprocess
 
 import prediction_kernel
+from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
 from tests.test_infra import reset_inverter, reset_rates
@@ -352,19 +353,19 @@ def compare_results(name, python_result, kernel_result):
     return failed
 
 
-def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv10, end_record):
+def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=None, load90_step=None):
     """Run one scenario through both engines and compare, returns True on failure"""
     # Python engine first (kernel disabled so run_prediction cannot dispatch)
     my_predbat.prediction_kernel_enable = False
-    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
-    python_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, cache=False)
+    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step, pv90_step, load90_step)
+    python_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False)
 
     # Kernel run on the identical Prediction state
     prediction.kernel_handle = create_kernel_context(prediction)
     if not prediction.kernel_handle:
         print("ERROR: Scenario {} kernel context creation failed".format(name))
         return True
-    kernel_result = run_prediction_kernel(prediction, charge_limit, charge_window, export_window, export_limits, pv10, end_record, 5, False)
+    kernel_result = run_prediction_kernel(prediction, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, 5, False)
     if kernel_result is None:
         print("ERROR: Scenario {} kernel run failed".format(name))
         return True
@@ -373,7 +374,7 @@ def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charg
 
     # Also check the run_prediction dispatch glue path picks the kernel and agrees
     prediction.prediction_kernel_enable = True
-    dispatch_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv10, end_record, save=None, cache=False)
+    dispatch_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False)
     failed |= compare_results(name + "_dispatch", kernel_result, dispatch_result)
     return failed
 
@@ -575,16 +576,80 @@ def run_edge_case_tests(my_predbat):
         for key, value in overrides.items():
             setattr(my_predbat, key, value)
         pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=pv_kw, load_kw=load_kw)
-        for pv10 in [False, True]:
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10):
             failed |= dual_run(
-                "{}_pv10_{}".format(name, pv10), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit[:], [dict(window) for window in charge_window], [dict(window) for window in export_window], export_limits[:], pv10, end_record
+                "{}_scenario_{}".format(name, pv_scenario),
+                my_predbat,
+                pv_step,
+                pv10_step,
+                load_step,
+                load10_step,
+                charge_limit[:],
+                [dict(window) for window in charge_window],
+                [dict(window) for window in export_window],
+                export_limits[:],
+                pv_scenario,
+                end_record,
             )
+
+    # pv90: the kernel must select the p90 arrays, skip the pv10 charge de-rate, and skip the
+    # io_adjusted worst-case import rate. Distinct series per scenario so a wrong selection shows up.
+    #
+    # Two profiles are needed because the three pv90-specific behaviours are not all observable in one:
+    #  - "charge" is PV-rich with a charge window, so it pins the array selection (export volume differs
+    #    per scenario) and the pv10 charge de-rate (final_soc differs), but every scenario ends up
+    #    exporting, which makes import_rate - and therefore the io_adjusted substitution - unobservable.
+    #  - "import" is load-dominated with an empty battery, so all three scenarios import and the
+    #    io_adjusted worst-case rate substitution moves the metric. load90 must stay above pv90 here
+    #    (load_kw > 4 * pv_kw, given the *0.5 / *2.0 p90 derivation below) or pv90 would export too.
+    pv90_cases = [
+        # name, pv_kw, load_kw, charge_limit, charge_window
+        ("pv90_charge", 2.0, 0.5, [100.0], [{"start": minutes_now, "end": minutes_now + 120, "average": 5.0}]),
+        ("pv90_import", 0.5, 3.0, [], []),
+    ]
+    for case_name, pv_kw, load_kw, charge_limit, charge_window in pv90_cases:
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=pv_kw, load_kw=load_kw)
+        pv90_step = {minute: value * 2.0 for minute, value in pv_step.items()}
+        load90_step = {minute: value * 0.5 for minute, value in load_step.items()}
+        my_predbat.charge_scaling10 = 0.5
+        my_predbat.io_adjusted = {minute: 1 for minute in range(0, my_predbat.forecast_minutes + my_predbat.minutes_now)}
+        # reset_rates leaves rate_max equal to the flat import rate, which would make the pv10 worst-case
+        # substitution (import_rate = rate_max) a no-op and hide a kernel that wrongly applied it to pv90
+        my_predbat.rate_max = 50.0
+        for scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+            failed |= dual_run(
+                "{}_scenario_{}".format(case_name, scenario),
+                my_predbat,
+                pv_step,
+                pv10_step,
+                load_step,
+                load10_step,
+                charge_limit[:],
+                [dict(window) for window in charge_window],
+                [],
+                [],
+                scenario,
+                my_predbat.forecast_minutes,
+                pv90_step=pv90_step,
+                load90_step=load90_step,
+            )
+        my_predbat.io_adjusted = {}
     return failed
 
 
 def run_random_sweep_tests(my_predbat, count=150):
-    """Seeded random configuration sweep comparing both engines, returns True on failure"""
+    """Seeded random configuration sweep comparing both engines, returns True on failure.
+
+    Every seed is run against all three PV scenarios. Drawing one scenario per seed instead would
+    trade away coverage of nominal and pv10 - the two scenarios every user runs at the default
+    pv_metric90_weight of 0 - to buy coverage of pv90; running all three is strictly additive and
+    the sweep is fast enough to absorb the 3x.
+    """
     failed = False
+    scenario_counts = {PV_SCENARIO_NOMINAL: 0, PV_SCENARIO_PV10: 0, PV_SCENARIO_PV90: 0}
     for seed in range(count):
         rng = random.Random(seed)
         reset_inverter(my_predbat)
@@ -593,17 +658,32 @@ def run_random_sweep_tests(my_predbat, count=150):
         apply_random_scenario(my_predbat, rng)
         pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng=rng)
 
+        # p90 series derived from a separate generator so the main rng stream - and therefore every
+        # pre-existing random scenario - is unchanged by the addition of the pv90 case
+        rng90 = random.Random(seed + 1000000)
+        pv90_step = {minute: round(value * rng90.uniform(1.0, 2.0), 3) for minute, value in pv_step.items()}
+        load90_step = {minute: round(value * rng90.uniform(0.5, 1.0), 3) for minute, value in load_step.items()}
+
         charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3), align=rng.choice([5, 5, 30, 3]))
         charge_limit = [rng.choice([0.0, my_predbat.reserve, my_predbat.soc_max, round(rng.uniform(0, my_predbat.soc_max), 2)]) for _ in charge_window]
         export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3), align=rng.choice([5, 5, 30]))
         export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)]) for _ in export_window]
         end_record = rng.choice([my_predbat.forecast_minutes, my_predbat.forecast_minutes - 30, rng.randrange(0, my_predbat.forecast_minutes, 5)])
-        pv10 = rng.choice([False, True])
 
-        failed |= dual_run("random_{}".format(seed), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv10, end_record)
+        # No scenario is drawn from rng here: the draw that used to sit at this position was the last
+        # use of rng in the loop body, so looping the scenarios instead leaves every previously
+        # generated configuration (windows, limits, end_record, step data) bit-for-bit unchanged.
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+            scenario_counts[pv_scenario] += 1
+            failed |= dual_run(
+                "random_{}_s{}".format(seed, pv_scenario), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=pv90_step, load90_step=load90_step
+            )
+            if failed:
+                print("Random sweep failed at seed {} scenario {}".format(seed, pv_scenario))
+                break
         if failed:
-            print("Random sweep failed at seed {}".format(seed))
             break
+    print("Random sweep ran {} configurations: nominal {}, pv10 {}, pv90 {}".format(sum(scenario_counts.values()), scenario_counts[PV_SCENARIO_NOMINAL], scenario_counts[PV_SCENARIO_PV10], scenario_counts[PV_SCENARIO_PV90]))
     return failed
 
 

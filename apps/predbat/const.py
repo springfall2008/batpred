@@ -24,6 +24,11 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
+# Forecast scenarios simulated by the planner.
+# PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
+PV_SCENARIO_NOMINAL = 0
+PV_SCENARIO_PV10 = 1
+PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"

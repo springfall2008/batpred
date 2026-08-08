@@ -30,8 +30,8 @@ from const import PREDICT_STEP
 from utils import remove_intersecting_windows, get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 2
-KERNEL_PARITY_REVISION = 2
+KERNEL_ABI_VERSION = 3
+KERNEL_PARITY_REVISION = 3
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = 4
@@ -53,6 +53,8 @@ class PkContext(ctypes.Structure):
         ("load", ctypes.POINTER(ctypes.c_double)),
         ("pv10", ctypes.POINTER(ctypes.c_double)),
         ("load10", ctypes.POINTER(ctypes.c_double)),
+        ("pv90", ctypes.POINTER(ctypes.c_double)),
+        ("load90", ctypes.POINTER(ctypes.c_double)),
         ("temp_charge_cap", ctypes.POINTER(ctypes.c_double)),
         ("temp_discharge_cap", ctypes.POINTER(ctypes.c_double)),
         ("io_flag", ctypes.POINTER(ctypes.c_int32)),
@@ -143,7 +145,7 @@ class PkScenario(ctypes.Structure):
         ("soc_out", ctypes.POINTER(ctypes.c_double)),
         ("n_charge", ctypes.c_int32),
         ("n_export", ctypes.c_int32),
-        ("pv10", ctypes.c_int32),
+        ("pv_scenario", ctypes.c_int32),
         ("end_record", ctypes.c_int32),
         ("step", ctypes.c_int32),
     ]
@@ -300,6 +302,8 @@ def create_kernel_context(pred):
         load = []
         pv10 = []
         load10 = []
+        pv90 = []
+        load90 = []
         temp_charge_cap = []
         temp_discharge_cap = []
         carbon = []
@@ -318,6 +322,8 @@ def create_kernel_context(pred):
             load.append(pred.load_minutes_step[minute])
             pv10.append(pred.pv_forecast_minute10_step[minute])
             load10.append(pred.load_minutes_step10[minute])
+            pv90.append(pred.pv_forecast_minute90_step[minute])
+            load90.append(pred.load_minutes_step90[minute])
             # Pre-compute the temperature rate cap base (before the min against the max rate,
             # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
             battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
@@ -345,6 +351,8 @@ def create_kernel_context(pred):
         ctx.load = double_array(load)
         ctx.pv10 = double_array(pv10)
         ctx.load10 = double_array(load10)
+        ctx.pv90 = double_array(pv90)
+        ctx.load90 = double_array(load90)
         ctx.temp_charge_cap = double_array(temp_charge_cap)
         ctx.temp_discharge_cap = double_array(temp_discharge_cap)
         ctx.io_flag = int32_array(io_flag)
@@ -444,7 +452,7 @@ def kernel_supported(pred, save, step):
     return not save and not pred.debug_enable and getattr(pred, "kernel_handle", 0) != 0
 
 
-def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv10, end_record, step, cache):
+def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache):
     """Run one prediction scenario through the C++ kernel.
 
     The caller's requested step is intentionally ignored - the kernel always simulates at
@@ -473,7 +481,7 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.soc_out = soc_out
     scenario.n_charge = len(charge_window)
     scenario.n_export = len(export_window)
-    scenario.pv10 = 1 if pv10 else 0
+    scenario.pv_scenario = int(pv_scenario)
     scenario.end_record = end_record
     scenario.step = PREDICT_STEP  # the caller's step is ignored - see run_prediction_kernel docstring
 
