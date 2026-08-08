@@ -1853,8 +1853,8 @@ def _test_component_fetch_load_data():
             return default
 
         def fetch_pv_forecast(self):
-            """Mock fetch_pv_forecast - returns empty forecasts"""
-            return {}, {}
+            """Mock fetch_pv_forecast - returns empty p50/p10/p90 forecasts"""
+            return {}, {}, {}
 
         def minute_data_import_export(self, days, now_utc, entity, scale=1.0, increment=False, smoothing=False, required_unit=None):
             """Mock minute_data_import_export - returns empty dict"""

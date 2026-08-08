@@ -84,6 +84,87 @@ def test_pv90_config_read(my_predbat):
     return failed
 
 
+def test_pv90_forecast_fallback_to_p50(my_predbat):
+    """With no forecast90 attribute published, pv_forecast_minute90 must be a copy of the p50 series.
+
+    Publishing the raw forecast sensor writes into the shared mock HA state layer (my_predbat.ha_interface.dummy_items),
+    which persists for the rest of the test run since every test in TEST_REGISTRY shares one PredBat instance. The
+    previous value of that one entity is snapshotted and restored afterwards so this test cannot leak the tiny
+    two-point forecast used here into any test that runs later and happens to read the same sensor.
+    """
+    failed = False
+    entity_id = "sensor." + my_predbat.prefix + "_pv_forecast_raw"
+    had_previous_state = entity_id in my_predbat.ha_interface.dummy_items
+    previous_state = my_predbat.ha_interface.dummy_items.get(entity_id)
+    try:
+        my_predbat.dashboard_item(
+            entity_id,
+            state=0,
+            attributes={
+                "relative_time": my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "forecast": {"0": 0.01, "60": 0.02},
+                "forecast10": {"0": 0.005, "60": 0.01},
+            },
+        )
+        pv50, pv10, pv90 = my_predbat.fetch_pv_forecast()
+        if not pv50:
+            print("ERROR: p50 series is empty, test setup failed")
+            return True
+        for minute, value in pv50.items():
+            if pv90.get(minute) != value:
+                print("ERROR: pv90[{}] is {}, expected the p50 value {} (fallback must copy p50)".format(minute, pv90.get(minute), value))
+                failed = True
+                break
+        if pv90 is pv50:
+            print("ERROR: pv90 is the same object as pv50 - must be a copy so later scaling cannot alias")
+            failed = True
+    finally:
+        if had_previous_state:
+            my_predbat.ha_interface.dummy_items[entity_id] = previous_state
+        else:
+            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+    return failed
+
+
+def test_pv90_forecast_uses_published_p90(my_predbat):
+    """When forecast90 is published it must be used verbatim, not the p50 fallback.
+
+    Same shared-state hazard as test_pv90_forecast_fallback_to_p50 above: the raw forecast sensor is snapshotted
+    and restored so this test cannot leak its published forecast90 attribute into later tests.
+    """
+    failed = False
+    entity_id = "sensor." + my_predbat.prefix + "_pv_forecast_raw"
+    had_previous_state = entity_id in my_predbat.ha_interface.dummy_items
+    previous_state = my_predbat.ha_interface.dummy_items.get(entity_id)
+    try:
+        my_predbat.dashboard_item(
+            entity_id,
+            state=0,
+            attributes={
+                "relative_time": my_predbat.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "forecast": {"0": 0.01, "60": 0.02},
+                "forecast10": {"0": 0.005, "60": 0.01},
+                "forecast90": {"0": 0.03, "60": 0.04},
+            },
+        )
+        pv50, pv10, pv90 = my_predbat.fetch_pv_forecast()
+        if pv90.get(0) != 0.03:
+            print("ERROR: pv90[0] is {}, expected the published 0.03".format(pv90.get(0)))
+            failed = True
+        if pv90.get(60) != 0.04:
+            print("ERROR: pv90[60] is {}, expected the published 0.04".format(pv90.get(60)))
+            failed = True
+        if pv90.get(0) == pv50.get(0):
+            print("ERROR: pv90 fell back to p50 despite forecast90 being published")
+            failed = True
+    finally:
+        if had_previous_state:
+            my_predbat.ha_interface.dummy_items[entity_id] = previous_state
+        else:
+            my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -91,4 +172,6 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_scenario_constants()
     failed |= test_pv90_config_items(my_predbat)
     failed |= test_pv90_config_read(my_predbat)
+    failed |= test_pv90_forecast_fallback_to_p50(my_predbat)
+    failed |= test_pv90_forecast_uses_published_p90(my_predbat)
     return failed

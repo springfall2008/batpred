@@ -1560,12 +1560,14 @@ def test_pack_and_store_forecast(my_predbat):
         # Create forecast data with some constant and some varying values
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
+        pv_forecast_minute90 = {}
         for minute in range(0, 4 * 24 * 60):
             # Varies every hour
             pv_forecast_minute[minute] = 1.0 if (minute // 60) % 2 == 0 else 2.0
             pv_forecast_minute10[minute] = 0.5 if (minute // 60) % 2 == 0 else 1.0
+            pv_forecast_minute90[minute] = 1.5 if (minute // 60) % 2 == 0 else 3.0
 
-        test_api.solar.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
+        test_api.solar.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
 
         # Verify entity was published
         forecast_entity = f"sensor.{test_api.mock_base.prefix}_pv_forecast_raw"
@@ -1580,11 +1582,15 @@ def test_pack_and_store_forecast(my_predbat):
             if "forecast10" not in attrs:
                 print(f"ERROR: Expected 'forecast10' in attributes")
                 failed = True
+            if "forecast90" not in attrs:
+                print(f"ERROR: Expected 'forecast90' in attributes")
+                failed = True
 
             # Packed forecast should have fewer entries than original (compression)
             # Format is {minute: value} dict with only changed values
             packed = attrs["forecast"]
             packed10 = attrs["forecast10"]
+            packed90 = attrs["forecast90"]
             original_count = len(pv_forecast_minute)
             packed_count = len(packed)
             if packed_count >= original_count:
@@ -1600,6 +1606,10 @@ def test_pack_and_store_forecast(my_predbat):
             # Check forecast10 has same structure (even=0.5, odd=1.0)
             failed |= check_packed_value(packed10, 0, 0.5, "packed10")
             failed |= check_packed_value(packed10, 60, 1.0, "packed10")
+
+            # Check forecast90 has same structure (even=1.5, odd=3.0)
+            failed |= check_packed_value(packed90, 0, 1.5, "packed90")
+            failed |= check_packed_value(packed90, 60, 3.0, "packed90")
 
     finally:
         test_api.cleanup()
@@ -3088,7 +3098,7 @@ def test_pv_calibration_power_conversion(my_predbat):
         pv_forecast_minute10 = {m: 0.04 for m in range(total_minutes)}
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+        adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         # Returned minute data must be non-negative
         if any(v < 0 for v in adj_minute.values()):
@@ -3142,7 +3152,7 @@ def test_pv_calibration_sparse_recent_history_no_crash(my_predbat):
         pv_forecast_data = [{"period_start": base.midnight_utc.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 0.05}]
 
         try:
-            adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
         except TypeError as e:
             print("ERROR: pv_calibration raised TypeError with sparse recent history: {}".format(e))
             failed = True
@@ -3269,7 +3279,7 @@ def test_pv_calibration_partial_history(my_predbat):
                     pv_forecast_hist[m_ago] = 1.0
 
             with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-                solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+                solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
             worst = solar.pv_calibration_worst_scaling
             best = solar.pv_calibration_best_scaling
@@ -3366,7 +3376,7 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
 
         max_kwh = 2.0  # panel peak output cap in kW
-        adj_minute, adj_minute10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         expected_cap = 1.2 * max_kwh / 60 * plan_interval  # the 1.2 * max_kwh ceiling binds here
 
@@ -3465,7 +3475,7 @@ def _cap_scenario(max_kwh, raw_kw, hist_kw, hist_forecast_kw=1.0, days_back=5, c
         pv_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": raw_kw * plan_interval / 60.0})
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
     return test_api, adj_m, adj_m10, adj_data, plan_interval, gen_start, gen_end
 
@@ -3759,7 +3769,7 @@ def test_pv_calibration_no_history_not_zeroed(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 1.0 * plan_interval / 60})
 
         max_kwh = 3.0  # declared array capacity (kwp * efficiency) - well above the 1 kW raw forecast, so the ceiling never binds
-        solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         # At least one calibrated value should be non-zero where the input forecast was non-zero.
         any_nonzero_cl = any(entry.get("pv_estimateCL", 0) > 0 for entry in pv_forecast_data)
@@ -3820,7 +3830,7 @@ def test_pv_calibration_no_history_ceiling_clips_raw(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 5.0 * plan_interval / 60})
 
         max_kwh = 3.0
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         expected_cap = 1.2 * max_kwh / 60 * plan_interval
         worst_slot = 0
@@ -4002,7 +4012,7 @@ def test_pv_calibration_synthetic_values(my_predbat):
         # synthetic pv_forecast dict without going through the real h0 pipeline
         # (which relies on now_utc_exact returning the mocked time).
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-            adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
         result = {
             "total_adj": solar.pv_calibration_total_adjustment,
             "avg_scaling": getattr(solar, "pv_calibration_average_scaling", None),
@@ -4209,7 +4219,7 @@ def test_pv_calibration_average_day_scaling_ratio_of_sums(my_predbat):
         pv_data = []
 
         with patch("solcast.history_attribute_to_minute_data", return_value=(forecast_hist, days_back)):
-            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         average = getattr(solar, "pv_calibration_average_scaling", None)
     finally:
@@ -4311,7 +4321,7 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
         pv_data = []
 
         with patch("solcast.history_attribute_to_minute_data", return_value=(forecast_hist, days_back)):
-            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         total_adjustment = solar.pv_calibration_total_adjustment
     finally:
@@ -4416,7 +4426,7 @@ def test_pv_calibration_60min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each annotated entry should cover the full FORECAST_PERIOD minutes.
     # Expected calibrated kWh per entry ≈ FORECAST_KW * FORECAST_PERIOD / 60 = 2.0 kWh.
@@ -4539,7 +4549,7 @@ def test_pv_calibration_15min_period(my_predbat):
             pv_forecast_hist[minutes_ago] = float(FORECAST_KW)
 
     with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days)):
-        adj_m, adj_m10, adj_data = solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
+        adj_m, adj_m10, adj_m90, adj_data = solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=True, divide_by=divide_by_factor, max_kwh=10.0, forecast_days=solar.forecast_days, period=FORECAST_PERIOD)
 
     # Each 15-min entry should be annotated with the single 30-min plan slot that
     # starts at the entry timestamp.  slots_per_period=max(1,round(15/30))=1, so
@@ -4733,7 +4743,7 @@ def test_pv_calibration_skips_system_down_days(my_predbat):
 
     try:
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
-            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         avg = getattr(solar, "pv_calibration_average_scaling", None)
         total_adj = solar.pv_calibration_total_adjustment
@@ -4814,7 +4824,7 @@ def test_pv_calibration_all_days_down(my_predbat):
     try:
         with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, days_back)):
             # Must not raise ZeroDivisionError or any other exception
-            solar.pv_calibration(pv_m, pv_m10, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
+            solar.pv_calibration(pv_m, pv_m10, {}, pv_data, create_pv10=False, divide_by=1.0, max_kwh=5.0, forecast_days=solar.forecast_days)
 
         total_adj = solar.pv_calibration_total_adjustment
         if abs(total_adj - 1.0) > 0.01:
