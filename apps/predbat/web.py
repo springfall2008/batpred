@@ -74,6 +74,7 @@ from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+import debug_history
 from web_annual import AnnualPage
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
@@ -455,6 +456,9 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
         app.router.add_get("/debug_plan", self.html_debug_plan)
+        app.router.add_get("/debug_history_list", self.html_debug_history_list)
+        app.router.add_get("/debug_history_download", self.html_debug_history_download)
+        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
@@ -876,6 +880,7 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
@@ -2775,6 +2780,55 @@ chart.render();
         """
         yaml_debug = self.base.create_debug_yaml(write_file=False)
         return await self.html_file("predbat_debug.yaml.txt", yaml_debug)
+
+    def _storage(self):
+        """Return the Storage component, or None when it is unavailable."""
+        components = getattr(self.base, "components", None)
+        return components.get_component("storage") if components else None
+
+    async def html_debug_history_list(self, request):
+        """
+        Return the rolling debug-history snapshot index as JSON, newest-first with
+        steps_back annotated - consumed by the plan table's History/Yesterday view.
+        """
+        snapshots = await debug_history.list_snapshots(self._storage())
+        return web.json_response(debug_history.annotate_steps_back(snapshots))
+
+    async def html_debug_history_download(self, request):
+        """
+        Download one retained debug-history snapshot by id (?id=<snapshot_id>, or
+        ?id=latest / omitted for the newest one), for #4417.
+        """
+        storage = self._storage()
+        snapshot_id = request.query.get("id") or "latest"
+        data = await debug_history.load_snapshot(storage, snapshot_id)
+        if data is None:
+            return web.Response(content_type="text/html", text="Snapshot {} not found".format(snapshot_id), status=404)
+
+        if snapshot_id == "latest":
+            snapshots = await debug_history.list_snapshots(storage)
+            snapshot_id = snapshots[0]["id"] if snapshots else snapshot_id
+
+        filename = debug_history.snapshot_filename(snapshot_id)
+        return await self.html_file(filename, data)
+
+    async def html_debug_history_download_all(self, request):
+        """
+        Download every retained debug-history snapshot as a single gzip tarball, so a
+        bug report can be gathered with one link instead of chasing a user through the
+        per-snapshot picker for the right moment, for #4417.
+        """
+        storage = self._storage()
+        named_snapshots = await debug_history.load_all_snapshots(storage)
+        if not named_snapshots:
+            return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
+
+        archive_bytes = debug_history.build_archive(named_snapshots)
+        return web.Response(
+            content_type="application/gzip",
+            body=archive_bytes,
+            headers={"Content-Disposition": "attachment; filename=predbat_debug_history.tgz"},
+        )
 
     async def html_file_load(self, filename, also_file=None, as_file=None):
         """
