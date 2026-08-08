@@ -199,6 +199,44 @@ def test_pv90_forecast_uses_published_p90(my_predbat):
     return failed
 
 
+def test_pv90_step_arrays_built(my_predbat):
+    """calculate_plan must build p90 step arrays with the same keys as the nominal ones."""
+    failed = False
+    if not hasattr(my_predbat, "pv_forecast_minute90_step"):
+        print("ERROR: pv_forecast_minute90_step was not built")
+        return True
+    if not hasattr(my_predbat, "load_minutes_step90"):
+        print("ERROR: load_minutes_step90 was not built")
+        return True
+    if set(my_predbat.pv_forecast_minute90_step.keys()) != set(my_predbat.pv_forecast_minute_step.keys()):
+        print("ERROR: pv_forecast_minute90_step keys differ from pv_forecast_minute_step keys")
+        failed = True
+    if set(my_predbat.load_minutes_step90.keys()) != set(my_predbat.load_minutes_step.keys()):
+        print("ERROR: load_minutes_step90 keys differ from load_minutes_step keys")
+        failed = True
+    total = sum(my_predbat.load_minutes_step.values())
+    total90 = sum(my_predbat.load_minutes_step90.values())
+    if total > 0 and total90 >= total:
+        print("ERROR: load_minutes_step90 total {} is not below the nominal {} - load_scaling90 was not applied".format(total90, total))
+        failed = True
+    return failed
+
+
+def test_pv90_missing_series_does_not_crash(my_predbat):
+    """A replayed debug dump has no pv_forecast_minute90; the plan must still build its step array."""
+    failed = False
+    saved = my_predbat.pv_forecast_minute90
+    my_predbat.pv_forecast_minute90 = {}
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    except KeyError as error:
+        print("ERROR: calculate_plan raised KeyError {} with an empty pv_forecast_minute90 - the p50 guard is missing".format(error))
+        failed = True
+    finally:
+        my_predbat.pv_forecast_minute90 = saved
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -208,4 +246,7 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_config_read(my_predbat)
     failed |= test_pv90_forecast_fallback_to_p50(my_predbat)
     failed |= test_pv90_forecast_uses_published_p90(my_predbat)
+    my_predbat.calculate_plan(recompute=True)
+    failed |= test_pv90_step_arrays_built(my_predbat)
+    failed |= test_pv90_missing_series_does_not_crash(my_predbat)
     return failed

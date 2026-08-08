@@ -1132,14 +1132,33 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
+        load_minutes_step90 = self.step_data_history(
+            self.load_minutes,
+            self.minutes_now,
+            forward=False,
+            scale_today=self.load_inday_adjustment,
+            scale_fixed=self.load_scaling90,
+            type_load=True,
+            load_forecast=self.load_forecast,
+            load_scaling_dynamic=self.load_scaling_dynamic,
+            cloud_factor=self.metric_load_divergence,
+            load_adjust=self.manual_load_adjust,
+            load_baseline=self.dynamic_load_baseline,
+        )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
+        # Guard against a missing p90 series (older debug dumps replayed without a forecast90 fetch)
+        if not self.pv_forecast_minute90:
+            self.pv_forecast_minute90 = dict(self.pv_forecast_minute)
+        pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Save step data for debug
         self.load_minutes_step = load_minutes_step
         self.load_minutes_step10 = load_minutes_step10
+        self.load_minutes_step90 = load_minutes_step90
         self.pv_forecast_minute_step = pv_forecast_minute_step
         self.pv_forecast_minute10_step = pv_forecast_minute10_step
+        self.pv_forecast_minute90_step = pv_forecast_minute90_step
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
