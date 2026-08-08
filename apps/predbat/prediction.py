@@ -795,8 +795,10 @@ class Prediction:
 
             # discharge freeze, reset charge rate by default
             if set_export_freeze:
-                # Freeze mode
-                if (export_window_active) and export_limit_now < 100.0 and (set_export_freeze and (export_limit_now == 99.0 or set_export_freeze_only)):
+                # Freeze mode - PV surplus beyond load/export still charges the battery on inverters that
+                # route it there during an export freeze (e.g. FoxESS "Feed-in First"), rather than clipping
+                # it, so only force the charge rate to zero when the inverter genuinely can't do that (#4207).
+                if (export_window_active) and export_limit_now < 100.0 and (set_export_freeze and (export_limit_now == 99.0 or set_export_freeze_only)) and not self.inverter_can_charge_during_export:
                     charge_rate_now = battery_rate_min  # 0
 
             # Set discharge during charge?
@@ -1010,8 +1012,9 @@ class Prediction:
                     # Battery draw is only subject to inverter limit for the AC part
                     if inverter_hybrid:
                         charge_rate_now_dc = battery_rate_max_charge_dc
-                        # Freeze mode
-                        if set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
+                        # Freeze mode - see the equivalent non-hybrid guard above (#4207): only clip PV
+                        # surplus to zero-charge when the inverter can't route it to the battery itself.
+                        if set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only) and not self.inverter_can_charge_during_export:
                             charge_rate_now_dc = battery_rate_min  # 0
 
                         charge_rate_now_curve_dc = (

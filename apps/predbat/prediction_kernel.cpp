@@ -27,7 +27,7 @@
 #include <vector>
 
 #define PK_ABI_VERSION 2
-#define PK_PARITY_REVISION 2
+#define PK_PARITY_REVISION 3
 #define PK_MAX_CARS 4
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -579,9 +579,12 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
             }
         }
 
-        // Discharge freeze - prediction.py:764-768
+        // Discharge freeze - prediction.py:797-802
+        // PV surplus beyond load/export still charges the battery on inverters that route it there during
+        // an export freeze (e.g. FoxESS "Feed-in First"), rather than clipping it, so only force the charge
+        // rate to zero when the inverter genuinely can't do that (#4207).
         if (c->set_export_freeze) {
-            if (export_window_active && export_limit_now < 100.0 && (c->set_export_freeze && (export_limit_now == 99.0 || c->set_export_freeze_only))) {
+            if (export_window_active && export_limit_now < 100.0 && (c->set_export_freeze && (export_limit_now == 99.0 || c->set_export_freeze_only)) && !c->inverter_can_charge_during_export) {
                 charge_rate_now = battery_rate_min; // 0
             }
         }
@@ -747,8 +750,8 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
             } else {
                 if (inverter_hybrid) {
                     double charge_rate_now_dc = battery_rate_max_charge_dc;
-                    // Freeze mode - prediction.py:973-975
-                    if (c->set_export_freeze && export_window_active && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only)) {
+                    // Freeze mode - prediction.py:1013-1017, see the equivalent non-hybrid guard above (#4207)
+                    if (c->set_export_freeze && export_window_active && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only) && !c->inverter_can_charge_during_export) {
                         charge_rate_now_dc = battery_rate_min; // 0
                     }
                     // Note: Python passes the un-rounded soc for the DC-rate lookup here

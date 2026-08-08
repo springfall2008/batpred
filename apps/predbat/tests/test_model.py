@@ -1153,9 +1153,21 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         inverter_loss=0.5,
         assert_clipped=24 * 2,
     )
-    failed |= simple_scenario("battery_discharge_freeze", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10)
-    failed |= simple_scenario("battery_discharge_freeze2", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, set_export_freeze_only=True)
-    failed |= simple_scenario("battery_discharge_freeze_only", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=0, battery_soc=10, set_export_freeze_only=True)
+    # These freeze scenarios test an inverter that genuinely can't route PV surplus to the battery during
+    # an export freeze, hence inverter_can_charge_during_export=False - see battery_discharge_freeze_pv_charge
+    # below for the default (True) case, where surplus PV charges the battery instead of being clipped (#4207).
+    failed |= simple_scenario("battery_discharge_freeze", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, inverter_can_charge_during_export=False)
+    failed |= simple_scenario(
+        "battery_discharge_freeze2", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=99, battery_soc=10, set_export_freeze_only=True, inverter_can_charge_during_export=False
+    )
+    failed |= simple_scenario(
+        "battery_discharge_freeze_only", my_predbat, 0, 0.5, assert_final_metric=-export_rate * 24 * 0.5, assert_final_soc=10, with_battery=True, discharge=0, battery_soc=10, set_export_freeze_only=True, inverter_can_charge_during_export=False
+    )
+    # #4207: with the default inverter_can_charge_during_export=True, PV surplus beyond load during a freeze
+    # charges the battery (e.g. FoxESS "Feed-in First") rather than being clipped - SoC should rise by the
+    # full PV amount over the 24h window instead of staying flat at battery_soc.
+    failed |= simple_scenario("battery_discharge_freeze_pv_charge", my_predbat, 0, 0.5, assert_final_metric=0, assert_final_soc=10 + 24 * 0.5, with_battery=True, discharge=99, battery_soc=10)
+    failed |= simple_scenario("battery_discharge_freeze_pv_charge_hybrid", my_predbat, 0, 0.5, assert_final_metric=0, assert_final_soc=10 + 24 * 0.5, with_battery=True, discharge=99, battery_soc=10, hybrid=True)
 
     # Force discharge with PV: penalty = discharge_hours * pv_kw * export_rate = 24 * 0.5 * export_rate (full 24h forecast window in these model tests)
     failed |= simple_scenario(
