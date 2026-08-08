@@ -253,6 +253,7 @@ def download_predbat_release_archive(tag, repository=None, target_dir=None):
     print("Downloading release archive {}".format(url))
 
     temp_path = None
+    response = None
     try:
         response = requests.get(url, headers={}, stream=True)
         if not response.ok:
@@ -277,6 +278,16 @@ def download_predbat_release_archive(tag, repository=None, target_dir=None):
         print("Error: Exception while downloading release archive {}: {}".format(url, e))
         remove_file_quietly(temp_path)
         return None
+    finally:
+        # A streamed response only returns its connection to the pool once the body has
+        # been consumed, so the paths that bail out early (a non-OK status, or the size cap
+        # tripping part way through) would hold the socket open until garbage collection.
+        # Those are exactly the paths an update retries, so close on every exit instead.
+        if response is not None and hasattr(response, "close"):
+            try:
+                response.close()
+            except Exception as e:
+                print("Warn: Failed to close the release archive response: {}".format(e))
 
 
 def match_archive_member(member_name):

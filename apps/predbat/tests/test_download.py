@@ -849,6 +849,26 @@ class _MockStreamResponse:
         self.chunks = chunks
         self.ok = ok
         self.status_code = status_code
+        self.closed = False
+
+    def iter_content(self, chunk_size=None):
+        """Yield the configured chunks, ignoring the requested chunk size."""
+        for chunk in self.chunks:
+            yield chunk
+
+    def close(self):
+        """Record that the connection was released, as a real streamed response requires."""
+        self.closed = True
+
+
+class _MockUnclosableResponse:
+    """A streamed response with no close() at all, standing in for a simpler test mock."""
+
+    def __init__(self, chunks, ok=True, status_code=200):
+        """Store the chunks the fake response will yield."""
+        self.chunks = chunks
+        self.ok = ok
+        self.status_code = status_code
 
     def iter_content(self, chunk_size=None):
         """Yield the configured chunks, ignoring the requested chunk size."""
@@ -1019,6 +1039,7 @@ def _test_download_release_archive_success(my_predbat):
             called_url = mock_get.call_args[0][0]
             assert called_url == "https://github.com/owner/repo/archive/v8.30.8.tar.gz"
             assert mock_get.call_args.kwargs.get("stream") is True, "The archive must be streamed, not buffered in memory"
+            assert response.closed is True, "The streamed response must be closed to release the connection"
 
     finally:
         shutil.rmtree(temp_dir)
@@ -1027,7 +1048,7 @@ def _test_download_release_archive_success(my_predbat):
 
 def _test_download_release_archive_failure(my_predbat):
     """
-    Test a failed release archive request returns None
+    Test a failed release archive request returns None and releases the connection
     """
     temp_dir = tempfile.mkdtemp()
 
@@ -1036,9 +1057,17 @@ def _test_download_release_archive_failure(my_predbat):
 
         with patch("download.requests.get", return_value=response):
             assert download_predbat_release_archive("v8.30.8", target_dir=temp_dir) is None
+        assert response.closed is True, "A non-OK response must still be closed, its body is never read"
 
         with patch("download.requests.get", side_effect=Exception("Network error")):
             assert download_predbat_release_archive("v8.30.8", target_dir=temp_dir) is None
+
+        # A response object that has no close() at all must not break the download
+        unclosable = _MockUnclosableResponse([b"archive-bytes"])
+        with patch("download.requests.get", return_value=unclosable):
+            archive_path = download_predbat_release_archive("v8.30.8", target_dir=temp_dir)
+            assert archive_path is not None
+            os.remove(archive_path)
 
         assert os.listdir(temp_dir) == [], "A failed archive download must not leave a partial file behind"
 
@@ -1066,6 +1095,7 @@ def _test_download_release_archive_too_large(my_predbat):
 
         assert result is None
         assert not os.path.exists(temp_path), "The partial archive should be cleaned up"
+        assert response.closed is True, "A response abandoned part way through must still be closed"
 
     finally:
         shutil.rmtree(temp_dir)
