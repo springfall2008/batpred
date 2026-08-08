@@ -420,6 +420,7 @@ sapm
 saverestore
 savez
 scalarstring
+scalings
 searr
 securetoken
 Segoe

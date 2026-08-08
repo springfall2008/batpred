@@ -375,65 +375,167 @@ def test_pv90_load_scaling90_is_absolute(my_predbat):
     return failed
 
 
-def test_pv90_load_scaling90_inversion_warning(my_predbat):
-    """A warning must fire, once per plan (not per slot), when load_scaling90 >= load_scaling - the safety net
-    for CHANGE 3's absolute convention. coverage/cases/predbat_debug_agile1.yaml (load_scaling: 0.5) is exactly
-    the sort of setup this guards: with load_scaling90 at its default 0.7, that case's PV90 scenario has more
-    load than nominal, silently inverting into a second downside case rather than an upside one.
+def _read_load_scalings_via_config(my_predbat, load_scaling, load_scaling10, load_scaling90):
+    """Force load_scaling/load_scaling10/load_scaling90 via config_index and call fetch_config_options for real.
 
-    my_predbat.log is monkeypatched to record every message (rather than replaced outright) so the real
-    logging path is still exercised, matching the style already used elsewhere in this suite for wrapping
-    launch_run_prediction_* functions. Both the inverted case (load_scaling90 >= load_scaling, warning must
-    fire exactly once) and the normal case (load_scaling90 < load_scaling, warning must not fire) are checked
-    with a single calculate_plan() call each.
+    load_scaling90 is expert-mode gated (see config.py), so expert_mode is forced on too - the same technique
+    test_pv90_config_read uses - or fetch_config_options would treat load_scaling90 as disabled and fall back
+    to its CONFIG_ITEMS default regardless of what "value" is set to. load_scaling/load_scaling10 are not
+    gated, so forcing expert_mode has no effect on them beyond what is needed for load_scaling90.
+
+    Returns the resulting (load_scaling, load_scaling10, load_scaling90) runtime attributes after CHANGE 4's
+    clamp has run. Callers are responsible for snapshotting/restoring config_index and my_predbat.__dict__
+    around this call - it does not restore anything itself.
+    """
+    my_predbat.config_index["expert_mode"]["value"] = True
+    my_predbat.config_index["load_scaling"]["value"] = load_scaling
+    my_predbat.config_index["load_scaling10"]["value"] = load_scaling10
+    my_predbat.config_index["load_scaling90"]["value"] = load_scaling90
+    my_predbat.fetch_config_options()
+    return my_predbat.load_scaling, my_predbat.load_scaling10, my_predbat.load_scaling90
+
+
+def _snapshot_load_scaling_config(my_predbat):
+    """Capture config_index["value"] for expert_mode/load_scaling/load_scaling10/load_scaling90, for later restore."""
+    return {name: my_predbat.config_index[name].get("value") for name in ("expert_mode", "load_scaling", "load_scaling10", "load_scaling90")}
+
+
+def _restore_load_scaling_config(my_predbat, snapshot):
+    """Restore config_index["value"] entries captured by _snapshot_load_scaling_config."""
+    for name, value in snapshot.items():
+        my_predbat.config_index[name]["value"] = value
+
+
+def test_pv90_load_scaling_clamp_invariant(my_predbat):
+    """fetch_config_options must clamp load_scaling90 <= load_scaling <= load_scaling10 (CHANGE 4), however the
+    three are configured - this pins CHANGE 4 and supersedes test_pv90_load_scaling90_inversion_warning, which
+    tested the CHANGE 3 warning this clamp makes structurally unreachable and has been removed.
+
+    Two violating configurations are exercised, matching the two inversions CHANGE 4 closes: load_scaling90
+    (0.7) above load_scaling (0.5) - the pv90-side inversion CHANGE 3 used to warn about, and exactly the
+    numbers coverage/cases/predbat_debug_agile1.yaml hits - and load_scaling (2.0) above load_scaling10 (1.1),
+    the older, symmetric pv10-side inversion. Both the invariant and the exact clamped values are asserted, the
+    latter so a clamp that merely swaps which side is wrong (still satisfying the ordering by coincidence)
+    could not slip through.
     """
     failed = False
-    saved_load_scaling = my_predbat.load_scaling
-    saved_load_scaling90 = my_predbat.load_scaling90
-    saved_load_minutes = my_predbat.load_minutes
-    saved_load_forecast_only = my_predbat.load_forecast_only
+    saved_state = my_predbat.__dict__.copy()
+    saved_config = _snapshot_load_scaling_config(my_predbat)
+    try:
+        # pv90-side: load_scaling90 (0.7) is above both load_scaling (0.5) and load_scaling10 (0.6).
+        # min(0.7, 0.6, 0.5) = 0.5; max(0.5, 0.5, 0.6) = 0.6 (load_scaling10 is already the max, unchanged).
+        ls, ls10, ls90 = _read_load_scalings_via_config(my_predbat, 0.5, 0.6, 0.7)
+        if not (ls90 <= ls <= ls10):
+            print("ERROR: invariant load_scaling90 <= load_scaling <= load_scaling10 violated for (0.5, 0.6, 0.7): {} <= {} <= {}".format(ls90, ls, ls10))
+            failed = True
+        if ls90 != 0.5:
+            print("ERROR: load_scaling90 is {}, expected min(0.7, 0.6, 0.5) = 0.5".format(ls90))
+            failed = True
+        if ls10 != 0.6:
+            print("ERROR: load_scaling10 is {}, expected max(0.5, 0.5, 0.6) = 0.6".format(ls10))
+            failed = True
+        if ls != 0.5:
+            print("ERROR: load_scaling is {}, expected the configured 0.5 unchanged (only load_scaling90/load_scaling10 are clamped)".format(ls))
+            failed = True
+
+        # pv10-side: load_scaling (2.0) is above load_scaling10 (1.1). min(0.7, 1.1, 2.0) = 0.7 (unchanged);
+        # max(0.7, 2.0, 1.1) = 2.0.
+        ls, ls10, ls90 = _read_load_scalings_via_config(my_predbat, 2.0, 1.1, 0.7)
+        if not (ls90 <= ls <= ls10):
+            print("ERROR: invariant load_scaling90 <= load_scaling <= load_scaling10 violated for (2.0, 1.1, 0.7): {} <= {} <= {}".format(ls90, ls, ls10))
+            failed = True
+        if ls90 != 0.7:
+            print("ERROR: load_scaling90 is {}, expected min(0.7, 1.1, 2.0) = 0.7".format(ls90))
+            failed = True
+        if ls10 != 2.0:
+            print("ERROR: load_scaling10 is {}, expected max(0.7, 2.0, 1.1) = 2.0".format(ls10))
+            failed = True
+    finally:
+        _restore_load_scaling_config(my_predbat, saved_config)
+        my_predbat.__dict__.clear()
+        my_predbat.__dict__.update(saved_state)
+    return failed
+
+
+def test_pv90_load_scaling_clamp_defaults_unchanged(my_predbat):
+    """The default load_scaling/load_scaling10/load_scaling90 (1.05/1.1/0.7) already satisfy
+    load_scaling90 <= load_scaling <= load_scaling10, so CHANGE 4's clamp must be a no-op on the common,
+    unconfigured path - a clamp that silently altered values nobody needed clamped would be a regression
+    in itself, distinct from (but just as serious as) the clamp not firing when it should.
+    """
+    failed = False
+    saved_state = my_predbat.__dict__.copy()
+    try:
+        my_predbat.fetch_config_options()
+        for name, expected in (("load_scaling", 1.05), ("load_scaling10", 1.1), ("load_scaling90", 0.7)):
+            value = getattr(my_predbat, name, None)
+            if value != expected:
+                print("ERROR: {} is {} with no config override, expected the unclamped CONFIG_ITEMS default {}".format(name, value, expected))
+                failed = True
+    finally:
+        my_predbat.__dict__.clear()
+        my_predbat.__dict__.update(saved_state)
+    return failed
+
+
+def test_pv90_load_scaling_clamp_logs_only_when_changed(my_predbat):
+    """CHANGE 4's clamp log must fire only when clamping actually changes a value: silent on the default path,
+    and precisely on whichever of load_scaling90/load_scaling10 a given violating configuration clamps - not
+    on the one that was already within bounds.
+
+    my_predbat.log is monkeypatched to record every message (and still log for real), matching the technique
+    already used elsewhere in this suite for wrapping launch_run_prediction_* functions.
+    """
+    failed = False
+    saved_state = my_predbat.__dict__.copy()
+    saved_config = _snapshot_load_scaling_config(my_predbat)
     original_log = my_predbat.log
     messages = []
 
     def capturing_log(message, *args, **kwargs):
-        """Record every log message (and still log for real) so the inversion warning can be asserted on."""
+        """Record every log message (and still log for real) so the clamp log can be asserted on."""
         messages.append(message)
         return original_log(message, *args, **kwargs)
 
     my_predbat.log = capturing_log
     try:
-        my_predbat.load_forecast_only = False
-        rate = 0.02  # kWh/minute
-        my_predbat.load_minutes = {minute: (1440 - minute) * rate for minute in range(0, 1441)}
-
-        # Inverted case: load_scaling90 (0.7) >= load_scaling (0.5) - warning must fire exactly once
-        my_predbat.load_scaling = 0.5
-        my_predbat.load_scaling90 = 0.7
+        # Defaults: nothing should be clamped, so no clamp message at all.
         messages.clear()
-        my_predbat.calculate_plan(recompute=True)
-        inversion_warnings = [msg for msg in messages if "load_scaling90" in msg and "acting as a downside" in msg]
-        if not inversion_warnings:
-            print("ERROR: no inversion warning logged with load_scaling90 (0.7) >= load_scaling (0.5): messages were {}".format(messages))
-            failed = True
-        elif len(inversion_warnings) > 1:
-            print("ERROR: inversion warning logged {} times in one calculate_plan() call, expected exactly once per plan: {}".format(len(inversion_warnings), inversion_warnings))
+        my_predbat.fetch_config_options()
+        clamp_messages = [msg for msg in messages if "clamped" in msg]
+        if clamp_messages:
+            print("ERROR: clamp log fired on the unclamped default path: {}".format(clamp_messages))
             failed = True
 
-        # Non-inverted case: load_scaling90 (0.7) < load_scaling (1.05) - warning must not fire
-        my_predbat.load_scaling = 1.05
-        my_predbat.load_scaling90 = 0.7
+        # Only load_scaling90 is clamped here (load_scaling10 (0.6) is already the max) - exactly the
+        # coverage/cases/predbat_debug_agile1.yaml numbers.
         messages.clear()
-        my_predbat.calculate_plan(recompute=True)
-        inversion_warnings = [msg for msg in messages if "load_scaling90" in msg and "acting as a downside" in msg]
-        if inversion_warnings:
-            print("ERROR: inversion warning logged when load_scaling90 (0.7) < load_scaling (1.05): {}".format(inversion_warnings))
+        _read_load_scalings_via_config(my_predbat, 0.5, 0.6, 0.7)
+        ls90_messages = [msg for msg in messages if "load_scaling90 clamped" in msg]
+        ls10_messages = [msg for msg in messages if "load_scaling10 clamped" in msg]
+        if len(ls90_messages) != 1:
+            print("ERROR: expected exactly one load_scaling90 clamp message for (0.5, 0.6, 0.7), got {}: {}".format(len(ls90_messages), ls90_messages))
+            failed = True
+        if ls10_messages:
+            print("ERROR: load_scaling10 clamp message fired for (0.5, 0.6, 0.7) even though load_scaling10 (0.6) was already the max and should be unchanged: {}".format(ls10_messages))
+            failed = True
+
+        # Only load_scaling10 is clamped here (load_scaling90 (0.7) is already the min).
+        messages.clear()
+        _read_load_scalings_via_config(my_predbat, 2.0, 1.1, 0.7)
+        ls90_messages = [msg for msg in messages if "load_scaling90 clamped" in msg]
+        ls10_messages = [msg for msg in messages if "load_scaling10 clamped" in msg]
+        if ls90_messages:
+            print("ERROR: load_scaling90 clamp message fired for (2.0, 1.1, 0.7) even though load_scaling90 (0.7) was already the min and should be unchanged: {}".format(ls90_messages))
+            failed = True
+        if len(ls10_messages) != 1:
+            print("ERROR: expected exactly one load_scaling10 clamp message for (2.0, 1.1, 0.7), got {}: {}".format(len(ls10_messages), ls10_messages))
             failed = True
     finally:
         my_predbat.log = original_log
-        my_predbat.load_scaling = saved_load_scaling
-        my_predbat.load_scaling90 = saved_load_scaling90
-        my_predbat.load_minutes = saved_load_minutes
-        my_predbat.load_forecast_only = saved_load_forecast_only
+        _restore_load_scaling_config(my_predbat, saved_config)
+        my_predbat.__dict__.clear()
+        my_predbat.__dict__.update(saved_state)
     return failed
 
 
@@ -1272,7 +1374,9 @@ def run_pv90_tests(my_predbat):
     my_predbat.calculate_plan(recompute=True)
     failed |= test_pv90_step_arrays_built(my_predbat)
     failed |= test_pv90_load_scaling90_is_absolute(my_predbat)
-    failed |= test_pv90_load_scaling90_inversion_warning(my_predbat)
+    failed |= test_pv90_load_scaling_clamp_invariant(my_predbat)
+    failed |= test_pv90_load_scaling_clamp_defaults_unchanged(my_predbat)
+    failed |= test_pv90_load_scaling_clamp_logs_only_when_changed(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)

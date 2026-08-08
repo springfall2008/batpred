@@ -1230,15 +1230,13 @@ class Plan:
             load_baseline=self.dynamic_load_baseline,
         )
         # load_scaling90 is an ABSOLUTE multiplier of the historical load, exactly like load_scaling10
-        # above - it does not compose with load_scaling. At its default of 0.7 this sits comfortably
-        # below the default load_scaling of 1.05, so pv90 correctly models the low-load "upside" case
-        # for normal setups. But because the two no longer cancel out, a user whose load_scaling is
-        # itself below load_scaling90 ends up with pv90 load HIGHER than nominal - the scenario silently
-        # inverts into a second downside case rather than the upside one it is meant to model. The
-        # arithmetic is deliberately left as a plain absolute multiplier (the repo owner's decision);
-        # the warning below is only so that inversion is visible, once per plan, not per slot.
-        if self.load_scaling90 >= self.load_scaling:
-            self.log("Warn: load_scaling90 ({}) is >= load_scaling ({}) - the PV90 scenario will have more load than nominal, so it is acting as a downside case rather than an upside one".format(self.load_scaling90, self.load_scaling))
+        # above - it does not compose with load_scaling. fetch_config_options() (CHANGE 4) clamps
+        # load_scaling90 <= load_scaling <= load_scaling10 immediately after reading all three from
+        # config, so by the time calculate_plan() runs load_scaling90 can never exceed load_scaling
+        # here - the pv90-load-inverts-into-a-second-downside-case failure mode CHANGE 3 used to warn
+        # about from this call site is now structurally unreachable, and the warning has been removed
+        # (see fetch_config_options' clamp-changed-a-value log instead, which fires there once per
+        # config read rather than here once per plan).
         load_minutes_step90 = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
