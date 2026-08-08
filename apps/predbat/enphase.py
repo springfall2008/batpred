@@ -351,6 +351,11 @@ class EnphaseAPI(ComponentBase):
         self.last_midnight_utc = None
         self.last_error_status = None  # HTTP status (or None) of the most recent request_json() failure
 
+        # site_id -> {family_key: True} for schedule/reserve writes that failed outright (all
+        # retries exhausted), so the failure is visible on the dashboard instead of only in the
+        # log - see _note_schedule_write_result / _publish_schedule_write_health.
+        self.schedule_write_failed = {}
+
     def is_alive(self):
         """Return True when the component has started and discovered a site."""
         return self.api_started and bool(self.sites)
@@ -678,14 +683,38 @@ class EnphaseAPI(ComponentBase):
                 local[direction]["enable"] = bool(entry.get("enabled"))
         self._schedule_seeded.add(site_id)
 
+    async def _publish_schedule_write_health(self, site_id):
+        """Publish a dedicated sensor reporting whether recent schedule/reserve writes landed.
+
+        A write that fails outright (a conflict surviving every retry, a failed delete or
+        activation) previously only ever appeared as a log warning - `predbat.status` kept
+        reporting the *intended* plan with no visible sign the cloud never actually accepted it
+        (#4461). This sensor stays "on" (ok) until a write fails, and reports exactly which
+        families/writes are currently failing so the mismatch is visible on the dashboard.
+        """
+        failures = self.schedule_write_failed.get(site_id, {})
+        self.dashboard_item(
+            f"binary_sensor.{self.prefix}_enphase_{site_id}_schedule_write_ok",
+            state="off" if failures else "on",
+            attributes={
+                "friendly_name": f"Enphase {site_id} Schedule Write Ok",
+                "icon": "mdi:cloud-check-outline" if not failures else "mdi:cloud-alert-outline",
+                "failed": sorted(failures.keys()),
+            },
+            app="enphase",
+        )
+
     async def publish_schedule_settings_ha(self, site_id):
         """Publish the schedule control entities for a site.
 
         Publishes the reserve control plus both the charge-from-grid and export (discharge-to-grid)
         window controls (a configured inverter always supports both - automatic_config requires
         DTG). There is no separate freeze control: Predbat freezes charge via the reserve, and
-        freeze-export is derived automatically from an export target SOC of 99%.
+        freeze-export is derived automatically from an export target SOC of 99%. Also (re)publishes
+        the schedule-write-health sensor, so a write failure is reflected immediately after the
+        attempt (switch_event) and kept current on every subsequent poll (run()).
         """
+        await self._publish_schedule_write_health(site_id)
         local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
         reserve_min = int(self.battery_settings.get(site_id, {}).get("veryLowSocMin", 5) or 5)
         base_name = f"{self.prefix}_enphase_{site_id}_battery_schedule"
@@ -835,11 +864,15 @@ class EnphaseAPI(ComponentBase):
 
         Converts the HA "HH:MM:SS" option times to Enphase "HH:MM" format, then compares against
         the cached cloud schedule via `schedules_equal()`. A matching schedule is a no-op. Otherwise
-        it updates the existing schedule by id (`PUT`) or creates a new one (`POST`). On success it
-        optimistically updates our cached copy to the written state and returns - the periodic
-        settings re-read will correct it if the write did not actually land. A create additionally
-        re-reads the schedules once, to capture the cloud-assigned scheduleId (so later edits update
-        in place rather than creating duplicates - the write responses do not return the id).
+        it updates the existing schedule by id (`PUT`) or creates a new one (`POST`), each retrying
+        once on a conflict via `_put_schedule_with_conflict_retry` / `_create_schedule_with_conflict_retry`.
+        On success it optimistically updates our cached copy to the written state and returns - the
+        periodic settings re-read will correct it if the write did not actually land. A create
+        additionally re-reads the schedules once, to capture the cloud-assigned scheduleId (so later
+        edits update in place rather than creating duplicates - the write responses do not return the
+        id). Every attempted write records its outcome via `_note_schedule_write_result`, so a write
+        that is attempted but never lands is visible instead of silently leaving the device on its
+        previous schedule.
         Returns True if a write was issued.
         """
         start_hm = ha_time_to_enphase(start_time_ha)
@@ -858,7 +891,8 @@ class EnphaseAPI(ComponentBase):
             # and keeps enforcing the window), so the only way to retire a window is to delete it.
             # A lingering window would also conflict with the other family's next write.
             self.log(f"Enphase: Deleting {family} schedule {schedule_id} on site {site_id} (window no longer required)")
-            if not await self._delete_schedule(site_id, schedule_id):
+            if not await self._delete_schedule(site_id, schedule_id, context=f"{family} disable"):
+                self._note_schedule_write_result(site_id, family_key, False)
                 return False
             # Drop the id/window so the next apply is a no-op while disabled, and a re-enable creates
             # a fresh schedule rather than PUTting an id the cloud no longer knows.
@@ -867,6 +901,7 @@ class EnphaseAPI(ComponentBase):
                 cleared.pop(field, None)
             cleared["enabled"] = False
             self.schedules.setdefault(site_id, {})[family_key] = cleared
+            self._note_schedule_write_result(site_id, family_key, True)
             return True
         if schedule_id:
             self.log(f"Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
@@ -878,10 +913,11 @@ class EnphaseAPI(ComponentBase):
                 self.schedules.setdefault(site_id, {})[family_key] = updated
         else:
             self.log(f"Enphase: Creating {family} schedule on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
-            result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config", json_body=payload)
+            result = await self._create_schedule_with_conflict_retry(site_id, family_key, payload)
             if result is not None:
                 # Re-read once so we learn the new schedule's cloud-assigned id for future edits.
                 await self.get_schedules(site_id)
+        self._note_schedule_write_result(site_id, family_key, result is not None)
         return result is not None
 
     async def _put_schedule_with_conflict_retry(self, site_id, family_key, schedule_id, payload):
@@ -894,7 +930,7 @@ class EnphaseAPI(ComponentBase):
         and retrying it again would just burn API calls every cycle.
         """
         for attempt in range(2):
-            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
+            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload, context=f"{family_key.upper()} schedule update")
             if result is not None or self.last_error_status != 409 or attempt:
                 return result
             self.log(f"Enphase: Schedule {schedule_id} on site {site_id} conflicts with another schedule; re-reading schedules and retrying once")
@@ -902,18 +938,39 @@ class EnphaseAPI(ComponentBase):
             schedule_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id") or schedule_id
         return None
 
+    async def _create_schedule_with_conflict_retry(self, site_id, family_key, payload):
+        """POST a new schedule, re-reading and retrying once if the cloud reports a conflict.
+
+        Mirrors `_put_schedule_with_conflict_retry` for the create path, which #4428 left without a
+        retry: an HTTP 409 here means an untracked schedule already occupies the family - a sibling
+        `_prune_sibling_schedules` had not yet reached, or one left over from an earlier create whose
+        response Predbat never saw. Re-reading picks it up: `get_schedules` prunes any sibling (so
+        the retried POST no longer collides with it) and, if a schedule remains in the family, adopts
+        its id (so the retry goes out as a PUT instead of a second POST). Retried once only, matching
+        the PUT path.
+        """
+        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config", json_body=payload, context=f"{family_key.upper()} schedule create")
+        if result is not None or self.last_error_status != 409:
+            return result
+        self.log(f"Enphase: Create of a new {family_key.upper()} schedule on site {site_id} conflicts with another schedule; re-reading schedules and retrying once")
+        await self.get_schedules(site_id)
+        schedule_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id")
+        if schedule_id:
+            return await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload, context=f"{family_key.upper()} schedule update after create conflict")
+        return await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config", json_body=payload, context=f"{family_key.upper()} schedule create retry")
+
     def _is_read_only(self):
         """Return True when Predbat is in read-only mode and must not write to the account."""
         return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
-    async def _delete_schedule(self, site_id, schedule_id):
+    async def _delete_schedule(self, site_id, schedule_id, context=None):
         """Delete one schedule by id. Returns True on success.
 
         Deletion is a POST to the schedule's /delete sub-resource. The gateway does not allow the
         DELETE verb here - it rejects it with "403 Invalid CORS request" - and because a 403 counts
         as an auth failure, using it also burned a re-login on every attempt.
         """
-        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True)
+        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True, context=context)
         return result is not None
 
     async def _prune_sibling_schedules(self, site_id, family_key, details, keep):
@@ -959,6 +1016,23 @@ class EnphaseAPI(ComponentBase):
         if isinstance(entry, dict):
             entry["startTime"] = ""
 
+    def _note_schedule_write_result(self, site_id, family_key, ok):
+        """Track whether the most recent write/activation for a schedule family landed on the cloud.
+
+        A write that fails outright (a conflict surviving every retry, a failed delete, a failed
+        activation PUT) otherwise only ever shows up as a generic HTTP warning in the log -
+        `predbat.status` keeps reporting the *intended* plan with no visible sign the device never
+        actually changed (#4461). ``count_errors`` feeds the existing per-component error count on
+        the `components_healthy` sensor; ``schedule_write_failed`` backs the dedicated per-family
+        warning published by `_publish_schedule_write_health`. Cleared on the next successful write.
+        """
+        failures = self.schedule_write_failed.setdefault(site_id, {})
+        if ok:
+            failures.pop(family_key, None)
+        else:
+            failures[family_key] = True
+            self.count_errors += 1
+
     async def _activate_control_mode(self, site_id, family, body, apply_cache, label):
         """Commit a freshly written schedule to the gateway via a batterySettings PUT.
 
@@ -972,15 +1046,17 @@ class EnphaseAPI(ComponentBase):
         params = {"source": "enho"}
         if self.user_id:
             params["userId"] = self.user_id
-        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body, context=f"{label} activation")
+        family_key = family.lower()
         if result is not None:
             apply_cache(self.battery_settings.setdefault(site_id, {}))
-            entry = self.schedules.get(site_id, {}).get(family.lower())
+            entry = self.schedules.get(site_id, {}).get(family_key)
             if isinstance(entry, dict):
                 entry.pop("status", None)
         else:
             self.log(f"Warn: Enphase: {label} activation failed for site {site_id}")
             self._invalidate_cached_schedule(site_id, family)
+        self._note_schedule_write_result(site_id, family_key, result is not None)
         return result is not None
 
     async def _activate_cfg_mode(self, site_id, family=SCHEDULE_CHARGE):
@@ -1058,11 +1134,12 @@ class EnphaseAPI(ComponentBase):
         params = {"source": "enho"}
         if self.user_id:
             params["userId"] = self.user_id
-        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": int(reserve)})
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": int(reserve)}, context="reserve update")
         if result is not None:
             # Optimistically cache the written reserve; the periodic profile re-read will correct
             # it if the write did not actually land (e.g. the gateway never activated it).
             self.profile.setdefault(site_id, {})["reserve"] = int(reserve)
+        self._note_schedule_write_result(site_id, "reserve", result is not None)
         return result
 
     async def apply_battery_schedule(self, site_id):
@@ -1677,7 +1754,7 @@ class EnphaseAPI(ComponentBase):
         stripped = (text or "").lstrip().lower()
         return stripped.startswith("<!doctype") or stripped.startswith("<html")
 
-    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None, allow_empty=False):
+    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None, allow_empty=False, context=None):
         """Perform an authenticated JSON request with retries and a single 401 re-login.
 
         Builds the request URL from BASE_URL + path and attaches family-appropriate headers
@@ -1688,7 +1765,10 @@ class EnphaseAPI(ComponentBase):
           attempt); otherwise it performs one login() and retries once.
         - HTTP 429 and 5xx responses, plus timeouts/connection errors, are retried with
           jittered backoff up to ENPHASE_RETRIES times.
-        - Any other non-200 status is treated as a terminal failure.
+        - Any other non-200 status is treated as a terminal failure, logged as
+          "HTTP {method} {path} -> {status}" (plus ``context`` when the caller gave one, e.g. the
+          schedule family/window being written) so a bare-path 409 is never ambiguous between the
+          GET, the POST create and the PUT update that all share that path shape.
         ``allow_empty`` additionally accepts a 204/empty body as success (returning {} rather than
         None), as a DELETE returns no content.
         Every outcome is recorded via record_api_call("enphase", ...) for metrics/health.
@@ -1732,7 +1812,8 @@ class EnphaseAPI(ComponentBase):
                 continue
 
             if status != 200 and not (allow_empty and status == 204):
-                self.log(f"Warn: Enphase: HTTP {status} on {path}")
+                context_suffix = f" ({context})" if context else ""
+                self.log(f"Warn: Enphase: HTTP {method} {path} -> {status}{context_suffix}")
                 record_api_call("enphase", False, "client_error")
                 self.last_error_status = status
                 self.failures_total += 1

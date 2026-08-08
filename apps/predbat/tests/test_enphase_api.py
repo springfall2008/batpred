@@ -45,6 +45,7 @@ class MockEnphaseAPI(EnphaseAPI):
         # so it cannot be assigned directly here. MockBase has no "components" attribute, so the inherited
         # property naturally evaluates to None for these tests.
         self.api_started = False
+        self.count_errors = 0  # normally set by ComponentBase.__init__, which this mock bypasses
         self.initialize(username="user@example.com", password="secret")
 
         # Test instrumentation
@@ -55,10 +56,11 @@ class MockEnphaseAPI(EnphaseAPI):
         self.mock_ha_states = {}
         self.args_set = {}
         self.fatal_signalled = False
+        self.log_messages = []
 
     def log(self, message):
-        """Swallow log output in tests."""
-        pass
+        """Record log output for assertions instead of printing it."""
+        self.log_messages.append(message)
 
     def update_success_timestamp(self):
         """Swallow health-tracking in tests."""
@@ -2059,6 +2061,146 @@ def test_write_schedule_gives_up_after_second_conflict():
     assert [r["method"] for r in api.request_log].count("PUT") == 2  # one retry only
 
 
+def test_write_schedule_create_retries_once_after_conflict_and_adopts_id():
+    """A 409 on the POST-create path re-reads, adopts the now-visible schedule, and PUTs it.
+
+    #4428 only added conflict-retry to the PUT (update) path; the create path (taken whenever no
+    id is cached yet, e.g. right after a disable/re-enable) could still 409 forever against an
+    untracked schedule already occupying the family - the follow-up flagged in #4428 and reported
+    recurring in #4461.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"supported": True}}  # no id yet -> takes the create path
+    api.set_http_sequence(SCHEDULES_PATH, [(409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}}), (200, _schedules_payload([_cfg_detail("existing", "03:00", "04:00")]))])
+    api.set_http_response(SCHEDULES_PATH + "/existing", 200, {"scheduleId": "existing"})
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is True
+    assert [r["method"] for r in api.request_log] == ["POST", "GET", "PUT", "GET"]
+    assert api.schedules["12345"]["cfg"]["id"] == "existing"
+
+
+def test_write_schedule_create_retries_once_via_post_when_still_no_id():
+    """When the re-read finds nothing to adopt, the retry goes out as a second POST, not a PUT."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"supported": True}}
+    api.set_http_sequence(
+        SCHEDULES_PATH,
+        [
+            (409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}}),
+            (200, _schedules_payload([])),
+            (200, {}),
+            (200, _schedules_payload([_cfg_detail("new2", "03:00", "04:00")])),
+        ],
+    )
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is True
+    assert [r["method"] for r in api.request_log] == ["POST", "GET", "POST", "GET"]
+    assert api.schedules["12345"]["cfg"]["id"] == "new2"
+
+
+def test_write_schedule_create_gives_up_after_second_conflict():
+    """A create-path conflict that survives the re-read fails the write instead of looping."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"supported": True}}
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is False
+    assert [r["method"] for r in api.request_log] == ["POST", "GET", "POST"]  # one retry only
+
+
+def test_request_json_failure_log_includes_method_and_context():
+    """A non-200 response logs the HTTP method and any caller-supplied context.
+
+    Before the fix a 409 on the bare .../schedules path was indistinguishable between the
+    periodic GET and a POST create sharing that same path shape (#4461).
+    """
+    api = MockEnphaseAPI()
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICT"}})
+    run_async(api.request_json("POST", SCHEDULES_PATH, family="battery_config", context="CFG schedule create"))
+    warns = [m for m in api.log_messages if "HTTP POST" in m and "409" in m]
+    assert len(warns) == 1
+    assert "CFG schedule create" in warns[0]
+
+
+def test_write_schedule_create_conflict_log_names_method_and_family():
+    """The generic HTTP-failure log for a create-path 409 says POST and names the family."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"supported": True}}
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    warns = [m for m in api.log_messages if m.startswith("Warn: Enphase: HTTP POST")]
+    assert warns and "CFG schedule create" in warns[0]
+
+
+def test_write_schedule_failure_is_tracked_for_dashboard():
+    """A schedule write that fails outright is counted and flagged for the dashboard.
+
+    Before the fix a persistent conflict only ever showed up as a log warning -
+    predbat.status/components_healthy kept reporting the *intended* plan with no visible sign the
+    write never landed (#4461).
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1", 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sched-1", "02:00", "02:20")]))
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is False
+    assert api.count_errors == 1
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+
+
+def test_write_schedule_success_clears_a_previous_failure_flag():
+    """A successful write clears the failure it previously flagged."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.schedule_write_failed["12345"] = {"cfg": True}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1", 200, {"scheduleId": "sched-1"})
+    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
+    assert wrote is True
+    assert "cfg" not in api.schedule_write_failed["12345"]
+
+
+def test_activate_cfg_mode_failure_is_tracked_for_dashboard():
+    """A failed activation PUT is counted and flagged for the dashboard, like a failed write."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 404, {})
+    ok = run_async(api._activate_cfg_mode("12345"))
+    assert ok is False
+    assert api.count_errors == 1
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+
+
+def test_set_reserve_failure_is_tracked_for_dashboard():
+    """A failed reserve write is counted and flagged for the dashboard under the "reserve" key."""
+    api = MockEnphaseAPI()
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 10}
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 400, {})
+    result = run_async(api.set_reserve("12345", 20))
+    assert result is None
+    assert api.schedule_write_failed["12345"]["reserve"] is True
+
+
+def test_publish_schedule_write_health_reports_failures():
+    """The dedicated write-health sensor reports "off" and lists the failing families."""
+    api = MockEnphaseAPI()
+    api.schedule_write_failed["12345"] = {"cfg": True}
+    run_async(api._publish_schedule_write_health("12345"))
+    item = api.dashboard_items["binary_sensor.predbat_enphase_12345_schedule_write_ok"]
+    assert item["state"] == "off"
+    assert item["attributes"]["failed"] == ["cfg"]
+
+
+def test_publish_schedule_write_health_ok_when_no_failures():
+    """With no tracked failures the sensor reports "on" and an empty failed list."""
+    api = MockEnphaseAPI()
+    run_async(api._publish_schedule_write_health("12345"))
+    item = api.dashboard_items["binary_sensor.predbat_enphase_12345_schedule_write_ok"]
+    assert item["state"] == "on"
+    assert item["attributes"]["failed"] == []
+
+
 def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
     """Replay of the live failure: two writes either side of a re-read must target the same schedule.
 
@@ -2091,6 +2233,17 @@ def run_enphase_api_tests(my_predbat):
     test_write_schedule_disable_deletes_the_schedule()
     test_write_schedule_retries_once_after_conflict()
     test_write_schedule_gives_up_after_second_conflict()
+    test_write_schedule_create_retries_once_after_conflict_and_adopts_id()
+    test_write_schedule_create_retries_once_via_post_when_still_no_id()
+    test_write_schedule_create_gives_up_after_second_conflict()
+    test_request_json_failure_log_includes_method_and_context()
+    test_write_schedule_create_conflict_log_names_method_and_family()
+    test_write_schedule_failure_is_tracked_for_dashboard()
+    test_write_schedule_success_clears_a_previous_failure_flag()
+    test_activate_cfg_mode_failure_is_tracked_for_dashboard()
+    test_set_reserve_failure_is_tracked_for_dashboard()
+    test_publish_schedule_write_health_reports_failures()
+    test_publish_schedule_write_health_ok_when_no_failures()
     test_initialize_defaults()
     test_needs_refresh()
     test_is_alive()
