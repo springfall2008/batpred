@@ -416,6 +416,20 @@ You can also set environment variable `PREDBAT_REPOSITORY` (same `owner/repo` fo
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by turning on the **switch.predbat_auto_update** to auto-update Predbat.
 
+### Update integrity checking
+
+Every file Predbat downloads during an update is checked against the checksum GitHub publishes for it,
+both when it is downloaded and again immediately before it is installed.
+If any file does not match, the update is abandoned and **nothing is installed**, so a corrupted or truncated download can never leave you with a broken Predbat.
+Predbat carries on running the version you already have, and you can simply retry the update.
+
+Updates are fetched as a single compressed archive rather than one request per file, which makes updating considerably quicker.
+This applies to branches such as `main` as well as to releases; if no archive is available Predbat falls back to downloading the files one at a time.
+Only the files that make up Predbat are installed from the archive; your `apps.yaml` and the rest of your configuration are never touched by an update.
+
+If you are updating from a branch rather than a release, a change merged part way through your download can cause a checksum mismatch.
+Predbat retries automatically against a fresh file listing, so this normally resolves itself.
+
 ## Manually installing a Predbat release
 
 The Predbat version selector **select.predbat_update** contains the last 25 Predbat releases, but sometimes if Predbat has stopped working,

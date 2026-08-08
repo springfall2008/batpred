@@ -489,6 +489,7 @@ timeobj
 timestep
 timestr
 timezone
+tmpfs
 tmrw
 tojson
 tottime
