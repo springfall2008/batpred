@@ -666,6 +666,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
     - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
 - Supports both V1 (older firmware) and V2 (newer firmware) time window formats
 - Automatic configuration available - sets up all required Predbat sensors automatically
+- **Inverter timezone must match Predbat's `timezone` setting**: charge/discharge slot times are written to the inverter as plain `HH:MM` values with no timezone attached. The inverter interprets these using its own configured timezone, not Predbat's. If your inverter's timezone is set to UTC (or anything other than Predbat's `timezone`, `Europe/London` by default), the resulting charge/discharge windows will be offset by the difference - for example, a full hour out whenever British Summer Time is in effect. Set the inverter's own timezone to match Predbat's `timezone` setting to avoid this.
 
 #### Configuration Options (solis)
 
