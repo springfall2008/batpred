@@ -66,6 +66,7 @@ class MockGECloudDirect(GECloudDirect):
         self.account_timezone = None
         self.account_timezone_name = None
         self.account_stamp = None
+        self.account_fetch_stamp = None
 
         class MockHAInterface:
             def __init__(self):
@@ -213,6 +214,7 @@ def test_ge_cloud(my_predbat=None):
         ("account_restored_from_cache", _test_account_restored_from_cache, "Account restored from a fresh storage cache"),
         ("account_stale_cache", _test_account_stale_cache_refetch, "Stale cached account is re-fetched"),
         ("account_no_cache", _test_account_no_cache_fetches, "Account fetched when nothing is cached"),
+        ("account_failed_fetch_retry", _test_account_failed_fetch_retries, "Failed account fetch retries without polling"),
         ("account_timezone", _test_set_account_timezone, "Account timezone parsing and fallbacks"),
         ("publish_account", _test_publish_account, "Publish account and timezone sensors"),
         ("publish_account_empty", _test_publish_account_empty, "Publish account with missing details"),
@@ -1177,6 +1179,75 @@ def _test_account_no_cache_fetches(my_predbat):
             return 1
         if ge_cloud.dashboard_items:
             print("ERROR: Expected no entities published for an empty account, got {}".format(list(ge_cloud.dashboard_items)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_failed_fetch_retries(my_predbat):
+    """A failed account fetch retries after the retry interval rather than waiting a full day"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        start = ge_cloud._now_utc_exact
+
+        fetch_calls = []
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens"}
+        fail = True
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            if fail:
+                return {}
+            ge_cloud.account = account_data
+            ge_cloud.set_account_timezone(account_data)
+            return account_data
+
+        ge_cloud.async_get_account = mock_get_account
+
+        # First attempt fails, so the details must not be marked fresh
+        await ge_cloud.update_account(first=True)
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected 1 fetch attempt, got {}".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account_stamp is not None:
+            print("ERROR: Expected account_stamp to stay None after a failed fetch, got {}".format(ge_cloud.account_stamp))
+            return 1
+
+        # A run within the retry interval must not hammer the API
+        ge_cloud._now_utc_exact = start + timedelta(minutes=5)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected no retry within the retry interval, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        # Once the retry interval has passed it tries again, well before the 24 hour lifetime
+        fail = False
+        ge_cloud._now_utc_exact = start + timedelta(minutes=31)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 2:
+            print("ERROR: Expected a retry after the retry interval, got {} fetches".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account_stamp != ge_cloud._now_utc_exact:
+            print("ERROR: Expected account_stamp to be set after a successful fetch, got {}".format(ge_cloud.account_stamp))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "Europe/Athens":
+            print("ERROR: Expected the timezone sensor to be published after the successful retry")
+            return 1
+
+        # Now that it succeeded there should be no further fetches until the details expire
+        ge_cloud._now_utc_exact = start + timedelta(hours=12)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 2:
+            print("ERROR: Expected no fetch while the details are fresh, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        ge_cloud._now_utc_exact = start + timedelta(hours=25)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 3:
+            print("ERROR: Expected a fetch once the details expired, got {} fetches".format(len(fetch_calls)))
             return 1
 
         return 0

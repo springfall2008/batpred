@@ -52,6 +52,8 @@ GE_REGISTER_BATTERY_CUTOFF_LIMIT = 75
 
 # How long the cached customer account details stay valid for before they are fetched again
 ACCOUNT_MAX_AGE_MINUTES = 24 * 60
+# How long to wait before retrying a failed account fetch
+ACCOUNT_RETRY_MINUTES = 30
 
 # 0	Current.Export	Instantaneous current flow from EV
 # 1	Current.Import	Instantaneous current flow to EV
@@ -263,6 +265,7 @@ class GECloudDirect(ComponentBase):
         self.account_timezone = None
         self.account_timezone_name = None
         self.account_stamp = None
+        self.account_fetch_stamp = None
 
         # API request metrics for monitoring
         self.requests_total = 0
@@ -1664,17 +1667,29 @@ class GECloudDirect(ComponentBase):
         """
         if first:
             await self.load_account_from_storage()
+            if self.account:
+                await self.publish_account(self.account)
 
-        expired = self.account_stamp is None or (self.now_utc_exact - self.account_stamp) >= timedelta(minutes=ACCOUNT_MAX_AGE_MINUTES)
-        if not expired and not first:
+        now_utc = self.now_utc_exact
+
+        # Nothing to do while the details we hold are still within their lifetime
+        if self.account_stamp is not None and (now_utc - self.account_stamp) < timedelta(minutes=ACCOUNT_MAX_AGE_MINUTES):
             return
 
-        if expired:
-            self.account_stamp = self.now_utc_exact
-            account = await self.async_get_account()
-            if account and self.storage:
-                await self.storage.save("gecloud", "account", account, format="json", expiry=None)
+        # A failed fetch retries after a short delay rather than a full day, but not on every 60 second
+        # run() tick, so a sustained API outage does not turn into a poll loop
+        if self.account_fetch_stamp is not None and (now_utc - self.account_fetch_stamp) < timedelta(minutes=ACCOUNT_RETRY_MINUTES):
+            return
 
+        self.account_fetch_stamp = now_utc
+        account = await self.async_get_account()
+        if not account:
+            return
+
+        # Only treat the details as fresh once we actually have them
+        self.account_stamp = now_utc
+        if self.storage:
+            await self.storage.save("gecloud", "account", account, format="json", expiry=None)
         await self.publish_account(self.account)
 
     async def async_get_account(self):
