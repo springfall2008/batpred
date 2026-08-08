@@ -321,14 +321,16 @@ def test_pv90_scenario_selects_arrays(my_predbat):
     return failed
 
 
-def test_pv90_no_charge_derate_and_no_io_penalty(my_predbat):
-    """pv90 must use the full charge rate and must not apply the pv10 io_adjusted worst-case rate.
+def test_pv90_no_io_penalty_on_identical_series(my_predbat):
+    """pv90 must not apply the pv10 io_adjusted worst-case import rate substitution.
 
     See test_pv90_scenario_selects_arrays for why reset_inverter/reset_rates and soc_max=0 are needed
-    to keep this deterministic under the shared TEST_REGISTRY instance. rate_max is overridden to a
-    value distinct from the flat import rate set by reset_rates, since the io_adjusted worst-case
-    substitution (import_rate = self.rate_max) would otherwise be a silent no-op when it happens to
-    equal the rate that would have applied anyway.
+    to keep this deterministic under the shared TEST_REGISTRY instance. soc_max=0 means no charging is
+    possible here at all, so this test is deliberately silent on the charge-rate de-rate - that is
+    covered separately by test_pv90_no_charge_derate. rate_max is overridden to a value distinct from
+    the flat import rate set by reset_rates, since the io_adjusted worst-case substitution
+    (import_rate = self.rate_max) would otherwise be a silent no-op when it happens to equal the rate
+    that would have applied anyway.
     """
     from prediction import Prediction
 
@@ -339,10 +341,9 @@ def test_pv90_no_charge_derate_and_no_io_penalty(my_predbat):
     flat_pv = {minute: 0.0 for minute in range(0, n, 5)}
     flat_load = {minute: 0.01 for minute in range(0, n, 5)}
 
-    # Identical series for every scenario: any remaining difference is the de-rate / io penalty
+    # Identical series for every scenario: any remaining difference is the io penalty
     pred = Prediction(my_predbat, flat_pv, flat_pv, flat_load, flat_load, flat_pv, flat_load, soc_kw=0, soc_max=0)
     _force_python_engine(pred)
-    pred.charge_scaling10 = 0.5
     pred.io_adjusted = {minute: 1 for minute in range(0, n)}
     pred.rate_max = 50.0
 
@@ -355,6 +356,55 @@ def test_pv90_no_charge_derate_and_no_io_penalty(my_predbat):
         failed = True
     if abs(pv10[0] - nominal[0]) < 1e-6:
         print("ERROR: pv10 cost matches nominal on identical series - the io_adjusted penalty is not being applied at all, so the pv90 check above is vacuous")
+        failed = True
+    return failed
+
+
+def test_pv90_no_charge_derate(my_predbat):
+    """pv90 must charge at the full rate; the pv10-only charge_scaling10 de-rate must not apply to it.
+
+    test_pv90_no_io_penalty_on_identical_series above runs with soc_max=0, so it never exercises
+    charging at all and cannot see the charge-rate de-rate applied at prediction.py's battery_rate_max_scaling
+    site. This test targets that site directly: a real (non-zero) soc_max, an explicit charge window
+    with no PV in it, and a target SoC well above what is reachable within the window at the nominal
+    rate, so the amount actually charged is genuinely rate-limited - not target-limited or PV-diverted.
+    With charge_scaling10 = 0.5, pv10 must reach roughly half of nominal's final_soc, while pv90's
+    final_soc must equal nominal's exactly.
+    """
+    from prediction import Prediction
+
+    failed = False
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 10.0, 5.0)
+    n = my_predbat.forecast_minutes + my_predbat.minutes_now
+    flat_pv = {minute: 0.0 for minute in range(0, n, 5)}
+    flat_load = {minute: 0.0 for minute in range(0, n, 5)}
+    # battery_rate_max_charge is 1/60.0 kWh/minute (reset_inverter) = 1kW, so a 60-minute window can
+    # deliver at most 1.0kWh at the nominal rate; the 5.0kWh target is well out of reach in that time.
+    charge_window = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 0}]
+    charge_limit = [5.0]
+
+    pred = Prediction(my_predbat, flat_pv, flat_pv, flat_load, flat_load, flat_pv, flat_load, soc_kw=0.0, soc_max=10.0)
+    _force_python_engine(pred)
+    pred.set_charge_low_power = False  # keep the rate at the flat max instead of throttling to just meet the target
+    pred.charge_scaling10 = 0.5
+
+    nominal = pred.run_prediction(charge_limit, charge_window, [], [], PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes)
+    pv90 = pred.run_prediction(charge_limit, charge_window, [], [], PV_SCENARIO_PV90, my_predbat.forecast_minutes)
+    pv10 = pred.run_prediction(charge_limit, charge_window, [], [], PV_SCENARIO_PV10, my_predbat.forecast_minutes)
+
+    nominal_final_soc = nominal[5]
+    pv90_final_soc = pv90[5]
+    pv10_final_soc = pv10[5]
+
+    if nominal_final_soc <= 0:
+        print("ERROR: nominal final_soc is {}, test setup failed to charge the battery at all".format(nominal_final_soc))
+        return True
+    if abs(pv90_final_soc - nominal_final_soc) > 1e-6:
+        print("ERROR: pv90 final_soc {} differs from nominal {} - the pv10-only charge de-rate leaked into pv90".format(pv90_final_soc, nominal_final_soc))
+        failed = True
+    if not (pv10_final_soc < nominal_final_soc - 1e-6):
+        print("ERROR: pv10 final_soc {} is not below nominal {} - the charge de-rate is not being applied, so the pv90 check above is vacuous".format(pv10_final_soc, nominal_final_soc))
         failed = True
     return failed
 
@@ -372,5 +422,6 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_step_arrays_built(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
-    failed |= test_pv90_no_charge_derate_and_no_io_penalty(my_predbat)
+    failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)
+    failed |= test_pv90_no_charge_derate(my_predbat)
     return failed

@@ -421,8 +421,13 @@ class Prediction:
             # Return cached result
             return self.prediction_cache[sim_hash]
 
-        # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine
-        if kernel_supported(self, save, step):
+        # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine.
+        # INTERIM GUARD (remove in Task 5): prediction_kernel.py still treats the scenario argument as a
+        # bare bool ("scenario.pv10 = 1 if pv10 else 0"), so PV_SCENARIO_PV90 (2, truthy) would silently
+        # be simulated as pv10 by the kernel. Excluding pv90 here keeps it on the Python engine - which
+        # does know about the three-valued pv_scenario - until Task 5 teaches the kernel about pv90 too,
+        # at which point this extra condition should be deleted.
+        if kernel_supported(self, save, step) and pv_scenario != PV_SCENARIO_PV90:
             kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache)
             if kernel_result is not None:
                 if not save and cache:
