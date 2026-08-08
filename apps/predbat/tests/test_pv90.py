@@ -57,7 +57,12 @@ def test_pv90_config_items(my_predbat):
 
 
 def test_pv90_calculate_pv90_plan_config_item(my_predbat):
-    """calculate_pv90_plan must exist as an expert-gated switch defaulting to Off (CHANGE 1)."""
+    """calculate_pv90_plan must exist as a switch defaulting to Off, and must NOT be expert-gated.
+
+    It is deliberately visible without expert mode so the community can test the PV90 scenario. The
+    two tuning knobs (pv_metric90_weight, load_scaling90) stay expert-gated, so everyone who turns
+    the switch on runs the same 0.15/0.7 values and their feedback is comparable.
+    """
     failed = False
     by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
     item = by_name.get("calculate_pv90_plan")
@@ -67,8 +72,8 @@ def test_pv90_calculate_pv90_plan_config_item(my_predbat):
     if item.get("type") != "switch":
         print("ERROR: config item calculate_pv90_plan type is {}, expected switch".format(item.get("type")))
         failed = True
-    if item.get("enable") != "expert_mode":
-        print("ERROR: config item calculate_pv90_plan enable is {}, expected expert_mode".format(item.get("enable")))
+    if item.get("enable") is not None:
+        print("ERROR: config item calculate_pv90_plan enable is {}, expected no gating - it must be visible without expert mode".format(item.get("enable")))
         failed = True
     if item.get("default") is not False:
         print("ERROR: config item calculate_pv90_plan default is {}, expected False".format(item.get("default")))
@@ -84,7 +89,8 @@ def test_pv90_config_read(my_predbat):
     the sentinel would survive the call unchanged and this test would fail - unlike a test that only inspects the
     value left over from __init__, which would pass regardless of whether the read ever happened.
 
-    calculate_pv90_plan (and expert_mode, which gates it) are forced On via config_index before the call: with the
+    calculate_pv90_plan is forced On via config_index before the call, and expert_mode with it because
+    pv_metric90_weight and load_scaling90 are still expert-gated even though the switch is not. With the
     switch left at its real default (Off), fetch_config_options' own override (CHANGE 2) would force
     pv_metric90_weight back to 0.0 regardless of whether get_arg("pv_metric90_weight") ever ran, making the
     sentinel check for that attribute vacuous. That switch-off override behaviour is covered separately by
@@ -148,9 +154,10 @@ def test_pv90_switch_on_weight_reads_configured_value(my_predbat):
     CONFIG_ITEMS default of 0.15, unmolested by CHANGE 2's switch-off override - the mirror image of
     test_pv90_switch_default_off_forces_weight_zero above.
 
-    calculate_pv90_plan is expert-mode gated (see config.py), so both it and expert_mode must be forced on via
-    config_index directly - the same technique test_pv90_config_read uses - or fetch_config_options would treat
-    the item as disabled and fall back to its default (False) regardless of what "value" is set to.
+    calculate_pv90_plan itself is not expert-gated, but pv_metric90_weight is, so expert_mode is forced on
+    alongside it via config_index directly - the same technique test_pv90_config_read uses - or
+    fetch_config_options would treat the weight as disabled and fall back to its default regardless of what
+    "value" is set to.
     """
     failed = False
     saved_state = my_predbat.__dict__.copy()

@@ -179,9 +179,11 @@ The default is 1.1 meaning an extra 10% load is added. This will only have an im
 like `load_scaling10` above but discounting the load instead of adding to it. It is an absolute multiplier of the historical load - it does not compose with
 `load_scaling`. The default is 0.7, meaning the PV90% scenario uses 70% of your raw historical load regardless of what `load_scaling` itself is set to.
 This will only have an impact if the PV 90% weighting is non-zero (see `pv_metric90_weight` and `switch.predbat_calculate_pv90_plan` below).<BR>
-Because the two settings do not compose, if your own `load_scaling` is set below `load_scaling90` the PV90% scenario ends up with _more_ load than the
-central scenario, not less - it silently becomes a second downside case rather than the intended upside one. Predbat logs a warning when this happens;
-if you see it, lower `load_scaling90` to below your configured `load_scaling` to restore the intended upside behaviour.
+Because the three load scalings are independent, some combinations would otherwise invert a scenario - a `load_scaling` set below `load_scaling90` would give
+the PV90% case _more_ load than the central case, making it a second downside case rather than the intended upside one. To prevent that, Predbat clamps the
+three values when it reads them, so that `load_scaling90` <= `load_scaling` <= `load_scaling10` always holds. The PV90% case can therefore never end up with
+more load than the central case, and the PV10% case can never end up with less. If a clamp changes one of your configured values Predbat logs which value it
+adjusted and to what; at the default settings nothing is clamped.
 
 **input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving session or Axle export events.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
@@ -204,8 +206,11 @@ A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scen
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
 A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.g. 30 for "30%") - Predbat will clamp it back into range and log a warning, but the resulting plan is likely to look very wrong in the meantime.
 
-**switch.predbat_calculate_pv90_plan** (_expert mode_) When turned On, enables the PV90% upside scenario described below - it is Off by default, and the
+**switch.predbat_calculate_pv90_plan** When turned On, enables the PV90% upside scenario described below - it is Off by default, and the
 PV90% scenario is not simulated at all while it is Off (no extra planning time is spent on it), regardless of what `pv_metric90_weight` is set to.
+This switch is deliberately available without expert mode, as the PV90% scenario is new and we would like feedback on it from as many systems as possible.
+The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone who turns the switch on is running the same
+values and their results are comparable.
 
 **input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 90% PV scenario in calculating solar generation.
 It is the upside mirror of `pv_metric10_weight` above: where the PV10% scenario models a cloudier, higher-load day, the PV90% scenario models a sunnier day

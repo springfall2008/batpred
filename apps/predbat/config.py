@@ -805,7 +805,6 @@ CONFIG_ITEMS = [
         "name": "calculate_pv90_plan",
         "friendly_name": "Calculate PV90 upside plan",
         "type": "switch",
-        "enable": "expert_mode",
         "default": False,
     },
     {
