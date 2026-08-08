@@ -2150,6 +2150,23 @@ def test_cleanup_family_delete_failure_is_tracked_when_disabling():
     assert api.schedule_write_failed["12345"]["cfg"] is True
 
 
+def test_cleanup_family_delete_failure_is_tracked_when_force_recreating():
+    """A failed delete during the multi-family force-recreate path is also tracked as a failure.
+
+    Not just the disable case - a family being cleared because a *different* family is also
+    changing this pass must be counted too, even though _converge_family (called next for every
+    family regardless of this outcome) may go on to self-heal it with a fallback PUT to the same
+    still-known id.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 400, {})
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}, True))
+    assert ok is False
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+    assert api.count_errors == 1
+
+
 def test_converge_family_creates_when_no_id():
     """No id on the cloud, family enabled - creates a new schedule and activates it."""
     api = MockEnphaseAPI()
@@ -2523,6 +2540,7 @@ def run_enphase_api_tests(my_predbat):
     test_cleanup_family_deletes_when_force_recreate()
     test_cleanup_family_nothing_to_do_without_an_id()
     test_cleanup_family_delete_failure_is_tracked_when_disabling()
+    test_cleanup_family_delete_failure_is_tracked_when_force_recreating()
     test_converge_family_creates_when_no_id()
     test_converge_family_updates_in_place_when_id_present()
     test_converge_family_no_op_when_already_matches()

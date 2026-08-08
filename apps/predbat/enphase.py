@@ -1080,8 +1080,10 @@ class EnphaseAPI(ComponentBase):
         reason = "window no longer required" if not target["enabled"] else "clearing before a multi-family change"
         self.log(f"Enphase: Deleting {family} schedule {schedule_id} on site {site_id} ({reason})")
         if not await self._delete_schedule(site_id, schedule_id, context=f"{family} {reason}"):
-            if not target["enabled"]:
-                self._note_schedule_write_result(site_id, family_key, False)
+            # Always recorded, even when target["enabled"] - a failure here is real even if the
+            # family's own _converge_family call (still to come this pass) goes on to self-heal it
+            # with a fallback PUT to the same id, which would then clear this again.
+            self._note_schedule_write_result(site_id, family_key, False)
             return False
         # Drop the id/window so a re-enable creates a fresh schedule rather than PUTting an id the
         # cloud no longer knows about.
