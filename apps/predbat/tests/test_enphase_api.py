@@ -10,7 +10,8 @@ from datetime import datetime, timedelta, timezone
 import base64
 import json as json_module
 import pytz
-from enphase import EnphaseAPI, ENPHASE_REFRESH_SETTINGS
+import enphase
+from enphase import EnphaseAPI, ENPHASE_REFRESH_SETTINGS, ENPHASE_REFRESH_SCHEDULE_SYNC, ENPHASE_RECONCILE_MAX_ATTEMPTS
 from tests.test_infra import run_async
 
 
@@ -45,6 +46,7 @@ class MockEnphaseAPI(EnphaseAPI):
         # so it cannot be assigned directly here. MockBase has no "components" attribute, so the inherited
         # property naturally evaluates to None for these tests.
         self.api_started = False
+        self.count_errors = 0  # normally set by ComponentBase.__init__, which this mock bypasses
         self.initialize(username="user@example.com", password="secret")
 
         # Test instrumentation
@@ -55,10 +57,11 @@ class MockEnphaseAPI(EnphaseAPI):
         self.mock_ha_states = {}
         self.args_set = {}
         self.fatal_signalled = False
+        self.log_messages = []
 
     def log(self, message):
-        """Swallow log output in tests."""
-        pass
+        """Record log output for assertions instead of printing it."""
+        self.log_messages.append(message)
 
     def update_success_timestamp(self):
         """Swallow health-tracking in tests."""
@@ -1063,6 +1066,35 @@ def test_run_first_polls_all_tiers():
     assert api.latest_power["12345"]["watts"] == 450
 
 
+def test_run_reconciles_schedule_periodically_not_every_poll():
+    """run() reconciles on the schedule_sync tier, not on every 60-second poll.
+
+    Independent of the write-switch trigger, so a missed/dropped trigger cannot leave the cloud
+    diverged from the plan indefinitely (#4461) - but it must still respect its own refresh tier
+    rather than reconciling on every call.
+    """
+    api = MockEnphaseAPI()
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = "tok"
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.set_http_response("/pv/settings/12345/battery_status.json", 200, BATTERY_STATUS_PAYLOAD)
+    api.set_http_response("/pv/systems/12345/today", 200, {"stats": [{"totals": {"production": 1000}, "production": [1000], "start_time": 1783724400, "interval_length": 900}]})
+    api.set_http_response("/app-api/12345/get_latest_power", 200, {"latest_power": {"value": 450, "units": "w", "time": 1760000000}})
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {"profile": "self-consumption", "batteryBackupPercentage": 20})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25})
+    api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    assert run_async(api.run(0, True))
+    assert "schedule_sync" in api.data_age
+    calls_after_first = len(api.request_log)
+
+    run_async(api.run(60, False))  # well within ENPHASE_REFRESH_SCHEDULE_SYNC minutes
+    assert len(api.request_log) == calls_after_first  # no further schedule GET issued
+
+    api.data_age["schedule_sync"] = datetime.now(timezone.utc) - timedelta(minutes=ENPHASE_REFRESH_SCHEDULE_SYNC + 1)
+    run_async(api.run(120, False))
+    assert len(api.request_log) > calls_after_first  # tier elapsed - reconciled again
+
+
 def test_log_api_call_redacts_token():
     """API-call logging redacts JWT token fields and truncates long bodies, and is gated by debug_api."""
     api = MockEnphaseAPI()
@@ -1398,6 +1430,7 @@ def _apply_export_case(export_soc):
         "export": {"start_time": "23:00:00", "end_time": "23:30:00", "soc": export_soc, "enable": True},
     }
     api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
     run_async(api.apply_battery_schedule("12345"))
     posts = [r for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules")]
     return posts
@@ -1439,6 +1472,7 @@ def test_apply_export_dtg_limit_clamped_to_reserve():
         "export": {"start_time": "16:00:00", "end_time": "19:00:00", "soc": 10, "enable": True},  # target 10 < reserve 30
     }
     api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules", 200, {"cfg": {"scheduleSupported": True, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
     run_async(api.apply_battery_schedule("12345"))
     dtg = next(r["json"] for r in api.request_log if r["method"] == "POST" and r["path"].endswith("/schedules") and r["json"]["scheduleType"] == "DTG")
     assert dtg["limit"] == 30  # clamped up to the reserve, not the requested 10
@@ -1456,10 +1490,12 @@ def test_apply_updates_existing_by_id():
     api.local_schedule["12345"] = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False}, "freeze": {"enable": False}}
     api.set_http_response("/service/batteryConfig/api/v1/battery/sites/12345/schedules/u1", 200, {})
     api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})  # activation PUT
+    # The pre-write re-read (#4461) must still show the *old* cloud state (matching the initial
+    # cache below), or the write would look like a no-op before it is even attempted.
     api.set_http_response(
         "/service/batteryConfig/api/v1/battery/sites/12345/schedules",
         200,
-        {"cfg": {"scheduleSupported": True, "details": [{"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "isEnabled": True}]}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}},
+        {"cfg": {"scheduleSupported": True, "details": [{"id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "isEnabled": True}]}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}},
     )
     run_async(api.apply_battery_schedule("12345"))
     puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
@@ -1756,8 +1792,12 @@ def test_apply_no_activate_dtg_when_unchanged():
     assert writes == []
 
 
-def test_activate_cfg_mode_invalidates_cache_on_failure():
-    """Cache is cleared on CFG activation failure so next apply retries write+activation."""
+def test_activate_cfg_mode_failure_leaves_cache_untouched():
+    """A failed CFG activation is tracked as a failure and does not poke the schedule cache.
+
+    _reconcile_once always re-reads from the cloud on its next attempt, so there is nothing for
+    activation to invalidate locally - unlike before #4461's reconcile rewrite.
+    """
     api = MockEnphaseAPI()
     api.user_id = "9999"
     api.battery_settings.clear()
@@ -1766,14 +1806,13 @@ def test_activate_cfg_mode_invalidates_cache_on_failure():
     api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 404, {})
     ok = run_async(api._activate_cfg_mode("12345"))
     assert ok is False
-    # Cached startTime must be cleared so schedules_equal detects a diff next time
     cached = api.schedules["12345"]["cfg"]
-    assert cached["startTime"] == ""
-    assert "id" in cached  # id preserved for PUT update
+    assert cached["startTime"] == "02:00"  # untouched
+    assert api.schedule_write_failed["12345"]["cfg"] is True
 
 
-def test_activate_dtg_mode_invalidates_cache_on_failure():
-    """Cache is cleared on DTG activation failure so next apply retries write+activation."""
+def test_activate_dtg_mode_failure_leaves_cache_untouched():
+    """A failed DTG activation is tracked as a failure and does not poke the schedule cache."""
     api = MockEnphaseAPI()
     api.user_id = "9999"
     api.battery_settings.clear()
@@ -1782,12 +1821,12 @@ def test_activate_dtg_mode_invalidates_cache_on_failure():
     ok = run_async(api._activate_dtg_mode("12345"))
     assert ok is False
     cached = api.schedules["12345"]["dtg"]
-    assert cached["startTime"] == ""
-    assert "id" in cached
+    assert cached["startTime"] == "16:00"
+    assert api.schedule_write_failed["12345"]["dtg"] is True
 
 
-def test_activate_rbd_mode_invalidates_cache_on_failure():
-    """Cache is cleared on RBD activation failure so next apply retries write+activation."""
+def test_activate_rbd_mode_failure_leaves_cache_untouched():
+    """A failed RBD activation is tracked as a failure and does not poke the schedule cache."""
     api = MockEnphaseAPI()
     api.user_id = "9999"
     api.battery_settings.clear()
@@ -1796,8 +1835,8 @@ def test_activate_rbd_mode_invalidates_cache_on_failure():
     ok = run_async(api._activate_rbd_mode("12345"))
     assert ok is False
     cached = api.schedules["12345"]["rbd"]
-    assert cached["startTime"] == ""
-    assert "id" in cached
+    assert cached["startTime"] == "22:00"
+    assert api.schedule_write_failed["12345"]["rbd"] is True
 
 
 def test_apply_activates_pending_schedule_without_rewrite():
@@ -2021,42 +2060,448 @@ def test_get_schedules_keeps_sibling_schedules_in_read_only_mode():
     assert [r for r in api.request_log if r["path"].endswith("/delete")] == []
 
 
-def test_write_schedule_disable_deletes_the_schedule():
-    """Disabling a window deletes the schedule rather than PUTting isEnabled=False.
+class _NoSleep:
+    """Context manager that replaces enphase.asyncio.sleep with a no-op.
 
-    The cloud ignores isEnabled=False on a PUT (it echoes isEnabled true and the window survives),
-    so a disabled window would otherwise linger and conflict with later writes.
+    Keeps tests exercising apply_battery_schedule's retry/backoff loop fast and deterministic.
+    """
+
+    def __enter__(self):
+        """Swap in a no-op sleep and remember the original to restore later."""
+        self._original = enphase.asyncio.sleep
+
+        async def _no_sleep(*args, **kwargs):
+            """Return immediately instead of actually sleeping."""
+
+        enphase.asyncio.sleep = _no_sleep
+        return self
+
+    def __exit__(self, *exc):
+        """Restore the real asyncio.sleep."""
+        enphase.asyncio.sleep = self._original
+
+
+def _apply_setup(api, charge=None, export=None, reserve=20):
+    """Seed a MockEnphaseAPI with the state apply_battery_schedule/_reconcile_once need to run."""
+    api.sites = [{"site_id": "12345", "name": "Home"}]
+    api.schedules.setdefault("12345", {"cfg": {}, "dtg": {}, "rbd": {}})
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": reserve}
+    api.battery_settings.setdefault("12345", {"chargeFromGrid": True, "veryLowSocMin": 5})
+    api.local_schedule["12345"] = {
+        "reserve": reserve,
+        "charge": charge or {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 100, "enable": False},
+        "export": export or {"start_time": "00:00:00", "end_time": "00:00:00", "soc": 5, "enable": False},
+    }
+
+
+def test_cleanup_family_deletes_when_disabling():
+    """A family being disabled is deleted - the cloud ignores isEnabled=False on a PUT."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 204, None)
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": False, "start": "00:00", "end": "00:00", "limit": 100}, False))
+    assert ok is True
+    assert [(r["method"], r["path"]) for r in api.request_log] == [("POST", SCHEDULES_PATH + "/sched-1/delete")]
+    assert api.schedules["12345"]["cfg"].get("id") is None
+
+
+def test_cleanup_family_skips_a_single_family_change():
+    """A single family changing alone is left for PUT-in-place - nothing to delete first."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}, False))
+    assert ok is True
+    assert api.request_log == []
+    assert api.schedules["12345"]["cfg"]["id"] == "sched-1"
+
+
+def test_cleanup_family_deletes_when_force_recreate():
+    """When several families change in the same pass, an enabled-but-moving one is cleared too.
+
+    Otherwise a new window for a different family can collide with this one's old, not-yet-updated
+    window even though neither family's *new* windows overlap each other - see the design doc's
+    "Update strategy" section and the cross-family test on _reconcile_once below.
     """
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
     api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 204, None)
-    wrote = run_async(api._write_schedule("12345", "CFG", "00:00:00", "00:00:00", 100, False))
-    assert wrote is True
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}, True))
+    assert ok is True
     assert [(r["method"], r["path"]) for r in api.request_log] == [("POST", SCHEDULES_PATH + "/sched-1/delete")]
-    assert api.schedules["12345"]["cfg"].get("id") is None  # nothing left to update in place
+    assert api.schedules["12345"]["cfg"].get("id") is None
 
 
-def test_write_schedule_retries_once_after_conflict():
-    """A 409 conflict triggers a schedules re-read and one retry of the write."""
+def test_cleanup_family_nothing_to_do_without_an_id():
+    """No id on the cloud means there is nothing to clean up."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {}}
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}, True))
+    assert ok is True
+    assert api.request_log == []
+
+
+def test_cleanup_family_delete_failure_is_tracked_when_disabling():
+    """A failed delete while disabling is reported as a failure for the dashboard."""
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
-    api.set_http_sequence(SCHEDULES_PATH + "/sched-1", [(409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}}), (200, {"scheduleId": "sched-1"})])
-    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sched-1", "02:00", "02:20")]))
-    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
-    assert wrote is True
-    assert [r["method"] for r in api.request_log] == ["PUT", "GET", "PUT"]  # re-read between the attempts
-    assert api.schedules["12345"]["cfg"]["startTime"] == "03:00"
+    api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 400, {})
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": False, "start": "00:00", "end": "00:00", "limit": 100}, False))
+    assert ok is False
+    assert api.schedule_write_failed["12345"]["cfg"] is True
 
 
-def test_write_schedule_gives_up_after_second_conflict():
-    """A conflict that survives the re-read fails the write instead of looping."""
+def test_cleanup_family_delete_failure_is_tracked_when_force_recreating():
+    """A failed delete during the multi-family force-recreate path is also tracked as a failure.
+
+    Not just the disable case - a family being cleared because a *different* family is also
+    changing this pass must be counted too, even though _converge_family (called next for every
+    family regardless of this outcome) may go on to self-heal it with a fallback PUT to the same
+    still-known id.
+    """
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1/delete", 400, {})
+    ok = run_async(api._cleanup_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}, True))
+    assert ok is False
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+    assert api.count_errors == 1
+
+
+def test_converge_family_creates_when_no_id():
+    """No id on the cloud, family enabled - creates a new schedule and activates it."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {}}
+    api.set_http_response(SCHEDULES_PATH, 200, {"scheduleId": "new1"})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}))
+    assert ok is True
+    posts = [r for r in api.request_log if r["method"] == "POST" and r["path"] == SCHEDULES_PATH]
+    assert len(posts) == 1 and posts[0]["json"]["scheduleType"] == "CFG"
+    activation = [r for r in api.request_log if r["path"].endswith("/batterySettings/12345")]
+    assert len(activation) == 1
+
+
+def test_converge_family_updates_in_place_when_id_present():
+    """An id surviving cleanup means the write goes out as a PUT, not a POST."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/u1", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}))
+    assert ok is True
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
+    assert len(puts) == 1
+    assert api.schedules["12345"]["cfg"]["startTime"] == "02:00"
+
+
+def test_converge_family_no_op_when_already_matches():
+    """A family that already matches, and is not pending, needs no write or activation."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True, "status": "active"}}
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}))
+    assert ok is True
+    assert api.request_log == []
+
+
+def test_converge_family_activates_without_rewrite_when_matches_but_pending():
+    """A family that already matches but is still pending gets an activation-only pass."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"cfg": {"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True, "status": "pending"}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}))
+    assert ok is True
+    schedule_writes = [r for r in api.request_log if "schedules" in r["path"] and r["method"] in ("PUT", "POST")]
+    assert schedule_writes == []
+    activation = [r for r in api.request_log if r["path"].endswith("/batterySettings/12345")]
+    assert len(activation) == 1
+
+
+def test_converge_family_force_activate_when_underlying_setting_off():
+    """force_activate fires activation even though the schedule already matches (chargeFromGrid off)."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"cfg": {"id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}}
+    api.battery_settings["12345"] = {"chargeFromGrid": False}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}, force_activate=True))
+    assert ok is True
+    activation = [r for r in api.request_log if r["path"].endswith("/batterySettings/12345")]
+    assert len(activation) == 1
+
+
+def test_converge_family_write_failure_skips_activation():
+    """A failed write does not attempt activation."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {"id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}}
+    api.set_http_response(SCHEDULES_PATH + "/u1", 400, {})
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}))
+    assert ok is False
+    assert [r for r in api.request_log if "batterySettings" in r["path"]] == []
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+
+
+def test_converge_family_disabled_target_is_a_no_op():
+    """A disabled target does nothing here - _cleanup_family already handled disabling."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {}}
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": False, "start": "00:00", "end": "00:00", "limit": 100}))
+    assert ok is True
+    assert api.request_log == []
+
+
+def test_desired_schedule_families_maps_export_soc_to_dtg_rbd_or_neither():
+    """Export target <99 -> DTG, ==99 -> RBD, ==100/disabled -> neither; DTG/RBD share the window."""
+    api = MockEnphaseAPI()
+    local = {"reserve": 20, "charge": {"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True}, "export": {"start_time": "23:00:00", "end_time": "23:30:00", "soc": 60, "enable": True}}
+    desired = api._desired_schedule_families(local)
+    assert desired["cfg"] == {"enabled": True, "start": "02:00", "end": "05:00", "limit": 90}
+    assert desired["dtg"]["enabled"] is True and (desired["dtg"]["start"], desired["dtg"]["end"]) == ("23:00", "23:30")
+    assert desired["rbd"]["enabled"] is False
+
+    local["export"]["soc"] = 99
+    desired = api._desired_schedule_families(local)
+    assert desired["dtg"]["enabled"] is False
+    assert desired["rbd"]["enabled"] is True and (desired["rbd"]["start"], desired["rbd"]["end"]) == ("23:00", "23:30")
+
+    local["export"]["soc"] = 100
+    desired = api._desired_schedule_families(local)
+    assert desired["dtg"]["enabled"] is False and desired["rbd"]["enabled"] is False
+
+
+def test_desired_schedule_families_clamps_dtg_limit_to_reserve():
+    """The DTG floor is clamped to at least the reserve - Enphase will not discharge below it."""
+    api = MockEnphaseAPI()
+    local = {"reserve": 30, "charge": {"enable": False}, "export": {"start_time": "23:00:00", "end_time": "23:30:00", "soc": 10, "enable": True}}
+    desired = api._desired_schedule_families(local)
+    assert desired["dtg"]["limit"] == 30
+
+
+def test_reconcile_once_single_family_change_updates_in_place():
+    """Only one family changing this pass -> PUT-in-place, no delete."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    _apply_setup(api, charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True})
+    api.schedules["12345"]["cfg"] = {"id": "u1", "startTime": "01:00", "endTime": "04:00", "limit": 80, "enabled": True}
+    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("u1", "01:00", "04:00", limit=80)]))
+    api.set_http_response(SCHEDULES_PATH + "/u1", 200, {})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._reconcile_once("12345"))
+    assert ok is True
+    assert [r for r in api.request_log if r["path"].endswith("/delete")] == []
+    puts = [r for r in api.request_log if r["method"] == "PUT" and r["path"].endswith("/schedules/u1")]
+    assert len(puts) == 1
+
+
+def test_reconcile_once_deletes_before_writing_when_two_families_change():
+    """Two families changing at once are both cleared before either is rewritten.
+
+    Charge moves 02:00-03:30 -> 03:00-04:30 and export moves 04:00-05:00 -> 05:00-06:00 in the
+    same pass: the new charge window overlaps the OLD export window even though neither family's
+    *new* windows overlap each other, so PUT-in-place on either risks an HTTP 409 against the
+    other's stale window. Both must be deleted (phase 1) before either is rewritten (phase 2).
+    """
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    _apply_setup(
+        api,
+        charge={"start_time": "03:00:00", "end_time": "04:30:00", "soc": 90, "enable": True},
+        export={"start_time": "05:00:00", "end_time": "06:00:00", "soc": 60, "enable": True},
+    )
+    api.schedules["12345"] = {
+        "cfg": {"id": "chg1", "startTime": "02:00", "endTime": "03:30", "limit": 90, "enabled": True},
+        "dtg": {"id": "exp1", "startTime": "04:00", "endTime": "05:00", "limit": 60, "enabled": True},
+        "rbd": {},
+    }
+    full_payload = {
+        "cfg": {"scheduleStatus": "active", "count": 1, "details": [_cfg_detail("chg1", "02:00", "03:30", limit=90)]},
+        "dtg": {"scheduleStatus": "active", "count": 1, "details": [{"scheduleId": "exp1", "startTime": "04:00", "endTime": "05:00", "limit": 60, "scheduleType": "DTG", "days": [1, 2, 3, 4, 5, 6, 7], "isDeleted": False, "isEnabled": True}]},
+        "rbd": {"scheduleStatus": "active", "count": 0, "details": []},
+    }
+    # SCHEDULES_PATH is shared by every GET/POST here (create has no id suffix, same as the list
+    # GET), so this sequence must cover all five calls this pass makes in order: the initial read,
+    # each family's create, and each family's post-create id-learning re-read. After the initial
+    # read (which shows both stale schedules, forcing the delete-first path) every later read shows
+    # them gone, matching what the deletes just did.
+    empty_payload = _schedules_payload([])
+    api.set_http_sequence(SCHEDULES_PATH, [(200, full_payload), (200, {}), (200, empty_payload), (200, {}), (200, empty_payload)])
+    api.set_http_response(SCHEDULES_PATH + "/chg1/delete", 204, None)
+    api.set_http_response(SCHEDULES_PATH + "/exp1/delete", 204, None)
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._reconcile_once("12345"))
+    assert ok is True
+    indexed = list(enumerate(api.request_log))
+    delete_indices = [i for i, r in indexed if r["path"].endswith("/delete")]
+    post_indices = [i for i, r in indexed if r["method"] == "POST" and r["path"] == SCHEDULES_PATH]
+    assert sorted(r["path"] for r in api.request_log if r["path"].endswith("/delete")) == sorted([SCHEDULES_PATH + "/chg1/delete", SCHEDULES_PATH + "/exp1/delete"])
+    assert len(post_indices) == 2
+    assert max(delete_indices) < min(post_indices)  # every delete completes before any create
+    assert [r for r in api.request_log if r["method"] == "PUT" and "schedules" in r["path"]] == []  # never PUT to a stale id
+
+
+def test_reconcile_once_returns_false_when_any_step_fails():
+    """A single failing step (e.g. a failed create) makes the whole pass report not-ok."""
+    api = MockEnphaseAPI()
+    _apply_setup(api, charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True})
+    api.battery_settings["12345"]["chargeFromGrid"] = False
+    api.set_http_response(SCHEDULES_PATH, 400, {})
+    ok = run_async(api._reconcile_once("12345"))
+    assert ok is False
+
+
+def test_converge_reserve_writes_when_different():
+    """Reserve converges via set_reserve when it differs from the cached cloud value."""
+    api = MockEnphaseAPI()
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 10}
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 200, {})
+    ok = run_async(api._converge_reserve("12345", {"reserve": 25}))
+    assert ok is True
+    assert api.profile["12345"]["reserve"] == 25
+
+
+def test_converge_reserve_no_op_when_zero_or_matching():
+    """A zero (unset) or already-matching reserve issues no write."""
+    api = MockEnphaseAPI()
+    api.profile["12345"] = {"reserve": 20}
+    assert run_async(api._converge_reserve("12345", {"reserve": 20})) is True
+    assert run_async(api._converge_reserve("12345", {"reserve": 0})) is True
+    assert api.request_log == []
+
+
+def test_apply_battery_schedule_retries_then_succeeds():
+    """A failing first pass is retried and can still converge within the attempt budget."""
+    api = MockEnphaseAPI()
+    _apply_setup(api, charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True})
+    api.set_http_sequence(
+        SCHEDULES_PATH,
+        [
+            (200, _schedules_payload([])),  # 1st attempt: pre-write read, nothing there
+            (409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}}),  # the create fails
+            (200, _schedules_payload([])),  # 2nd attempt: fresh read again, still nothing
+            (200, {}),  # this time the create succeeds
+            (200, _schedules_payload([_cfg_detail("new1", "02:00", "05:00", limit=90)])),  # post-success re-read
+        ],
+    )
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    with _NoSleep():
+        ok = run_async(api.apply_battery_schedule("12345"))
+    assert ok is True
+    assert [r["method"] for r in api.request_log].count("POST") == 2  # one failed create, one that landed
+
+
+def test_apply_battery_schedule_gives_up_after_max_attempts():
+    """A persistent conflict exhausts the attempt budget and returns False."""
+    api = MockEnphaseAPI()
+    _apply_setup(api, charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True})
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    with _NoSleep():
+        ok = run_async(api.apply_battery_schedule("12345"))
+    assert ok is False
+    assert [r["method"] for r in api.request_log].count("POST") == ENPHASE_RECONCILE_MAX_ATTEMPTS
+    assert api.count_errors == ENPHASE_RECONCILE_MAX_ATTEMPTS
+
+
+def test_apply_battery_schedule_skips_everything_in_read_only_mode():
+    """Read-only mode does nothing at all - no reads, no writes, no reconcile attempted."""
+    api = MockEnphaseAPI()
+    api.mock_ha_states["switch.predbat_set_read_only"] = "on"
+    ok = run_async(api.apply_battery_schedule("12345"))
+    assert ok is True
+    assert api.request_log == []
+
+
+def test_request_json_failure_log_includes_method_and_context():
+    """A non-200 response logs the HTTP method and any caller-supplied context.
+
+    Before the fix a 409 on the bare .../schedules path was indistinguishable between the
+    periodic GET and a POST create sharing that same path shape (#4461).
+    """
+    api = MockEnphaseAPI()
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICT"}})
+    run_async(api.request_json("POST", SCHEDULES_PATH, family="battery_config", context="CFG schedule create"))
+    warns = [m for m in api.log_messages if "HTTP POST" in m and "409" in m]
+    assert len(warns) == 1
+    assert "CFG schedule create" in warns[0]
+
+
+def test_converge_family_create_conflict_log_names_method_and_family():
+    """The generic HTTP-failure log for a create-path 409 says POST and names the family."""
+    api = MockEnphaseAPI()
+    api.schedules["12345"] = {"cfg": {}}
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}))
+    warns = [m for m in api.log_messages if m.startswith("Warn: Enphase: HTTP POST")]
+    assert warns and "CFG schedule create" in warns[0]
+
+
+def test_converge_family_failure_is_tracked_for_dashboard():
+    """A schedule write that fails outright is counted and flagged for the dashboard.
+
+    Before the fix a persistent conflict only ever showed up as a log warning -
+    predbat.status/components_healthy kept reporting the *intended* plan with no visible sign the
+    write never landed (#4461).
+    """
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
     api.set_http_response(SCHEDULES_PATH + "/sched-1", 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
-    api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("sched-1", "02:00", "02:20")]))
-    wrote = run_async(api._write_schedule("12345", "CFG", "03:00:00", "04:00:00", 100, True))
-    assert wrote is False
-    assert [r["method"] for r in api.request_log].count("PUT") == 2  # one retry only
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}))
+    assert ok is False
+    assert api.count_errors == 1
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+
+
+def test_converge_family_success_clears_a_previous_failure_flag():
+    """A successful write clears the failure it previously flagged."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"cfg": {"id": "sched-1", "startTime": "02:00", "endTime": "02:20", "limit": 100, "enabled": True}}
+    api.schedule_write_failed["12345"] = {"cfg": True}
+    api.set_http_response(SCHEDULES_PATH + "/sched-1", 200, {"scheduleId": "sched-1"})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
+    ok = run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "03:00", "end": "04:00", "limit": 100}))
+    assert ok is True
+    assert "cfg" not in api.schedule_write_failed["12345"]
+
+
+def test_activate_cfg_mode_failure_is_tracked_for_dashboard():
+    """A failed activation PUT is counted and flagged for the dashboard, like a failed write."""
+    api = MockEnphaseAPI()
+    api.user_id = "9999"
+    api.schedules["12345"] = {"cfg": {"supported": True, "id": "u1", "startTime": "02:00", "endTime": "05:00", "limit": 90, "enabled": True}}
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 404, {})
+    ok = run_async(api._activate_cfg_mode("12345"))
+    assert ok is False
+    assert api.count_errors == 1
+    assert api.schedule_write_failed["12345"]["cfg"] is True
+
+
+def test_set_reserve_failure_is_tracked_for_dashboard():
+    """A failed reserve write is counted and flagged for the dashboard under the "reserve" key."""
+    api = MockEnphaseAPI()
+    api.profile["12345"] = {"profile": "self-consumption", "reserve": 10}
+    api.set_http_response("/service/batteryConfig/api/v1/profile/12345", 400, {})
+    result = run_async(api.set_reserve("12345", 20))
+    assert result is None
+    assert api.schedule_write_failed["12345"]["reserve"] is True
+
+
+def test_publish_schedule_write_health_reports_failures():
+    """The dedicated write-health sensor reports "off" and lists the failing families."""
+    api = MockEnphaseAPI()
+    api.schedule_write_failed["12345"] = {"cfg": True}
+    run_async(api._publish_schedule_write_health("12345"))
+    item = api.dashboard_items["binary_sensor.predbat_enphase_12345_schedule_write_ok"]
+    assert item["state"] == "off"
+    assert item["attributes"]["failed"] == ["cfg"]
+
+
+def test_publish_schedule_write_health_ok_when_no_failures():
+    """With no tracked failures the sensor reports "on" and an empty failed list."""
+    api = MockEnphaseAPI()
+    run_async(api._publish_schedule_write_health("12345"))
+    item = api.dashboard_items["binary_sensor.predbat_enphase_12345_schedule_write_ok"]
+    assert item["state"] == "on"
+    assert item["attributes"]["failed"] == []
 
 
 def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
@@ -2065,18 +2510,20 @@ def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
     Observed on a site with two CFG schedules: Predbat wrote 22:35-23:30 to one, the re-read
     returned the pair in the opposite order, Predbat swapped to the other and wrote 22:50-23:30 -
     which the cloud rejected with CONFLICTING_SCHEDULE_CFG against the window Predbat had set
-    itself five minutes earlier. Every subsequent cycle then failed the same way.
+    itself five minutes earlier. Every subsequent cycle then failed the same way. The write path
+    changed with #4461's reconcile rewrite, but the id-pinning this guards (in get_schedules) did
+    not, so this still exercises it directly via _converge_family.
     """
     api = MockEnphaseAPI()
     api.schedules["12345"] = {"cfg": {"id": "first", "startTime": "20:30", "endTime": "21:00", "limit": 5, "enabled": True}}
     api.set_http_response(SCHEDULES_PATH + "/first", 200, {"scheduleId": "first"})
     api.set_http_response(SCHEDULES_PATH + "/second/delete", 204, None)
-    run_async(api._write_schedule("12345", "CFG", "22:35:00", "23:30:00", 5, True))
+    run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "22:35", "end": "23:30", "limit": 5}))
     # Cloud re-read now lists the sibling first, because our write made "first" the most recent
     api.set_http_response(SCHEDULES_PATH, 200, _schedules_payload([_cfg_detail("second", "20:30", "21:00", limit=5), _cfg_detail("first", "22:35", "23:30", limit=5)]))
     run_async(api.get_schedules("12345"))
-    run_async(api._write_schedule("12345", "CFG", "22:50:00", "23:30:00", 5, True))
-    written = [r["path"] for r in api.request_log if r["method"] == "PUT"]
+    run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "22:50", "end": "23:30", "limit": 5}))
+    written = [r["path"] for r in api.request_log if r["method"] == "PUT" and "schedules" in r["path"]]
     assert written == [SCHEDULES_PATH + "/first", SCHEDULES_PATH + "/first"]  # never swapped onto the sibling
 
 
@@ -2088,9 +2535,37 @@ def run_enphase_api_tests(my_predbat):
     test_get_schedules_readopts_when_pinned_id_disappears()
     test_get_schedules_deletes_sibling_schedules_in_write_mode()
     test_get_schedules_keeps_sibling_schedules_in_read_only_mode()
-    test_write_schedule_disable_deletes_the_schedule()
-    test_write_schedule_retries_once_after_conflict()
-    test_write_schedule_gives_up_after_second_conflict()
+    test_cleanup_family_deletes_when_disabling()
+    test_cleanup_family_skips_a_single_family_change()
+    test_cleanup_family_deletes_when_force_recreate()
+    test_cleanup_family_nothing_to_do_without_an_id()
+    test_cleanup_family_delete_failure_is_tracked_when_disabling()
+    test_cleanup_family_delete_failure_is_tracked_when_force_recreating()
+    test_converge_family_creates_when_no_id()
+    test_converge_family_updates_in_place_when_id_present()
+    test_converge_family_no_op_when_already_matches()
+    test_converge_family_activates_without_rewrite_when_matches_but_pending()
+    test_converge_family_force_activate_when_underlying_setting_off()
+    test_converge_family_write_failure_skips_activation()
+    test_converge_family_disabled_target_is_a_no_op()
+    test_desired_schedule_families_maps_export_soc_to_dtg_rbd_or_neither()
+    test_desired_schedule_families_clamps_dtg_limit_to_reserve()
+    test_reconcile_once_single_family_change_updates_in_place()
+    test_reconcile_once_deletes_before_writing_when_two_families_change()
+    test_reconcile_once_returns_false_when_any_step_fails()
+    test_converge_reserve_writes_when_different()
+    test_converge_reserve_no_op_when_zero_or_matching()
+    test_apply_battery_schedule_retries_then_succeeds()
+    test_apply_battery_schedule_gives_up_after_max_attempts()
+    test_apply_battery_schedule_skips_everything_in_read_only_mode()
+    test_request_json_failure_log_includes_method_and_context()
+    test_converge_family_create_conflict_log_names_method_and_family()
+    test_converge_family_failure_is_tracked_for_dashboard()
+    test_converge_family_success_clears_a_previous_failure_flag()
+    test_activate_cfg_mode_failure_is_tracked_for_dashboard()
+    test_set_reserve_failure_is_tracked_for_dashboard()
+    test_publish_schedule_write_health_reports_failures()
+    test_publish_schedule_write_health_ok_when_no_failures()
     test_initialize_defaults()
     test_needs_refresh()
     test_is_alive()
@@ -2153,6 +2628,7 @@ def run_enphase_api_tests(my_predbat):
     test_get_schedules_pending_family_is_still_supported()
     test_inverter_def_enphase()
     test_run_first_polls_all_tiers()
+    test_run_reconciles_schedule_periodically_not_every_poll()
     test_get_today()
     test_publish_data_sensors()
     test_sync_local_schedule_from_cloud()
@@ -2180,9 +2656,9 @@ def run_enphase_api_tests(my_predbat):
     test_apply_no_activate_dtg_when_export_disabled()
     test_apply_no_activate_dtg_when_freeze_not_real_export()
     test_apply_no_activate_dtg_when_unchanged()
-    test_activate_cfg_mode_invalidates_cache_on_failure()
-    test_activate_dtg_mode_invalidates_cache_on_failure()
-    test_activate_rbd_mode_invalidates_cache_on_failure()
+    test_activate_cfg_mode_failure_leaves_cache_untouched()
+    test_activate_dtg_mode_failure_leaves_cache_untouched()
+    test_activate_rbd_mode_failure_leaves_cache_untouched()
     test_apply_activates_pending_schedule_without_rewrite()
     test_is_schedule_pending_null_status_is_not_pending()
     test_apply_no_crash_when_cached_status_none()
