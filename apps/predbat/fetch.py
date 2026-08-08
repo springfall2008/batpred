@@ -731,6 +731,9 @@ class Fetch:
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}
+        # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
+        # earlier pair of signatures may be held against them
+        self.pv_forecast_minute90_signatures = None
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}

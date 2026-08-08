@@ -1053,6 +1053,68 @@ class Plan:
             return preclip_new, preclip_prev
         return plan_new, plan_prev
 
+    @staticmethod
+    def pv_series_signature(series):
+        """Return a cheap content and coverage signature for a per-minute PV series.
+
+        The tuple is (minute count, total kWh, first minute, last minute) - enough to notice that a
+        series has been swapped or rewritten between plan runs, and to tell how much of the plan
+        horizon it spans. It is never used as a value in its own right, so a content collision costs
+        nothing more than a redundant (or skipped) refresh of the fallback p90 copy.
+        """
+        if not series:
+            return (0, 0.0, None, None)
+        return (len(series), round(sum(series.values()), 6), min(series), max(series))
+
+    def refresh_pv_forecast_minute90(self):
+        """Keep the pv90 (upside) PV forecast series in step with the p50 series it sits beside.
+
+        ``fetch.py`` always refreshes ``pv_forecast_minute90`` alongside ``pv_forecast_minute``, falling
+        back to a copy of the p50 when no forecast90 data is published, so in production the pair is
+        always consistent. But callers that assign ``pv_forecast_minute`` directly - ``annual.py``'s
+        year-long sweep, which reuses ONE PredBat instance across every sampled day, replayed debug
+        dumps with no forecast90 sensor, and unit tests sharing a fixture - can leave the p90 empty or,
+        far worse, holding a series belonging to a completely different p50.
+
+        A stale p90 is not a harmless approximation: it silently turns pv90, which exists to be the
+        UPSIDE case, into a severe downside one. January's p50 held against July's makes the "upside"
+        scenario carry a quarter of nominal PV - exactly the inversion already ruled out for
+        ``load_scaling90``, arriving by another route. Emptiness is therefore not a sufficient trigger.
+
+        Two independent tests must both pass for the p90 in hand to be used:
+
+        1. Coverage. The p90 must span the part of the plan horizon that the p50 spans. Missing minutes
+           read back as zero from ``step_data_history``, so a p90 that stops short of the horizon makes
+           pv90 a zero-PV downside case over the rest of it. In production this always holds - fetch.py
+           builds all three series over one shared minute range - so this only ever fires on a p90 that
+           came from somewhere else.
+        2. Not left behind. If the p50 changed since the previous call while the p90 did not, the p90
+           cannot belong to the p50 in hand. A p90 that moved with its p50 - the normal case for a real
+           fetched forecast90 - is kept untouched however far it diverges, because that divergence is
+           the entire point of having a real p90.
+
+        Failing either test re-derives the p90 from the p50. That costs only the accuracy of the upside
+        case (pv90 collapses to nominal PV, an inert scenario), whereas using a mismatched one silently
+        inverts what the feature means.
+        """
+        p50_signature = self.pv_series_signature(self.pv_forecast_minute)
+        p90_signature = self.pv_series_signature(self.pv_forecast_minute90)
+        previous = self.pv_forecast_minute90_signatures
+
+        if not self.pv_forecast_minute:
+            # Nothing to plan against - the only consistent p90 is an equally empty one
+            covers_horizon = not self.pv_forecast_minute90
+        else:
+            first_needed = max(p50_signature[2], self.minutes_now)
+            last_needed = min(p50_signature[3], self.minutes_now + self.forecast_minutes)
+            covers_horizon = bool(self.pv_forecast_minute90) and p90_signature[2] <= first_needed and p90_signature[3] >= last_needed
+        left_behind = previous is not None and previous[0] != p50_signature and previous[1] == p90_signature
+
+        if not covers_horizon or left_behind:
+            self.pv_forecast_minute90 = dict(self.pv_forecast_minute)
+            p90_signature = p50_signature
+        self.pv_forecast_minute90_signatures = (p50_signature, p90_signature)
+
     def calculate_plan(self, recompute=True, debug_mode=False, publish=True):
         """
         Calculate the new plan (best)
@@ -1190,9 +1252,7 @@ class Plan:
         )
         pv_forecast_minute_step = self.step_data_history(self.pv_forecast_minute, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
         pv_forecast_minute10_step = self.step_data_history(self.pv_forecast_minute10, self.minutes_now, forward=True, cloud_factor=min(self.metric_cloud_coverage + 0.2, 1.0) if self.metric_cloud_coverage else None, flip=True)
-        # Guard against a missing p90 series (older debug dumps replayed without a forecast90 fetch)
-        if not self.pv_forecast_minute90:
-            self.pv_forecast_minute90 = dict(self.pv_forecast_minute)
+        self.refresh_pv_forecast_minute90()
         pv_forecast_minute90_step = self.step_data_history(self.pv_forecast_minute90, self.minutes_now, forward=True, cloud_factor=self.metric_cloud_coverage)
 
         # Save step data for debug

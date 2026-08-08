@@ -1122,6 +1122,9 @@ class SolarAPI(ComponentBase):
         capped_slots = 0
         raw_exceeds_ceiling_slots = 0
         raw_exceeds_ceiling_peak = 0
+        # Per-slot best_day_scaling for the planner's p90 series, held back so the create_pv10 block
+        # below can apply the same ceiling this loop applies to the published pv_estimate90.
+        slot_best_scaling = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
             raw_value = 0
@@ -1142,6 +1145,14 @@ class SolarAPI(ComponentBase):
             pv_estimateCL[minute] = dp4(capped_p50)
             pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
             pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, capped_data))
+
+            # The planner's p90 series (built in the create_pv10 block below from the capped
+            # per-minute data) must land on the same ceiling as pv_estimate90 above, or the two
+            # disagree exactly where the comment above says they must agree. capped_data is kWh per
+            # plan interval, so the clamp cannot be applied per minute; record the scaling that
+            # holds this slot's p90 total at min(capped_p50 * best_day_scaling, capped_data) instead
+            # and let the block below scale every minute of the slot by it.
+            slot_best_scaling[minute] = min(best_day_scaling, capped_data / capped_p50) if capped_p50 > 0 else best_day_scaling
 
             # Apply the same cap to the per-minute data the planner consumes. Scale rather than
             # clamp per minute: capped_data is kWh per plan interval, not per minute.
@@ -1212,13 +1223,27 @@ class SolarAPI(ComponentBase):
 
         # Creation of PV10 data using worst day scaling factor
         if create_pv10:
+            capped_best_slots = 0
             for minute in range(0, max(pv_forecast_minute_adjusted.keys()) + 1):
                 pv_value = pv_forecast_minute_adjusted.get(minute, 0)
-                # Use the worst day scaling factor to create pv_estimate10
+                # Use the worst day scaling factor to create pv_estimate10. No ceiling clamp is
+                # needed: worst_day_scaling is capped at 1.0 above, so this can only scale down.
                 pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
-                # Use the best day scaling factor to create pv_estimate90
-                pv_forecast_minute90[minute] = dp4(pv_value * best_day_scaling)
-            self.log("SolarAPI: PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {} and best day scaling factor {}".format(dp2(worst_day_scaling), dp2(best_day_scaling)))
+                # Use the best day scaling factor to create pv_estimate90, clamped to this slot's
+                # array ceiling. best_day_scaling has no floor at 1.0 and reaches 2.0 (1.3 when
+                # calibration is disabled), so without the clamp the planner's upside case would
+                # predict more solar than the panels can physically produce - and would disagree
+                # with the published pv_estimate90 for the very same slot, which is clamped.
+                slot_start = int(minute / self.plan_interval_minutes) * self.plan_interval_minutes
+                best_scaling_slot = slot_best_scaling.get(slot_start, best_day_scaling)
+                if best_scaling_slot < best_day_scaling:
+                    capped_best_slots += 1
+                pv_forecast_minute90[minute] = dp4(pv_value * best_scaling_slot)
+            self.log(
+                "SolarAPI: PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {} and best day scaling factor {} ({} minutes held at the array ceiling)".format(
+                    dp2(worst_day_scaling), dp2(best_day_scaling), capped_best_slots
+                )
+            )
 
         # Do we use calibrated or raw data?
         if self.get_arg("metric_pv_calibration_enable", default=True):

@@ -1231,6 +1231,12 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.soc_kw = START_SOC_KWH
     predbat.pv_forecast_minute = forecast_pv
     predbat.pv_forecast_minute10 = p10_pv
+    # Open-Meteo gives this model a forecast and a monthly P10 ratio but no P90 series, so the
+    # pv90 (upside) scenario runs on the same PV as nominal - its upside comes from load_scaling90
+    # alone. This must be assigned explicitly on every sampled day: one PredBat instance is reused
+    # for the whole year (see AnnualRun), so leaving it to calculate_plan()'s fallback would pin
+    # every later day's "upside" to the first sampled day's solar profile.
+    predbat.pv_forecast_minute90 = dict(forecast_pv)
     predbat.calculate_plan(recompute=True, debug_mode=False, publish=False)
 
     # Swap in the actuals before costing. There is no forecast/actual split for load (only PV

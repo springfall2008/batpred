@@ -3376,7 +3376,11 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
             pv_forecast_data.append({"period_start": ts.strftime("%Y-%m-%dT%H:%M:%S+0000"), "pv_estimate": 3.0 * plan_interval / 60})
 
         max_kwh = 2.0  # panel peak output cap in kW
-        adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=False, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
+        # create_pv10=True so the synthesised p10/p90 planner series are built too - they are the series
+        # every Open-Meteo and Forecast.solar user's planner actually consumes, and the p90 is scaled by
+        # best_day_scaling (1.3 here with calibration disabled, up to 2.0 with it on), so it is the one
+        # series that can be pushed back above the ceiling after the p50 has been capped.
+        adj_minute, adj_minute10, adj_minute90, adj_data = solar.pv_calibration(pv_forecast_minute, pv_forecast_minute10, {}, pv_forecast_data, create_pv10=True, divide_by=1.0, max_kwh=max_kwh, forecast_days=solar.forecast_days)
 
         expected_cap = 1.2 * max_kwh / 60 * plan_interval  # the 1.2 * max_kwh ceiling binds here
 
@@ -3394,6 +3398,30 @@ def test_pv_calibration_capped_data_clamp(my_predbat):
         got_max = _max_slot_cl(adj_data)
         if got_max < expected_cap * 0.99:
             print("ERROR: pv_estimateCL {} is below the expected cap {} - the raw forecast floor is not being applied".format(got_max, expected_cap))
+            failed = True
+
+        # The synthesised p90 planner series must respect the SAME ceiling the p50 was capped to.
+        # best_day_scaling has no floor at 1.0 (it defaults to 1.3 with calibration disabled and can
+        # reach 2.0 with it on), so an unclamped p90 lands at 1.3x the array's physical ceiling and
+        # the planner prices a spill that cannot happen - and it disagrees with the published
+        # pv_estimate90 for the very same slot, which is clamped.
+        def _max_slot_total(series):
+            """Return the largest per-plan-interval total in a per-minute kWh series."""
+            if not series:
+                return 0.0
+            slot_totals = {}
+            for minute, value in series.items():
+                slot_start = int(minute / plan_interval) * plan_interval
+                slot_totals[slot_start] = slot_totals.get(slot_start, 0.0) + value
+            return max(slot_totals.values())
+
+        max_slot_p50 = _max_slot_total(adj_minute)
+        max_slot_p90 = _max_slot_total(adj_minute90)
+        if max_slot_p90 > expected_cap * 1.01:
+            print("ERROR: pv_forecast_minute90 peaks at {} kWh/slot, above the array ceiling of {} kWh/slot (p50 peak {}) - best_day_scaling has escaped the cap".format(round(max_slot_p90, 4), round(expected_cap, 4), round(max_slot_p50, 4)))
+            failed = True
+        if max_slot_p90 < max_slot_p50 * 0.99:
+            print("ERROR: pv_forecast_minute90 peaks at {} kWh/slot, below the p50 peak of {} kWh/slot - the clamp must hold the upside case AT the ceiling, not below it".format(round(max_slot_p90, 4), round(max_slot_p50, 4)))
             failed = True
 
     finally:

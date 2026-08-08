@@ -589,29 +589,127 @@ def _restore_calculate_plan_with_real_windows(my_predbat, snapshot):
     my_predbat.plan_valid = snapshot["plan_valid"]
 
 
+def test_pv90_fallback_tracks_a_reassigned_p50(my_predbat):
+    """A caller that swaps in a fresh p50 must end up with a matching p90, never a stale copy of an earlier one.
+
+    annual.py reuses ONE PredBat instance for every sampled day of a whole year, assigning
+    pv_forecast_minute/pv_forecast_minute10 directly before each calculate_plan(). A guard that only fired
+    on an EMPTY p90 would populate the p90 from the first day's p50 and then never fire again, so from the
+    second day onwards the pv90 "upside" scenario would be priced against January's solar - a scenario with
+    a fraction of nominal PV, i.e. a second, severe downside case. That is the same inversion already ruled
+    out for load_scaling90, arriving by a different route.
+
+    Two calculate_plan() runs with different p50 data reproduce it directly: the p90 total (and the p90 step
+    array the prediction engine actually consumes) must track the p50 in hand on both runs.
+
+    The second half asserts the converse: a real, caller-supplied p90 is never overwritten by the fallback,
+    however far it diverges from the p50 - that divergence is the entire point of having a real p90.
+    """
+    failed = False
+    horizon = my_predbat.forecast_minutes + my_predbat.minutes_now + 10
+    saved = {
+        "pv_forecast_minute": my_predbat.pv_forecast_minute,
+        "pv_forecast_minute10": my_predbat.pv_forecast_minute10,
+        "pv_forecast_minute90": my_predbat.pv_forecast_minute90,
+        "signatures": getattr(my_predbat, "pv_forecast_minute90_signatures", None),
+    }
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        # Two "days" of a year-long sweep, the second four times as sunny as the first
+        for day, per_minute_kwh in ((1, 0.01), (2, 0.04)):
+            my_predbat.pv_forecast_minute = {minute: per_minute_kwh for minute in range(0, horizon)}
+            my_predbat.pv_forecast_minute10 = dict(my_predbat.pv_forecast_minute)
+            my_predbat.calculate_plan(recompute=True)
+            total_p50 = sum(my_predbat.pv_forecast_minute.values())
+            total_p90 = sum(my_predbat.pv_forecast_minute90.values())
+            if abs(total_p90 - total_p50) > 1e-6:
+                print("ERROR: day {}: pv90 series totals {} kWh against a p50 of {} kWh - the fallback copy has gone stale".format(day, round(total_p90, 3), round(total_p50, 3)))
+                failed = True
+            total_p50_step = sum(my_predbat.pv_forecast_minute_step.values())
+            total_p90_step = sum(my_predbat.pv_forecast_minute90_step.values())
+            if abs(total_p90_step - total_p50_step) > 1e-6:
+                print("ERROR: day {}: pv90 step array totals {} kWh against a nominal step array of {} kWh - the engine is fed a stale pv90".format(day, round(total_p90_step, 3), round(total_p50_step, 3)))
+                failed = True
+
+        # A real p90 supplied by the caller must survive untouched, even though it differs from the p50
+        my_predbat.pv_forecast_minute = {minute: 0.02 for minute in range(0, horizon)}
+        my_predbat.pv_forecast_minute10 = dict(my_predbat.pv_forecast_minute)
+        my_predbat.pv_forecast_minute90 = {minute: 0.03 for minute in range(0, horizon)}
+        my_predbat.calculate_plan(recompute=True)
+        total_p90 = sum(my_predbat.pv_forecast_minute90.values())
+        expected_p90 = 0.03 * horizon
+        if abs(total_p90 - expected_p90) > 1e-6:
+            print("ERROR: a real caller-supplied pv90 series totalling {} kWh was overwritten, now totals {} kWh".format(round(expected_p90, 3), round(total_p90, 3)))
+            failed = True
+    finally:
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+        my_predbat.pv_forecast_minute = saved["pv_forecast_minute"]
+        my_predbat.pv_forecast_minute10 = saved["pv_forecast_minute10"]
+        my_predbat.pv_forecast_minute90 = saved["pv_forecast_minute90"]
+        my_predbat.pv_forecast_minute90_signatures = saved["signatures"]
+    return failed
+
+
 def test_pv90_weight_zero_skips_simulation(my_predbat):
-    """With the weight at 0 no pv90 prediction may be run, so plan time is unaffected."""
+    """With the weight at 0 no pv90 prediction may be run through ANY launch path, so plan time is unaffected.
+
+    The whole "ship it inert" safety argument rests on this: at the default pv_metric90_weight of 0 the
+    feature must cost nothing. There are four launch functions and four independent skip gates - the
+    charge optimiser (launch_run_prediction_charge), its SoC-envelope pre-pass
+    (launch_run_prediction_charge_min_max), the export optimiser (launch_run_prediction_export) and the
+    levels optimiser (launch_run_prediction_single). Patching only one of them leaves three gates that
+    could be deleted with the suite still green, silently imposing ~50% extra simulation cost on every
+    user at the default weight, so all four are counted here.
+    """
     failed = False
     my_predbat.pv_metric90_weight = 0.0
-    calls = {"count": 0}
-    original = my_predbat.launch_run_prediction_charge
+    calls = {"charge": 0, "charge_min_max": 0, "export": 0, "single": 0}
+    original_charge = my_predbat.launch_run_prediction_charge
+    original_charge_min_max = my_predbat.launch_run_prediction_charge_min_max
+    original_export = my_predbat.launch_run_prediction_export
+    original_single = my_predbat.launch_run_prediction_single
 
-    def counting(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """Count pv90 launches so the skip can be asserted."""
+    def counting_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the charge optimiser so the skip can be asserted."""
         if pv_scenario == PV_SCENARIO_PV90:
-            calls["count"] += 1
-        return original(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+            calls["charge"] += 1
+        return original_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
-    my_predbat.launch_run_prediction_charge = counting
+    def counting_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the charge SoC-envelope pre-pass so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["charge_min_max"] += 1
+        return original_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+
+    def counting_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the export optimiser so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["export"] += 1
+        return original_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
+
+    def counting_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
+        """Count pv90 launches from the levels optimiser so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["single"] += 1
+        return original_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step=step)
+
+    my_predbat.launch_run_prediction_charge = counting_charge
+    my_predbat.launch_run_prediction_charge_min_max = counting_charge_min_max
+    my_predbat.launch_run_prediction_export = counting_export
+    my_predbat.launch_run_prediction_single = counting_single
     snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
     try:
         my_predbat.calculate_plan(recompute=True)
     finally:
-        my_predbat.launch_run_prediction_charge = original
+        my_predbat.launch_run_prediction_charge = original_charge
+        my_predbat.launch_run_prediction_charge_min_max = original_charge_min_max
+        my_predbat.launch_run_prediction_export = original_export
+        my_predbat.launch_run_prediction_single = original_single
         _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
-    if calls["count"] != 0:
-        print("ERROR: {} pv90 predictions were launched with pv_metric90_weight=0".format(calls["count"]))
-        failed = True
+    for path, count in calls.items():
+        if count != 0:
+            print("ERROR: {} pv90 predictions were launched via {} with pv_metric90_weight=0".format(count, path))
+            failed = True
     return failed
 
 
@@ -922,6 +1020,7 @@ def run_pv90_tests(my_predbat):
     original_run_prediction_metric = my_predbat.run_prediction_metric
     original_compute_metric = my_predbat.compute_metric
     try:
+        failed |= test_pv90_fallback_tracks_a_reassigned_p50(my_predbat)
         failed |= test_pv90_weight_zero_skips_simulation(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_simulation(my_predbat)
         failed |= test_pv90_charge_limit_results_paired_with_try_soc(my_predbat)

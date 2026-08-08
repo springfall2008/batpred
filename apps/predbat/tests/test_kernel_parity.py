@@ -641,8 +641,15 @@ def run_edge_case_tests(my_predbat):
 
 
 def run_random_sweep_tests(my_predbat, count=150):
-    """Seeded random configuration sweep comparing both engines, returns True on failure"""
+    """Seeded random configuration sweep comparing both engines, returns True on failure.
+
+    Every seed is run against all three PV scenarios. Drawing one scenario per seed instead would
+    trade away coverage of nominal and pv10 - the two scenarios every user runs at the default
+    pv_metric90_weight of 0 - to buy coverage of pv90; running all three is strictly additive and
+    the sweep is fast enough to absorb the 3x.
+    """
     failed = False
+    scenario_counts = {PV_SCENARIO_NOMINAL: 0, PV_SCENARIO_PV10: 0, PV_SCENARIO_PV90: 0}
     for seed in range(count):
         rng = random.Random(seed)
         reset_inverter(my_predbat)
@@ -662,12 +669,21 @@ def run_random_sweep_tests(my_predbat, count=150):
         export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(0, 3), align=rng.choice([5, 5, 30]))
         export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)]) for _ in export_window]
         end_record = rng.choice([my_predbat.forecast_minutes, my_predbat.forecast_minutes - 30, rng.randrange(0, my_predbat.forecast_minutes, 5)])
-        pv_scenario = rng.choice([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90])
 
-        failed |= dual_run("random_{}".format(seed), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=pv90_step, load90_step=load90_step)
+        # No scenario is drawn from rng here: the draw that used to sit at this position was the last
+        # use of rng in the loop body, so looping the scenarios instead leaves every previously
+        # generated configuration (windows, limits, end_record, step data) bit-for-bit unchanged.
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90):
+            scenario_counts[pv_scenario] += 1
+            failed |= dual_run(
+                "random_{}_s{}".format(seed, pv_scenario), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, pv90_step=pv90_step, load90_step=load90_step
+            )
+            if failed:
+                print("Random sweep failed at seed {} scenario {}".format(seed, pv_scenario))
+                break
         if failed:
-            print("Random sweep failed at seed {}".format(seed))
             break
+    print("Random sweep ran {} configurations: nominal {}, pv10 {}, pv90 {}".format(sum(scenario_counts.values()), scenario_counts[PV_SCENARIO_NOMINAL], scenario_counts[PV_SCENARIO_PV10], scenario_counts[PV_SCENARIO_PV90]))
     return failed
 
 
