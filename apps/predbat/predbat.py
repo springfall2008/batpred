@@ -374,8 +374,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_more_solar_threshold = 1.0
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
-        self.pv_metric90_weight = 0.0
-        self.load_scaling90 = 0.9
+        self.calculate_pv90_plan = False
+        self.pv_metric90_weight = 0.15
+        self.load_scaling90 = 0.7
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0

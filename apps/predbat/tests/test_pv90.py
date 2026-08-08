@@ -33,8 +33,8 @@ def test_pv90_config_items(my_predbat):
     """pv_metric90_weight and load_scaling90 must exist, be expert-gated and carry the documented defaults."""
     failed = False
     expected = {
-        "pv_metric90_weight": {"default": 0.0, "min": 0, "max": 1.0, "step": 0.01},
-        "load_scaling90": {"default": 0.9, "min": 0, "max": 2.0, "step": 0.01},
+        "pv_metric90_weight": {"default": 0.15, "min": 0, "max": 1.0, "step": 0.01},
+        "load_scaling90": {"default": 0.7, "min": 0, "max": 2.0, "step": 0.01},
     }
     by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
     for name, want in expected.items():
@@ -56,31 +56,119 @@ def test_pv90_config_items(my_predbat):
     return failed
 
 
+def test_pv90_calculate_pv90_plan_config_item(my_predbat):
+    """calculate_pv90_plan must exist as an expert-gated switch defaulting to Off (CHANGE 1)."""
+    failed = False
+    by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
+    item = by_name.get("calculate_pv90_plan")
+    if not item:
+        print("ERROR: config item calculate_pv90_plan is missing from CONFIG_ITEMS")
+        return True
+    if item.get("type") != "switch":
+        print("ERROR: config item calculate_pv90_plan type is {}, expected switch".format(item.get("type")))
+        failed = True
+    if item.get("enable") != "expert_mode":
+        print("ERROR: config item calculate_pv90_plan enable is {}, expected expert_mode".format(item.get("enable")))
+        failed = True
+    if item.get("default") is not False:
+        print("ERROR: config item calculate_pv90_plan default is {}, expected False".format(item.get("default")))
+        failed = True
+    return failed
+
+
 def test_pv90_config_read(my_predbat):
-    """fetch_config_options must actually read the two new attributes via get_arg, not merely leave __init__'s defaults untouched.
+    """fetch_config_options must actually read pv_metric90_weight/load_scaling90 via get_arg, not merely leave __init__'s defaults untouched.
 
     Both attributes are forced to a sentinel that matches neither the PredBat.__init__ default nor the CONFIG_ITEMS
     default before fetch_config_options() is called for real. If the get_arg reads were ever deleted from fetch.py,
     the sentinel would survive the call unchanged and this test would fail - unlike a test that only inspects the
     value left over from __init__, which would pass regardless of whether the read ever happened.
 
+    calculate_pv90_plan (and expert_mode, which gates it) are forced On via config_index before the call: with the
+    switch left at its real default (Off), fetch_config_options' own override (CHANGE 2) would force
+    pv_metric90_weight back to 0.0 regardless of whether get_arg("pv_metric90_weight") ever ran, making the
+    sentinel check for that attribute vacuous. That switch-off override behaviour is covered separately by
+    test_pv90_switch_default_off_forces_weight_zero below; this test isolates "does the read happen" from it.
+
     The whole instance dict is snapshotted first and restored afterwards, so this test cannot leak state - such as
-    the sentinel itself, or any of the many other attributes fetch_config_options() also populates - into tests
-    that run after it.
+    the sentinel itself, the config_index overrides, or any of the many other attributes fetch_config_options()
+    also populates - into tests that run after it.
     """
     failed = False
     sentinel = -999.0
     saved_state = my_predbat.__dict__.copy()
+    saved_expert_mode_value = my_predbat.config_index["expert_mode"].get("value")
+    saved_pv90_switch_value = my_predbat.config_index["calculate_pv90_plan"].get("value")
     try:
         my_predbat.pv_metric90_weight = sentinel
         my_predbat.load_scaling90 = sentinel
+        my_predbat.config_index["expert_mode"]["value"] = True
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = True
         my_predbat.fetch_config_options()
-        for name, default in (("pv_metric90_weight", 0.0), ("load_scaling90", 0.9)):
+        for name, default in (("pv_metric90_weight", 0.15), ("load_scaling90", 0.7)):
             value = getattr(my_predbat, name, None)
             if value != default:
                 print("ERROR: {} is {} after fetch_config_options, expected the default {} (sentinel {} was not overwritten - the get_arg read is missing)".format(name, value, default, sentinel))
                 failed = True
     finally:
+        my_predbat.config_index["expert_mode"]["value"] = saved_expert_mode_value
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = saved_pv90_switch_value
+        my_predbat.__dict__.clear()
+        my_predbat.__dict__.update(saved_state)
+    return failed
+
+
+def test_pv90_switch_default_off_forces_weight_zero(my_predbat):
+    """calculate_pv90_plan defaults to Off, so fetch_config_options must leave pv_metric90_weight at 0.0 even
+    though the CONFIG_ITEMS default for pv_metric90_weight is 0.15 (CHANGE 2's whole point: the user sees 0.15
+    in Home Assistant, but the feature stays inert until the switch is turned on).
+
+    Uses the same isolated snapshot/restore-the-whole-__dict__ technique as test_pv90_config_read, but with no
+    config overrides applied at all - this exercises the real, undisturbed CONFIG_ITEMS defaults for both
+    calculate_pv90_plan and pv_metric90_weight, not a hand-set value.
+    """
+    failed = False
+    saved_state = my_predbat.__dict__.copy()
+    try:
+        my_predbat.fetch_config_options()
+        if my_predbat.calculate_pv90_plan is not False:
+            print("ERROR: calculate_pv90_plan is {} with no config override, expected the CONFIG_ITEMS default False".format(my_predbat.calculate_pv90_plan))
+            failed = True
+        if my_predbat.pv_metric90_weight != 0.0:
+            print("ERROR: pv_metric90_weight is {} with calculate_pv90_plan Off, expected the override to force 0.0 despite the CONFIG_ITEMS default of 0.15".format(my_predbat.pv_metric90_weight))
+            failed = True
+    finally:
+        my_predbat.__dict__.clear()
+        my_predbat.__dict__.update(saved_state)
+    return failed
+
+
+def test_pv90_switch_on_weight_reads_configured_value(my_predbat):
+    """With calculate_pv90_plan forced On, fetch_config_options must let pv_metric90_weight through as the real
+    CONFIG_ITEMS default of 0.15, unmolested by CHANGE 2's switch-off override - the mirror image of
+    test_pv90_switch_default_off_forces_weight_zero above.
+
+    calculate_pv90_plan is expert-mode gated (see config.py), so both it and expert_mode must be forced on via
+    config_index directly - the same technique test_pv90_config_read uses - or fetch_config_options would treat
+    the item as disabled and fall back to its default (False) regardless of what "value" is set to.
+    """
+    failed = False
+    saved_state = my_predbat.__dict__.copy()
+    saved_expert_mode_value = my_predbat.config_index["expert_mode"].get("value")
+    saved_pv90_switch_value = my_predbat.config_index["calculate_pv90_plan"].get("value")
+    try:
+        my_predbat.config_index["expert_mode"]["value"] = True
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = True
+        my_predbat.fetch_config_options()
+        if my_predbat.calculate_pv90_plan is not True:
+            print("ERROR: calculate_pv90_plan is {} after forcing it on via config_index, expected True".format(my_predbat.calculate_pv90_plan))
+            failed = True
+        if my_predbat.pv_metric90_weight != 0.15:
+            print("ERROR: pv_metric90_weight is {} with calculate_pv90_plan On, expected the CONFIG_ITEMS default 0.15 to pass through unmolested".format(my_predbat.pv_metric90_weight))
+            failed = True
+    finally:
+        my_predbat.config_index["expert_mode"]["value"] = saved_expert_mode_value
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = saved_pv90_switch_value
         my_predbat.__dict__.clear()
         my_predbat.__dict__.update(saved_state)
     return failed
@@ -224,27 +312,28 @@ def test_pv90_step_arrays_built(my_predbat):
     return failed
 
 
-def test_pv90_load_scaling90_composes_relatively(my_predbat):
-    """load_scaling90 must compose relatively with load_scaling, not replace it as an independent absolute multiplier.
+def test_pv90_load_scaling90_is_absolute(my_predbat):
+    """load_scaling90 must be an ABSOLUTE multiplier of the historical load, exactly like load_scaling10, and
+    must NOT compose with load_scaling. This pins CHANGE 3, which reverses the earlier relative-composition
+    decision that this test's predecessor, test_pv90_load_scaling90_composes_relatively, used to pin.
 
-    This pins fix-round-2 Item 2. If load_scaling90 were an absolute multiplier (scale_fixed=self.load_scaling90
-    alone, the pre-fix code), a user's own load_scaling would not cancel out of it: on
-    coverage/cases/predbat_debug_agile1.yaml, load_scaling=0.5 with load_scaling90 at its default 0.9 gave
-    0.9/0.5 = 1.8x - a same-PV, HIGHER-load scenario, the opposite of the "upside" pv90 is meant to model.
-    load_scaling=1.05 (this file's earlier test_pv90_step_arrays_built, and most default configs) is too
-    close to 1.0 for that inversion to show up in a totals comparison, so this test deliberately sets
-    load_scaling well away from 1.0 (0.5, matching the debug case that surfaced the bug) - under the
-    absolute convention this assertion fails (total90 > total), which is exactly the regression being
-    pinned; under the relative convention (self.load_scaling * self.load_scaling90) it always holds,
-    because the two load_scaling factors are the same on both sides and only load_scaling90's 0.9 discount
-    remains.
+    Discriminates the two conventions directly: calculate_plan() is run twice with the same load_minutes and
+    load_scaling90, varying only load_scaling (0.5, matching coverage/cases/predbat_debug_agile1.yaml, then
+    1.5 - far enough apart that any residual coupling would be obvious). Under the ABSOLUTE convention
+    load_minutes_step90's total does not depend on load_scaling at all, so it must come out identical both
+    times; under the relative convention (scale_fixed=self.load_scaling * self.load_scaling90, the old code)
+    it would scale by the same 1.5/0.5 = 3x ratio as the nominal (load_scaling-only) step array.
+
+    Verified to actually discriminate: temporarily restoring the relative form at the plan.py call site
+    (scale_fixed=self.load_scaling * self.load_scaling90) makes this test FAIL (the two pv90 totals differ by
+    roughly the same 3x ratio as the nominal totals); reverting to the absolute form
+    (scale_fixed=self.load_scaling90) makes it PASS again.
     """
     failed = False
     saved_load_scaling = my_predbat.load_scaling
     saved_load_minutes = my_predbat.load_minutes
     saved_load_forecast_only = my_predbat.load_forecast_only
     try:
-        my_predbat.load_scaling = 0.5
         # The historical-load path (step_data_history's type_load and not forward branch) reads
         # load_minutes as a HA-style incrementing/cumulative series via get_filtered_load_minute ->
         # get_from_incrementing (a plain per-minute dict, as most other array-based tests in this file
@@ -255,17 +344,94 @@ def test_pv90_load_scaling90_composes_relatively(my_predbat):
         my_predbat.load_forecast_only = False
         rate = 0.02  # kWh/minute
         my_predbat.load_minutes = {minute: (1440 - minute) * rate for minute in range(0, 1441)}
+
+        my_predbat.load_scaling = 0.5
         my_predbat.calculate_plan(recompute=True)
-        total = sum(my_predbat.load_minutes_step.values())
-        total90 = sum(my_predbat.load_minutes_step90.values())
-        if total <= 0:
+        total_low = sum(my_predbat.load_minutes_step.values())
+        total90_low = sum(my_predbat.load_minutes_step90.values())
+
+        my_predbat.load_scaling = 1.5
+        my_predbat.calculate_plan(recompute=True)
+        total_high = sum(my_predbat.load_minutes_step.values())
+        total90_high = sum(my_predbat.load_minutes_step90.values())
+
+        if total_low <= 0 or total_high <= 0:
             print("ERROR: load_minutes_step is all zero despite seeding a synthetic load series - the comparison would be vacuous")
             return True
-        if total90 >= total:
-            print("ERROR: load_minutes_step90 total {} is not below the nominal {} at load_scaling=0.5 - load_scaling90 is not composing relatively with load_scaling".format(total90, total))
+        if abs(total_high - 3 * total_low) > max(1.0, total_low * 0.05):
+            print("ERROR: nominal load_minutes_step did not scale ~3x with load_scaling (0.5 -> 1.5) as expected (total at 0.5={}, at 1.5={}) - test setup problem, not a pv90 result".format(total_low, total_high))
+            return True
+        if abs(total90_high - total90_low) > max(1.0, total90_low * 0.05):
+            print(
+                "ERROR: load_minutes_step90 total changed from {} to {} when load_scaling changed from 0.5 to 1.5 (load_scaling90 held at {}) - load_scaling90 is composing with load_scaling instead of acting as an absolute multiplier".format(
+                    total90_low, total90_high, my_predbat.load_scaling90
+                )
+            )
             failed = True
     finally:
         my_predbat.load_scaling = saved_load_scaling
+        my_predbat.load_minutes = saved_load_minutes
+        my_predbat.load_forecast_only = saved_load_forecast_only
+    return failed
+
+
+def test_pv90_load_scaling90_inversion_warning(my_predbat):
+    """A warning must fire, once per plan (not per slot), when load_scaling90 >= load_scaling - the safety net
+    for CHANGE 3's absolute convention. coverage/cases/predbat_debug_agile1.yaml (load_scaling: 0.5) is exactly
+    the sort of setup this guards: with load_scaling90 at its default 0.7, that case's PV90 scenario has more
+    load than nominal, silently inverting into a second downside case rather than an upside one.
+
+    my_predbat.log is monkeypatched to record every message (rather than replaced outright) so the real
+    logging path is still exercised, matching the style already used elsewhere in this suite for wrapping
+    launch_run_prediction_* functions. Both the inverted case (load_scaling90 >= load_scaling, warning must
+    fire exactly once) and the normal case (load_scaling90 < load_scaling, warning must not fire) are checked
+    with a single calculate_plan() call each.
+    """
+    failed = False
+    saved_load_scaling = my_predbat.load_scaling
+    saved_load_scaling90 = my_predbat.load_scaling90
+    saved_load_minutes = my_predbat.load_minutes
+    saved_load_forecast_only = my_predbat.load_forecast_only
+    original_log = my_predbat.log
+    messages = []
+
+    def capturing_log(message, *args, **kwargs):
+        """Record every log message (and still log for real) so the inversion warning can be asserted on."""
+        messages.append(message)
+        return original_log(message, *args, **kwargs)
+
+    my_predbat.log = capturing_log
+    try:
+        my_predbat.load_forecast_only = False
+        rate = 0.02  # kWh/minute
+        my_predbat.load_minutes = {minute: (1440 - minute) * rate for minute in range(0, 1441)}
+
+        # Inverted case: load_scaling90 (0.7) >= load_scaling (0.5) - warning must fire exactly once
+        my_predbat.load_scaling = 0.5
+        my_predbat.load_scaling90 = 0.7
+        messages.clear()
+        my_predbat.calculate_plan(recompute=True)
+        inversion_warnings = [msg for msg in messages if "load_scaling90" in msg and "acting as a downside" in msg]
+        if not inversion_warnings:
+            print("ERROR: no inversion warning logged with load_scaling90 (0.7) >= load_scaling (0.5): messages were {}".format(messages))
+            failed = True
+        elif len(inversion_warnings) > 1:
+            print("ERROR: inversion warning logged {} times in one calculate_plan() call, expected exactly once per plan: {}".format(len(inversion_warnings), inversion_warnings))
+            failed = True
+
+        # Non-inverted case: load_scaling90 (0.7) < load_scaling (1.05) - warning must not fire
+        my_predbat.load_scaling = 1.05
+        my_predbat.load_scaling90 = 0.7
+        messages.clear()
+        my_predbat.calculate_plan(recompute=True)
+        inversion_warnings = [msg for msg in messages if "load_scaling90" in msg and "acting as a downside" in msg]
+        if inversion_warnings:
+            print("ERROR: inversion warning logged when load_scaling90 (0.7) < load_scaling (1.05): {}".format(inversion_warnings))
+            failed = True
+    finally:
+        my_predbat.log = original_log
+        my_predbat.load_scaling = saved_load_scaling
+        my_predbat.load_scaling90 = saved_load_scaling90
         my_predbat.load_minutes = saved_load_minutes
         my_predbat.load_forecast_only = saved_load_forecast_only
     return failed
@@ -460,6 +626,7 @@ def test_pv90_no_charge_derate(my_predbat):
 METRIC_STATE_ITEMS = [
     "pv_metric10_weight",
     "pv_metric90_weight",
+    "calculate_pv90_plan",
     "metric_battery_value_scaling",
     "carbon_enable",
     "metric_self_sufficiency",
@@ -756,6 +923,110 @@ def test_pv90_weight_nonzero_runs_simulation(my_predbat):
     return failed
 
 
+def test_pv90_switch_off_skips_all_launch_paths(my_predbat):
+    """With calculate_pv90_plan at its default Off, no pv90 prediction may be launched through any of the four
+    launch paths test_pv90_weight_zero_skips_simulation counts (that test hand-sets pv_metric90_weight=0.0
+    directly). This test instead relies on the ambient state left behind by the shared instance's own setup -
+    calculate_pv90_plan Off, pv_metric90_weight forced to 0.0 by CHANGE 2's override - asserting those
+    preconditions explicitly rather than assuming them, so a regression that broke the switch-to-weight
+    override wiring would be caught here even if pv_metric90_weight were never set by hand anywhere else.
+    """
+    if my_predbat.calculate_pv90_plan is not False:
+        print("ERROR: precondition failed - calculate_pv90_plan is {}, expected False".format(my_predbat.calculate_pv90_plan))
+        return True
+    if my_predbat.pv_metric90_weight != 0.0:
+        print("ERROR: precondition failed - pv_metric90_weight is {}, expected 0.0".format(my_predbat.pv_metric90_weight))
+        return True
+
+    failed = False
+    calls = {"charge": 0, "charge_min_max": 0, "export": 0, "single": 0}
+    original_charge = my_predbat.launch_run_prediction_charge
+    original_charge_min_max = my_predbat.launch_run_prediction_charge_min_max
+    original_export = my_predbat.launch_run_prediction_export
+    original_single = my_predbat.launch_run_prediction_single
+
+    def counting_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the charge optimiser so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["charge"] += 1
+        return original_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+
+    def counting_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the charge SoC-envelope pre-pass so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["charge_min_max"] += 1
+        return original_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+
+    def counting_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the export optimiser so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["export"] += 1
+        return original_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
+
+    def counting_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
+        """Count pv90 launches from the levels optimiser so the skip can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["single"] += 1
+        return original_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step=step)
+
+    my_predbat.launch_run_prediction_charge = counting_charge
+    my_predbat.launch_run_prediction_charge_min_max = counting_charge_min_max
+    my_predbat.launch_run_prediction_export = counting_export
+    my_predbat.launch_run_prediction_single = counting_single
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_charge = original_charge
+        my_predbat.launch_run_prediction_charge_min_max = original_charge_min_max
+        my_predbat.launch_run_prediction_export = original_export
+        my_predbat.launch_run_prediction_single = original_single
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+    for path, count in calls.items():
+        if count != 0:
+            print("ERROR: {} pv90 predictions were launched via {} with calculate_pv90_plan Off (ambient default state)".format(count, path))
+            failed = True
+    return failed
+
+
+def test_pv90_switch_on_runs_simulation_via_weight(my_predbat):
+    """When calculate_pv90_plan is On, the resulting non-zero pv_metric90_weight (0.15, per
+    test_pv90_switch_on_weight_reads_configured_value above) must actually launch pv90 predictions during
+    calculate_plan() - closing the loop from switch to weight to simulation.
+
+    Hand-sets both attributes to the values already proven to come out of fetch_config_options with the
+    switch on, using the same launch-counting technique as test_pv90_weight_nonzero_runs_simulation, so this
+    test does not need to call fetch_config_options() itself (and risk disturbing the
+    calculate_best_charge/threads/low_rates setup calculate_plan() needs) to prove the switch's end-to-end
+    effect.
+    """
+    failed = False
+    my_predbat.calculate_pv90_plan = True
+    my_predbat.pv_metric90_weight = 0.15
+    calls = {"count": 0}
+    original = my_predbat.launch_run_prediction_charge
+
+    def counting(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Count pv90 launches from the charge optimiser so the run can be asserted."""
+        if pv_scenario == PV_SCENARIO_PV90:
+            calls["count"] += 1
+        return original(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
+
+    my_predbat.launch_run_prediction_charge = counting
+    snapshot = _setup_calculate_plan_with_real_windows(my_predbat)
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    finally:
+        my_predbat.launch_run_prediction_charge = original
+        my_predbat.calculate_pv90_plan = False
+        my_predbat.pv_metric90_weight = 0.0
+        _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+    if calls["count"] == 0:
+        print("ERROR: no pv90 predictions were launched via the charge optimiser with calculate_pv90_plan On and pv_metric90_weight 0.15")
+        failed = True
+    return failed
+
+
 def test_pv90_charge_limit_results_paired_with_try_soc(my_predbat):
     """optimise_charge_limit's pv90 results must stay paired with the try_soc that produced them.
 
@@ -992,12 +1263,16 @@ def run_pv90_tests(my_predbat):
     print("**** Running pv90 tests ****")
     failed |= test_pv90_scenario_constants()
     failed |= test_pv90_config_items(my_predbat)
+    failed |= test_pv90_calculate_pv90_plan_config_item(my_predbat)
     failed |= test_pv90_config_read(my_predbat)
+    failed |= test_pv90_switch_default_off_forces_weight_zero(my_predbat)
+    failed |= test_pv90_switch_on_weight_reads_configured_value(my_predbat)
     failed |= test_pv90_forecast_fallback_to_p50(my_predbat)
     failed |= test_pv90_forecast_uses_published_p90(my_predbat)
     my_predbat.calculate_plan(recompute=True)
     failed |= test_pv90_step_arrays_built(my_predbat)
-    failed |= test_pv90_load_scaling90_composes_relatively(my_predbat)
+    failed |= test_pv90_load_scaling90_is_absolute(my_predbat)
+    failed |= test_pv90_load_scaling90_inversion_warning(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)
@@ -1023,6 +1298,8 @@ def run_pv90_tests(my_predbat):
         failed |= test_pv90_fallback_tracks_a_reassigned_p50(my_predbat)
         failed |= test_pv90_weight_zero_skips_simulation(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_simulation(my_predbat)
+        failed |= test_pv90_switch_off_skips_all_launch_paths(my_predbat)
+        failed |= test_pv90_switch_on_runs_simulation_via_weight(my_predbat)
         failed |= test_pv90_charge_limit_results_paired_with_try_soc(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_export_simulation(my_predbat)
         failed |= test_pv90_weight_nonzero_runs_levels_simulation(my_predbat)

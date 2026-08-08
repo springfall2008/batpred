@@ -123,7 +123,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
-        "default": 0.0,
+        "default": 0.15,
         "enable": "expert_mode",
     },
     {
@@ -135,7 +135,7 @@ CONFIG_ITEMS = [
         "step": 0.01,
         "unit": "*",
         "icon": "mdi:multiplication",
-        "default": 0.9,
+        "default": 0.7,
         "enable": "expert_mode",
     },
     {
@@ -797,6 +797,13 @@ CONFIG_ITEMS = [
     {
         "name": "calculate_second_pass",
         "friendly_name": "Calculate full second pass (slower)",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": False,
+    },
+    {
+        "name": "calculate_pv90_plan",
+        "friendly_name": "Calculate PV90 upside plan",
         "type": "switch",
         "enable": "expert_mode",
         "default": False,

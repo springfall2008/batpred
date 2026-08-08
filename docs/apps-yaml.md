@@ -1532,9 +1532,10 @@ NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware ca
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast, and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
 By default, Predbat will use the central (PV50) estimate and apply to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
 You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.<BR>
-The 90% (best case) estimate is not used by default. Expert users can give it a weighting too via **input_number.predbat_pv_metric90_weight**,
-which defaults to 0.0 - at that value no PV90 scenario is simulated at all and the plan is unchanged. Raising it above 0.0 makes Predbat price in a
-chance of a better-than-forecast day. See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
+The 90% (best case) estimate is not used by default. Expert users can enable it via **switch.predbat_calculate_pv90_plan** (Off by default) and give it a
+weighting via **input_number.predbat_pv_metric90_weight** (which defaults to 0.15, but is only applied once the switch is turned On - while it is Off no
+PV90 scenario is simulated at all and the plan is unchanged). Turning the switch on makes Predbat price in a chance of a better-than-forecast day.
+See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
 Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
 this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.

@@ -1229,20 +1229,22 @@ class Plan:
             load_adjust=self.manual_load_adjust,
             load_baseline=self.dynamic_load_baseline,
         )
-        # load_scaling90 composes RELATIVELY with load_scaling, unlike load_scaling10 above which is an
-        # absolute multiplier of its own. If it were absolute too, a user's own load_scaling would not
-        # cancel out of it: e.g. load_scaling=0.5 with the load_scaling90 default of 0.9 would scale the
-        # pv90 load to 0.9x of the *raw* history - 1.8x the nominal load the user actually configured -
-        # making pv90 a same-PV, higher-load scenario, i.e. a second downside case, defeating the point
-        # of the feature (see plan.py's compute_metric docstring/premise on pv90 being the upside case).
-        # Multiplying by load_scaling here means load_scaling90's default of 0.9 always means "10% below
-        # whatever nominal load the user has configured", regardless of what load_scaling itself is.
+        # load_scaling90 is an ABSOLUTE multiplier of the historical load, exactly like load_scaling10
+        # above - it does not compose with load_scaling. At its default of 0.7 this sits comfortably
+        # below the default load_scaling of 1.05, so pv90 correctly models the low-load "upside" case
+        # for normal setups. But because the two no longer cancel out, a user whose load_scaling is
+        # itself below load_scaling90 ends up with pv90 load HIGHER than nominal - the scenario silently
+        # inverts into a second downside case rather than the upside one it is meant to model. The
+        # arithmetic is deliberately left as a plain absolute multiplier (the repo owner's decision);
+        # the warning below is only so that inversion is visible, once per plan, not per slot.
+        if self.load_scaling90 >= self.load_scaling:
+            self.log("Warn: load_scaling90 ({}) is >= load_scaling ({}) - the PV90 scenario will have more load than nominal, so it is acting as a downside case rather than an upside one".format(self.load_scaling90, self.load_scaling))
         load_minutes_step90 = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
-            scale_fixed=self.load_scaling * self.load_scaling90,
+            scale_fixed=self.load_scaling90,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,

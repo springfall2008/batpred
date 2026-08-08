@@ -2380,10 +2380,22 @@ class Fetch:
         self.notify_devices = self.get_arg("notify_devices", ["notify"])
         self.pv_scaling = self.get_arg("pv_scaling")
         self.pv_metric10_weight = self.get_arg("pv_metric10_weight")
+        self.calculate_pv90_plan = self.get_arg("calculate_pv90_plan")
         self.pv_metric90_weight = self.get_arg("pv_metric90_weight")
         self.load_scaling = self.get_arg("load_scaling")
         self.load_scaling10 = self.get_arg("load_scaling10")
         self.load_scaling90 = self.get_arg("load_scaling90")
+        if not self.calculate_pv90_plan:
+            # calculate_pv90_plan (CHANGE 2) gates the whole feature: pv_metric90_weight's own
+            # CONFIG_ITEMS default is 0.15, not 0.0, so the user sees a non-zero weight in Home
+            # Assistant even while the switch is off. Force the runtime weight back to 0.0 here so
+            # every one of the pre-existing `pv_metric90_weight > 0` gates elsewhere (the pv90 launch
+            # paths in plan.py, and the pv90 term collapsing out of compute_metric) stays inert until
+            # the user explicitly turns the switch on - no separate gating on calculate_pv90_plan is
+            # added anywhere else, this is the single choke point.
+            if self.pv_metric90_weight:
+                self.log("Warn: calculate_pv90_plan is Off so forcing pv_metric90_weight from {} to 0.0 - turn on switch.predbat_calculate_pv90_plan (expert mode) to enable the PV90 upside scenario".format(self.pv_metric90_weight))
+            self.pv_metric90_weight = 0.0
         self.charge_scaling10 = self.get_arg("charge_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.load_scaling_free = self.get_arg("load_scaling_free")
