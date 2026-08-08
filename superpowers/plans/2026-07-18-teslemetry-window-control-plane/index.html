@@ -1,0 +1,1496 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Teslemetry Window Control Plane Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Teslemetry Window Control Plane Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-18-teslemetry-window-control-plane.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Teslemetry Window Control Plane Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="teslemetry-window-control-plane-implementation-plan">Teslemetry Window Control Plane Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Replace the service-hook control path of the TeslemetryAPI component (PR #4177) with a fox.py-style window control plane: a <code>TESLA</code> inverter type, virtual charge/discharge-window schedule entities driven directly by <code>inverter.py</code>, a component-side scheduler emulator that translates the committed windows into Powerwall REST commands, and <code>teslemetry_automatic</code> auto-configuration so a user needs only three config keys.</p>
+<p><strong>Architecture:</strong> Predbat's <code>Inverter</code> class programs charge/discharge windows by writing virtual <code>predbat_teslemetry_schedule_*</code> entities (time selects, SoC numbers, enable switches) and pressing a write button — exactly how it drives Fox. The writes route back into the component via the existing <code>predbat_teslemetry_</code> event filter, accumulate in a <em>pending</em> schedule, and the write button commits them atomically. Because the Powerwall has no native scheduler (unlike Fox Cloud), the component's <code>run()</code> loop acts as the scheduler: each 60s cycle it evaluates the committed schedule against the wall clock and live SOC, computes a desired device tuple <code>(tariff_mode, export_rule, grid_charging, reserve, mode)</code>, and asserts it through the existing deduped command layer (<code>_apply_command</code> write-on-change is kept unchanged, so command-credit spend stays flat and failed writes self-retry).</p>
+<p><strong>Tech Stack:</strong> Python 3 (async), aiohttp, existing Predbat component framework (<code>ComponentBase</code>), Storage component for persistence, existing <code>tests/test_teslemetry.py</code> mock harness.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length: 256 chars (Black), 250 chars (Flake8) — run <code>./run_pre_commit</code> from repo root before finishing</li>
+<li>Docstrings: 100% coverage required (<code>interrogate</code>) — <strong>every</strong> new function, method, class, and test function needs a docstring</li>
+<li>Spell checking: British English (<code>en-gb</code>) via CSpell; add unknown valid words to <code>.cspell/custom-dictionary-workspace.txt</code></li>
+<li>Variable naming: <code>lower_case_with_underscores</code></li>
+<li>Tests run from <code>coverage/</code> dir; <strong>always save test output to a file, then grep the file</strong> (never pipe directly to grep)</li>
+<li>New test functions MUST be added to the <code>test_teslemetry()</code> runner at the bottom of <code>apps/predbat/tests/test_teslemetry.py</code></li>
+<li>Use the Storage component for persistence, never direct file access</li>
+<li>Work on the existing branch <code>feat/tesla-powerwall-teslemetry</code></li>
+<li>Git commits end with: <code>Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;</code></li>
+</ul>
+<h2 id="design-decisions-agreed-in-review-do-not-re-litigate">Design decisions (agreed in review — do not re-litigate)</h2>
+<ol>
+<li><strong>No service hooks.</strong> The five <code>*_service</code> hooks from <code>templates/tesla_powerwall.yaml</code> are replaced entirely by window entities + emulator.</li>
+<li><strong><code>support_discharge_freeze: False</code></strong> — the Powerwall cannot pin SOC while exporting PV (<code>backup</code> absorbs solar into the battery; <code>self_consumption</code>/<code>autonomous</code> discharge to load). <code>execute.py:794</code> automatically forces <code>set_export_freeze</code> off for such inverters. <code>support_charge_freeze: True</code> (<code>backup</code> + grid-charging-off holds during a charge window).</li>
+<li><strong><code>output_charge_control: "none"</code></strong> — no fake charge/discharge rate entities; the Powerwall has no rate registers. <code>battery_rate_max</code> is a modelling sensor only.</li>
+<li><strong>Write-button atomicity</strong> (<code>time_button_press: True</code>): entity writes are staged in <code>pending_schedule</code>; only the write button copies pending → committed. The emulator only ever reads the committed schedule, so a half-written window is never acted on.</li>
+<li><strong>Device-state ownership:</strong> when the component is enabled and Predbat is not read-only, the emulator asserts the full device tuple every cycle (deduped). This intentionally replaces the customer's device tariff with Predbat's built tariff. <code>set_read_only</code> gates ALL emulator device writes.</li>
+<li><strong>Idle export rule is <code>pv_only</code></strong> (divergence from the template's <code>never</code>): with the battery full and excess solar, <code>never</code> would curtail PV export. Flagged in the PR description.</li>
+<li><strong>The five existing control entities</strong> (<code>operation_mode</code>, <code>backup_reserve</code>, <code>allow_charging_from_grid</code>, <code>allow_export</code>, <code>tariff_mode</code>) remain as diagnostic mirrors + manual overrides. Their event handlers stay; the emulator updates their states after successful asserts.</li>
+<li><strong><code>reserve</code> maps to Powerwall <code>backup_reserve</code></strong>; <code>has_reserve_soc: True</code>, <code>inverter_reserve_max: 80</code> (Predbat treats 80–100 as 100).</li>
+</ol>
+<h2 id="file-structure">File Structure</h2>
+<ul>
+<li>Modify: <code>apps/predbat/config.py</code> — add <code>INVERTER_DEF["TESLA"]</code>, add <code>teslemetry_automatic</code> to <code>APPS_SCHEMA</code></li>
+<li>Modify: <code>apps/predbat/components.py</code> — add <code>automatic</code> arg + <code>can_restart</code> to the <code>teslemetry</code> entry</li>
+<li>Modify: <code>apps/predbat/teslemetry.py</code> — schedule model, window math, schedule entities, event routing, persistence, scheduler emulator, <code>automatic_config()</code>, extra site_info sensors</li>
+<li>Modify: <code>apps/predbat/tests/test_teslemetry.py</code> — all new tests + mock harness extensions</li>
+<li>Rewrite: <code>templates/tesla_powerwall.yaml</code> — component-based config</li>
+<li>Modify: <code>docs/components.md</code>, <code>docs/inverter-setup.md</code></li>
+</ul>
+<hr />
+<h3 id="task-1-tesla-inverter-type-in-inverter_def">Task 1: <code>TESLA</code> inverter type in <code>INVERTER_DEF</code></h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/config.py</code> (insert after the <code>"FoxCloud"</code> entry which ends at line 1919)</li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: <code>INVERTER_DEF["TESLA"]</code> dict consumed by <code>inverter.py</code> (read via <code>INVERTER_DEF[self.inverter_type][...]</code> at <code>inverter.py:207-243</code>). Every key present in the <code>"FoxCloud"</code> entry must be present here because <code>inverter.py</code> reads most of them unconditionally.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code> (after <code>test_teslemetry_reconcile_forces_write_even_if_cache_preseeded</code>, before the <code>test_teslemetry()</code> runner):</p>
+<pre><code class="language-python">def test_teslemetry_inverter_def_tesla():
+    &quot;&quot;&quot;TESLA inverter type is registered with window control, no rate control and no export freeze.&quot;&quot;&quot;
+    from config import INVERTER_DEF
+
+    tesla = INVERTER_DEF.get(&quot;TESLA&quot;)
+    assert tesla is not None
+    assert tesla[&quot;name&quot;] == &quot;Tesla Powerwall&quot;
+    assert tesla[&quot;has_charge_enable_time&quot;] is True
+    assert tesla[&quot;has_discharge_enable_time&quot;] is True
+    assert tesla[&quot;has_target_soc&quot;] is True
+    assert tesla[&quot;has_reserve_soc&quot;] is True
+    assert tesla[&quot;charge_time_entity_is_option&quot;] is True
+    assert tesla[&quot;charge_time_format&quot;] == &quot;HH:MM:SS&quot;
+    assert tesla[&quot;time_button_press&quot;] is True
+    assert tesla[&quot;output_charge_control&quot;] == &quot;none&quot;
+    assert tesla[&quot;support_charge_freeze&quot;] is True
+    assert tesla[&quot;support_discharge_freeze&quot;] is False
+    assert tesla[&quot;can_span_midnight&quot;] is False
+    assert tesla[&quot;target_soc_used_for_discharge&quot;] is True
+    # inverter.py reads the FoxCloud key set unconditionally - TESLA must not miss any of them
+    for key in INVERTER_DEF[&quot;FoxCloud&quot;]:
+        assert key in tesla, &quot;TESLA INVERTER_DEF missing key {}&quot;.format(key)
+</code></pre>
+<p>Register it in the <code>test_teslemetry()</code> runner (add the call just before the <code>print</code> line):</p>
+<pre><code class="language-python">    test_teslemetry_inverter_def_tesla()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t1.log 2&gt;&amp;1; grep -E &quot;AssertionError|Error|passed&quot; /tmp/teslemetry_t1.log
+</code></pre>
+<p>Expected: FAIL (<code>tesla is not None</code> assertion fails — no TESLA entry yet).</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the INVERTER_DEF entry</strong></li>
+</ul>
+<p>In <code>apps/predbat/config.py</code>, insert immediately after the closing <code>},</code> of the <code>"FoxCloud"</code> entry (line 1919), before <code>"SolaxCloud"</code>:</p>
+<pre><code class="language-python">    &quot;TESLA&quot;: {
+        &quot;name&quot;: &quot;Tesla Powerwall&quot;,
+        &quot;has_rest_api&quot;: False,
+        &quot;has_mqtt_api&quot;: False,
+        &quot;output_charge_control&quot;: &quot;none&quot;,
+        &quot;charge_control_immediate&quot;: False,
+        &quot;has_charge_enable_time&quot;: True,
+        &quot;has_discharge_enable_time&quot;: True,
+        &quot;has_target_soc&quot;: True,
+        &quot;has_reserve_soc&quot;: True,
+        &quot;has_timed_pause&quot;: False,
+        &quot;charge_time_format&quot;: &quot;HH:MM:SS&quot;,
+        &quot;charge_time_entity_is_option&quot;: True,
+        &quot;soc_units&quot;: &quot;%&quot;,
+        &quot;num_load_entities&quot;: 1,
+        &quot;has_ge_inverter_mode&quot;: False,
+        &quot;has_ge_eco_toggle&quot;: False,
+        &quot;has_fox_inverter_mode&quot;: False,
+        &quot;time_button_press&quot;: True,
+        &quot;clock_time_format&quot;: &quot;%Y-%m-%d %H:%M:%S&quot;,
+        &quot;write_and_poll_sleep&quot;: 2,
+        &quot;has_time_window&quot;: False,
+        &quot;support_charge_freeze&quot;: True,
+        &quot;support_discharge_freeze&quot;: False,
+        &quot;has_idle_time&quot;: False,
+        &quot;can_span_midnight&quot;: False,
+        &quot;charge_discharge_with_rate&quot;: False,
+        &quot;target_soc_used_for_discharge&quot;: True,
+    },
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t1.log 2&gt;&amp;1; grep -E &quot;AssertionError|Error|tests passed&quot; /tmp/teslemetry_t1.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/config.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): add TESLA inverter type to INVERTER_DEF
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-config-plumbing-teslemetry_automatic">Task 2: Config plumbing — <code>teslemetry_automatic</code></h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/components.py:370-379</code> (teslemetry entry)</li>
+<li>Modify: <code>apps/predbat/config.py</code> (<code>APPS_SCHEMA</code>, next to the existing <code>teslemetry_base_url</code> key)</li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: component arg <code>automatic</code> (bool, default False) passed into <code>TeslemetryAPI.initialize(**kwargs)</code> — absorbed by the existing <code>**kwargs</code> until Task 4 adds the named parameter.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing test</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">def test_teslemetry_component_registry_config():
+    &quot;&quot;&quot;Component registry exposes the automatic arg, can_restart, and the schema accepts teslemetry_automatic.&quot;&quot;&quot;
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST[&quot;teslemetry&quot;]
+    assert entry[&quot;args&quot;][&quot;automatic&quot;][&quot;config&quot;] == &quot;teslemetry_automatic&quot;
+    assert entry[&quot;args&quot;][&quot;automatic&quot;][&quot;default&quot;] is False
+    assert entry[&quot;args&quot;][&quot;automatic&quot;][&quot;required&quot;] is False
+    assert entry.get(&quot;can_restart&quot;) is True
+    assert APPS_SCHEMA[&quot;teslemetry_automatic&quot;] == {&quot;type&quot;: &quot;boolean&quot;}
+</code></pre>
+<p>Register in the <code>test_teslemetry()</code> runner:</p>
+<pre><code class="language-python">    test_teslemetry_component_registry_config()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run test to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t2.log 2&gt;&amp;1; grep -E &quot;KeyError|AssertionError|tests passed&quot; /tmp/teslemetry_t2.log
+</code></pre>
+<p>Expected: FAIL with <code>KeyError: 'automatic'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/components.py</code>, change the teslemetry entry to:</p>
+<pre><code class="language-python">    &quot;teslemetry&quot;: {
+        &quot;class&quot;: TeslemetryAPI,
+        &quot;name&quot;: &quot;Tesla Powerwall (Teslemetry)&quot;,
+        &quot;event_filter&quot;: &quot;predbat_teslemetry_&quot;,
+        &quot;args&quot;: {
+            &quot;key&quot;: {&quot;required&quot;: True, &quot;config&quot;: &quot;teslemetry_key&quot;},
+            &quot;site_id&quot;: {&quot;required&quot;: True, &quot;config&quot;: &quot;teslemetry_site_id&quot;},
+            &quot;base_url&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;teslemetry_base_url&quot;, &quot;default&quot;: &quot;https://api.teslemetry.com&quot;},
+            &quot;automatic&quot;: {&quot;required&quot;: False, &quot;default&quot;: False, &quot;config&quot;: &quot;teslemetry_automatic&quot;},
+        },
+        &quot;phase&quot;: 1,
+        &quot;can_restart&quot;: True,
+    },
+</code></pre>
+<p>In <code>apps/predbat/config.py</code>, find the existing <code>"teslemetry_base_url"</code> line in <code>APPS_SCHEMA</code> and add below it:</p>
+<pre><code class="language-python">    &quot;teslemetry_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run test to verify it passes</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t2.log 2&gt;&amp;1; grep -E &quot;AssertionError|tests passed&quot; /tmp/teslemetry_t2.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/components.py apps/predbat/config.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): wire teslemetry_automatic config and can_restart
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-extra-site_info-sensors-live-soc-tracking">Task 3: Extra site_info sensors + live SOC tracking</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/teslemetry.py</code> (<code>fetch_site_info</code>, <code>fetch_live_status</code>)</li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces: sensors <code>sensor.&lt;prefix&gt;_teslemetry_battery_rate_max</code> (W) and <code>sensor.&lt;prefix&gt;_teslemetry_inverter_limit</code> (W) — referenced by <code>automatic_config()</code> in Task 8. Attribute <code>self.last_soc</code> (float or None) — consumed by the emulator in Task 7.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">SITE_INFO_FULL = {
+    &quot;response&quot;: {
+        &quot;nameplate_energy&quot;: 13500,
+        &quot;nameplate_power&quot;: 11500,
+        &quot;max_site_meter_power_ac&quot;: 11500,
+        &quot;default_real_mode&quot;: &quot;self_consumption&quot;,
+        &quot;backup_reserve_percent&quot;: 20,
+    }
+}
+
+
+def test_teslemetry_site_info_publishes_rate_and_limit():
+    &quot;&quot;&quot;site_info nameplate power and site AC limit are published as W sensors for automatic config.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items[&quot;sensor.predbat_teslemetry_battery_rate_max&quot;][&quot;state&quot;] == 11500
+    assert api.dashboard_items[&quot;sensor.predbat_teslemetry_inverter_limit&quot;][&quot;state&quot;] == 11500
+
+
+def test_teslemetry_site_info_limit_kw_normalised():
+    &quot;&quot;&quot;A max_site_meter_power_ac reported in kW (small magnitude) is normalised to W.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = {&quot;response&quot;: {&quot;nameplate_energy&quot;: 13500, &quot;nameplate_power&quot;: 11500, &quot;max_site_meter_power_ac&quot;: 11.5}}
+    run_async(api.fetch_site_info())
+    assert api.dashboard_items[&quot;sensor.predbat_teslemetry_inverter_limit&quot;][&quot;state&quot;] == 11500
+
+
+def test_teslemetry_live_status_tracks_last_soc():
+    &quot;&quot;&quot;fetch_live_status records the live SOC for the scheduler emulator.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    run_async(api.fetch_live_status())
+    assert api.last_soc == 55.5
+</code></pre>
+<p>Register all three in the <code>test_teslemetry()</code> runner. Also add <code>self.last_soc = None</code> to <code>MockTeslemetryAPI.__init__</code> so pre-existing tests are unaffected.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t3.log 2&gt;&amp;1; grep -E &quot;KeyError|AssertionError|tests passed&quot; /tmp/teslemetry_t3.log
+</code></pre>
+<p>Expected: FAIL with <code>KeyError: 'sensor.predbat_teslemetry_battery_rate_max'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code> <code>fetch_site_info</code>, after the <code>nameplate_wh</code> block (after <code>soc_max_published = True</code>), add:</p>
+<pre><code class="language-python">        nameplate_power = response.get(&quot;nameplate_power&quot;, 0)
+        if nameplate_power:
+            self.publish_sensor(&quot;battery_rate_max&quot;, nameplate_power, unit=&quot;W&quot;, state_class=None, friendly=&quot;Powerwall Max Rate&quot;)
+        site_limit = response.get(&quot;max_site_meter_power_ac&quot;, 0) or nameplate_power
+        if site_limit and site_limit &lt; 100:
+            # Some sites report this field in kW; normalise to W
+            site_limit = site_limit * 1000
+        if site_limit:
+            self.publish_sensor(&quot;inverter_limit&quot;, int(site_limit), unit=&quot;W&quot;, state_class=None, friendly=&quot;Powerwall Site Limit&quot;)
+</code></pre>
+<p>In <code>fetch_live_status</code>, after <code>response = data.get("response", {})</code>, add:</p>
+<pre><code class="language-python">        self.last_soc = response.get(&quot;percentage_charged&quot;, self.last_soc)
+</code></pre>
+<p>In <code>initialize()</code>, after <code>self.reconcile_done = False</code>, add:</p>
+<pre><code class="language-python">        self.last_soc = None
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t3.log 2&gt;&amp;1; grep -E &quot;AssertionError|tests passed&quot; /tmp/teslemetry_t3.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): publish battery_rate_max/inverter_limit sensors, track live SOC
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-schedule-model-window-math-state-evaluation-pure-logic">Task 4: Schedule model + window math + state evaluation (pure logic)</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/teslemetry.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Produces:</p>
+<ul>
+<li><code>DEFAULT_SCHEDULE</code> (module constant), <code>OPTIONS_TIME_FULL</code> (module constant, per-minute <code>"HH:MM:00"</code> strings)</li>
+<li><code>TeslemetryAPI.time_to_minutes(value: str) -&gt; int</code> (staticmethod)</li>
+<li><code>TeslemetryAPI.in_window(minutes_now: int, window: dict) -&gt; bool</code> (staticmethod; window dict keys: <code>start_time</code>, <code>end_time</code>, <code>enable</code>)</li>
+<li><code>TeslemetryAPI.evaluate_schedule(minutes_now: int, soc: float) -&gt; dict</code> returning exactly <code>{"tariff_mode": str, "export_rule": str, "grid_charging": bool, "reserve": int, "mode": str}</code></li>
+<li>Instance attrs <code>self.schedule</code>, <code>self.pending_schedule</code> (dicts shaped like <code>DEFAULT_SCHEDULE</code>), <code>self.schedule_loaded</code> (bool), <code>self.automatic</code> (bool), <code>self.automatic_done</code> (bool)</li>
+</ul>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code> (also change the import line at the top of the file to <code>from teslemetry import TeslemetryAPI, OPERATION_MODES, OPTIONS_TIME_FULL, DEFAULT_SCHEDULE</code> and add <code>import copy</code> to the imports):</p>
+<pre><code class="language-python">def test_teslemetry_time_to_minutes():
+    &quot;&quot;&quot;HH:MM:SS strings convert to minutes since midnight; garbage converts to 0.&quot;&quot;&quot;
+    assert TeslemetryAPI.time_to_minutes(&quot;00:00:00&quot;) == 0
+    assert TeslemetryAPI.time_to_minutes(&quot;05:30:00&quot;) == 330
+    assert TeslemetryAPI.time_to_minutes(&quot;23:59:00&quot;) == 1439
+    assert TeslemetryAPI.time_to_minutes(&quot;garbage&quot;) == 0
+
+
+def test_teslemetry_in_window():
+    &quot;&quot;&quot;Window membership: inclusive start, exclusive end, disabled and midnight-wrap cases.&quot;&quot;&quot;
+    window = {&quot;enable&quot;: 1, &quot;start_time&quot;: &quot;01:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;}
+    assert TeslemetryAPI.in_window(60, window) is True
+    assert TeslemetryAPI.in_window(299, window) is True
+    assert TeslemetryAPI.in_window(300, window) is False
+    assert TeslemetryAPI.in_window(0, window) is False
+    assert TeslemetryAPI.in_window(60, {**window, &quot;enable&quot;: 0}) is False
+    assert TeslemetryAPI.in_window(60, {**window, &quot;end_time&quot;: &quot;01:00:00&quot;}) is False
+    wrap = {&quot;enable&quot;: 1, &quot;start_time&quot;: &quot;23:00:00&quot;, &quot;end_time&quot;: &quot;01:00:00&quot;}
+    assert TeslemetryAPI.in_window(23 * 60 + 30, wrap) is True
+    assert TeslemetryAPI.in_window(30, wrap) is True
+    assert TeslemetryAPI.in_window(12 * 60, wrap) is False
+
+
+def test_teslemetry_evaluate_schedule_states():
+    &quot;&quot;&quot;The five reachable device states: charging, hold-at-target, exporting, discharge floor, idle.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        &quot;reserve&quot;: 20,
+        &quot;charge&quot;: {&quot;start_time&quot;: &quot;01:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1},
+        &quot;discharge&quot;: {&quot;start_time&quot;: &quot;17:00:00&quot;, &quot;end_time&quot;: &quot;19:00:00&quot;, &quot;soc&quot;: 30, &quot;enable&quot;: 1},
+    }
+    assert api.evaluate_schedule(2 * 60, 50) == {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;never&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 90, &quot;mode&quot;: &quot;backup&quot;}
+    assert api.evaluate_schedule(2 * 60, 90) == {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;never&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 90, &quot;mode&quot;: &quot;backup&quot;}
+    assert api.evaluate_schedule(18 * 60, 80) == {&quot;tariff_mode&quot;: &quot;export_now&quot;, &quot;export_rule&quot;: &quot;battery_ok&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 30, &quot;mode&quot;: &quot;autonomous&quot;}
+    assert api.evaluate_schedule(18 * 60, 30) == {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: 30, &quot;mode&quot;: &quot;self_consumption&quot;}
+    assert api.evaluate_schedule(12 * 60, 60) == {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 20, &quot;mode&quot;: &quot;self_consumption&quot;}
+
+
+def test_teslemetry_evaluate_schedule_charge_precedence():
+    &quot;&quot;&quot;When charge and discharge windows overlap, charge wins (matches execute.py ordering).&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        &quot;reserve&quot;: 20,
+        &quot;charge&quot;: {&quot;start_time&quot;: &quot;01:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 100, &quot;enable&quot;: 1},
+        &quot;discharge&quot;: {&quot;start_time&quot;: &quot;01:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 10, &quot;enable&quot;: 1},
+    }
+    assert api.evaluate_schedule(2 * 60, 50)[&quot;mode&quot;] == &quot;backup&quot;
+</code></pre>
+<p>Register all four in the <code>test_teslemetry()</code> runner. Extend <code>MockTeslemetryAPI.__init__</code> with the new schedule attributes (add <code>import copy</code> at the top of the test file if not present):</p>
+<pre><code class="language-python">        self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.schedule_loaded = False
+        self.automatic = False
+        self.automatic_done = False
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t4.log 2&gt;&amp;1; grep -E &quot;ImportError|AttributeError|AssertionError|tests passed&quot; /tmp/teslemetry_t4.log
+</code></pre>
+<p>Expected: FAIL with <code>ImportError: cannot import name 'OPTIONS_TIME_FULL'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add <code>import copy</code> to the imports. After the <code>TARIFF_MODES</code> constant, add:</p>
+<pre><code class="language-python">OPTIONS_TIME_FULL = [&quot;{:02d}:{:02d}:00&quot;.format(hour, minute) for hour in range(24) for minute in range(60)]
+
+DEFAULT_SCHEDULE = {
+    &quot;reserve&quot;: 20,
+    &quot;charge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 100, &quot;enable&quot;: 0},
+    &quot;discharge&quot;: {&quot;start_time&quot;: &quot;00:00:00&quot;, &quot;end_time&quot;: &quot;00:00:00&quot;, &quot;soc&quot;: 10, &quot;enable&quot;: 0},
+}
+</code></pre>
+<p>In <code>initialize()</code>, change the signature to accept the automatic flag and add the schedule state (after <code>self.last_soc = None</code>):</p>
+<pre><code class="language-python">    def initialize(self, key=&quot;&quot;, site_id=&quot;&quot;, base_url=TESLEMETRY_DEFAULT_URL, automatic=False, **kwargs):
+</code></pre>
+<p>(Update the docstring's Args accordingly: <code>automatic: Automatically configure Predbat's inverter args to use this component (fox-style).</code>)</p>
+<pre><code class="language-python">        self.automatic = automatic
+        self.automatic_done = False
+        self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
+        self.schedule_loaded = False
+</code></pre>
+<p>Add the three pure methods to <code>TeslemetryAPI</code> (after <code>register_control_entities</code>):</p>
+<pre><code class="language-python">    @staticmethod
+    def time_to_minutes(value):
+        &quot;&quot;&quot;Convert an HH:MM[:SS] time string to minutes since midnight, or 0 on garbage.&quot;&quot;&quot;
+        try:
+            parts = str(value).split(&quot;:&quot;)
+            return int(parts[0]) * 60 + int(parts[1])
+        except (ValueError, IndexError):
+            return 0
+
+    @staticmethod
+    def in_window(minutes_now, window):
+        &quot;&quot;&quot;Return True if minutes_now falls inside an enabled schedule window (inclusive start, exclusive end, midnight wrap supported; start == end means disabled).&quot;&quot;&quot;
+        if not window.get(&quot;enable&quot;):
+            return False
+        start = TeslemetryAPI.time_to_minutes(window.get(&quot;start_time&quot;, &quot;00:00:00&quot;))
+        end = TeslemetryAPI.time_to_minutes(window.get(&quot;end_time&quot;, &quot;00:00:00&quot;))
+        if start == end:
+            return False
+        if end &gt; start:
+            return start &lt;= minutes_now &lt; end
+        return minutes_now &gt;= start or minutes_now &lt; end
+
+    def evaluate_schedule(self, minutes_now, soc):
+        &quot;&quot;&quot;Map the committed schedule + wall clock + live SOC to the desired device tuple.
+
+        Returns a dict with keys tariff_mode, export_rule, grid_charging, reserve and mode.
+        Charge window wins over an overlapping discharge window (matches execute.py ordering).
+        Charging uses backup mode (proven template semantics); the hold state (SOC at target,
+        which is also how Predbat expresses charge freeze) is backup + grid charging off.
+        Export uses the tariff-trick + autonomous with the device reserve as the discharge floor.
+        Idle allows PV-only export so excess solar is never curtailed.
+        &quot;&quot;&quot;
+        charge = self.schedule.get(&quot;charge&quot;, {})
+        discharge = self.schedule.get(&quot;discharge&quot;, {})
+        reserve = self.schedule.get(&quot;reserve&quot;, 20)
+        if self.in_window(minutes_now, charge):
+            target = int(charge.get(&quot;soc&quot;, 100))
+            if soc &gt;= target:
+                return {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;never&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;backup&quot;}
+            return {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;never&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;backup&quot;}
+        if self.in_window(minutes_now, discharge):
+            target = int(discharge.get(&quot;soc&quot;, 10))
+            if soc &gt; target:
+                return {&quot;tariff_mode&quot;: &quot;export_now&quot;, &quot;export_rule&quot;: &quot;battery_ok&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;autonomous&quot;}
+            return {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: False, &quot;reserve&quot;: target, &quot;mode&quot;: &quot;self_consumption&quot;}
+        return {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: int(reserve), &quot;mode&quot;: &quot;self_consumption&quot;}
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t4.log 2&gt;&amp;1; grep -E &quot;AssertionError|tests passed&quot; /tmp/teslemetry_t4.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): schedule model, window math and device-state evaluation
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-5-schedule-entities-event-routing-write-button-staging">Task 5: Schedule entities + event routing + write-button staging</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/teslemetry.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>OPTIONS_TIME_FULL</code>, <code>DEFAULT_SCHEDULE</code>, <code>self.pending_schedule</code>, <code>self.schedule</code> (Task 4)</li>
+<li>
+<p>Produces:</p>
+<ul>
+<li>Entities: <code>number.&lt;prefix&gt;_teslemetry_schedule_reserve</code>, <code>select.&lt;prefix&gt;_teslemetry_schedule_{charge,discharge}_{start_time,end_time}</code>, <code>number.&lt;prefix&gt;_teslemetry_schedule_{charge,discharge}_soc</code>, <code>switch.&lt;prefix&gt;_teslemetry_schedule_{charge,discharge}_enable</code>, <code>switch.&lt;prefix&gt;_teslemetry_schedule_write</code></li>
+<li><code>publish_schedule_entities()</code> — renders <code>pending_schedule</code> into the entities</li>
+<li><code>schedule_event(entity_id, value)</code> — async; stages edits, commits on write button</li>
+<li><code>apply_schedule()</code> — async; commits pending → committed, persists (Task 6), asserts device (Task 7). In THIS task it is a stub that copies + republishes only:</li>
+</ul>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">def test_teslemetry_schedule_entities_published():
+    &quot;&quot;&quot;Schedule entities are published with option lists, ranges and safe defaults.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.publish_schedule_entities()
+    assert api.dashboard_items[&quot;select.predbat_teslemetry_schedule_charge_start_time&quot;][&quot;attributes&quot;][&quot;options&quot;] == OPTIONS_TIME_FULL
+    assert api.dashboard_items[&quot;select.predbat_teslemetry_schedule_discharge_end_time&quot;][&quot;state&quot;] == &quot;00:00:00&quot;
+    assert api.dashboard_items[&quot;number.predbat_teslemetry_schedule_reserve&quot;][&quot;state&quot;] == 20
+    assert api.dashboard_items[&quot;number.predbat_teslemetry_schedule_charge_soc&quot;][&quot;state&quot;] == 100
+    assert api.dashboard_items[&quot;number.predbat_teslemetry_schedule_discharge_soc&quot;][&quot;state&quot;] == 10
+    assert api.dashboard_items[&quot;switch.predbat_teslemetry_schedule_charge_enable&quot;][&quot;state&quot;] == &quot;off&quot;
+    assert api.dashboard_items[&quot;switch.predbat_teslemetry_schedule_write&quot;][&quot;state&quot;] == &quot;off&quot;
+
+
+def test_teslemetry_schedule_edits_stage_without_device_writes():
+    &quot;&quot;&quot;Entity writes accumulate in pending_schedule, mirror into entity state, and send nothing to the device.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    run_async(api.select_event(&quot;select.predbat_teslemetry_schedule_charge_start_time&quot;, &quot;01:30:00&quot;))
+    run_async(api.select_event(&quot;select.predbat_teslemetry_schedule_charge_end_time&quot;, &quot;05:00:00&quot;))
+    run_async(api.number_event(&quot;number.predbat_teslemetry_schedule_charge_soc&quot;, 90))
+    run_async(api.switch_event(&quot;switch.predbat_teslemetry_schedule_charge_enable&quot;, &quot;turn_on&quot;))
+    assert api.pending_schedule[&quot;charge&quot;] == {&quot;start_time&quot;: &quot;01:30:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}
+    assert api.schedule[&quot;charge&quot;][&quot;enable&quot;] == 0
+    assert api.requests_made == []
+    assert api.entity_states[&quot;select.predbat_teslemetry_schedule_charge_start_time&quot;] == &quot;01:30:00&quot;
+    assert api.entity_states[&quot;switch.predbat_teslemetry_schedule_charge_enable&quot;] == &quot;on&quot;
+
+
+def test_teslemetry_schedule_write_button_commits():
+    &quot;&quot;&quot;The write button copies pending to committed and leaves the button off.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    run_async(api.switch_event(&quot;switch.predbat_teslemetry_schedule_discharge_enable&quot;, &quot;turn_on&quot;))
+    run_async(api.switch_event(&quot;switch.predbat_teslemetry_schedule_write&quot;, &quot;turn_on&quot;))
+    assert api.schedule[&quot;discharge&quot;][&quot;enable&quot;] == 1
+    assert api.entity_states[&quot;switch.predbat_teslemetry_schedule_write&quot;] == &quot;off&quot;
+
+
+def test_teslemetry_schedule_invalid_values_rejected():
+    &quot;&quot;&quot;Garbage times and non-numeric SOC values are rejected or clamped without corrupting the schedule.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    run_async(api.select_event(&quot;select.predbat_teslemetry_schedule_charge_start_time&quot;, &quot;25:99:00&quot;))
+    assert api.pending_schedule[&quot;charge&quot;][&quot;start_time&quot;] == &quot;00:00:00&quot;
+    run_async(api.number_event(&quot;number.predbat_teslemetry_schedule_charge_soc&quot;, &quot;banana&quot;))
+    assert api.pending_schedule[&quot;charge&quot;][&quot;soc&quot;] == 100
+    run_async(api.number_event(&quot;number.predbat_teslemetry_schedule_reserve&quot;, 150))
+    assert api.pending_schedule[&quot;reserve&quot;] == 100
+
+
+def test_teslemetry_schedule_reserve_applies_immediately():
+    &quot;&quot;&quot;Reserve edits commit without the write button (fox parity) and persist into both schedules.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    run_async(api.number_event(&quot;number.predbat_teslemetry_schedule_reserve&quot;, 35))
+    assert api.pending_schedule[&quot;reserve&quot;] == 35
+    assert api.schedule[&quot;reserve&quot;] == 35
+</code></pre>
+<p>Register all five in the <code>test_teslemetry()</code> runner.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t5.log 2&gt;&amp;1; grep -E &quot;AttributeError|AssertionError|tests passed&quot; /tmp/teslemetry_t5.log
+</code></pre>
+<p>Expected: FAIL with <code>AttributeError: ... 'publish_schedule_entities'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add after <code>evaluate_schedule</code>:</p>
+<pre><code class="language-python">    def publish_schedule_entities(self):
+        &quot;&quot;&quot;Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
+
+        Entity states must track pending edits immediately so inverter.py's write-and-poll
+        verification sees its own writes reflected back.
+        &quot;&quot;&quot;
+        sched = self.pending_schedule
+        self.dashboard_item(
+            self.entity(&quot;schedule_reserve&quot;, domain=&quot;number&quot;),
+            sched.get(&quot;reserve&quot;, 20),
+            {&quot;friendly_name&quot;: &quot;Powerwall Schedule Reserve&quot;, &quot;min&quot;: 0, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit_of_measurement&quot;: &quot;%&quot;, &quot;icon&quot;: &quot;mdi:gauge&quot;},
+            app=&quot;teslemetry&quot;,
+        )
+        for direction in [&quot;charge&quot;, &quot;discharge&quot;]:
+            window = sched.get(direction, {})
+            for attribute in [&quot;start_time&quot;, &quot;end_time&quot;]:
+                self.dashboard_item(
+                    self.entity(&quot;schedule_{}_{}&quot;.format(direction, attribute), domain=&quot;select&quot;),
+                    window.get(attribute, &quot;00:00:00&quot;),
+                    {&quot;options&quot;: OPTIONS_TIME_FULL, &quot;friendly_name&quot;: &quot;Powerwall Schedule {} {}&quot;.format(direction.capitalize(), attribute.replace(&quot;_&quot;, &quot; &quot;).capitalize()), &quot;icon&quot;: &quot;mdi:clock-outline&quot;},
+                    app=&quot;teslemetry&quot;,
+                )
+            self.dashboard_item(
+                self.entity(&quot;schedule_{}_soc&quot;.format(direction), domain=&quot;number&quot;),
+                window.get(&quot;soc&quot;, 100 if direction == &quot;charge&quot; else 10),
+                {&quot;friendly_name&quot;: &quot;Powerwall Schedule {} Soc&quot;.format(direction.capitalize()), &quot;min&quot;: 0, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit_of_measurement&quot;: &quot;%&quot;, &quot;icon&quot;: &quot;mdi:gauge&quot;},
+                app=&quot;teslemetry&quot;,
+            )
+            self.dashboard_item(
+                self.entity(&quot;schedule_{}_enable&quot;.format(direction), domain=&quot;switch&quot;),
+                &quot;on&quot; if window.get(&quot;enable&quot;) else &quot;off&quot;,
+                {&quot;friendly_name&quot;: &quot;Powerwall Schedule {} Enable&quot;.format(direction.capitalize()), &quot;icon&quot;: &quot;mdi:check-circle-outline&quot;},
+                app=&quot;teslemetry&quot;,
+            )
+        self.dashboard_item(self.entity(&quot;schedule_write&quot;, domain=&quot;switch&quot;), &quot;off&quot;, {&quot;friendly_name&quot;: &quot;Powerwall Schedule Write&quot;, &quot;icon&quot;: &quot;mdi:content-save-outline&quot;}, app=&quot;teslemetry&quot;)
+
+    async def apply_schedule(self):
+        &quot;&quot;&quot;Commit the pending schedule atomically (extended with persistence and an immediate device assert in later tasks).&quot;&quot;&quot;
+        self.schedule = copy.deepcopy(self.pending_schedule)
+        self.publish_schedule_entities()
+
+    async def schedule_event(self, entity_id, value):
+        &quot;&quot;&quot;Stage a schedule entity write into pending_schedule; the write switch commits it.
+
+        Reserve applies immediately (fox parity) since it is not part of window atomicity.
+        Invalid times fall back to 00:00:00 and non-numeric SOC/reserve values are rejected.
+        &quot;&quot;&quot;
+        if entity_id.endswith(&quot;_schedule_write&quot;):
+            if value in (&quot;turn_on&quot;, &quot;toggle&quot;):
+                await self.apply_schedule()
+            self.publish_schedule_entities()
+            return
+        if entity_id.endswith(&quot;_schedule_reserve&quot;):
+            try:
+                reserve = max(0, min(100, int(float(value))))
+            except (ValueError, TypeError):
+                self.log(&quot;Warn: Teslemetry invalid schedule reserve value {}&quot;.format(value))
+                return
+            self.pending_schedule[&quot;reserve&quot;] = reserve
+            self.schedule[&quot;reserve&quot;] = reserve
+            self.publish_schedule_entities()
+            return
+        direction = None
+        if &quot;_schedule_charge_&quot; in entity_id:
+            direction = &quot;charge&quot;
+        elif &quot;_schedule_discharge_&quot; in entity_id:
+            direction = &quot;discharge&quot;
+        if not direction:
+            self.log(&quot;Warn: Teslemetry unhandled schedule event {} = {}&quot;.format(entity_id, value))
+            return
+        window = self.pending_schedule.setdefault(direction, {})
+        if entity_id.endswith(&quot;_start_time&quot;) or entity_id.endswith(&quot;_end_time&quot;):
+            attribute = &quot;start_time&quot; if entity_id.endswith(&quot;_start_time&quot;) else &quot;end_time&quot;
+            window[attribute] = value if value in OPTIONS_TIME_FULL else &quot;00:00:00&quot;
+        elif entity_id.endswith(&quot;_soc&quot;):
+            try:
+                window[&quot;soc&quot;] = max(0, min(100, int(float(value))))
+            except (ValueError, TypeError):
+                self.log(&quot;Warn: Teslemetry invalid schedule soc value {}&quot;.format(value))
+                return
+        elif entity_id.endswith(&quot;_enable&quot;):
+            if value == &quot;turn_on&quot;:
+                window[&quot;enable&quot;] = 1
+            elif value == &quot;turn_off&quot;:
+                window[&quot;enable&quot;] = 0
+            elif value == &quot;toggle&quot;:
+                window[&quot;enable&quot;] = 0 if window.get(&quot;enable&quot;) else 1
+        else:
+            self.log(&quot;Warn: Teslemetry unhandled schedule event {} = {}&quot;.format(entity_id, value))
+            return
+        self.publish_schedule_entities()
+</code></pre>
+<p>Route schedule entities in the three existing event handlers by inserting at the TOP of each:</p>
+<p>In <code>select_event</code>:</p>
+<pre><code class="language-python">        if &quot;_schedule_&quot; in entity_id:
+            await self.schedule_event(entity_id, value)
+            return
+</code></pre>
+<p>In <code>number_event</code>:</p>
+<pre><code class="language-python">        if &quot;_schedule_&quot; in entity_id:
+            await self.schedule_event(entity_id, value)
+            return
+</code></pre>
+<p>In <code>switch_event</code> (note: the parameter is named <code>service</code>):</p>
+<pre><code class="language-python">        if &quot;_schedule_&quot; in entity_id:
+            await self.schedule_event(entity_id, service)
+            return
+</code></pre>
+<p>Finally call <code>self.publish_schedule_entities()</code> at the end of <code>register_control_entities()</code> so the entities exist from boot.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t5.log 2&gt;&amp;1; grep -E &quot;AssertionError|tests passed&quot; /tmp/teslemetry_t5.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): schedule entities with staged edits and write-button commit
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-6-schedule-persistence-via-the-storage-component">Task 6: Schedule persistence via the Storage component</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/teslemetry.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>ComponentBase.storage</code> property (returns the storage component or None); <code>storage.save(module, filename, data, format=...)</code> / <code>storage.load(module, filename)</code> (<code>storage.py:69/85</code>)</li>
+<li>
+<p>Produces: <code>save_schedule()</code> / <code>load_schedule()</code> — async; storage key <code>("teslemetry", "schedule")</code>, JSON format. <code>apply_schedule()</code> now persists.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">class FakeStorage:
+    &quot;&quot;&quot;In-memory stand-in for the Storage component.&quot;&quot;&quot;
+
+    def __init__(self):
+        &quot;&quot;&quot;Create the empty in-memory store.&quot;&quot;&quot;
+        self.saved = {}
+
+    async def save(self, module, filename, data, format=&quot;yaml&quot;, expiry=None):
+        &quot;&quot;&quot;Record saved data keyed on (module, filename).&quot;&quot;&quot;
+        self.saved[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        &quot;&quot;&quot;Return previously saved data or None.&quot;&quot;&quot;
+        return self.saved.get((module, filename))
+
+
+def test_teslemetry_schedule_persistence_roundtrip():
+    &quot;&quot;&quot;apply_schedule persists the committed schedule; load_schedule restores it and resets pending.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.mock_storage = FakeStorage()
+    api.pending_schedule[&quot;charge&quot;][&quot;enable&quot;] = 1
+    api.pending_schedule[&quot;charge&quot;][&quot;start_time&quot;] = &quot;02:00:00&quot;
+    run_async(api.apply_schedule())
+    assert api.mock_storage.saved[(&quot;teslemetry&quot;, &quot;schedule&quot;)][&quot;charge&quot;][&quot;enable&quot;] == 1
+    api2 = MockTeslemetryAPI()
+    api2.mock_storage = api.mock_storage
+    run_async(api2.load_schedule())
+    assert api2.schedule[&quot;charge&quot;][&quot;start_time&quot;] == &quot;02:00:00&quot;
+    assert api2.pending_schedule == api2.schedule
+
+
+def test_teslemetry_schedule_load_without_storage_is_safe():
+    &quot;&quot;&quot;With no storage component available, load_schedule keeps the safe defaults.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    run_async(api.load_schedule())
+    assert api.schedule == DEFAULT_SCHEDULE
+</code></pre>
+<p>Register both in the <code>test_teslemetry()</code> runner. Add the storage hook to <code>MockTeslemetryAPI</code> (inside the class):</p>
+<pre><code class="language-python">    mock_storage = None
+
+    @property
+    def storage(self):
+        &quot;&quot;&quot;Return the fake storage component for tests (None by default).&quot;&quot;&quot;
+        return self.mock_storage
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t6.log 2&gt;&amp;1; grep -E &quot;AttributeError|AssertionError|tests passed&quot; /tmp/teslemetry_t6.log
+</code></pre>
+<p>Expected: FAIL with <code>AttributeError: ... 'load_schedule'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add after <code>apply_schedule</code>:</p>
+<pre><code class="language-python">    async def save_schedule(self):
+        &quot;&quot;&quot;Persist the committed schedule via the Storage component (no-op when storage is unavailable).&quot;&quot;&quot;
+        storage = self.storage
+        if storage:
+            await storage.save(&quot;teslemetry&quot;, &quot;schedule&quot;, self.schedule, format=&quot;json&quot;)
+
+    async def load_schedule(self):
+        &quot;&quot;&quot;Restore the committed schedule from storage at boot; keep safe defaults when absent.
+
+        The Powerwall has no native scheduler to read the plan back from (unlike Fox Cloud),
+        so persistence is what makes a schedule survive a restart mid-plan.
+        &quot;&quot;&quot;
+        storage = self.storage
+        data = await storage.load(&quot;teslemetry&quot;, &quot;schedule&quot;) if storage else None
+        if isinstance(data, dict) and &quot;charge&quot; in data and &quot;discharge&quot; in data:
+            self.schedule = data
+        self.pending_schedule = copy.deepcopy(self.schedule)
+</code></pre>
+<p>Update <code>apply_schedule</code> to persist (full replacement):</p>
+<pre><code class="language-python">    async def apply_schedule(self):
+        &quot;&quot;&quot;Commit the pending schedule atomically and persist it (immediate device assert added by the emulator task).&quot;&quot;&quot;
+        self.schedule = copy.deepcopy(self.pending_schedule)
+        await self.save_schedule()
+        self.publish_schedule_entities()
+</code></pre>
+<p>Also update the reserve branch of <code>schedule_event</code> to persist the immediate commit — after <code>self.schedule["reserve"] = reserve</code> add:</p>
+<pre><code class="language-python">            await self.save_schedule()
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t6.log 2&gt;&amp;1; grep -E &quot;AssertionError|tests passed&quot; /tmp/teslemetry_t6.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): persist committed schedule via Storage component
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-7-scheduler-emulator-assert_device_state-run-integration">Task 7: Scheduler emulator — <code>assert_device_state</code> + <code>run()</code> integration</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/teslemetry.py</code> (<code>assert_device_state</code>, <code>get_minutes_now</code>, <code>run()</code>, <code>apply_schedule</code>, module docstring)</li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>evaluate_schedule</code> (Task 4), setters <code>set_tariff</code>/<code>set_export_rule</code>/<code>set_grid_charging</code>/<code>set_backup_reserve</code>/<code>set_operation_mode</code> (existing, deduped), <code>self.last_soc</code> (Task 3), <code>_is_read_only()</code> (existing)</li>
+<li>
+<p>Produces: <code>assert_device_state(desired: dict) -&gt; bool</code> (async), <code>get_minutes_now() -&gt; int</code>. <code>run()</code> gains latches: <code>load_schedule</code> once, emulator assert each cycle when <code>schedule_loaded and reconcile_done and last_soc is not None and not read_only</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">def command_ok_responses(api):
+    &quot;&quot;&quot;Register success responses for all four Powerwall command endpoints.&quot;&quot;&quot;
+    for path in [&quot;operation&quot;, &quot;backup&quot;, &quot;grid_import_export&quot;, &quot;time_of_use_settings&quot;]:
+        api.mock_responses[&quot;/api/1/energy_sites/123456/{}&quot;.format(path)] = {&quot;response&quot;: {}}
+
+
+def test_teslemetry_assert_device_state_posts_commands():
+    &quot;&quot;&quot;assert_device_state issues all four command groups and mirrors success into the diagnostic entities.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    desired = {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 20, &quot;mode&quot;: &quot;self_consumption&quot;}
+    assert run_async(api.assert_device_state(desired)) is True
+    paths = [req[1] for req in api.requests_made if req[0] == &quot;POST&quot;]
+    assert &quot;/api/1/energy_sites/123456/time_of_use_settings&quot; in paths
+    assert &quot;/api/1/energy_sites/123456/grid_import_export&quot; in paths
+    assert &quot;/api/1/energy_sites/123456/backup&quot; in paths
+    assert &quot;/api/1/energy_sites/123456/operation&quot; in paths
+    assert api.entity_states[&quot;select.predbat_teslemetry_operation_mode&quot;] == &quot;self_consumption&quot;
+    assert api.entity_states[&quot;number.predbat_teslemetry_backup_reserve&quot;] == 20
+    assert api.entity_states[&quot;select.predbat_teslemetry_allow_export&quot;] == &quot;pv_only&quot;
+
+
+def test_teslemetry_assert_device_state_dedupes_repeat():
+    &quot;&quot;&quot;Asserting an unchanged desired state issues no further REST commands (write-on-change).&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    desired = {&quot;tariff_mode&quot;: &quot;normal&quot;, &quot;export_rule&quot;: &quot;pv_only&quot;, &quot;grid_charging&quot;: True, &quot;reserve&quot;: 20, &quot;mode&quot;: &quot;self_consumption&quot;}
+    run_async(api.assert_device_state(desired))
+    first_count = len(api.requests_made)
+    run_async(api.assert_device_state(desired))
+    assert len(api.requests_made) == first_count
+
+
+def test_teslemetry_apply_schedule_asserts_immediately():
+    &quot;&quot;&quot;Committing a schedule mid-window asserts the device state without waiting for the next run cycle.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.last_soc = 50
+    api.get_minutes_now = lambda: 2 * 60
+    api.pending_schedule[&quot;charge&quot;] = {&quot;start_time&quot;: &quot;01:00:00&quot;, &quot;end_time&quot;: &quot;05:00:00&quot;, &quot;soc&quot;: 90, &quot;enable&quot;: 1}
+    run_async(api.switch_event(&quot;switch.predbat_teslemetry_schedule_write&quot;, &quot;turn_on&quot;))
+    posts = [(req[1], req[2]) for req in api.requests_made if req[0] == &quot;POST&quot;]
+    assert (&quot;/api/1/energy_sites/123456/operation&quot;, {&quot;default_real_mode&quot;: &quot;backup&quot;}) in posts
+    assert (&quot;/api/1/energy_sites/123456/backup&quot;, {&quot;backup_reserve_percent&quot;: 90}) in posts
+
+
+def test_teslemetry_run_asserts_schedule_each_cycle():
+    &quot;&quot;&quot;A healthy run cycle evaluates the committed schedule and asserts the device state.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    api.mock_responses[&quot;/api/1/energy_sites/123456/calendar_history?kind=energy&amp;period=day&quot;] = ENERGY_HISTORY
+    api.mock_responses[&quot;/api/1/energy_sites/123456/tariff_rate&quot;] = TARIFF_RATE_NORMAL
+    api.get_minutes_now = lambda: 12 * 60
+    assert run_async(api.run(seconds=0, first=True)) is True
+    posts = [req[1] for req in api.requests_made if req[0] == &quot;POST&quot;]
+    assert &quot;/api/1/energy_sites/123456/operation&quot; in posts
+
+
+def test_teslemetry_run_skips_assert_when_read_only():
+    &quot;&quot;&quot;Read-only mode gates all emulator device writes.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    api.mock_responses[&quot;/api/1/energy_sites/123456/calendar_history?kind=energy&amp;period=day&quot;] = ENERGY_HISTORY
+    api.mock_responses[&quot;/api/1/energy_sites/123456/tariff_rate&quot;] = TARIFF_RATE_NORMAL
+    api._is_read_only = lambda: True
+    run_async(api.run(seconds=0, first=True))
+    assert [req for req in api.requests_made if req[0] == &quot;POST&quot;] == []
+
+
+def test_teslemetry_run_skips_assert_without_soc():
+    &quot;&quot;&quot;The emulator never asserts before a live SOC reading exists (no blind mode changes).&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    api.mock_responses[&quot;/api/1/energy_sites/123456/tariff_rate&quot;] = TARIFF_RATE_NORMAL
+    # live_status has no mock response -&gt; fetch fails -&gt; last_soc stays None
+    run_async(api.run(seconds=0, first=True))
+    assert [req for req in api.requests_made if req[0] == &quot;POST&quot;] == []
+</code></pre>
+<p>Register all six in the <code>test_teslemetry()</code> runner.</p>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t7.log 2&gt;&amp;1; grep -E &quot;AttributeError|AssertionError|tests passed&quot; /tmp/teslemetry_t7.log
+</code></pre>
+<p>Expected: FAIL with <code>AttributeError: ... 'assert_device_state'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add after <code>load_schedule</code>:</p>
+<pre><code class="language-python">    def get_minutes_now(self):
+        &quot;&quot;&quot;Return minutes since local midnight, preferring the base's clock (which Predbat schedules against).&quot;&quot;&quot;
+        base = getattr(self, &quot;base&quot;, None)
+        minutes = getattr(base, &quot;minutes_now&quot;, None) if base is not None else None
+        if minutes is not None:
+            return minutes
+        now = datetime.now(timezone.utc).astimezone(getattr(self, &quot;local_tz&quot;, None) or timezone.utc)
+        return now.hour * 60 + now.minute
+
+    async def assert_device_state(self, desired):
+        &quot;&quot;&quot;Assert the desired device tuple, tariff first and mode last (the template-proven ordering).
+
+        Each setter dedupes on write-on-change, so an unchanged assert costs zero command credits.
+        Successful writes are mirrored into the diagnostic control entities; failures leave both
+        the dedupe cache and the entity state untouched so the next cycle retries.
+        &quot;&quot;&quot;
+        results = {}
+        results[&quot;tariff_mode&quot;] = await self.set_tariff(desired[&quot;tariff_mode&quot;])
+        results[&quot;export_rule&quot;] = await self.set_export_rule(desired[&quot;export_rule&quot;])
+        results[&quot;grid_charging&quot;] = await self.set_grid_charging(desired[&quot;grid_charging&quot;])
+        results[&quot;reserve&quot;] = await self.set_backup_reserve(desired[&quot;reserve&quot;])
+        results[&quot;mode&quot;] = await self.set_operation_mode(desired[&quot;mode&quot;])
+        if results[&quot;tariff_mode&quot;]:
+            self.publish_control(self.entity(&quot;tariff_mode&quot;, domain=&quot;select&quot;), desired[&quot;tariff_mode&quot;])
+        if results[&quot;export_rule&quot;]:
+            self.publish_control(self.entity(&quot;allow_export&quot;, domain=&quot;select&quot;), desired[&quot;export_rule&quot;])
+        if results[&quot;grid_charging&quot;]:
+            self.publish_control(self.entity(&quot;allow_charging_from_grid&quot;, domain=&quot;switch&quot;), &quot;on&quot; if desired[&quot;grid_charging&quot;] else &quot;off&quot;)
+        if results[&quot;reserve&quot;]:
+            self.publish_control(self.entity(&quot;backup_reserve&quot;, domain=&quot;number&quot;), int(desired[&quot;reserve&quot;]))
+        if results[&quot;mode&quot;]:
+            self.publish_control(self.entity(&quot;operation_mode&quot;, domain=&quot;select&quot;), desired[&quot;mode&quot;])
+        if not all(results.values()):
+            self.log(&quot;Warn: Teslemetry device-state assert incomplete: {}&quot;.format({key: value for key, value in results.items() if not value}))
+        return all(results.values())
+</code></pre>
+<p>Replace the body of <code>run()</code> after the auth-failed block (keep everything from the docstring down to and including the <code>if self.api_auth_failed:</code> block unchanged) with:</p>
+<pre><code class="language-python">        success = True
+        if not self.site_info_done:
+            self.site_info_done = await self.fetch_site_info()
+        if not self.reconcile_done:
+            self.reconcile_done = await self.reconcile_on_start()
+        if not self.schedule_loaded:
+            await self.load_schedule()
+            self.schedule_loaded = True
+            self.publish_schedule_entities()
+        if first or (seconds - self.last_live_poll &gt;= LIVE_POLL_SECONDS):
+            self.last_live_poll = seconds
+            success = await self.fetch_live_status()
+        if first or (seconds - self.last_energy_poll &gt;= ENERGY_POLL_SECONDS):
+            self.last_energy_poll = seconds
+            await self.fetch_energy_today()
+        if self.schedule_loaded and self.reconcile_done and self.last_soc is not None and not self._is_read_only():
+            # Scheduler emulator: the Powerwall has no native scheduler, so translate the committed
+            # windows into device commands each cycle. Failures are logged and self-retry via the
+            # dedupe cache; they do not fail the run() data path.
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+        return success
+</code></pre>
+<p>Update <code>apply_schedule</code> (full replacement) to assert immediately:</p>
+<pre><code class="language-python">    async def apply_schedule(self):
+        &quot;&quot;&quot;Commit the pending schedule atomically, persist it, and assert the device state immediately rather than waiting up to 60s for the next run cycle.&quot;&quot;&quot;
+        self.schedule = copy.deepcopy(self.pending_schedule)
+        await self.save_schedule()
+        self.publish_schedule_entities()
+        if self.last_soc is not None and not self._is_read_only():
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+</code></pre>
+<p>Update the module docstring's "Control path" paragraph (replace the two <code>Control path:</code>/<code>Command dedupe:</code> paragraphs) with:</p>
+<pre><code class="language-python">Control path: exposes fox-style virtual schedule entities (charge/discharge window
+time selects, SoC numbers, enable switches, a reserve number and an atomic write
+button) that inverter.py programs directly via the TESLA inverter type. Because the
+Powerwall has no native scheduler, run() acts as one: each cycle it evaluates the
+committed windows against the wall clock and live SOC and asserts the resulting
+device tuple (tariff / export rule / grid charging / backup reserve / operation
+mode) through deduped write-on-change commands, so unchanged cycles cost no
+Teslemetry command credits and failed writes self-retry. All emulator writes are
+gated on Predbat's set_read_only configuration.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests and fix pre-existing run() test fallout</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t7.log 2&gt;&amp;1; grep -E &quot;AttributeError|AssertionError|tests passed&quot; /tmp/teslemetry_t7.log
+</code></pre>
+<p>Pre-existing <code>run()</code> tests (<code>test_teslemetry_run_first_success_returns_true</code>, the reconcile-latch tests) may now see extra POSTs from the emulator or need the new mock attributes. Fix them by either registering <code>command_ok_responses(api)</code> or leaving <code>last_soc</code> as None depending on what each test verifies — do NOT weaken their original assertions. Re-run until: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): scheduler emulator asserts window-derived device state each cycle
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-8-automatic_config">Task 8: <code>automatic_config()</code></h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>apps/predbat/teslemetry.py</code></li>
+<li>Test: <code>apps/predbat/tests/test_teslemetry.py</code></li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>Consumes: <code>self.set_arg</code> (ComponentBase → <code>base.set_arg</code>), entity helpers, sensors from Task 3, schedule entities from Task 5, <code>self.automatic</code> / <code>self.automatic_done</code> (Task 4)</li>
+<li>
+<p>Produces: Predbat args wired to component entities; called from <code>run()</code> once <code>site_info_done</code> is True.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Write the failing tests</strong></p>
+</li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_teslemetry.py</code>:</p>
+<pre><code class="language-python">def test_teslemetry_automatic_config_sets_args():
+    &quot;&quot;&quot;automatic_config wires every inverter arg to this component's published entities.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    run_async(api.automatic_config())
+    assert api.args_set[&quot;inverter_type&quot;] == [&quot;TESLA&quot;]
+    assert api.args_set[&quot;num_inverters&quot;] == 1
+    assert api.args_set[&quot;inverter_reserve_max&quot;] == 80
+    assert api.args_set[&quot;soc_percent&quot;] == [&quot;sensor.predbat_teslemetry_soc&quot;]
+    assert api.args_set[&quot;soc_max&quot;] == [&quot;sensor.predbat_teslemetry_soc_max&quot;]
+    assert api.args_set[&quot;battery_power&quot;] == [&quot;sensor.predbat_teslemetry_battery_power&quot;]
+    assert api.args_set[&quot;battery_power_invert&quot;] == [False]
+    assert api.args_set[&quot;grid_power&quot;] == [&quot;sensor.predbat_teslemetry_grid_power&quot;]
+    assert api.args_set[&quot;grid_power_invert&quot;] == [True]
+    assert api.args_set[&quot;load_power&quot;] == [&quot;sensor.predbat_teslemetry_load_power&quot;]
+    assert api.args_set[&quot;pv_power&quot;] == [&quot;sensor.predbat_teslemetry_solar_power&quot;]
+    assert api.args_set[&quot;load_today&quot;] == [&quot;sensor.predbat_teslemetry_load_today&quot;]
+    assert api.args_set[&quot;import_today&quot;] == [&quot;sensor.predbat_teslemetry_import_today&quot;]
+    assert api.args_set[&quot;export_today&quot;] == [&quot;sensor.predbat_teslemetry_export_today&quot;]
+    assert api.args_set[&quot;pv_today&quot;] == [&quot;sensor.predbat_teslemetry_solar_today&quot;]
+    assert api.args_set[&quot;battery_rate_max&quot;] == [&quot;sensor.predbat_teslemetry_battery_rate_max&quot;]
+    assert api.args_set[&quot;inverter_limit&quot;] == [&quot;sensor.predbat_teslemetry_inverter_limit&quot;]
+    assert api.args_set[&quot;reserve&quot;] == [&quot;number.predbat_teslemetry_schedule_reserve&quot;]
+    assert api.args_set[&quot;charge_start_time&quot;] == [&quot;select.predbat_teslemetry_schedule_charge_start_time&quot;]
+    assert api.args_set[&quot;charge_end_time&quot;] == [&quot;select.predbat_teslemetry_schedule_charge_end_time&quot;]
+    assert api.args_set[&quot;charge_limit&quot;] == [&quot;number.predbat_teslemetry_schedule_charge_soc&quot;]
+    assert api.args_set[&quot;scheduled_charge_enable&quot;] == [&quot;switch.predbat_teslemetry_schedule_charge_enable&quot;]
+    assert api.args_set[&quot;discharge_start_time&quot;] == [&quot;select.predbat_teslemetry_schedule_discharge_start_time&quot;]
+    assert api.args_set[&quot;discharge_end_time&quot;] == [&quot;select.predbat_teslemetry_schedule_discharge_end_time&quot;]
+    assert api.args_set[&quot;discharge_target_soc&quot;] == [&quot;number.predbat_teslemetry_schedule_discharge_soc&quot;]
+    assert api.args_set[&quot;scheduled_discharge_enable&quot;] == [&quot;switch.predbat_teslemetry_schedule_discharge_enable&quot;]
+    assert api.args_set[&quot;schedule_write_button&quot;] == [&quot;switch.predbat_teslemetry_schedule_write&quot;]
+
+
+def test_teslemetry_automatic_config_references_published_entities():
+    &quot;&quot;&quot;Every entity automatic_config references is actually published by the component.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    api.mock_responses[&quot;/api/1/energy_sites/123456/calendar_history?kind=energy&amp;period=day&quot;] = ENERGY_HISTORY
+    api.register_control_entities()
+    run_async(api.fetch_live_status())
+    run_async(api.fetch_site_info())
+    run_async(api.fetch_energy_today())
+    run_async(api.automatic_config())
+    published = set(api.dashboard_items.keys())
+    for arg, value in api.args_set.items():
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and &quot;.&quot; in item:
+                    assert item in published, &quot;automatic_config references unpublished entity {} (arg {})&quot;.format(item, arg)
+
+
+def test_teslemetry_run_triggers_automatic_config_once_after_site_info():
+    &quot;&quot;&quot;run() calls automatic_config exactly once, only when automatic is enabled and site_info succeeded.&quot;&quot;&quot;
+    api = MockTeslemetryAPI()
+    api.register_control_entities()
+    command_ok_responses(api)
+    api.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    api.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    api.mock_responses[&quot;/api/1/energy_sites/123456/calendar_history?kind=energy&amp;period=day&quot;] = ENERGY_HISTORY
+    api.mock_responses[&quot;/api/1/energy_sites/123456/tariff_rate&quot;] = TARIFF_RATE_NORMAL
+    api.automatic = True
+    run_async(api.run(seconds=0, first=True))
+    assert api.args_set.get(&quot;inverter_type&quot;) == [&quot;TESLA&quot;]
+    api.args_set.clear()
+    run_async(api.run(seconds=120, first=False))
+    assert &quot;inverter_type&quot; not in api.args_set
+
+    api_off = MockTeslemetryAPI()
+    api_off.register_control_entities()
+    command_ok_responses(api_off)
+    api_off.mock_responses[&quot;/api/1/energy_sites/123456/live_status&quot;] = LIVE_STATUS
+    api_off.mock_responses[&quot;/api/1/energy_sites/123456/site_info&quot;] = SITE_INFO_FULL
+    api_off.mock_responses[&quot;/api/1/energy_sites/123456/calendar_history?kind=energy&amp;period=day&quot;] = ENERGY_HISTORY
+    api_off.mock_responses[&quot;/api/1/energy_sites/123456/tariff_rate&quot;] = TARIFF_RATE_NORMAL
+    run_async(api_off.run(seconds=0, first=True))
+    assert api_off.args_set == {}
+</code></pre>
+<p>Register all three in the <code>test_teslemetry()</code> runner. Add to <code>MockTeslemetryAPI.__init__</code>:</p>
+<pre><code class="language-python">        self.args_set = {}
+</code></pre>
+<p>And add the capture method to <code>MockTeslemetryAPI</code>:</p>
+<pre><code class="language-python">    def set_arg(self, arg, value):
+        &quot;&quot;&quot;Capture set_arg calls for automatic_config assertions.&quot;&quot;&quot;
+        self.args_set[arg] = value
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t8.log 2&gt;&amp;1; grep -E &quot;AttributeError|AssertionError|tests passed&quot; /tmp/teslemetry_t8.log
+</code></pre>
+<p>Expected: FAIL with <code>AttributeError: ... 'automatic_config'</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement</strong></li>
+</ul>
+<p>In <code>apps/predbat/teslemetry.py</code>, add after <code>assert_device_state</code>:</p>
+<pre><code class="language-python">    async def automatic_config(self):
+        &quot;&quot;&quot;Automatically wire Predbat's inverter args to this component's virtual entities (fox parity).
+
+        With teslemetry_automatic enabled the user needs no manual inverter configuration in
+        apps.yaml: the TESLA inverter type plus these args make inverter.py program the
+        schedule entities directly and the emulator drive the device.
+        &quot;&quot;&quot;
+        self.log(&quot;Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type&quot;)
+        self.set_arg(&quot;inverter_type&quot;, [&quot;TESLA&quot;])
+        self.set_arg(&quot;num_inverters&quot;, 1)
+        self.set_arg(&quot;inverter_reserve_max&quot;, 80)
+        self.set_arg(&quot;soc_percent&quot;, [self.entity(&quot;soc&quot;)])
+        self.set_arg(&quot;soc_max&quot;, [self.entity(&quot;soc_max&quot;)])
+        self.set_arg(&quot;battery_power&quot;, [self.entity(&quot;battery_power&quot;)])
+        self.set_arg(&quot;battery_power_invert&quot;, [False])
+        self.set_arg(&quot;grid_power&quot;, [self.entity(&quot;grid_power&quot;)])
+        self.set_arg(&quot;grid_power_invert&quot;, [True])
+        self.set_arg(&quot;load_power&quot;, [self.entity(&quot;load_power&quot;)])
+        self.set_arg(&quot;pv_power&quot;, [self.entity(&quot;solar_power&quot;)])
+        self.set_arg(&quot;load_today&quot;, [self.entity(&quot;load_today&quot;)])
+        self.set_arg(&quot;import_today&quot;, [self.entity(&quot;import_today&quot;)])
+        self.set_arg(&quot;export_today&quot;, [self.entity(&quot;export_today&quot;)])
+        self.set_arg(&quot;pv_today&quot;, [self.entity(&quot;solar_today&quot;)])
+        self.set_arg(&quot;battery_rate_max&quot;, [self.entity(&quot;battery_rate_max&quot;)])
+        self.set_arg(&quot;inverter_limit&quot;, [self.entity(&quot;inverter_limit&quot;)])
+        self.set_arg(&quot;reserve&quot;, [self.entity(&quot;schedule_reserve&quot;, domain=&quot;number&quot;)])
+        self.set_arg(&quot;charge_start_time&quot;, [self.entity(&quot;schedule_charge_start_time&quot;, domain=&quot;select&quot;)])
+        self.set_arg(&quot;charge_end_time&quot;, [self.entity(&quot;schedule_charge_end_time&quot;, domain=&quot;select&quot;)])
+        self.set_arg(&quot;charge_limit&quot;, [self.entity(&quot;schedule_charge_soc&quot;, domain=&quot;number&quot;)])
+        self.set_arg(&quot;scheduled_charge_enable&quot;, [self.entity(&quot;schedule_charge_enable&quot;, domain=&quot;switch&quot;)])
+        self.set_arg(&quot;discharge_start_time&quot;, [self.entity(&quot;schedule_discharge_start_time&quot;, domain=&quot;select&quot;)])
+        self.set_arg(&quot;discharge_end_time&quot;, [self.entity(&quot;schedule_discharge_end_time&quot;, domain=&quot;select&quot;)])
+        self.set_arg(&quot;discharge_target_soc&quot;, [self.entity(&quot;schedule_discharge_soc&quot;, domain=&quot;number&quot;)])
+        self.set_arg(&quot;scheduled_discharge_enable&quot;, [self.entity(&quot;schedule_discharge_enable&quot;, domain=&quot;switch&quot;)])
+        self.set_arg(&quot;schedule_write_button&quot;, [self.entity(&quot;schedule_write&quot;, domain=&quot;switch&quot;)])
+</code></pre>
+<p>In <code>run()</code>, insert after the <code>schedule_loaded</code> latch block (before the live poll):</p>
+<pre><code class="language-python">        if self.automatic and not self.automatic_done and self.site_info_done:
+            await self.automatic_config()
+            self.automatic_done = True
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Run tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --test teslemetry &gt; /tmp/teslemetry_t8.log 2&gt;&amp;1; grep -E &quot;AssertionError|tests passed&quot; /tmp/teslemetry_t8.log
+</code></pre>
+<p>Expected: <code>**** Teslemetry tests passed ****</code></p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/teslemetry.py apps/predbat/tests/test_teslemetry.py
+git commit -m &quot;feat(teslemetry): automatic_config wires Predbat to the TESLA inverter type
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-9-template-rewrite-documentation">Task 9: Template rewrite + documentation</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>Modify: <code>templates/tesla_powerwall.yaml</code></li>
+<li>Modify: <code>docs/components.md</code> (add section after the Fox section which ends ~line 525)</li>
+<li>Modify: <code>docs/inverter-setup.md</code> (Tesla Powerwall section at line 2484)</li>
+</ul>
+<p><strong>Interfaces:</strong></p>
+<ul>
+<li>
+<p>Consumes: config keys <code>teslemetry_key</code>, <code>teslemetry_site_id</code>, <code>teslemetry_base_url</code>, <code>teslemetry_automatic</code> (Tasks 2/8)</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Rewrite the template control section</strong></p>
+</li>
+</ul>
+<p>In <code>templates/tesla_powerwall.yaml</code>, DELETE lines 27–170 (everything from <code># Misc</code> / <code>charge_control_immediate: False</code> through <code>inverter_limit_discharge:</code> inclusive — the inline <code>inverter:</code> dict, all <code>*_power</code>/<code>*_today</code>/<code>soc_*</code> entity mappings, all five <code>*_service</code> hook blocks, and the static limits). REPLACE with:</p>
+<pre><code class="language-yaml">  # --- Tesla Powerwall via the Teslemetry component ---
+  # Get your API token from https://teslemetry.com and your energy site id
+  # from the Teslemetry console. With teslemetry_automatic enabled Predbat
+  # configures the inverter automatically - no further inverter settings needed.
+  # For a direct Tesla Fleet API connection set teslemetry_base_url accordingly.
+  teslemetry_key: 'xxxx'
+  teslemetry_site_id: '123456'
+  teslemetry_automatic: True
+  #teslemetry_base_url: 'https://api.teslemetry.com'
+</code></pre>
+<p>Keep everything from <code># Inverter clock skew in minutes</code> (line 172) onward unchanged.</p>
+<ul>
+<li>[ ] <strong>Step 2: Add the components.md section</strong></li>
+</ul>
+<p>In <code>docs/components.md</code>, add to the contents list (after the Fox entry at line 19):</p>
+<pre><code class="language-markdown">    - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
+</code></pre>
+<p>Add after the Fox section's closing <code>---</code> (~line 525):</p>
+<pre><code class="language-markdown">### Tesla Powerwall Teslemetry API (teslemetry)
+
+**Can be restarted:** Yes
+
+#### What it does (teslemetry)
+
+Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST API (which mirrors Tesla Fleet API paths, so a direct Fleet API connection works by changing the base URL). Publishes live power flows, SOC and daily energy sensors, and exposes fox-style charge/discharge window entities that Predbat programs directly. Because the Powerwall has no native scheduler, the component translates the programmed windows into operation mode, backup reserve, grid-charging and export-rule commands each cycle, including the export tariff-trick needed to force the Powerwall to export.
+
+#### When to enable (teslemetry)
+
+- You have a Tesla Powerwall (developed against Powerwall 3)
+- You want Predbat to control charging and export directly via the Tesla cloud
+- You have a Teslemetry subscription and API token (or Tesla Fleet API access)
+
+#### Important notes (teslemetry)
+
+- Export freeze is not supported by the Powerwall hardware and is disabled automatically
+- The Powerwall has no charge/discharge rate control; rates are modelled from the nameplate power
+- When enabled (and Predbat is not read-only) the component owns the device tariff, replacing the customer's configured tariff with one built from Predbat's rate data
+- Commands are deduped write-on-change to conserve Teslemetry command credits
+
+#### Configuration Options (teslemetry)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `key` | String | Yes | - | `teslemetry_key` | Your Teslemetry (or Fleet API) bearer token |
+| `site_id` | String | Yes | - | `teslemetry_site_id` | Tesla energy site id to poll and control |
+| `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; set to the Fleet API endpoint for a direct connection |
+| `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
+
+---
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Update inverter-setup.md</strong></li>
+</ul>
+<p>In <code>docs/inverter-setup.md</code>, at the start of the <code>## Tesla Powerwall</code> section (line 2484), insert BEFORE the existing content:</p>
+<pre><code class="language-markdown">### Recommended: Teslemetry component
+
+The recommended integration is Predbat's built-in Teslemetry component, which needs only three keys in `apps.yaml` and no Home Assistant Tesla integration:
+
+```yaml
+  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_site_id: 'your-energy-site-id'
+  teslemetry_automatic: True
+</code></pre>
+<p>See <a href="components.md#tesla-powerwall-teslemetry-api-teslemetry">Tesla Powerwall Teslemetry API</a> for details. The manual configuration below remains available if you prefer to drive the Powerwall through the Home Assistant Tesla Fleet/Teslemetry integrations.</p>
+<h3 id="manual-configuration-via-home-assistant-integrations">Manual configuration via Home Assistant integrations</h3>
+<pre><code>
+(The existing prose then continues under the &quot;Manual configuration&quot; heading; demote nothing else.)
+
+- [ ] **Step 4: Verify docs and spelling**
+
+```bash
+./run_pre_commit &gt; /tmp/precommit_t9.log 2&gt;&amp;1; grep -E &quot;Failed|error|cspell&quot; /tmp/precommit_t9.log
+</code></pre>
+<p>If CSpell flags new words (e.g. <code>teslemetry</code> variants), add them to <code>.cspell/custom-dictionary-workspace.txt</code> and re-stage (the file auto-sorts on commit).</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add templates/tesla_powerwall.yaml docs/components.md docs/inverter-setup.md .cspell/custom-dictionary-workspace.txt
+git commit -m &quot;docs(teslemetry): component-based template and documentation
+
+Co-Authored-By: Claude Fable 5 &lt;noreply@anthropic.com&gt;&quot;
+</code></pre>
+<hr />
+<h3 id="task-10-full-verification-pr-update">Task 10: Full verification + PR update</h3>
+<p><strong>Files:</strong></p>
+<ul>
+<li>
+<p>No new code; verification only</p>
+</li>
+<li>
+<p>[ ] <strong>Step 1: Full quick test suite</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/run_all_final.log 2&gt;&amp;1; grep -E &quot;FAIL|Error|passed|failed&quot; /tmp/run_all_final.log | tail -30
+</code></pre>
+<p>Expected: all groups pass except the known pre-existing <code>multi_car_iog_load_slots_regression</code> failure (verify it is the same failure as on main via <code>git stash</code> baseline if unsure).</p>
+<ul>
+<li>[ ] <strong>Step 2: Pre-commit</strong></li>
+</ul>
+<pre><code class="language-bash">./run_pre_commit &gt; /tmp/precommit_final.log 2&gt;&amp;1; tail -20 /tmp/precommit_final.log
+</code></pre>
+<p>Expected: all hooks pass (interrogate 100%, black, flake8, cspell).</p>
+<ul>
+<li>[ ] <strong>Step 3: Push and update the PR description</strong></li>
+</ul>
+<pre><code class="language-bash">git push origin feat/tesla-powerwall-teslemetry
+git pull   # pre-commit.ci may auto-fix and push
+</code></pre>
+<p>Update the PR #4177 body (<code>gh pr edit 4177 --body-file &lt;file&gt;</code>) to describe the window control plane: TESLA inverter type, schedule entities + write button, scheduler emulator, <code>teslemetry_automatic</code>, no service hooks, <code>support_discharge_freeze: False</code> rationale, and the idle <code>pv_only</code> divergence from the old template. Keep the existing "Known follow-ups" (tariff_rate shape validation on live PW3) and add: emulator behaviour validated against live hardware during the beta pilot.</p>
+<hr />
+<h2 id="self-review-completed">Self-Review (completed)</h2>
+<ol>
+<li><strong>Spec coverage:</strong> TESLA INVERTER_DEF (T1), config plumbing (T2), sensors for auto-config (T3), window math + evaluation incl. no-export-freeze states (T4), fox-style entities with atomic write button (T5), persistence via Storage (T6), scheduler emulator with read-only gating + dedupe (T7), automatic_config (T8), template/docs (T9), verification (T10). Export-freeze decision is encoded in T1 (flag) and T4 (no export-freeze state exists in <code>evaluate_schedule</code>).</li>
+<li><strong>Placeholder scan:</strong> none — every step has concrete code/commands. T7 Step 4 names the specific pre-existing tests that may need mock updates and forbids weakening their assertions.</li>
+<li><strong>Type consistency:</strong> <code>evaluate_schedule</code> returns the exact 5-key dict consumed by <code>assert_device_state</code> and asserted in tests; entity suffixes (<code>schedule_charge_start_time</code> etc.) match between <code>publish_schedule_entities</code>, <code>schedule_event</code> routing, <code>automatic_config</code>, and all tests; storage key <code>("teslemetry", "schedule")</code> consistent between save/load/tests.</li>
+</ol>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
