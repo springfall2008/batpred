@@ -1137,22 +1137,33 @@ class SolarAPI(ComponentBase):
             capped_data = min(ceiling_slot, max(observed_slot, raw_value))
             # Derive all three published series from the capped P50 so they agree with the
             # planner series built below from the (also capped) pv_forecast_minute_adjusted.
-            # pv_estimate10 needs no min(..., capped_data): worst_day_scaling is clamped to at
-            # most 1.0 above, so capped_p50 * worst_day_scaling <= capped_p50 <= capped_data
-            # always holds. pv_estimate90 keeps the clamp because best_day_scaling can exceed
-            # 1.0, so the optimistic case can genuinely exceed the physical ceiling.
+            # pv_estimate10 needs no clamp at all: worst_day_scaling is clamped to at most 1.0
+            # above, so capped_p50 * worst_day_scaling <= capped_p50 <= capped_data always holds.
+            # pv_estimate90 keeps a clamp because best_day_scaling can exceed 1.0 (up to 2.0, and
+            # 1.3 by default when calibration is off), so the optimistic case can genuinely exceed
+            # what the array can physically produce.
+            #
+            # That clamp is against ceiling_slot, the physical ceiling, NOT against capped_data.
+            # capped_data is min(ceiling_slot, max(observed_slot, raw_value)), so it collapses to the
+            # raw forecast itself whenever the raw forecast sits below the ceiling - and capped_p50
+            # then equals capped_data, making the clamp bite at exactly 1.0 and erasing the upside
+            # entirely. On a system whose forecast is comfortably inside its array limit (the normal
+            # case) that would leave pv90 identical to nominal, silently: the scenario would still be
+            # simulated and still cost planning time while measuring nothing on the axis it exists
+            # for. Only the array limit may cap the upside case.
             capped_p50 = min(pv_value, capped_data)
             pv_estimateCL[minute] = dp4(capped_p50)
             pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
-            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, capped_data))
+            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, ceiling_slot))
 
             # The planner's p90 series (built in the create_pv10 block below from the capped
             # per-minute data) must land on the same ceiling as pv_estimate90 above, or the two
-            # disagree exactly where the comment above says they must agree. capped_data is kWh per
+            # disagree exactly where the comment above says they must agree. ceiling_slot is kWh per
             # plan interval, so the clamp cannot be applied per minute; record the scaling that
-            # holds this slot's p90 total at min(capped_p50 * best_day_scaling, capped_data) instead
-            # and let the block below scale every minute of the slot by it.
-            slot_best_scaling[minute] = min(best_day_scaling, capped_data / capped_p50) if capped_p50 > 0 else best_day_scaling
+            # holds this slot's p90 total at min(capped_p50 * best_day_scaling, ceiling_slot) instead
+            # and let the block below scale every minute of the slot by it. An empty slot has no
+            # ratio to take, and needs no clamp either - scaling zero by anything stays zero.
+            slot_best_scaling[minute] = min(best_day_scaling, ceiling_slot / capped_p50) if capped_p50 > 0 else best_day_scaling
 
             # Apply the same cap to the per-minute data the planner consumes. Scale rather than
             # clamp per minute: capped_data is kWh per plan interval, not per minute.
