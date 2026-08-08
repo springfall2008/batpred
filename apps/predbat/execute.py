@@ -610,7 +610,15 @@ class Execute:
 
             # Charging/Discharging off via service
             if not isCharging and self.set_charge_window:
-                if carHolding or boostHolding:
+                if (carHolding or boostHolding) and self.set_charge_freeze:
+                    # Only attempt the extra charge-side hold when a genuine passive freeze is available
+                    # (self.set_charge_freeze already accounts for inverter support and charge_freeze_service
+                    # being configured, #4424/#4432) - otherwise adjust_charge_immediate(soc, freeze=True)
+                    # silently falls back to a real charge_start_service targeting the current SoC, which
+                    # some inverters treat as a fresh command each cycle and briefly ramp to full power,
+                    # producing repeated short full-rate import bursts instead of a passive hold. The
+                    # discharge-side hold set above (pause/rate/reserve) already prevents discharge, so
+                    # falling back to a plain charge-stop is safe.
                     inverter.adjust_charge_immediate(inverter.soc_percent, freeze=True)
                 else:
                     inverter.adjust_charge_immediate(0)
@@ -806,9 +814,31 @@ class Execute:
                     self.log("Note: Inverter does not support discharge freeze - disabled")
                     self.set_export_freeze = False
                     self.set_export_freeze_only = False
+                elif not (inverter.inv_has_target_soc and inverter.inv_target_soc_used_for_discharge) and not self.args.get("discharge_freeze_service", ""):
+                    # Same class of bug as #4424/charge_freeze_service above, but on the export side,
+                    # and with a different fallback condition: adjust_battery_target() only writes a
+                    # target SoC during export when inv_target_soc_used_for_discharge is also set
+                    # (inverter.py:1899) - GE/GEC have a target SoC but target_soc_used_for_discharge is
+                    # False for them, so they get no passive-hold protection from it at all and depend
+                    # entirely on discharge_freeze_service. Without it, adjust_export_immediate() would
+                    # silently fall back to a real discharge_start_service call instead of a passive hold.
+                    self.log("Note: No discharge_freeze_service configured - discharge freeze disabled")
+                    self.set_export_freeze = False
+                    self.set_export_freeze_only = False
                 if not inverter.inv_support_charge_freeze:
                     # Force off unsupported feature
                     self.log("Note: Inverter does not support charge freeze - disabled")
+                    self.set_charge_freeze = False
+                elif not inverter.inv_has_target_soc and not self.args.get("charge_freeze_service", ""):
+                    # Inverters with a target SoC (GE, GEC, GEE, the cloud integrations, etc.) already
+                    # achieve a passive hold via adjust_battery_target() and never need
+                    # charge_freeze_service configured at all - GE's own default template doesn't set it.
+                    # Only inverters without that fallback (e.g. SIG, FoxESS) rely on charge_freeze_service
+                    # as their sole freeze mechanism - for those, a missing service means
+                    # adjust_charge_immediate() silently falls back to a real charge_start_service call
+                    # instead of a passive hold (#4424), so treat it the same as an inverter type with no
+                    # support at all.
+                    self.log("Note: No charge_freeze_service configured - charge freeze disabled")
                     self.set_charge_freeze = False
                 if not inverter.inv_has_reserve_soc:
                     self.log("Note: Inverter does not support reserve - disabling reserve functions")

@@ -40,6 +40,7 @@ class ActiveTestInverter:
         self.inv_charge_discharge_with_rate = False
         self.inv_can_span_midnight = True
         self.inv_has_target_soc = True
+        self.inv_target_soc_used_for_discharge = True
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
         self.inv_has_discharge_enable_time = True
@@ -282,6 +283,12 @@ def run_execute_test(
         inverter.reserve_max = reserve_max_array[inverter.id] if reserve_max_array else reserve_max
         inverter.battery_temperature = battery_temperature
 
+    # fetch_inverter_data() only ever narrows set_charge_freeze (never widens it back), matching
+    # production where fetch_config_options() re-derives it from raw config every cycle before
+    # fetch_inverter_data() runs. This helper calls fetch_inverter_data() directly and is reused
+    # across many scenarios in one process, so re-derive it here too or a capability narrowing from
+    # an earlier scenario (e.g. an unsupported inverter) leaks forward into every later one.
+    my_predbat.set_charge_freeze = my_predbat.get_arg("set_charge_freeze")
     my_predbat.fetch_inverter_data(create=False)
 
     if my_predbat.soc_kw != soc_kw:
@@ -493,12 +500,181 @@ def test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat
     return False
 
 
+def _run_fetch_inverter_data_charge_freeze_test(my_predbat, inv_support_charge_freeze, charge_freeze_service, inv_has_target_soc=True):
+    """
+    Helper: configure one inverter's charge-freeze support flag, target-SoC capability and the
+    charge_freeze_service arg, call fetch_inverter_data, and return the resulting
+    my_predbat.set_charge_freeze.
+    """
+    inverter = ActiveTestInverter(0, soc_kw=5, soc_max=10, now_utc=my_predbat.now_utc)
+    inverter.inv_support_charge_freeze = inv_support_charge_freeze
+    inverter.inv_has_target_soc = inv_has_target_soc
+    my_predbat.inverters = [inverter]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.args["charge_freeze_service"] = charge_freeze_service
+    my_predbat.set_charge_freeze = True
+
+    my_predbat.fetch_inverter_data(create=False)
+    return my_predbat.set_charge_freeze
+
+
+def test_fetch_inverter_data_charge_freeze_service_configured(my_predbat):
+    """
+    Test that set_charge_freeze stays enabled when the inverter type supports charge freeze and a
+    charge_freeze_service is actually configured for it.
+    """
+    print("  - test_fetch_inverter_data_charge_freeze_service_configured")
+
+    result = _run_fetch_inverter_data_charge_freeze_test(my_predbat, inv_support_charge_freeze=True, charge_freeze_service="select.charge_freeze", inv_has_target_soc=False)
+    if result is not True:
+        print("ERROR: set_charge_freeze should stay True when charge_freeze_service is configured, got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_charge_freeze_service_not_configured_no_target_soc(my_predbat):
+    """
+    Test that set_charge_freeze is disabled when the inverter type supports charge freeze in
+    general, has no target-SoC based fallback (e.g. SIG, FoxESS), and no charge_freeze_service is
+    actually configured for this setup - otherwise adjust_charge_immediate() would silently fall
+    back to a real charge_start_service call instead of a passive hold (#4424).
+    """
+    print("  - test_fetch_inverter_data_charge_freeze_service_not_configured_no_target_soc")
+
+    result = _run_fetch_inverter_data_charge_freeze_test(my_predbat, inv_support_charge_freeze=True, charge_freeze_service="", inv_has_target_soc=False)
+    if result is not False:
+        print("ERROR: set_charge_freeze should be disabled when charge_freeze_service is not configured and the inverter has no target-SoC fallback, got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_charge_freeze_service_not_configured_with_target_soc(my_predbat):
+    """
+    Test that set_charge_freeze stays enabled when charge_freeze_service isn't configured but the
+    inverter type has a target-SoC based hold instead (e.g. GE, GEC and the cloud integrations,
+    none of which set charge_freeze_service in their default templates) - adjust_battery_target()
+    already achieves a passive hold for these without going anywhere near charge_freeze_service, so
+    they must not be penalised for lacking it (regression caught in review of #4435/#4424).
+    """
+    print("  - test_fetch_inverter_data_charge_freeze_service_not_configured_with_target_soc")
+
+    result = _run_fetch_inverter_data_charge_freeze_test(my_predbat, inv_support_charge_freeze=True, charge_freeze_service="", inv_has_target_soc=True)
+    if result is not True:
+        print("ERROR: set_charge_freeze should stay True when the inverter has a target-SoC fallback, even without charge_freeze_service configured, got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_charge_freeze_unsupported_inverter(my_predbat):
+    """
+    Test that set_charge_freeze is disabled when the inverter type does not support charge freeze
+    at all, regardless of whether a charge_freeze_service happens to be configured.
+    """
+    print("  - test_fetch_inverter_data_charge_freeze_unsupported_inverter")
+
+    result = _run_fetch_inverter_data_charge_freeze_test(my_predbat, inv_support_charge_freeze=False, charge_freeze_service="select.charge_freeze")
+    if result is not False:
+        print("ERROR: set_charge_freeze should be disabled when the inverter type does not support charge freeze, got {}".format(result))
+        return True
+    return False
+
+
+def _run_fetch_inverter_data_discharge_freeze_test(my_predbat, inv_support_discharge_freeze, discharge_freeze_service, inv_has_target_soc=True, inv_target_soc_used_for_discharge=True):
+    """
+    Helper: configure one inverter's discharge-freeze support flag, target-SoC discharge capability
+    and the discharge_freeze_service arg, call fetch_inverter_data, and return the resulting
+    (my_predbat.set_export_freeze, my_predbat.set_export_freeze_only).
+    """
+    inverter = ActiveTestInverter(0, soc_kw=5, soc_max=10, now_utc=my_predbat.now_utc)
+    inverter.inv_support_discharge_freeze = inv_support_discharge_freeze
+    inverter.inv_has_target_soc = inv_has_target_soc
+    inverter.inv_target_soc_used_for_discharge = inv_target_soc_used_for_discharge
+    my_predbat.inverters = [inverter]
+    my_predbat.args["num_inverters"] = 1
+    my_predbat.args["discharge_freeze_service"] = discharge_freeze_service
+    my_predbat.set_export_freeze = True
+    my_predbat.set_export_freeze_only = True
+
+    my_predbat.fetch_inverter_data(create=False)
+    return my_predbat.set_export_freeze, my_predbat.set_export_freeze_only
+
+
+def test_fetch_inverter_data_discharge_freeze_service_configured(my_predbat):
+    """
+    Test that set_export_freeze stays enabled when the inverter type supports discharge freeze and
+    a discharge_freeze_service is actually configured for it.
+    """
+    print("  - test_fetch_inverter_data_discharge_freeze_service_configured")
+
+    result = _run_fetch_inverter_data_discharge_freeze_test(my_predbat, inv_support_discharge_freeze=True, discharge_freeze_service="select.discharge_freeze", inv_has_target_soc=False, inv_target_soc_used_for_discharge=False)
+    if result != (True, True):
+        print("ERROR: set_export_freeze/set_export_freeze_only should stay True when discharge_freeze_service is configured, got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_discharge_freeze_service_not_configured_no_target_soc(my_predbat):
+    """
+    Test that set_export_freeze is disabled when the inverter type supports discharge freeze in
+    general, has no target-SoC based export fallback, and no discharge_freeze_service is actually
+    configured for this setup - otherwise adjust_export_immediate() would silently fall back to a
+    real discharge_start_service call instead of a passive hold, the export-side equivalent of #4424.
+    """
+    print("  - test_fetch_inverter_data_discharge_freeze_service_not_configured_no_target_soc")
+
+    result = _run_fetch_inverter_data_discharge_freeze_test(my_predbat, inv_support_discharge_freeze=True, discharge_freeze_service="", inv_has_target_soc=False, inv_target_soc_used_for_discharge=False)
+    if result != (False, False):
+        print("ERROR: set_export_freeze/set_export_freeze_only should be disabled when discharge_freeze_service is not configured and the inverter has no target-SoC export fallback, got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_discharge_freeze_service_not_configured_with_target_soc(my_predbat):
+    """
+    Test that set_export_freeze stays enabled when discharge_freeze_service isn't configured but the
+    inverter type has a target-SoC based export hold instead (has_target_soc and
+    target_soc_used_for_discharge both True) - adjust_battery_target() already achieves a passive
+    hold for these without going anywhere near discharge_freeze_service. Note GE/GEC have a target
+    SoC but target_soc_used_for_discharge is False for them (inverter.py:1899), so they do NOT hit
+    this fallback and still require discharge_freeze_service - see the "no_target_soc" test above.
+    """
+    print("  - test_fetch_inverter_data_discharge_freeze_service_not_configured_with_target_soc")
+
+    result = _run_fetch_inverter_data_discharge_freeze_test(my_predbat, inv_support_discharge_freeze=True, discharge_freeze_service="", inv_has_target_soc=True, inv_target_soc_used_for_discharge=True)
+    if result != (True, True):
+        print("ERROR: set_export_freeze/set_export_freeze_only should stay True when the inverter has a target-SoC export fallback, even without discharge_freeze_service configured, got {}".format(result))
+        return True
+    return False
+
+
+def test_fetch_inverter_data_discharge_freeze_unsupported_inverter(my_predbat):
+    """
+    Test that set_export_freeze is disabled when the inverter type does not support discharge
+    freeze at all, regardless of whether a discharge_freeze_service happens to be configured.
+    """
+    print("  - test_fetch_inverter_data_discharge_freeze_unsupported_inverter")
+
+    result = _run_fetch_inverter_data_discharge_freeze_test(my_predbat, inv_support_discharge_freeze=False, discharge_freeze_service="select.discharge_freeze")
+    if result != (False, False):
+        print("ERROR: set_export_freeze/set_export_freeze_only should be disabled when the inverter type does not support discharge freeze, got {}".format(result))
+        return True
+    return False
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
     failed = test_fetch_inverter_data_extra_pv_sensors(my_predbat)
     failed |= test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat)
     failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
+    failed |= test_fetch_inverter_data_charge_freeze_service_configured(my_predbat)
+    failed |= test_fetch_inverter_data_charge_freeze_service_not_configured_no_target_soc(my_predbat)
+    failed |= test_fetch_inverter_data_charge_freeze_service_not_configured_with_target_soc(my_predbat)
+    failed |= test_fetch_inverter_data_charge_freeze_unsupported_inverter(my_predbat)
+    failed |= test_fetch_inverter_data_discharge_freeze_service_configured(my_predbat)
+    failed |= test_fetch_inverter_data_discharge_freeze_service_not_configured_no_target_soc(my_predbat)
+    failed |= test_fetch_inverter_data_discharge_freeze_service_not_configured_with_target_soc(my_predbat)
+    failed |= test_fetch_inverter_data_discharge_freeze_unsupported_inverter(my_predbat)
     if failed:
         return failed
 
@@ -598,6 +774,33 @@ def run_execute_tests(my_predbat):
     my_predbat.iboost_prevent_discharge = True
     my_predbat.iboost_running_full = True
     failed |= run_execute_test(my_predbat, "no_charge_iboost", set_charge_window=True, set_export_window=True, assert_pause_discharge=True, assert_status="Hold for iBoost", soc_kw=1, assert_immediate_soc_target=10)
+
+    # #4432: boostHolding must not silently fall back to a real charge_start_service when no
+    # charge_freeze_service is configured - same fallback risk as #4424, but via this direct-call
+    # path rather than the optimiser's planned charge-freeze windows. With no freeze service
+    # available, this should fall back to a plain charge-stop, not a disguised real charge.
+    # has_target_soc=False models the at-risk inverter class (e.g. SIG, FoxESS) that has no
+    # target-SoC based fallback and so genuinely depends on charge_freeze_service (#4424's actual
+    # reporter, FoxESS, is one of these) - inverters with a target SoC keep set_charge_freeze
+    # enabled regardless, since adjust_battery_target() already achieves the hold for them.
+    saved_charge_freeze_service = my_predbat.args.get("charge_freeze_service", "")
+    my_predbat.args["charge_freeze_service"] = ""
+    failed |= run_execute_test(
+        my_predbat,
+        "no_charge_iboost_no_freeze_service",
+        set_charge_window=True,
+        set_export_window=True,
+        assert_pause_discharge=True,
+        assert_status="Hold for iBoost",
+        soc_kw=1,
+        has_target_soc=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+    )
+    my_predbat.args["charge_freeze_service"] = saved_charge_freeze_service
+    if failed:
+        return failed
 
     failed |= run_execute_test(
         my_predbat,
@@ -2566,6 +2769,34 @@ def run_execute_tests(my_predbat):
     failed |= run_execute_test(
         my_predbat, "car", car_slot=charge_window_best_slot, set_charge_window=True, set_export_window=True, assert_status="Hold for car", assert_pause_discharge=True, assert_discharge_rate=1000, soc_kw=1, assert_immediate_soc_target=10
     )
+
+    # #4432: carHolding must not silently fall back to a real charge_start_service when no
+    # charge_freeze_service is configured - same fallback risk as #4424, but via this direct-call
+    # path rather than the optimiser's planned charge-freeze windows. With no freeze service
+    # available, this should fall back to a plain charge-stop, not a disguised real charge.
+    # has_target_soc=False models the at-risk inverter class (e.g. SIG, FoxESS) that has no
+    # target-SoC based fallback and so genuinely depends on charge_freeze_service - inverters with
+    # a target SoC keep set_charge_freeze enabled regardless, since adjust_battery_target() already
+    # achieves the hold for them.
+    saved_charge_freeze_service = my_predbat.args.get("charge_freeze_service", "")
+    my_predbat.args["charge_freeze_service"] = ""
+    failed |= run_execute_test(
+        my_predbat,
+        "car_no_freeze_service",
+        car_slot=charge_window_best_slot,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        assert_discharge_rate=1000,
+        soc_kw=1,
+        has_target_soc=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+    )
+    my_predbat.args["charge_freeze_service"] = saved_charge_freeze_service
+
     failed |= run_execute_test(
         my_predbat,
         "car2",
