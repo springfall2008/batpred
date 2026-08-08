@@ -1463,13 +1463,17 @@ class Plan:
         # Return if we recomputed or not
         return recompute
 
-    def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh):
+    def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=None, cost90=None, final_iboost90=0.0):
         """
-        Compute the metric combing pv and pv10 data
+        Compute the metric by blending the nominal, PV10 and PV90 scenarios
+
+        cost90 is the switch for the PV90 term - when it is None the scenario was not simulated and
+        its weight collapses into the nominal weight.
         """
         # Store simulated mid value
         metric = cost
         metric10 = cost10
+        metric90 = cost90
 
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
@@ -1480,14 +1484,20 @@ class Plan:
         battery_value10 = (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
         metric -= battery_value
         metric10 -= battery_value10
+        if metric90 is not None:
+            battery_value90 = ((soc90 or 0) * self.metric_battery_value_scaling + final_iboost90 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+            metric90 -= battery_value90
 
-        # Metric adjustment based on 10% outcome weighting
-        if metric10 > metric:
-            metric_diff = metric10 - metric
-            metric_diff *= self.pv_metric10_weight
-            metric += metric_diff
-        else:
-            metric_diff = 0.0
+        # Signed weighted average across the simulated scenarios. Unlike the previous downside-only
+        # clamp this lets a better-than-nominal scenario pull the metric down, which is what gives
+        # PV90 a gradient at all - PV90 is nearly always cheaper than nominal.
+        weight10 = self.pv_metric10_weight
+        weight90 = self.pv_metric90_weight if metric90 is not None else 0.0
+        weight_total = weight10 + weight90
+        if weight_total > 1.0:
+            weight10 = weight10 / weight_total
+            weight90 = weight90 / weight_total
+        metric = (1.0 - weight10 - weight90) * metric + weight10 * metric10 + weight90 * (metric90 if metric90 is not None else 0.0)
 
         # Carbon metric
         if self.carbon_enable:

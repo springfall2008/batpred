@@ -15,8 +15,10 @@ def compute_metric_test(
     end_record=None,
     soc=0,
     soc10=0,
+    soc90=0,
     cost=0,
     cost10=0,
+    cost90=None,
     final_iboost=0,
     final_iboost10=0,
     battery_cycle=0,
@@ -33,6 +35,7 @@ def compute_metric_test(
     battery_loss=1.0,
     metric_battery_cycle=0.0,
     pv_metric10_weight=0.0,
+    pv_metric90_weight=0.0,
     battery_loss_discharge=1.0,
     metric_self_sufficiency=0.0,
     carbon_metric=0.0,
@@ -49,6 +52,7 @@ def compute_metric_test(
     my_predbat.battery_loss = battery_loss
     my_predbat.metric_battery_cycle = metric_battery_cycle
     my_predbat.pv_metric10_weight = pv_metric10_weight
+    my_predbat.pv_metric90_weight = pv_metric90_weight
     my_predbat.battery_loss_discharge = battery_loss_discharge
     my_predbat.metric_self_sufficiency = metric_self_sufficiency
     my_predbat.rate_min = rate_min
@@ -80,6 +84,8 @@ def compute_metric_test(
         import_kwh_battery,
         import_kwh_house,
         export_kwh,
+        soc90=soc90,
+        cost90=cost90,
     )
     if abs(metric - assert_metric) > 0.1:
         print("ERROR: Test {} Metric {} should be {}".format(name, metric, assert_metric))
@@ -97,6 +103,7 @@ def save_state(my_predbat):
         "battery_loss",
         "metric_battery_cycle",
         "pv_metric10_weight",
+        "pv_metric90_weight",
         "battery_loss_discharge",
         "metric_self_sufficiency",
         "rate_min",
@@ -128,6 +135,10 @@ def run_compute_metric_tests(my_predbat):
     failed |= compute_metric_test(my_predbat, "cost_iboost", cost=10.0, final_iboost=50, iboost_value_scaling=0.8, assert_metric=10 - 50 * 0.8)
     failed |= compute_metric_test(my_predbat, "cost_keep", cost=10.0, metric_keep=5, assert_metric=10 + 5)
     failed |= compute_metric_test(my_predbat, "cost10", cost=10.0, cost10=20, pv_metric10_weight=0.5, assert_metric=10 + 10 * 0.5)
+    # The blend is a signed weighted average, so a cheaper-than-nominal PV10 now pulls the metric
+    # DOWN. The previous downside-only clamp left the metric at `cost` in this case.
+    failed |= compute_metric_test(my_predbat, "cost10_cheaper", cost=20.0, cost10=10.0, pv_metric10_weight=0.5, assert_metric=0.5 * 20 + 0.5 * 10)
+    failed |= compute_metric_test(my_predbat, "cost90", cost=10.0, cost10=10.0, cost90=4.0, pv_metric10_weight=0.1, pv_metric90_weight=0.2, assert_metric=0.7 * 10 + 0.1 * 10 + 0.2 * 4)
     failed |= compute_metric_test(my_predbat, "cost_carbon", cost=10.0, final_carbon_g=100, carbon_metric=2.0, assert_metric=10 + 100 / 1000 * 2.0)
     failed |= compute_metric_test(my_predbat, "cost_battery_cycle", cost=10.0, battery_cycle=25, metric_battery_cycle=0.1, assert_metric=10 + 25 * 0.1)
     # Test rate_max capping: rate_min=5 but rate_max=2 should cap it to 2

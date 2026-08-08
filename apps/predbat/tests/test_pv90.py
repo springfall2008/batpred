@@ -409,6 +409,87 @@ def test_pv90_no_charge_derate(my_predbat):
     return failed
 
 
+METRIC_STATE_ITEMS = [
+    "pv_metric10_weight",
+    "pv_metric90_weight",
+    "metric_battery_value_scaling",
+    "carbon_enable",
+    "metric_self_sufficiency",
+    "metric_battery_cycle",
+]
+
+
+def save_metric_state(my_predbat):
+    """Snapshot the weighting attributes the blend tests overwrite."""
+    return {name: getattr(my_predbat, name) for name in METRIC_STATE_ITEMS}
+
+
+def restore_metric_state(my_predbat, state):
+    """Restore the weighting attributes saved by save_metric_state."""
+    for name, value in state.items():
+        setattr(my_predbat, name, value)
+
+
+def test_pv90_metric_blend(my_predbat):
+    """The blend must be a signed weighted average that sums to 1.0 across the three scenarios."""
+    failed = False
+    my_predbat.pv_metric10_weight = 0.1
+    my_predbat.pv_metric90_weight = 0.2
+    my_predbat.metric_battery_value_scaling = 0.0  # remove the residual credit so cost == metric
+    my_predbat.carbon_enable = False
+    my_predbat.metric_self_sufficiency = 0.0
+    my_predbat.metric_battery_cycle = 0.0
+
+    metric, _ = my_predbat.compute_metric(0, 0, 0, 100.0, 200.0, 0, 0, 0, 0, 0, 0, 0, 0, soc90=0, cost90=50.0)
+    expected = 0.7 * 100.0 + 0.1 * 200.0 + 0.2 * 50.0
+    if abs(metric - expected) > 1e-4:
+        print("ERROR: blended metric is {}, expected {}".format(metric, expected))
+        failed = True
+
+    # cost90 omitted -> the pv90 term must drop out and the nominal weight absorb it
+    metric, _ = my_predbat.compute_metric(0, 0, 0, 100.0, 200.0, 0, 0, 0, 0, 0, 0, 0, 0)
+    expected = 0.9 * 100.0 + 0.1 * 200.0
+    if abs(metric - expected) > 1e-4:
+        print("ERROR: metric without cost90 is {}, expected {}".format(metric, expected))
+        failed = True
+    return failed
+
+
+def test_pv90_metric_weight_renormalisation(my_predbat):
+    """Weights summing above 1.0 must renormalise so the nominal weight never goes negative."""
+    failed = False
+    my_predbat.pv_metric10_weight = 0.8
+    my_predbat.pv_metric90_weight = 0.8
+    my_predbat.metric_battery_value_scaling = 0.0
+    my_predbat.carbon_enable = False
+    my_predbat.metric_self_sufficiency = 0.0
+    my_predbat.metric_battery_cycle = 0.0
+
+    metric, _ = my_predbat.compute_metric(0, 0, 0, 100.0, 200.0, 0, 0, 0, 0, 0, 0, 0, 0, soc90=0, cost90=50.0)
+    expected = 0.5 * 200.0 + 0.5 * 50.0
+    if abs(metric - expected) > 1e-4:
+        print("ERROR: renormalised metric is {}, expected {} (nominal weight must clamp to 0)".format(metric, expected))
+        failed = True
+    return failed
+
+
+def test_pv90_identical_scenarios_are_identity(my_predbat):
+    """When every scenario has the same cost the blend must be a no-op at any weights."""
+    failed = False
+    my_predbat.pv_metric10_weight = 0.35
+    my_predbat.pv_metric90_weight = 0.35
+    my_predbat.metric_battery_value_scaling = 0.0
+    my_predbat.carbon_enable = False
+    my_predbat.metric_self_sufficiency = 0.0
+    my_predbat.metric_battery_cycle = 0.0
+
+    metric, _ = my_predbat.compute_metric(0, 0, 0, 123.0, 123.0, 0, 0, 0, 0, 0, 0, 0, 0, soc90=0, cost90=123.0)
+    if abs(metric - 123.0) > 1e-4:
+        print("ERROR: identity blend gave {}, expected 123.0".format(metric))
+        failed = True
+    return failed
+
+
 def run_pv90_tests(my_predbat):
     """Run all pv90 tests, returning True if any failed."""
     failed = False
@@ -424,4 +505,12 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)
     failed |= test_pv90_no_charge_derate(my_predbat)
+
+    metric_state = save_metric_state(my_predbat)
+    try:
+        failed |= test_pv90_metric_blend(my_predbat)
+        failed |= test_pv90_metric_weight_renormalisation(my_predbat)
+        failed |= test_pv90_identical_scenarios_are_identity(my_predbat)
+    finally:
+        restore_metric_state(my_predbat, metric_state)
     return failed
