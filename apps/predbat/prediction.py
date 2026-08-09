@@ -1288,9 +1288,9 @@ class Prediction:
         if not save and cache:
             self.prediction_cache[sim_hash] = (
                 round(final_metric, 4),
-                round(import_kwh_battery, 4),
-                round(import_kwh_house, 4),
-                round(export_kwh, 4),
+                round(final_import_kwh_battery, 4),
+                round(final_import_kwh_house, 4),
+                round(final_export_kwh, 4),
                 round(soc_min, 4),
                 round(final_soc, 4),
                 soc_min_minute,
@@ -1308,9 +1308,9 @@ class Prediction:
 
         return (
             round(final_metric, 4),
-            round(import_kwh_battery, 4),
-            round(import_kwh_house, 4),
-            round(export_kwh, 4),
+            round(final_import_kwh_battery, 4),
+            round(final_import_kwh_house, 4),
+            round(final_export_kwh, 4),
             round(soc_min, 4),
             round(final_soc, 4),
             soc_min_minute,

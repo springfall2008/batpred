@@ -27,7 +27,7 @@
 #include <vector>
 
 #define PK_ABI_VERSION 2
-#define PK_PARITY_REVISION 2
+#define PK_PARITY_REVISION 3
 #define PK_MAX_CARS 4
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -375,6 +375,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     double final_metric_keep = metric_keep;
     double final_iboost_kwh = iboost_today_kwh;
     double final_carbon_g = carbon_g;
+    double final_import_kwh_battery = import_kwh_battery;
+    double final_import_kwh_house = import_kwh_house;
+    double final_export_kwh = export_kwh;
     double charge_rate_now = c->charge_rate_now;
     double discharge_rate_now = c->discharge_rate_now;
     const bool car_enable = c->num_cars > 0;
@@ -938,6 +941,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
             final_metric_keep = metric_keep;
             final_iboost_kwh += iboost_amount;
             final_carbon_g = carbon_g;
+            final_import_kwh_battery = import_kwh_battery;
+            final_import_kwh_house = import_kwh_house;
+            final_export_kwh = export_kwh;
 
             // Record soc min - prediction.py:1183-1186
             if (soc < soc_min) {
@@ -948,9 +954,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     }
 
     out->final_metric = final_metric;
-    out->import_kwh_battery = import_kwh_battery;
-    out->import_kwh_house = import_kwh_house;
-    out->export_kwh = export_kwh;
+    out->import_kwh_battery = final_import_kwh_battery;
+    out->import_kwh_house = final_import_kwh_house;
+    out->export_kwh = final_export_kwh;
     out->soc_min = soc_min;
     out->final_soc = final_soc;
     out->battery_cycle = final_battery_cycle;
