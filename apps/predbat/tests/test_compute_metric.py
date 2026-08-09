@@ -122,12 +122,61 @@ def restore_state(my_predbat, state_dict):
         setattr(my_predbat, item, value)
 
 
+def battery_value_rate_test(my_predbat):
+    """Pin battery_value_rate, the single definition shared by the metric, the dashboard and savings.
+
+    The rate_max ceiling is the case worth pinning: output.py's copy of this formula omitted it, so on
+    a flat tariff the savings report valued the battery 15.3% above what the planner used. Anyone
+    re-splitting the formula would reintroduce that divergence, and only the ceiling case catches it.
+    """
+    failed = False
+    saved = {name: getattr(my_predbat, name) for name in ("rate_min_forward", "rate_min", "rate_max", "inverter_loss", "battery_loss", "battery_loss_discharge", "rate_export_min", "metric_battery_cycle")}
+    try:
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_loss = 0.97
+        my_predbat.battery_loss_discharge = 0.97
+        my_predbat.metric_battery_cycle = 0.0
+        my_predbat.rate_export_min = 0.0
+        my_predbat.rate_min = 6.9
+
+        # Normal spread: the gross-up applies and the ceiling does not bind
+        my_predbat.rate_max = 28.85
+        my_predbat.rate_min_forward = {10: 6.9}
+        expected = 6.9 / 0.96 / 0.97
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {}, expected the grossed-up {}".format(got, expected))
+            failed = True
+
+        # Flat tariff: rate_min_forward == rate_max, so the ceiling MUST bind and pull the value
+        # below the gross-up. Without the ceiling this returns 1.0739*R instead of 0.9312*R.
+        my_predbat.rate_max = 6.9
+        expected_capped = 6.9 * 0.96 * 0.97
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected_capped) > 1e-6:
+            print("ERROR: battery_value_rate is {} on a flat tariff, expected the capped {} - the rate_max ceiling is not being applied".format(got, expected_capped))
+            failed = True
+
+        # The 1p floor applies when the forward rate is negative (plunge pricing)
+        my_predbat.rate_max = 28.85
+        my_predbat.rate_min_forward = {10: -5.0}
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - 1.0) > 1e-6:
+            print("ERROR: battery_value_rate is {} at a negative forward rate, expected the 1.0 floor".format(got))
+            failed = True
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
+
+
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
     """
     failed = False
     print("**** Running compute metric tests ****")
+    failed |= battery_value_rate_test(my_predbat)
     state_dict = save_state(my_predbat)
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)

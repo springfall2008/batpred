@@ -1566,6 +1566,28 @@ class Plan:
         # Return if we recomputed or not
         return recompute
 
+    def battery_value_rate(self, minute):
+        """
+        Forward value of one kWh left in the battery at the given absolute minute, in p/kWh
+
+        The value is what it would cost to replace that energy: the cheapest import rate available
+        from `minute` to the end of the forecast, grossed up by the charging losses. It is capped at
+        the highest import rate (reduced by losses) so a flat tariff cannot value stored energy above
+        what the grid would ever charge for it, and floored at the export arbitrage margin and at
+        1p/kWh.
+
+        Note `rate_export_min` here is not the export rate - it is the export earnings less the
+        replacement cost, so it only raises the value when exporting beats re-importing. It can
+        never lower it, which is why a zero export rate does not reduce the credit.
+
+        This is the single definition used by the planner's metric, the dashboard's value_per_kwh
+        attributes and the savings report, so all three agree on what a stored kWh is worth.
+        """
+        rate_min = self.rate_min_forward.get(minute, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        rate_min = max(min(rate_min, self.rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
+        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
+        return max(rate_min, 1.0, rate_export_min)
+
     def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=None, cost90=None, final_iboost90=0.0):
         """
         Compute the metric by blending the nominal, PV10 and PV90 scenarios
@@ -1580,15 +1602,13 @@ class Plan:
 
         # Balancing payment to account for battery left over
         # ie. how much extra battery is worth to us in future, assume it's the same as low rate
-        rate_min = (self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min)) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        rate_min = max(min(rate_min, self.rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
-        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
-        battery_value10 = (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+        value_rate = self.battery_value_rate(self.minutes_now + end_record)
+        battery_value = (soc * self.metric_battery_value_scaling + final_iboost * self.iboost_value_scaling) * value_rate
+        battery_value10 = (soc10 * self.metric_battery_value_scaling + final_iboost10 * self.iboost_value_scaling) * value_rate
         metric -= battery_value
         metric10 -= battery_value10
         if metric90 is not None:
-            battery_value90 = ((soc90 or 0) * self.metric_battery_value_scaling + final_iboost90 * self.iboost_value_scaling) * max(rate_min, 1.0, rate_export_min)
+            battery_value90 = ((soc90 or 0) * self.metric_battery_value_scaling + final_iboost90 * self.iboost_value_scaling) * value_rate
             metric90 -= battery_value90
 
         # Signed weighted average across the simulated scenarios. Unlike the previous downside-only
@@ -4377,14 +4397,8 @@ class Plan:
                     )
 
                 # Compute battery value now and at end of plan
-                rate_min_now = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-                rate_min_now = max(min(rate_min_now, self.rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
-                rate_min_end = self.rate_min_forward.get(self.minutes_now + end_record, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-                rate_min_end = max(min(rate_min_end, self.rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
-                rate_export_min_now = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_now
-                rate_export_min_end = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min_end
-                value_kwh_now = self.metric_battery_value_scaling * max(rate_min_now, 1.0, rate_export_min_now)
-                value_kwh_end = self.metric_battery_value_scaling * max(rate_min_end, 1.0, rate_export_min_end)
+                value_kwh_now = self.metric_battery_value_scaling * self.battery_value_rate(self.minutes_now)
+                value_kwh_end = self.metric_battery_value_scaling * self.battery_value_rate(self.minutes_now + end_record)
 
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best",

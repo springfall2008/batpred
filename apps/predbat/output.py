@@ -1809,9 +1809,10 @@ class Output:
         battery_level_midnight = self.soc_kwh_history.get(self.minutes_now, 0)
         battery_change_hour = battery_level_now - battery_level_hour
         battery_change_midnight = battery_level_now - battery_level_midnight
-        rate_min = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        rate_forward = max(rate_min, 1.0, rate_export_min)
+        # Shared with the planner's own metric so the reported battery value matches the plan it
+        # reports on. This previously omitted the rate_max ceiling that battery_value_rate applies,
+        # which over-valued the battery here relative to the plan on flat or near-flat tariffs.
+        rate_forward = self.battery_value_rate(self.minutes_now)
         value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
         value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
