@@ -245,7 +245,7 @@ class Execute:
                             status = "Freeze charging"
                             status_per_inverter[inverter.id] = status
                             status_extra += " target" if inverter.id == 0 else " /"  # Append multi-inverter target SoC's together
-                            status_extra += " {}%".format(inverter.soc_percent)
+                            status_extra += " {} {}%".format(status, inverter.soc_percent)
                             self.log("Inverter {} Freeze charging with SoC {}%".format(inverter.id, inverter.soc_percent))
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
@@ -291,7 +291,7 @@ class Execute:
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
                             status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%-{}%".format(inverter.soc_percent, inv_target_soc_percent)
+                            status_extra += " {} {}%-{}%".format(status, inverter.soc_percent, inv_target_soc_percent)
 
                         if not self.set_discharge_during_charge and resetPause:
                             # Do we discharge discharge during charge
@@ -428,7 +428,7 @@ class Execute:
                         status = "Exporting"
                         status_per_inverter[inverter.id] = status
                         status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                        status_extra += " {}%-{}%".format(inverter.soc_percent, int(target))
+                        status_extra += " {} {}%-{}%".format(status, inverter.soc_percent, int(target))
                         # Immediate export mode
                     else:
                         inverter.adjust_force_export(False)
@@ -449,7 +449,7 @@ class Execute:
                             status = "Freeze exporting"
                             status_per_inverter[inverter.id] = status
                             status_extra += " current SoC" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
+                            status_extra += " {} {}%".format(status, inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             isExporting = True
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
                             self.isExporting_Target = int(target)
@@ -458,7 +458,7 @@ class Execute:
                             status_per_inverter[inverter.id] = status
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
                             status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%-{}%".format(inverter.soc_percent, inverter.soc_percent)
+                            status_extra += " {} {}%-{}%".format(status, inverter.soc_percent, inverter.soc_percent)
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:

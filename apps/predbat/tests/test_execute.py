@@ -182,6 +182,7 @@ def run_execute_test(
     assert_pause_discharge=False,
     assert_pause_discharge_array=None,
     assert_status="Demand",
+    assert_status_extra=None,
     assert_charge_start_time_minutes=-1,
     assert_charge_end_time_minutes=-1,
     assert_charge_start_time_minutes_array=None,
@@ -316,6 +317,10 @@ def run_execute_test(
         my_predbat.calculate_plan(recompute=False)
 
     status, status_extra = my_predbat.execute_plan()
+
+    if assert_status_extra is not None and assert_status_extra != status_extra:
+        print("ERROR: status_extra should be {!r} got {!r}".format(assert_status_extra, status_extra))
+        failed = True
 
     for inverter in my_predbat.inverters:
         if assert_status != status:
@@ -688,6 +693,7 @@ def run_execute_tests(my_predbat):
         set_charge_window=True,
         set_export_window=True,
         assert_status="Charging",
+        assert_status_extra=" target Charging 90%-100.0% / Hold charging 100%-100.0%",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw=9.5,
@@ -1720,6 +1726,7 @@ def run_execute_tests(my_predbat):
         soc_kw=2,
         assert_pause_discharge_array=[False, True],
         assert_status="Charging",
+        assert_status_extra=" target Charging 0%-10% / Freeze charging 40%",
         assert_reserve=0,
         assert_soc_target_array=[10, 100],
         assert_immediate_soc_target_array=[10, 40],
