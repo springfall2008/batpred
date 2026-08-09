@@ -1190,10 +1190,17 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "debug_history_enable",
+        "friendly_name": "Debug history rolling capture enable",
+        "type": "switch",
+        "icon": "mdi:history",
+        "default": True,
+    },
+    {
         "name": "debug_history_count",
         "friendly_name": "Debug history snapshot count",
         "type": "input_number",
-        "min": 0,
+        "min": 1,
         "max": 50,
         "step": 1,
         "unit": "snapshots",

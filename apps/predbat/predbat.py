@@ -777,21 +777,25 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         Independent of switch.predbat_debug_enable - runs on a coarse interval so
         there is always some recent history to replay a bug report against, rather
         than only when the switch happened to already be on before the problem
-        occurred. debug_history_count <= 0 disables the routine capture entirely,
-        but debug_history_force_capture still works even then - an explicit "give me
-        one right now" request (e.g. from an automation that just noticed something
-        worth investigating) is a different intent to "keep a rolling background
-        history" and must not be silently pruned away by that setting.
+        occurred. switch.predbat_debug_history_enable disables the routine capture
+        entirely (default on), but debug_history_force_capture still works even
+        then - an explicit "give me one right now" request (e.g. from an automation
+        that just noticed something worth investigating) is a different intent to
+        "keep a rolling background history" and must not be silently skipped by
+        that switch. debug_history_count has a config-schema minimum of 1 (not 0)
+        precisely so it can't also mean "off" - the switch is the only off-switch,
+        avoiding two independent, potentially-conflicting ways to disable this.
         """
         count = int(self.get_arg("debug_history_count", 15))
         interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
+        enabled = self.get_arg("debug_history_enable", True)
         forced = self.get_arg("debug_history_force_capture", False)
         if forced:
             # Reset the switch immediately regardless of outcome below - it's a
             # momentary trigger, an automation should never have to remember to
             # turn it back off.
             self.expose_config("debug_history_force_capture", False)
-        if count <= 0 and not forced:
+        if not enabled and not forced:
             return
         if not forced:
             if self.debug_history_last_capture is not None and (self.now_utc - self.debug_history_last_capture) < timedelta(hours=interval_hours):
@@ -814,10 +818,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             # than that gets pruned even if max_count hasn't been reached yet, so a burst of
             # close-together captures (several force-captures, or a shortened interval) can't
             # leave something far older than the intended window lingering just because the
-            # count cap alone hasn't caught up to it. Skip it when count<=0 (forced-only mode,
-            # no routine window to speak of).
-            max_age = timedelta(hours=interval_hours * count) if count > 0 else None
-            run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, max(count, 1), max_age=max_age))
+            # count cap alone hasn't caught up to it. count's config-schema minimum is 1, but
+            # clamp defensively anyway in case a stale persisted value predates that minimum.
+            count = max(count, 1)
+            max_age = timedelta(hours=interval_hours * count)
+            run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, count, max_age=max_age))
         except Exception as e:
             self.log("Warning: Failed to capture debug history snapshot: {}".format(e))
         self.debug_history_last_capture = self.now_utc

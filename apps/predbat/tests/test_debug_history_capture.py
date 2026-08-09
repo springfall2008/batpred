@@ -54,10 +54,11 @@ def test_debug_history_capture(my_predbat):
     try:
         storage = _make_storage(my_predbat, tmpdir)
         my_predbat.components = _MockComponents(storage)
-        # debug_history_count/interval/force_capture are input_number/switch CONFIG_ITEMS -
+        # debug_history_enable/count/interval/force_capture are switch/input_number CONFIG_ITEMS -
         # get_arg() resolves those via config_index (see get_ha_config()), not self.args
         # directly, so they must be set the same way the running app itself would (and the
         # same way _capture_debug_history() resets the force-capture switch): expose_config().
+        my_predbat.expose_config("debug_history_enable", True)
         my_predbat.expose_config("debug_history_count", 15)
         my_predbat.expose_config("debug_history_interval", 3)
         my_predbat.expose_config("debug_history_force_capture", False)
@@ -88,25 +89,23 @@ def test_debug_history_capture(my_predbat):
             print("  FAILED: expected 2 snapshots after the interval elapsed, got {}".format(len(index)))
             failed += 1
 
-        print("Test 4: debug_history_count <= 0 disables routine capture entirely (zero storage calls)")
-        my_predbat.expose_config("debug_history_count", 0)
+        print("Test 4: debug_history_enable off disables routine capture entirely (zero storage calls)")
+        my_predbat.expose_config("debug_history_enable", False)
         my_predbat.now_utc = my_predbat.now_utc + timedelta(hours=4)
         my_predbat._capture_debug_history()
         index = run_async(list_snapshots(storage))
         if len(index) != 2:
-            print("  FAILED: count=0 should not add a snapshot, got {} entries".format(len(index)))
+            print("  FAILED: debug_history_enable off should not add a snapshot, got {} entries".format(len(index)))
             failed += 1
 
-        print("Test 5: debug_history_force_capture fires immediately even with count=0 and mid-interval, and resets the switch")
+        print("Test 5: debug_history_force_capture fires immediately even with debug_history_enable off and mid-interval, and resets the switch")
         my_predbat.expose_config("debug_history_force_capture", True)
         my_predbat._capture_debug_history()
         index = run_async(list_snapshots(storage))
-        # With count=0, max(count, 1) == 1 - a forced capture guarantees at least ONE
-        # snapshot survives (this one), but does not resurrect the ring the earlier
-        # count=0 setting had already stopped growing. The 2 snapshots from tests 1/3
-        # are correctly pruned away here, same as any other max_count=1 prune would.
-        if len(index) != 1:
-            print("  FAILED: forced capture with count=0 should leave exactly 1 snapshot (this one), got {} entries".format(len(index)))
+        # debug_history_count (15) never changed, only the enable switch did - a forced capture
+        # adds to the existing ring rather than truncating it, same as any other force capture.
+        if len(index) != 3:
+            print("  FAILED: forced capture with debug_history_enable off should add a 3rd snapshot, got {} entries".format(len(index)))
             failed += 1
         if my_predbat.get_arg("debug_history_force_capture", None) is not False:
             print("  FAILED: the force-capture switch should read back False after firing, got {}".format(my_predbat.get_arg("debug_history_force_capture", None)))
@@ -117,22 +116,20 @@ def test_debug_history_capture(my_predbat):
             print("  FAILED: a forced capture should update debug_history_last_capture too")
             failed += 1
 
-        print("Test 6b: a forced capture with a normal positive count adds to the ring rather than truncating it")
+        print("Test 6b: re-enabling debug_history_enable lets routine capture resume")
         # Advance by a full plan slot, not just any amount - the captured timestamp is floored to
         # the plan_interval_minutes grid (see _capture_debug_history()), so a smaller advance could
         # floor right back to test 5's slot and collide instead of producing a distinct id.
-        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=my_predbat.plan_interval_minutes)
-        my_predbat.expose_config("debug_history_count", 15)
-        my_predbat.expose_config("debug_history_force_capture", True)
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(hours=4) + timedelta(minutes=my_predbat.plan_interval_minutes)
+        my_predbat.expose_config("debug_history_enable", True)
         my_predbat._capture_debug_history()
         index = run_async(list_snapshots(storage))
-        if len(index) != 2:
-            print("  FAILED: forced capture with count=15 should add to the existing snapshot, got {} entries".format(len(index)))
+        if len(index) != 4:
+            print("  FAILED: routine capture should resume once debug_history_enable is back on, got {} entries".format(len(index)))
             failed += 1
 
         print("Test 7: no storage component available is handled without raising")
         my_predbat.components = _MockComponents(None)
-        my_predbat.expose_config("debug_history_count", 15)
         my_predbat.debug_history_last_capture = None  # force past the interval throttle so the storage-unavailable branch is actually exercised
         try:
             my_predbat._capture_debug_history()
@@ -163,6 +160,7 @@ def test_debug_history_capture_slot_alignment(my_predbat):
     try:
         storage = _make_storage(my_predbat, tmpdir)
         my_predbat.components = _MockComponents(storage)
+        my_predbat.expose_config("debug_history_enable", True)
         my_predbat.expose_config("debug_history_count", 15)
         my_predbat.expose_config("debug_history_interval", 3)
         my_predbat.expose_config("debug_history_force_capture", False)
