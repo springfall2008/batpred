@@ -160,7 +160,7 @@ This column will only be shown if *switch.predbat_carbon_enable* is set to True.
 The carbon amount in kg will be coloured according to the direction of travel over the slot; if the carbon value rises by 10kg or more it will be orange with an upward arrow;
 if falling by 10kg or more it will be green with a downwards arrow, and in the middle, white with a horizontal arrow.
 
-- **Debug** - (Only shown on the plan's [History view](web-interface.md#plan-view)) A download link to the [debug history snapshot](customisation.md#debug-history) captured nearest to that time slot, if one was retained, along with how many snapshots ago it was taken. Empty if no snapshot was captured close enough to that slot's time.
+- **Debug** - (Only shown on the plan's [History view](web-interface.md#plan-view)) A download link to the [debug history snapshot](customisation.md#debug-history) captured for that exact time slot, if one was retained, labelled with the time it was taken. Empty if no snapshot was captured for that slot.
 
 ## Debug mode for Predbat Plan
 
