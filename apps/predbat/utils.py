@@ -1428,6 +1428,24 @@ def clone_windows(windows):
     return [w.copy() for w in windows]
 
 
+def calc_percent_limit_floor(charge_limit, soc_max):
+    """
+    Calculate a charge limit in percent, always rounding down
+
+    Used where a limit represents a level to hold rather than a level to reach. calc_percent_limit
+    rounds to nearest, so a hold computed from a 61.6% SoC becomes 62% - one percent above where the
+    battery actually is, which on an inverter that treats its target as something to charge towards
+    turns a hold into a real grid import. Rounding down can only ever ask for slightly less.
+    """
+    if isinstance(charge_limit, list):
+        if soc_max <= 0:
+            return [0 for i in range(len(charge_limit))]
+        return [min(int(float(charge_limit[i]) / soc_max * 100.0), 100) for i in range(len(charge_limit))]
+    if soc_max <= 0:
+        return 0
+    return min(int(float(charge_limit) / soc_max * 100.0), 100)
+
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows

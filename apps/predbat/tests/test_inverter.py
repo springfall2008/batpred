@@ -274,7 +274,7 @@ def test_adjust_charge_window(
     return failed
 
 
-def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, expect_reserve=None, reserve_min=4, reserve_max=100, reserve_percent=None):
+def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, expect_reserve=None, reserve_min=4, reserve_max=100, reserve_percent=None, charge_target=False, soc_percent=None):
     """
     Test
        inv.adjust_reserve(self, reserve):
@@ -290,6 +290,14 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
     inv.reserve_percent = reserve_percent
     inv.reserve_min = reserve_min
     inv.reserve_max = reserve_max
+
+    # charge_target/soc_percent exercise inverters that charge towards their reserve (e.g. Powerwall),
+    # where a reserve above the current SoC is a grid-import request and must be clamped away
+    saved_charge_target = inv.inv_reserve_is_charge_target
+    saved_soc_percent = inv.soc_percent
+    inv.inv_reserve_is_charge_target = charge_target
+    if soc_percent is not None:
+        inv.soc_percent = soc_percent
 
     print("Test: {}".format(test_name))
 
@@ -319,6 +327,9 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
         failed = True
 
+    inv.inv_reserve_is_charge_target = saved_charge_target
+    inv.soc_percent = saved_soc_percent
+
     return failed
 
 
@@ -345,6 +356,28 @@ def test_adjust_reserve_device_bounds(test_name, ha, inv, prev_reserve, reserve,
         failed = True
 
     return failed
+
+
+def test_hold_reserve_percent(test_name, inv, soc_percent, charge_target, expect, target_percent=None):
+    """
+    Test
+       inv.hold_reserve_percent(self, target_percent=None):
+    """
+    print("Test: {}".format(test_name))
+    saved_charge_target = inv.inv_reserve_is_charge_target
+    saved_soc_percent = inv.soc_percent
+    inv.inv_reserve_is_charge_target = charge_target
+    inv.soc_percent = soc_percent
+
+    got = inv.hold_reserve_percent(target_percent)
+
+    inv.inv_reserve_is_charge_target = saved_charge_target
+    inv.soc_percent = saved_soc_percent
+
+    if got != expect:
+        print("ERROR: hold_reserve_percent should be {} got {}".format(expect, got))
+        return True
+    return False
 
 
 def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_end, prev_force_export, prev_discharge_target, new_start, new_end, new_force_export, has_inv_time_button_press=False, expect_inv_time_button_press=False):
@@ -3263,6 +3296,21 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_reserve("adjust_reserve3", ha, inv, dummy_rest, 20, 100, reserve_max=100)
     failed |= test_adjust_reserve("adjust_reserve4", ha, inv, dummy_rest, 20, 100, 98, reserve_min=4, reserve_max=98)
     failed |= test_adjust_reserve("adjust_reserve5", ha, inv, dummy_rest, 50, 0, 0, reserve_min=0, reserve_max=100)
+
+    # Inverters that charge towards their reserve must never be asked to hold above the actual SoC,
+    # otherwise the hold is a grid-import command (Powerwall). Clamp down to SoC, but never below the floor.
+    failed |= test_adjust_reserve("adjust_reserve_charge_target_clamps", ha, inv, dummy_rest, 20, 62, 61, reserve_min=4, reserve_max=100, charge_target=True, soc_percent=61)
+    failed |= test_adjust_reserve("adjust_reserve_charge_target_at_soc", ha, inv, dummy_rest, 20, 61, 61, reserve_min=4, reserve_max=100, charge_target=True, soc_percent=61)
+    failed |= test_adjust_reserve("adjust_reserve_charge_target_below_soc", ha, inv, dummy_rest, 20, 30, 30, reserve_min=4, reserve_max=100, charge_target=True, soc_percent=61)
+    failed |= test_adjust_reserve("adjust_reserve_charge_target_floor_wins", ha, inv, dummy_rest, 20, 50, 4, reserve_min=4, reserve_max=100, charge_target=True, soc_percent=2)
+    failed |= test_adjust_reserve("adjust_reserve_passive_unclamped", ha, inv, dummy_rest, 20, 62, 62, reserve_min=4, reserve_max=100, charge_target=False, soc_percent=61)
+
+    failed |= test_hold_reserve_percent("hold_reserve_passive", inv, 61, False, 62)
+    failed |= test_hold_reserve_percent("hold_reserve_charge_target", inv, 61, True, 61)
+    failed |= test_hold_reserve_percent("hold_reserve_passive_at_full", inv, 100, False, 100)
+    failed |= test_hold_reserve_percent("hold_reserve_charge_target_at_full", inv, 100, True, 100)
+    failed |= test_hold_reserve_percent("hold_reserve_explicit_target", inv, 61, False, 51, target_percent=50)
+    failed |= test_hold_reserve_percent("hold_reserve_explicit_target_charge", inv, 61, True, 50, target_percent=50)
     if failed:
         return failed
 

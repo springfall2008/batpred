@@ -1228,6 +1228,64 @@ def test_teslemetry_evaluate_schedule_charge_precedence():
     assert api.evaluate_schedule(2 * 60, 50)["mode"] == "backup"
 
 
+def test_teslemetry_idle_reserve_clamped_to_soc():
+    """An idle reserve above the SOC is a charge-towards-reserve request, so it is clamped down.
+
+    The committed schedule is persisted across restarts, so a reserve that was valid when written can
+    be replayed after the battery has drained - adjust_reserve's clamp does not cover that path.
+    """
+    api = MockTeslemetryAPI()
+    api.schedule = {
+        "reserve": 80,
+        "charge": {"start_time": "01:00:00", "end_time": "05:00:00", "soc": 90, "enable": 1},
+        "discharge": {"start_time": "17:00:00", "end_time": "19:00:00", "soc": 30, "enable": 1},
+    }
+    # Idle with a stale reserve well above the real SOC
+    assert api.evaluate_schedule(12 * 60, 40) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 40, "mode": "self_consumption"}
+    assert any("clamping idle reserve" in message for message in api.log_messages)
+    # Reserve at or below SOC is left alone
+    assert api.evaluate_schedule(12 * 60, 80)["reserve"] == 80
+    assert api.evaluate_schedule(12 * 60, 95)["reserve"] == 80
+    # A real charge window still charges towards its target - the clamp must not break charging
+    assert api.evaluate_schedule(2 * 60, 40) == {"export_rule": "pv_only", "grid_charging": True, "reserve": 90, "mode": "backup"}
+
+
+def test_teslemetry_current_soc_prefers_base():
+    """current_soc uses Predbat's own inverter reading when available, else the cloud poll."""
+
+    class FakeBase:
+        """Stand-in for the PredBat base exposing just the SOC fields current_soc reads."""
+
+        def __init__(self, soc_max, soc_percent):
+            """Record the SOC fields."""
+            self.soc_max = soc_max
+            self.soc_percent = soc_percent
+
+    api = MockTeslemetryAPI()
+    api.last_soc = 55
+
+    # No base at all (component started before the first fetch): fall back to the cloud poll
+    assert api.current_soc() == 55
+
+    # Base present but no fetch cycle has run yet, so soc_max is still zero
+    api.base = FakeBase(0, 0)
+    assert api.current_soc() == 55
+
+    # Base populated: prefer it, because that is the SOC the plan was built from
+    api.base = FakeBase(27.0, 61)
+    assert api.current_soc() == 61
+
+    # A zero SOC from the base is a real reading, not a missing one
+    api.base = FakeBase(27.0, 0)
+    assert api.current_soc() == 0
+
+    # Junk from the base is ignored rather than propagated into a device command
+    api.base = FakeBase(27.0, None)
+    assert api.current_soc() == 55
+    api.base = FakeBase(27.0, True)
+    assert api.current_soc() == 55
+
+
 def test_teslemetry_schedule_entities_published():
     """Schedule entities are published with option lists, ranges and safe defaults."""
     api = MockTeslemetryAPI()
@@ -2317,6 +2375,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_in_window()
     test_teslemetry_evaluate_schedule_states()
     test_teslemetry_evaluate_schedule_charge_precedence()
+    test_teslemetry_idle_reserve_clamped_to_soc()
+    test_teslemetry_current_soc_prefers_base()
     test_teslemetry_schedule_entities_published()
     test_teslemetry_schedule_edits_stage_without_device_writes()
     test_teslemetry_schedule_write_button_commits()

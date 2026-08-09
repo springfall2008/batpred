@@ -247,6 +247,10 @@ class Inverter:
         self.inv_has_target_soc = INVERTER_DEF[self.inverter_type]["has_target_soc"]
         self.inv_has_reserve_soc = INVERTER_DEF[self.inverter_type]["has_reserve_soc"]
         self.inv_has_timed_pause = INVERTER_DEF[self.inverter_type]["has_timed_pause"]
+        # Most inverters defend the reserve passively, so Predbat holds the battery by setting a reserve
+        # just above the current SoC. Some (notably the Powerwall) treat the reserve as a level to charge
+        # towards, which turns that hold into a grid import - see hold_reserve_percent and adjust_reserve.
+        self.inv_reserve_is_charge_target = INVERTER_DEF[self.inverter_type].get("reserve_is_charge_target", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
@@ -1802,6 +1806,26 @@ class Inverter:
                     self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
                 self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
 
+    def hold_reserve_percent(self, target_percent=None):
+        """
+        Work out the reserve % to write when holding the battery at a level rather than charging it
+
+        Holding normally means asking for one percent above the level being held, which stops the
+        battery discharging past it. On an inverter where the reserve is a charge target that extra
+        percent is a request to import, so hold exactly at the level instead.
+
+        Parameters:
+        - target_percent: level to hold at, defaulting to this inverter's current SoC %
+
+        Returns:
+        - int: reserve percentage to write
+        """
+        if target_percent is None:
+            target_percent = self.soc_percent
+        if self.inv_reserve_is_charge_target:
+            return int(min(target_percent, 100))
+        return int(min(target_percent + 1, 100))
+
     def adjust_reserve(self, reserve):
         """
         Adjust the output reserve target %
@@ -1853,6 +1877,17 @@ class Inverter:
                         reserve = min(reserve, int(float(device_max)))
                     except (ValueError, TypeError):
                         pass
+        # Runs after the device-bound clamp above deliberately: that one can raise the reserve to the
+        # register's floor, and this one must have the last word - a reserve above SoC on such an
+        # inverter is a grid charge, which is worse than a write the device narrows itself.
+        # Where the reserve is a charge target rather than a passive floor, a reserve above the current
+        # SoC is a request to import from the grid. Refuse to write one whatever the caller intended -
+        # this is the backstop that makes an accidental grid charge impossible rather than merely unlikely.
+        if self.inv_reserve_is_charge_target and reserve > self.soc_percent:
+            clamped = max(int(self.soc_percent), self.reserve_percent)
+            if clamped != reserve:
+                self.base.log("Inverter {} Clamping reserve {}% to {}% - this inverter charges towards its reserve and SoC is {}%".format(self.id, dp0(reserve), dp0(clamped), dp0(self.soc_percent)))
+            reserve = clamped
 
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))

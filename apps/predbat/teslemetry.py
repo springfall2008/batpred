@@ -463,7 +463,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # windows into device commands each cycle. Failures are logged and self-retry via the
             # dedupe cache; they do not fail the run() data path.
             await self.sync_tariff()
-            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.current_soc()))
         return success
 
     def register_control_entities(self):
@@ -521,6 +521,23 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return start <= minutes_now < end
         return minutes_now >= start or minutes_now < end
 
+    def current_soc(self):
+        """Return the SOC to drive device commands from, preferring Predbat's own inverter reading.
+
+        self.last_soc comes from this component's Fleet live_status poll, which runs on its own cadence
+        (LIVE_POLL_SECONDS) and is a different number from the one the plan was built on: Predbat reads
+        soc_percent from the configured sensor, which on a site with local Powerwall monitoring is not
+        the cloud at all. Commanding the device from a different SOC than the planner used is what makes
+        an off-by-one hold turn into a grid import, so prefer the base's value and fall back to the poll
+        only before the first fetch cycle has populated it (soc_max is still zero at that point).
+        """
+        base = getattr(self, "base", None)
+        if base is not None and getattr(base, "soc_max", 0):
+            soc_percent = getattr(base, "soc_percent", None)
+            if isinstance(soc_percent, (int, float)) and not isinstance(soc_percent, bool):
+                return soc_percent
+        return self.last_soc
+
     def evaluate_schedule(self, minutes_now, soc):
         """Map the committed schedule + wall clock + live SOC to the desired device tuple.
 
@@ -542,7 +559,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             if soc > target:
                 return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
-        return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+        # Idle: the reserve is a level to hold, so it must never sit above the actual SOC - the Powerwall
+        # charges towards its backup reserve. adjust_reserve already refuses to write one, but the schedule
+        # is persisted across restarts (see load_schedule), so a reserve that was valid when written can be
+        # replayed after the battery has drained. Clamp on the way out rather than trusting the stored value.
+        idle_reserve = int(reserve)
+        if soc is not None and idle_reserve > soc:
+            self.log("Info: Teslemetry clamping idle reserve {}% to SOC {}% to avoid charging towards the reserve".format(idle_reserve, int(soc)))
+            idle_reserve = int(soc)
+        return {"export_rule": "pv_only", "grid_charging": True, "reserve": idle_reserve, "mode": "self_consumption"}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
@@ -587,7 +612,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.publish_schedule_entities()
         if self.last_soc is not None and not self._is_read_only():
             await self.sync_tariff()
-            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+            await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.current_soc()))
 
     async def save_schedule(self):
         """Persist the committed schedule via the Storage component (no-op when storage is unavailable)."""
