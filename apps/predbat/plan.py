@@ -1583,8 +1583,20 @@ class Plan:
         This is the single definition used by the planner's metric, the dashboard's value_per_kwh
         attributes and the savings report, so all three agree on what a stored kWh is worth.
         """
-        rate_min = self.rate_min_forward.get(minute, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        rate_min_raw = self.rate_min_forward.get(minute, self.rate_min)
+        rate_min = rate_min_raw / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_min = max(min(rate_min, self.rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
+
+        # Replacement cost assumes the energy can always be redeployed. That holds while surplus can
+        # be sold, but if export pays less than it cost to import then anything the house cannot use
+        # is a partial loss, so the stored energy is worth less than replacement. Scale the value by
+        # how much of the cheapest import price export would actually recover: full value when export
+        # matches or beats it, down to metric_battery_value_export_scaling when export is worthless.
+        # Setting that to 1.0 disables this entirely.
+        if rate_min_raw > 0 and self.metric_battery_value_export_scaling < 1.0:
+            recovery = min(max(self.rate_export_max / rate_min_raw, 0.0), 1.0)
+            rate_min *= self.metric_battery_value_export_scaling + (1.0 - self.metric_battery_value_export_scaling) * recovery
+
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
         return max(rate_min, 1.0, rate_export_min)
 

@@ -2377,6 +2377,7 @@ class Fetch:
         self.inverter_soc_reset = self.get_arg("inverter_soc_reset")
 
         self.metric_battery_value_scaling = self.get_arg("metric_battery_value_scaling")
+        self.metric_battery_value_export_scaling = self.get_arg("metric_battery_value_export_scaling")
         self.notify_devices = self.get_arg("notify_devices", ["notify"])
         self.pv_scaling = self.get_arg("pv_scaling")
         self.pv_metric10_weight = self.get_arg("pv_metric10_weight")

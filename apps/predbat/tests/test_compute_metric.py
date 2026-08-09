@@ -30,6 +30,8 @@ def compute_metric_test(
     assert_metric=0,
     battery_value_scaling=1.0,
     rate_export_min=1.0,
+    rate_export_max=0.0,
+    metric_battery_value_export_scaling=1.0,
     iboost_value_scaling=1.0,
     inverter_loss=1.0,
     battery_loss=1.0,
@@ -47,6 +49,8 @@ def compute_metric_test(
     """
     my_predbat.metric_battery_value_scaling = battery_value_scaling
     my_predbat.rate_export_min = rate_export_min
+    my_predbat.rate_export_max = rate_export_max
+    my_predbat.metric_battery_value_export_scaling = metric_battery_value_export_scaling
     my_predbat.iboost_value_scaling = iboost_value_scaling
     my_predbat.inverter_loss = inverter_loss
     my_predbat.battery_loss = battery_loss
@@ -98,6 +102,8 @@ def save_state(my_predbat):
     save_items = [
         "metric_battery_value_scaling",
         "rate_export_min",
+        "rate_export_max",
+        "metric_battery_value_export_scaling",
         "iboost_value_scaling",
         "inverter_loss",
         "battery_loss",
@@ -130,13 +136,17 @@ def battery_value_rate_test(my_predbat):
     re-splitting the formula would reintroduce that divergence, and only the ceiling case catches it.
     """
     failed = False
-    saved = {name: getattr(my_predbat, name) for name in ("rate_min_forward", "rate_min", "rate_max", "inverter_loss", "battery_loss", "battery_loss_discharge", "rate_export_min", "metric_battery_cycle")}
+    saved = {
+        name: getattr(my_predbat, name) for name in ("rate_min_forward", "rate_min", "rate_max", "inverter_loss", "battery_loss", "battery_loss_discharge", "rate_export_min", "rate_export_max", "metric_battery_cycle", "metric_battery_value_export_scaling")
+    }
     try:
         my_predbat.inverter_loss = 0.96
         my_predbat.battery_loss = 0.97
         my_predbat.battery_loss_discharge = 0.97
         my_predbat.metric_battery_cycle = 0.0
         my_predbat.rate_export_min = 0.0
+        my_predbat.rate_export_max = 6.9
+        my_predbat.metric_battery_value_export_scaling = 1.0
         my_predbat.rate_min = 6.9
 
         # Normal spread: the gross-up applies and the ceiling does not bind
@@ -170,6 +180,57 @@ def battery_value_rate_test(my_predbat):
     return failed
 
 
+def battery_value_export_scaling_test(my_predbat):
+    """Pin the export-risk haircut: full value when export can recover the import cost, discounted when it cannot.
+
+    The two cases that matter are the extremes. A system that cannot sell surplus at all must take the
+    full haircut, and a system whose export matches the cheapest import must take none - otherwise the
+    haircut fires on ordinary tariffs, where export is always somewhat below import, and restructures
+    plans that have no export problem at all.
+    """
+    failed = False
+    names = ("rate_min_forward", "rate_min", "rate_max", "inverter_loss", "battery_loss", "battery_loss_discharge", "rate_export_min", "rate_export_max", "metric_battery_cycle", "metric_battery_value_export_scaling")
+    saved = {name: getattr(my_predbat, name) for name in names}
+    try:
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_loss = 0.97
+        my_predbat.battery_loss_discharge = 0.97
+        my_predbat.metric_battery_cycle = 0.0
+        my_predbat.rate_export_min = 0.0
+        my_predbat.rate_min = 6.9
+        my_predbat.rate_max = 28.85
+        my_predbat.rate_min_forward = {10: 6.9}
+        my_predbat.metric_battery_value_export_scaling = 0.8
+        full = 6.9 / 0.96 / 0.97
+
+        for export_max, recovery, label in ((0.0, 0.0, "no export at all"), (6.9, 1.0, "export matches the cheapest import"), (3.45, 0.5, "export recovers half")):
+            my_predbat.rate_export_max = export_max
+            expected = full * (0.8 + 0.2 * recovery)
+            got = my_predbat.battery_value_rate(10)
+            if abs(got - expected) > 1e-6:
+                print("ERROR: battery_value_rate is {} with {} (export_max {}), expected {}".format(got, label, export_max, expected))
+                failed = True
+
+        # Export above the cheapest import must not push the value ABOVE replacement cost
+        my_predbat.rate_export_max = 50.0
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - full) > 1e-6:
+            print("ERROR: battery_value_rate is {} when export beats import, expected it capped at replacement cost {}".format(got, full))
+            failed = True
+
+        # Setting the option to 1.0 must disable the haircut entirely, even with zero export
+        my_predbat.rate_export_max = 0.0
+        my_predbat.metric_battery_value_export_scaling = 1.0
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - full) > 1e-6:
+            print("ERROR: battery_value_rate is {} with the export scaling disabled at 1.0, expected the undiscounted {}".format(got, full))
+            failed = True
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
+
+
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
@@ -177,6 +238,7 @@ def run_compute_metric_tests(my_predbat):
     failed = False
     print("**** Running compute metric tests ****")
     failed |= battery_value_rate_test(my_predbat)
+    failed |= battery_value_export_scaling_test(my_predbat)
     state_dict = save_state(my_predbat)
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)

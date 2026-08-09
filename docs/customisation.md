@@ -136,6 +136,17 @@ The battery value is accounted for in the optimisations at the lowest future imp
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,
 greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
 
+**input_number.predbat_metric_battery_value_export_scaling** (_expert mode_) Discounts that end-of-plan battery value when you would not be able to sell
+the surplus for what it cost to buy. Valuing the battery at the lowest future import rate assumes the energy can always be redeployed, which holds while
+surplus can be exported at a good price - but if your export rate is below your cheapest import rate, anything the house cannot use is only partly
+recovered, so the stored energy is worth less than it cost.<BR>
+Predbat scales the value by how much of the cheapest import price your export would actually recover: full value when your export rate matches or beats it,
+falling to this setting when export is worth nothing. The default is 0.8, so a system that cannot export at all values leftover battery at 80% of the
+replacement price, while a system exporting at 80% of its cheapest import rate takes only a 4% reduction.<BR>
+Set it to 1.0 to switch this off entirely and value leftover battery at full replacement cost regardless of your export rate.
+The effect is to make Predbat less willing to buy energy purely to carry it forward, which matters most on tariffs with no export payment at all,
+where energy bought cheaply and then spilled to the grid is a complete loss.
+
 **input_number.metric_self_sufficiency** (_expert mode_) A price in pence per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
 Effectively saying to Predbat to account for imports at a higher price than reality in the calculation and thus selecting plans with less import.
 If you want to be as self-sufficient as possible then set this to the difference between your lowest import rate and the highest export rate to take exports that require additional import appear unprofitable.

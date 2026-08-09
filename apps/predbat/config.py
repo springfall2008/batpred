@@ -462,6 +462,18 @@ CONFIG_ITEMS = [
         "default": 1.0,
     },
     {
+        "name": "metric_battery_value_export_scaling",
+        "friendly_name": "Metric Battery Value Scaling when export is worthless",
+        "type": "input_number",
+        "min": 0,
+        "max": 1.0,
+        "step": 0.01,
+        "unit": "*",
+        "icon": "mdi:multiplication",
+        "enable": "expert_mode",
+        "default": 0.8,
+    },
+    {
         "name": "metric_future_rate_offset_import",
         "friendly_name": "Metric Future Rate Offset Import",
         "type": "input_number",
