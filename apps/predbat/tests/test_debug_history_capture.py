@@ -131,10 +131,64 @@ def test_debug_history_capture(my_predbat):
         print("Test 7: no storage component available is handled without raising")
         my_predbat.components = _MockComponents(None)
         my_predbat.debug_history_last_capture = None  # force past the interval throttle so the storage-unavailable branch is actually exercised
+        my_predbat.debug_history_storage_warned = None
         try:
             my_predbat._capture_debug_history()
         except Exception as e:
             print("  FAILED: _capture_debug_history() raised with no storage component: {}".format(e))
+            failed += 1
+
+        print("Test 8: the storage-unavailable warning is throttled, not re-logged every cycle (#4438 review item 2)")
+        if my_predbat.debug_history_storage_warned != my_predbat.now_utc:
+            print("  FAILED: expected debug_history_storage_warned to be set on the first no-storage call")
+            failed += 1
+        first_warned = my_predbat.debug_history_storage_warned
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=5)
+        my_predbat._capture_debug_history()
+        if my_predbat.debug_history_storage_warned != first_warned:
+            print("  FAILED: expected debug_history_storage_warned to stay unchanged well within the interval, got a new value")
+            failed += 1
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(hours=4)
+        my_predbat._capture_debug_history()
+        if my_predbat.debug_history_storage_warned != my_predbat.now_utc:
+            print("  FAILED: expected debug_history_storage_warned to advance once the interval has elapsed")
+            failed += 1
+
+        print("Test 9: a failed capture does not advance debug_history_last_capture (#4438 review item 1)")
+        storage = _make_storage(my_predbat, tmpdir)
+        my_predbat.components = _MockComponents(storage)
+        my_predbat.expose_config("debug_history_enable", True)
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=5)
+        my_predbat.debug_history_last_capture = None
+        last_capture_before = my_predbat.debug_history_last_capture
+        original_create_debug_yaml = my_predbat.create_debug_yaml
+
+        def _raise(*args, **kwargs):
+            raise ValueError("simulated capture failure")
+
+        my_predbat.create_debug_yaml = _raise
+        try:
+            my_predbat._capture_debug_history()
+        finally:
+            my_predbat.create_debug_yaml = original_create_debug_yaml
+        if my_predbat.debug_history_last_capture != last_capture_before:
+            print("  FAILED: expected debug_history_last_capture to stay unchanged after a failed capture, got {}".format(my_predbat.debug_history_last_capture))
+            failed += 1
+
+        print("Test 10: a failed forced capture leaves the switch on and retries next cycle (#4438 review item 3)")
+        my_predbat.expose_config("debug_history_force_capture", True)
+        my_predbat.create_debug_yaml = _raise
+        try:
+            my_predbat._capture_debug_history()
+        finally:
+            my_predbat.create_debug_yaml = original_create_debug_yaml
+        if my_predbat.get_arg("debug_history_force_capture", None) is not True:
+            print("  FAILED: expected the force-capture switch to stay on after a failed attempt, got {}".format(my_predbat.get_arg("debug_history_force_capture", None)))
+            failed += 1
+        # Now let it genuinely succeed - the still-on switch should retry and this time reset.
+        my_predbat._capture_debug_history()
+        if my_predbat.get_arg("debug_history_force_capture", None) is not False:
+            print("  FAILED: expected the force-capture switch to reset once a retry actually succeeds")
             failed += 1
 
     finally:

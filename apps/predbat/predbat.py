@@ -427,6 +427,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.debug_enable = False
         self.debug_enable_started = None
         self.debug_history_last_capture = None
+        self.debug_history_storage_warned = None
         self.import_today = {}
         self.import_today_now = 0
         self.export_today = {}
@@ -785,16 +786,31 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         that switch. debug_history_count has a config-schema minimum of 1 (not 0)
         precisely so it can't also mean "off" - the switch is the only off-switch,
         avoiding two independent, potentially-conflicting ways to disable this.
+
+        debug_history_last_capture and the force-capture switch are both only
+        updated on a genuine successful capture, per @springfall2008's #4438 review
+        (items 1-3): previously both reset unconditionally, so a failed attempt
+        (an exception, or storage simply being unavailable) was silently treated
+        as if it had succeeded - deferring the next *routine* retry a full
+        debug_history_interval for no reason, and (for a forced request) resetting
+        the switch before the snapshot the docs promise it waits for was actually
+        taken. A failed forced capture now leaves the switch on, so it retries
+        every cycle until it succeeds or the switch is turned off - a routine
+        capture retries at its normal interval either way, since a failure simply
+        leaves last_capture at its previous (possibly-None) value rather than
+        artificially advancing it.
+
+        The "storage unavailable" warning is throttled separately
+        (debug_history_storage_warned), on the same interval, so a persistent
+        outage logs once per interval instead of every ~5-minute cycle - this is
+        deliberately independent of the capture throttle above, so a later
+        genuine capture attempt is never skipped just because the warning was
+        recently logged.
         """
         count = int(self.get_arg("debug_history_count", 15))
         interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
         enabled = self.get_arg("debug_history_enable", True)
         forced = self.get_arg("debug_history_force_capture", False)
-        if forced:
-            # Reset the switch immediately regardless of outcome below - it's a
-            # momentary trigger, an automation should never have to remember to
-            # turn it back off.
-            self.expose_config("debug_history_force_capture", False)
         if not enabled and not forced:
             return
         if not forced:
@@ -802,7 +818,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 return
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
-            self.log("Warning: Storage component unavailable, cannot capture debug history")
+            if self.debug_history_storage_warned is None or (self.now_utc - self.debug_history_storage_warned) >= timedelta(hours=interval_hours):
+                self.log("Warning: Storage component unavailable, cannot capture debug history")
+                self.debug_history_storage_warned = self.now_utc
             return
         try:
             yaml_text = self.create_debug_yaml(write_file=False)
@@ -825,7 +843,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, count, max_age=max_age))
         except Exception as e:
             self.log("Warning: Failed to capture debug history snapshot: {}".format(e))
+            return
         self.debug_history_last_capture = self.now_utc
+        if forced:
+            # Only reset once the snapshot has genuinely been taken, matching docs/customisation.md -
+            # an automation should never have to remember to turn it back off, but a failed attempt
+            # should retry rather than being silently swallowed by an early reset.
+            self.expose_config("debug_history_force_capture", False)
 
     def record_final_run_status(self, status, status_extra):
         """
