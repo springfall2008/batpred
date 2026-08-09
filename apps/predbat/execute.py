@@ -26,6 +26,46 @@ import time
 Execute Predbat plan
 """
 
+# Per-inverter core charge/export states, used to resolve one headline status across a multi-inverter
+# fleet instead of letting whichever inverter is processed last silently win. Precedence lists are
+# ordered most-active-first so the most informative sub-state is shown when inverters within the same
+# side disagree (e.g. one still actively Charging while another has already reached Hold charging).
+CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
+EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
+EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
+
+
+def resolve_multi_inverter_status(status_per_inverter, current_status):
+    """Resolve one headline status across a multi-inverter fleet.
+
+    ``status_per_inverter`` holds each inverter's own final core charge/export state, keyed by
+    inverter id, as recorded during execute_plan()'s per-inverter loop - a plain dict overwrite per
+    inverter, so it correctly reflects each inverter's own last-set state even if that inverter's own
+    processing passed through more than one core-state assignment.
+
+    If inverters disagree across the charge/export divide (one genuinely charging while another
+    discharges at the same time) that's real cross-charging, not noise - surfaced explicitly rather
+    than silently showing whichever inverter happened to be processed last. If they only disagree on
+    sub-state within the same side (e.g. one still actively Charging, another already Hold charging),
+    the most active one is shown - it's the most informative and matches what the fleet is actually
+    doing overall.
+
+    Falls through to ``current_status`` unchanged when no inverter reached a core charge/export state
+    at all (pure Demand, Read-Only, Calibration, or a Hold-for-car/iBoost annotation with nothing else
+    going on) - those cases are already correct and untouched by this resolution.
+    """
+    states_present = set(status_per_inverter.values())
+    charge_states_present = states_present & CHARGE_SIDE_STATES
+    export_states_present = states_present & EXPORT_SIDE_STATES
+    if charge_states_present and export_states_present:
+        return "Cross-charging"
+    if charge_states_present:
+        return next(candidate for candidate in CHARGE_STATE_PRECEDENCE if candidate in charge_states_present)
+    if export_states_present:
+        return next(candidate for candidate in EXPORT_STATE_PRECEDENCE if candidate in export_states_present)
+    return current_status
+
 
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
@@ -40,6 +80,11 @@ class Execute:
         status_hold_car = ""  # car hold status text
         status_hold_iboost = ""  # iBoost hold status text
         status_freeze_export = ""  # freeze export during demand status text
+        # Each inverter's own final core charge/export state, keyed by inverter id - used after the
+        # loop to detect genuine cross-charging (one inverter charging while another discharges at
+        # the same time) rather than silently showing whichever inverter's status happened to be
+        # set last, which hides that the fleet is fighting itself.
+        status_per_inverter = {}
 
         in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
         in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
@@ -198,6 +243,7 @@ class Execute:
                                 resetDischarge = False
 
                             status = "Freeze charging"
+                            status_per_inverter[inverter.id] = status
                             status_extra += " target" if inverter.id == 0 else " /"  # Append multi-inverter target SoC's together
                             status_extra += " {}%".format(inverter.soc_percent)
                             self.log("Inverter {} Freeze charging with SoC {}%".format(inverter.id, inverter.soc_percent))
@@ -206,6 +252,7 @@ class Execute:
                             # and the current charge level is above the target for all inverters
                             if self.set_soc_enable and inverter.soc_percent >= inv_target_soc_percent:
                                 status = "Hold charging"
+                                status_per_inverter[inverter.id] = status
                                 self.log(
                                     "Inverter {} Hold charging as SoC {}% is above target SoC {}% (global soc target {}%) set_discharge_during_charge {}".format(
                                         inverter.id, inverter.soc_percent, dp0(inv_target_soc_percent), dp0(target_soc), self.set_discharge_during_charge
@@ -240,6 +287,7 @@ class Execute:
                                     inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                             else:
                                 status = "Charging"
+                                status_per_inverter[inverter.id] = status
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
                             status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
@@ -378,6 +426,7 @@ class Execute:
                         self.isExporting_Target = int(target)
 
                         status = "Exporting"
+                        status_per_inverter[inverter.id] = status
                         status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
                         status_extra += " {}%-{}%".format(inverter.soc_percent, int(target))
                         # Immediate export mode
@@ -398,6 +447,7 @@ class Execute:
 
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
+                            status_per_inverter[inverter.id] = status
                             status_extra += " current SoC" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
                             status_extra += " {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
                             isExporting = True
@@ -405,6 +455,7 @@ class Execute:
                             self.isExporting_Target = int(target)
                         else:
                             status = "Hold exporting"
+                            status_per_inverter[inverter.id] = status
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
                             status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
                             status_extra += " {}%-{}%".format(inverter.soc_percent, inverter.soc_percent)
@@ -627,6 +678,10 @@ class Execute:
                 metrics().inverter_register_writes_total.inc(inverter.count_register_writes)
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
+
+        # Resolve the headline status across all inverters rather than leaving whichever inverter was
+        # processed last to silently win.
+        status = resolve_multi_inverter_status(status_per_inverter, status)
 
         # Set the charge/discharge status information
         self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))

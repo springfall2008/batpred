@@ -675,7 +675,10 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
-    # Here we are already above the target SOC, we can discharge as a hold
+    # Here inverter 0 is below target (still charging) and inverter 1 is already above target
+    # (holding). The headline status shows "Charging" - the most active state present across the
+    # fleet (#4446) - rather than whichever inverter happened to be processed last, since the fleet
+    # overall genuinely is still charging until inverter 0 catches up.
     failed |= run_execute_test(
         my_predbat,
         "charge_imbalance2",
@@ -684,7 +687,7 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable=True,
         set_charge_window=True,
         set_export_window=True,
-        assert_status="Hold charging",
+        assert_status="Charging",
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
         soc_kw=9.5,
@@ -1704,6 +1707,8 @@ def run_execute_tests(my_predbat):
 
     # Charge freeze, one inverter is empty and the other at 40%
     # Inverter 0 will charge to 10% while inverter 1 will freeze at current level of 40% (as it is above the reserve of 1kWh)
+    # Headline status shows "Charging" - the most active state present (#4446) - since inverter 0
+    # genuinely is still charging, not just whichever inverter happened to be processed last.
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_imb1",
@@ -1714,7 +1719,7 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable_array=[True, False],
         soc_kw=2,
         assert_pause_discharge_array=[False, True],
-        assert_status="Freeze charging",
+        assert_status="Charging",
         assert_reserve=0,
         assert_soc_target_array=[10, 100],
         assert_immediate_soc_target_array=[10, 40],
@@ -1772,6 +1777,8 @@ def run_execute_tests(my_predbat):
         return failed
 
     # One inverter below the reserve, the other above it, re-balance at 10%
+    # Headline status shows "Charging" - the most active state present (#4446) - since inverter 0
+    # genuinely is still charging toward the target, not just whichever inverter was processed last.
     failed |= run_execute_test(
         my_predbat,
         "charge_freeze_imb4",
@@ -1782,7 +1789,7 @@ def run_execute_tests(my_predbat):
         assert_charge_time_enable_array=[True, False],
         soc_kw=1,
         assert_pause_discharge_array=[False, True],
-        assert_status="Freeze charging",
+        assert_status="Charging",
         assert_reserve_array=[0, 0],
         assert_soc_target_array=[10, 100],
         assert_immediate_soc_target_array=[10, 15],
