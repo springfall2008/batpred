@@ -352,12 +352,12 @@ def test_pv90_load_scaling90_is_absolute(my_predbat):
         rate = 0.02  # kWh/minute
         my_predbat.load_minutes = {minute: (1440 - minute) * rate for minute in range(0, 1441)}
 
-        my_predbat.load_scaling = 0.5
+        my_predbat.load_scaling = 1.0
         my_predbat.calculate_plan(recompute=True)
         total_low = sum(my_predbat.load_minutes_step.values())
         total90_low = sum(my_predbat.load_minutes_step90.values())
 
-        my_predbat.load_scaling = 1.5
+        my_predbat.load_scaling = 3.0
         my_predbat.calculate_plan(recompute=True)
         total_high = sum(my_predbat.load_minutes_step.values())
         total90_high = sum(my_predbat.load_minutes_step90.values())
@@ -366,11 +366,11 @@ def test_pv90_load_scaling90_is_absolute(my_predbat):
             print("ERROR: load_minutes_step is all zero despite seeding a synthetic load series - the comparison would be vacuous")
             return True
         if abs(total_high - 3 * total_low) > max(1.0, total_low * 0.05):
-            print("ERROR: nominal load_minutes_step did not scale ~3x with load_scaling (0.5 -> 1.5) as expected (total at 0.5={}, at 1.5={}) - test setup problem, not a pv90 result".format(total_low, total_high))
+            print("ERROR: nominal load_minutes_step did not scale ~3x with load_scaling (1.0 -> 3.0) as expected (total at 0.5={}, at 1.5={}) - test setup problem, not a pv90 result".format(total_low, total_high))
             return True
         if abs(total90_high - total90_low) > max(1.0, total90_low * 0.05):
             print(
-                "ERROR: load_minutes_step90 total changed from {} to {} when load_scaling changed from 0.5 to 1.5 (load_scaling90 held at {}) - load_scaling90 is composing with load_scaling instead of acting as an absolute multiplier".format(
+                "ERROR: load_minutes_step90 total changed from {} to {} when load_scaling changed from 1.0 to 3.0 (load_scaling90 held at {}) - load_scaling90 is composing with load_scaling instead of acting as an absolute multiplier".format(
                     total90_low, total90_high, my_predbat.load_scaling90
                 )
             )
@@ -382,167 +382,83 @@ def test_pv90_load_scaling90_is_absolute(my_predbat):
     return failed
 
 
-def _read_load_scalings_via_config(my_predbat, load_scaling, load_scaling10, load_scaling90):
-    """Force load_scaling/load_scaling10/load_scaling90 via config_index and call fetch_config_options for real.
-
-    load_scaling90 is expert-mode gated (see config.py), so expert_mode is forced on too - the same technique
-    test_pv90_config_read uses - or fetch_config_options would treat load_scaling90 as disabled and fall back
-    to its CONFIG_ITEMS default regardless of what "value" is set to. load_scaling/load_scaling10 are not
-    gated, so forcing expert_mode has no effect on them beyond what is needed for load_scaling90.
-
-    Returns the resulting (load_scaling, load_scaling10, load_scaling90) runtime attributes after CHANGE 4's
-    clamp has run. Callers are responsible for snapshotting/restoring config_index and my_predbat.__dict__
-    around this call - it does not restore anything itself.
-    """
-    my_predbat.config_index["expert_mode"]["value"] = True
-    my_predbat.config_index["load_scaling"]["value"] = load_scaling
-    my_predbat.config_index["load_scaling10"]["value"] = load_scaling10
-    my_predbat.config_index["load_scaling90"]["value"] = load_scaling90
-    my_predbat.fetch_config_options()
-    return my_predbat.load_scaling, my_predbat.load_scaling10, my_predbat.load_scaling90
-
-
-def _snapshot_load_scaling_config(my_predbat):
-    """Capture config_index["value"] for expert_mode/load_scaling/load_scaling10/load_scaling90, for later restore."""
-    return {name: my_predbat.config_index[name].get("value") for name in ("expert_mode", "load_scaling", "load_scaling10", "load_scaling90")}
-
-
-def _restore_load_scaling_config(my_predbat, snapshot):
-    """Restore config_index["value"] entries captured by _snapshot_load_scaling_config."""
-    for name, value in snapshot.items():
-        my_predbat.config_index[name]["value"] = value
-
-
 def test_pv90_load_scaling_clamp_invariant(my_predbat):
-    """fetch_config_options must clamp load_scaling90 <= load_scaling <= load_scaling10 (CHANGE 4), however the
-    three are configured - this pins CHANGE 4 and supersedes test_pv90_load_scaling90_inversion_warning, which
-    tested the CHANGE 3 warning this clamp makes structurally unreachable and has been removed.
+    """The built load step arrays must always satisfy pv90 <= nominal <= pv10, however the three scalings are set.
 
-    Two violating configurations are exercised, matching the two inversions CHANGE 4 closes: load_scaling90
-    (0.7) above load_scaling (0.5) - the pv90-side inversion CHANGE 3 used to warn about, and exactly the
-    numbers coverage/cases/predbat_debug_agile1.yaml hits - and load_scaling (2.0) above load_scaling10 (1.1),
-    the older, symmetric pv10-side inversion. Both the invariant and the exact clamped values are asserted, the
-    latter so a clamp that merely swaps which side is wrong (still satisfying the ordering by coincidence)
-    could not slip through.
+    This asserts the invariant on its observable effect - the totals of the step arrays the prediction
+    actually simulates - rather than on the scaling attributes. That matters because the clamp is applied
+    where the step arrays are built, not where config is read: callers that set the scalings directly and
+    never read config (the annual report, the random scenario harness, compare) must be protected too, and
+    an attribute-level assertion would pass for them while the scenarios were silently inverted.
+
+    Two violating configurations are exercised, one per side. load_scaling90 (0.7) above load_scaling (0.5)
+    is the pv90-side inversion, and exactly the numbers coverage/cases/predbat_debug_agile1.yaml hits - it
+    made pv90 carry 40% MORE load than nominal, a harsher case than pv10. load_scaling (2.0) above
+    load_scaling10 (1.1) is the symmetric pv10-side inversion, which predates the PV90 work.
     """
     failed = False
-    saved_state = my_predbat.__dict__.copy()
-    saved_config = _snapshot_load_scaling_config(my_predbat)
+    saved = {name: getattr(my_predbat, name) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only")}
     try:
-        # pv90-side: load_scaling90 (0.7) is above both load_scaling (0.5) and load_scaling10 (0.6).
-        # min(0.7, 0.6, 0.5) = 0.5; max(0.5, 0.5, 0.6) = 0.6 (load_scaling10 is already the max, unchanged).
-        ls, ls10, ls90 = _read_load_scalings_via_config(my_predbat, 0.5, 0.6, 0.7)
-        if not (ls90 <= ls <= ls10):
-            print("ERROR: invariant load_scaling90 <= load_scaling <= load_scaling10 violated for (0.5, 0.6, 0.7): {} <= {} <= {}".format(ls90, ls, ls10))
-            failed = True
-        if ls90 != 0.5:
-            print("ERROR: load_scaling90 is {}, expected min(0.7, 0.6, 0.5) = 0.5".format(ls90))
-            failed = True
-        if ls10 != 0.6:
-            print("ERROR: load_scaling10 is {}, expected max(0.5, 0.5, 0.6) = 0.6".format(ls10))
-            failed = True
-        if ls != 0.5:
-            print("ERROR: load_scaling is {}, expected the configured 0.5 unchanged (only load_scaling90/load_scaling10 are clamped)".format(ls))
-            failed = True
-
-        # pv10-side: load_scaling (2.0) is above load_scaling10 (1.1). min(0.7, 1.1, 2.0) = 0.7 (unchanged);
-        # max(0.7, 2.0, 1.1) = 2.0.
-        ls, ls10, ls90 = _read_load_scalings_via_config(my_predbat, 2.0, 1.1, 0.7)
-        if not (ls90 <= ls <= ls10):
-            print("ERROR: invariant load_scaling90 <= load_scaling <= load_scaling10 violated for (2.0, 1.1, 0.7): {} <= {} <= {}".format(ls90, ls, ls10))
-            failed = True
-        if ls90 != 0.7:
-            print("ERROR: load_scaling90 is {}, expected min(0.7, 1.1, 2.0) = 0.7".format(ls90))
-            failed = True
-        if ls10 != 2.0:
-            print("ERROR: load_scaling10 is {}, expected max(0.7, 2.0, 1.1) = 2.0".format(ls10))
-            failed = True
-    finally:
-        _restore_load_scaling_config(my_predbat, saved_config)
-        my_predbat.__dict__.clear()
-        my_predbat.__dict__.update(saved_state)
-    return failed
-
-
-def test_pv90_load_scaling_clamp_defaults_unchanged(my_predbat):
-    """The default load_scaling/load_scaling10/load_scaling90 (1.05/1.1/0.7) already satisfy
-    load_scaling90 <= load_scaling <= load_scaling10, so CHANGE 4's clamp must be a no-op on the common,
-    unconfigured path - a clamp that silently altered values nobody needed clamped would be a regression
-    in itself, distinct from (but just as serious as) the clamp not firing when it should.
-    """
-    failed = False
-    saved_state = my_predbat.__dict__.copy()
-    try:
-        my_predbat.fetch_config_options()
-        for name, expected in (("load_scaling", 1.05), ("load_scaling10", 1.1), ("load_scaling90", 0.7)):
-            value = getattr(my_predbat, name, None)
-            if value != expected:
-                print("ERROR: {} is {} with no config override, expected the unclamped CONFIG_ITEMS default {}".format(name, value, expected))
+        my_predbat.load_forecast_only = False
+        my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
+        for ls, ls10, ls90, label in ((0.5, 0.6, 0.7, "pv90-side"), (2.0, 1.1, 0.7, "pv10-side")):
+            my_predbat.load_scaling = ls
+            my_predbat.load_scaling10 = ls10
+            my_predbat.load_scaling90 = ls90
+            my_predbat.plan_valid = False
+            my_predbat.calculate_plan(recompute=True)
+            total = sum(my_predbat.load_minutes_step.values())
+            total10 = sum(my_predbat.load_minutes_step10.values())
+            total90 = sum(my_predbat.load_minutes_step90.values())
+            if total <= 0:
+                print("ERROR: nominal load total is {} for {} - the check would be vacuous".format(total, label))
+                failed = True
+                continue
+            if not (total90 <= total + 1e-6):
+                print("ERROR: {} ({}, {}, {}): pv90 load total {} exceeds nominal {} - the PV90 scenario is inverted into a downside case".format(label, ls, ls10, ls90, total90, total))
+                failed = True
+            if not (total10 >= total - 1e-6):
+                print("ERROR: {} ({}, {}, {}): pv10 load total {} is below nominal {} - the PV10 scenario is inverted into an upside case".format(label, ls, ls10, ls90, total10, total))
                 failed = True
     finally:
-        my_predbat.__dict__.clear()
-        my_predbat.__dict__.update(saved_state)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        my_predbat.plan_valid = False
+        my_predbat.calculate_plan(recompute=True)
     return failed
 
 
-def test_pv90_load_scaling_clamp_logs_only_when_changed(my_predbat):
-    """CHANGE 4's clamp log must fire only when clamping actually changes a value: silent on the default path,
-    and precisely on whichever of load_scaling90/load_scaling10 a given violating configuration clamps - not
-    on the one that was already within bounds.
+def test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat):
+    """At the shipped defaults (1.05 / 1.1 / 0.7) the ordering already holds, so the clamp must change nothing.
 
-    my_predbat.log is monkeypatched to record every message (and still log for real), matching the technique
-    already used elsewhere in this suite for wrapping launch_run_prediction_* functions.
+    A clamp that quietly altered values nobody needed clamped would be its own regression, and it would show
+    up as the pv90 and pv10 load totals collapsing onto nominal rather than sitting either side of it.
     """
     failed = False
-    saved_state = my_predbat.__dict__.copy()
-    saved_config = _snapshot_load_scaling_config(my_predbat)
-    original_log = my_predbat.log
-    messages = []
-
-    def capturing_log(message, *args, **kwargs):
-        """Record every log message (and still log for real) so the clamp log can be asserted on."""
-        messages.append(message)
-        return original_log(message, *args, **kwargs)
-
-    my_predbat.log = capturing_log
+    saved = {name: getattr(my_predbat, name) for name in ("load_scaling", "load_scaling10", "load_scaling90", "load_minutes", "load_forecast_only")}
     try:
-        # Defaults: nothing should be clamped, so no clamp message at all.
-        messages.clear()
-        my_predbat.fetch_config_options()
-        clamp_messages = [msg for msg in messages if "clamped" in msg]
-        if clamp_messages:
-            print("ERROR: clamp log fired on the unclamped default path: {}".format(clamp_messages))
-            failed = True
-
-        # Only load_scaling90 is clamped here (load_scaling10 (0.6) is already the max) - exactly the
-        # coverage/cases/predbat_debug_agile1.yaml numbers.
-        messages.clear()
-        _read_load_scalings_via_config(my_predbat, 0.5, 0.6, 0.7)
-        ls90_messages = [msg for msg in messages if "load_scaling90 clamped" in msg]
-        ls10_messages = [msg for msg in messages if "load_scaling10 clamped" in msg]
-        if len(ls90_messages) != 1:
-            print("ERROR: expected exactly one load_scaling90 clamp message for (0.5, 0.6, 0.7), got {}: {}".format(len(ls90_messages), ls90_messages))
-            failed = True
-        if ls10_messages:
-            print("ERROR: load_scaling10 clamp message fired for (0.5, 0.6, 0.7) even though load_scaling10 (0.6) was already the max and should be unchanged: {}".format(ls10_messages))
-            failed = True
-
-        # Only load_scaling10 is clamped here (load_scaling90 (0.7) is already the min).
-        messages.clear()
-        _read_load_scalings_via_config(my_predbat, 2.0, 1.1, 0.7)
-        ls90_messages = [msg for msg in messages if "load_scaling90 clamped" in msg]
-        ls10_messages = [msg for msg in messages if "load_scaling10 clamped" in msg]
-        if ls90_messages:
-            print("ERROR: load_scaling90 clamp message fired for (2.0, 1.1, 0.7) even though load_scaling90 (0.7) was already the min and should be unchanged: {}".format(ls90_messages))
-            failed = True
-        if len(ls10_messages) != 1:
-            print("ERROR: expected exactly one load_scaling10 clamp message for (2.0, 1.1, 0.7), got {}: {}".format(len(ls10_messages), ls10_messages))
-            failed = True
+        my_predbat.load_forecast_only = False
+        my_predbat.load_minutes = {minute: (1440 - minute) * 0.02 for minute in range(0, 1441)}
+        my_predbat.load_scaling = 1.05
+        my_predbat.load_scaling10 = 1.1
+        my_predbat.load_scaling90 = 0.7
+        my_predbat.plan_valid = False
+        my_predbat.calculate_plan(recompute=True)
+        total = sum(my_predbat.load_minutes_step.values())
+        total10 = sum(my_predbat.load_minutes_step10.values())
+        total90 = sum(my_predbat.load_minutes_step90.values())
+        if total <= 0:
+            print("ERROR: nominal load total is {} - the check would be vacuous".format(total))
+            return True
+        for name, got, want in (("pv10", total10, total * 1.1 / 1.05), ("pv90", total90, total * 0.7 / 1.05)):
+            if abs(got - want) > max(want * 0.001, 1e-6):
+                print("ERROR: {} load total is {} at the defaults, expected {} - the clamp altered a value that was already in range".format(name, got, want))
+                failed = True
     finally:
-        my_predbat.log = original_log
-        _restore_load_scaling_config(my_predbat, saved_config)
-        my_predbat.__dict__.clear()
-        my_predbat.__dict__.update(saved_state)
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+        my_predbat.plan_valid = False
+        my_predbat.calculate_plan(recompute=True)
     return failed
 
 
@@ -1382,8 +1298,7 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_step_arrays_built(my_predbat)
     failed |= test_pv90_load_scaling90_is_absolute(my_predbat)
     failed |= test_pv90_load_scaling_clamp_invariant(my_predbat)
-    failed |= test_pv90_load_scaling_clamp_defaults_unchanged(my_predbat)
-    failed |= test_pv90_load_scaling_clamp_logs_only_when_changed(my_predbat)
+    failed |= test_pv90_load_scaling_clamp_is_a_noop_at_defaults(my_predbat)
     failed |= test_pv90_missing_series_falls_back_to_p50(my_predbat)
     failed |= test_pv90_scenario_selects_arrays(my_predbat)
     failed |= test_pv90_no_io_penalty_on_identical_series(my_predbat)

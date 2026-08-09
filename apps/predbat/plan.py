@@ -1203,6 +1203,27 @@ class Plan:
         # Created optimised step data
         self.metric_cloud_coverage = self.get_cloud_factor(self.minutes_now, self.pv_forecast_minute, self.pv_forecast_minute10)
         self.metric_load_divergence = self.get_load_divergence(self.minutes_now, self.load_minutes)
+
+        # Clamp the three load scalings so load_scaling90 <= load_scaling <= load_scaling10 always
+        # holds: the PV90 case can never end up with more load than the central case, and the PV10
+        # case can never end up with less. Without this, any load_scaling below load_scaling90 turns
+        # PV90 into a second, harsher downside case rather than the upside one it exists to model.
+        # This lives here rather than in fetch_config_options because it is an invariant of the
+        # scenarios, not of config reading - callers that set the scalings directly (the annual
+        # report, the random scenario harness, compare) never read config and would otherwise plan
+        # with the scenarios inverted. Sequential evaluation is deliberate: the clamped load_scaling90
+        # can never be the maximum of the three, so the second line reduces to max of the other two.
+        # These are locals so the configured values stay visible in Home Assistant and the logs.
+        load_scaling90 = min(self.load_scaling90, self.load_scaling10, self.load_scaling)
+        load_scaling10 = max(load_scaling90, self.load_scaling, self.load_scaling10)
+        if load_scaling90 != self.load_scaling90:
+            self.log(
+                "Warn: load_scaling90 {} exceeds load_scaling ({}) or load_scaling10 ({}) so the PV90 scenario would have more load than the central case - using {} for this plan".format(
+                    self.load_scaling90, self.load_scaling, self.load_scaling10, load_scaling90
+                )
+            )
+        if load_scaling10 != self.load_scaling10:
+            self.log("Warn: load_scaling10 {} is below load_scaling ({}) so the PV10 scenario would have less load than the central case - using {} for this plan".format(self.load_scaling10, self.load_scaling, load_scaling10))
         load_minutes_step = self.step_data_history(
             self.load_minutes,
             self.minutes_now,
@@ -1221,7 +1242,7 @@ class Plan:
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
-            scale_fixed=self.load_scaling10,
+            scale_fixed=load_scaling10,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,
@@ -1242,7 +1263,7 @@ class Plan:
             self.minutes_now,
             forward=False,
             scale_today=self.load_inday_adjustment,
-            scale_fixed=self.load_scaling90,
+            scale_fixed=load_scaling90,
             type_load=True,
             load_forecast=self.load_forecast,
             load_scaling_dynamic=self.load_scaling_dynamic,

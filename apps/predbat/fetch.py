@@ -2398,24 +2398,6 @@ class Fetch:
                 self.log("Warn: calculate_pv90_plan is Off so forcing pv_metric90_weight from {} to 0.0 - turn on switch.predbat_calculate_pv90_plan (expert mode) to enable the PV90 upside scenario".format(self.pv_metric90_weight))
             self.pv_metric90_weight = 0.0
 
-        # CHANGE 4: clamp the three load scalings so load_scaling90 <= load_scaling <= load_scaling10
-        # is structurally guaranteed, whatever the user configures. This replaces the CHANGE 3
-        # "load_scaling90 >= load_scaling" warning (that inversion can no longer happen) and also
-        # closes the same latent inversion on the pv10 side (a user with load_scaling above
-        # load_scaling10 previously got a pv10 case with LESS load than nominal). Sequential
-        # evaluation is deliberate: by the time the second line runs, load_scaling90 already holds
-        # its clamped value, which by construction can never be the maximum of the three, so the
-        # second line reduces to max(load_scaling, load_scaling10). The configured values (as read
-        # above) are what the user sees in Home Assistant; only the runtime attributes are clamped.
-        configured_load_scaling90 = self.load_scaling90
-        configured_load_scaling10 = self.load_scaling10
-        self.load_scaling90 = min(self.load_scaling90, self.load_scaling10, self.load_scaling)
-        self.load_scaling10 = max(self.load_scaling90, self.load_scaling, self.load_scaling10)
-        if self.load_scaling90 != configured_load_scaling90:
-            self.log("Warn: load_scaling90 clamped from the configured {} to {} so it does not exceed load_scaling ({}) or load_scaling10 ({})".format(configured_load_scaling90, self.load_scaling90, self.load_scaling, configured_load_scaling10))
-        if self.load_scaling10 != configured_load_scaling10:
-            self.log("Warn: load_scaling10 clamped from the configured {} to {} so it is not below load_scaling ({}) or load_scaling90 ({})".format(configured_load_scaling10, self.load_scaling10, self.load_scaling, self.load_scaling90))
-
         self.charge_scaling10 = self.get_arg("charge_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.load_scaling_free = self.get_arg("load_scaling_free")
