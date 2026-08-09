@@ -2567,6 +2567,21 @@ class Fetch:
         self.car_charging_energy = {}
         if "car_charging_energy" in self.args:
             self.car_charging_energy = self.minute_data_import_export(self.max_days_previous, now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
+            if self.car_charging_hold and not self.car_charging_energy:
+                # car_charging_energy is configured (an entity is set) but resolved to nothing at
+                # all - most likely the entity no longer exists (e.g. removed upstream, see #4458)
+                # rather than a transient gap. minute_data_import_export() already logs a benign
+                # "Unable to fetch history" warning per entity with no had_errors flag, so this
+                # degrades to the car_charging_threshold heuristic below completely silently
+                # otherwise - loud enough here that it doesn't get missed, since car_charging_hold
+                # defaults on and this quietly degrades load-forecast accuracy on every car-charging
+                # day until fixed, not just a single wrong sensor reading.
+                self.log(
+                    "Warn: car_charging_hold is enabled and car_charging_energy is configured ({}) but no data could be loaded for it - falling back to the car_charging_threshold heuristic instead of precise car energy subtraction. Check the entity still exists.".format(
+                        self.get_arg("car_charging_energy", indirect=False)
+                    )
+                )
+                self.record_status("Warn: car_charging_energy entity has no data, falling back to car_charging_threshold heuristic", had_errors=True)
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
