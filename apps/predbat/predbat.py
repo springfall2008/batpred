@@ -66,6 +66,7 @@ from const import (
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
     INVERTER_QUICK_UPDATE_SECONDS,
+    DEBUG_ENABLE_MAX_HOURS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
@@ -424,6 +425,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.set_soc_minutes = 5
         self.set_window_minutes = 5
         self.debug_enable = False
+        self.debug_enable_started = None
         self.debug_history_last_capture = None
         self.import_today = {}
         self.import_today_now = 0
@@ -740,6 +742,34 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+
+    def _debug_enable_auto_scope(self):
+        """Write a raw debug.yaml this cycle if switch.predbat_debug_enable is on, and
+        auto-disable the switch after DEBUG_ENABLE_MAX_HOURS rather than let it run forever.
+
+        debug_enable also gates verbose logging and the C++ kernel bypass (a more accurate but far
+        slower prediction path, see #4453) - both genuinely useful while actively watching a live
+        issue develop cycle to cycle, at a finer grain than the rotating debug-history buffer's
+        (#4417) coarsest interval of 1 hour. So this does not remove the raw per-cycle write, only
+        bounds how long it - and the slow-path logging it's normally turned on alongside - can run
+        unattended, since leaving it on by accident causes both unbounded predbat_debug_*.yaml disk
+        growth and a standing performance cost, not just the former.
+        """
+        if not self.debug_enable:
+            self.debug_enable_started = None
+            return
+
+        if self.debug_enable_started is None:
+            self.debug_enable_started = self.now_utc
+
+        if (self.now_utc - self.debug_enable_started) >= timedelta(hours=DEBUG_ENABLE_MAX_HOURS):
+            self.log("Warn: debug_enable has been on for over {} hours - auto-disabling to bound disk writes and the slower debug prediction path. Re-enable if you need more time.".format(DEBUG_ENABLE_MAX_HOURS))
+            self.expose_config("debug_enable", False)
+            self.debug_enable = False
+            self.debug_enable_started = None
+            return
+
+        self.create_debug_yaml()
 
     def _capture_debug_history(self):
         """Capture a rolling debug-history snapshot if due, for #4417.
@@ -1133,8 +1163,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.expose_config("holiday_days_left", self.holiday_days_left)
             self.log("Holiday days left is now {}".format(self.holiday_days_left))
 
-        if self.debug_enable:
-            self.create_debug_yaml()
+        self._debug_enable_auto_scope()
         self._capture_debug_history()
 
         self.record_final_run_status(status, status_extra)
