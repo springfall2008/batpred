@@ -536,6 +536,21 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         flip=True,
     )
 
+    # --- Rescan the new rates before anything consumes their summaries ---
+    # Replacing rate_import/rate_export above does not update the min/max/average summaries or
+    # rate_min_forward - those only move when rate_scan runs. Without this the whole scenario is
+    # planned against the TEMPLATE's rates: on scenario 10, rate_min_forward stayed at the template's
+    # 18.081 while the scenario's cheapest forward import was 5.54, so battery_value_rate credited
+    # leftover battery at 3.4x its replacement cost and every window charged to 100%. set_rate_thresholds
+    # and rate_scan_window below both read these, so the rescan has to come first.
+    # rate_scan only recomputes rate_min_forward when print is True, so it is called explicitly here
+    # rather than turning the per-scenario logging on.
+    if my_predbat.rate_import:
+        my_predbat.rate_scan(my_predbat.rate_import, print=False)
+        my_predbat.rate_min_forward = my_predbat.rate_min_forward_calc(my_predbat.rate_import)
+    if my_predbat.rate_export:
+        my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
+
     # --- Rebuild rate thresholds and charge/export windows ---
     if my_predbat.rate_import or my_predbat.rate_export:
         my_predbat.set_rate_thresholds()
