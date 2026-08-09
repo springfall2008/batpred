@@ -49,22 +49,41 @@ def annotate_steps_back(snapshots):
     return [dict(entry, steps_back=i) for i, entry in enumerate(snapshots)]
 
 
+async def resolve_and_load_snapshot(storage, snapshot_id):
+    """Resolve snapshot_id (including "latest"/falsy) and load its text in one call,
+    returning (resolved_id, text).
+
+    A caller that needs both the id (e.g. to build a filename) and the data must use
+    this rather than resolving "latest" via load_snapshot() and then separately calling
+    list_snapshots() again to find the id - a capture landing between those two calls
+    could resolve to a different snapshot than the one whose bytes were actually loaded,
+    serving one snapshot's data under another's filename.
+
+    Returns (None, None) when nothing could be resolved or loaded.
+    """
+    if not storage:
+        return None, None
+    if not snapshot_id or snapshot_id == "latest":
+        snapshots = await list_snapshots(storage)
+        if not snapshots:
+            return None, None
+        snapshot_id = snapshots[0]["id"]
+    data = await storage.load(STORAGE_MODULE, _snapshot_key(snapshot_id))
+    return snapshot_id, data
+
+
 async def load_snapshot(storage, snapshot_id):
     """Return one snapshot's raw debug-yaml text, or None when it cannot be resolved.
 
     A falsy snapshot_id or the literal string "latest" resolves to the newest stored
     snapshot, so a caller (an automation that just forced a capture, or the download
     route with no id given) does not need a separate round-trip to the list endpoint
-    first just to discover what id its own capture got.
+    first just to discover what id its own capture got. A caller that also needs the
+    resolved id itself (not just the text) should use resolve_and_load_snapshot()
+    instead, to avoid resolving "latest" twice.
     """
-    if not storage:
-        return None
-    if not snapshot_id or snapshot_id == "latest":
-        snapshots = await list_snapshots(storage)
-        if not snapshots:
-            return None
-        snapshot_id = snapshots[0]["id"]
-    return await storage.load(STORAGE_MODULE, _snapshot_key(snapshot_id))
+    _, data = await resolve_and_load_snapshot(storage, snapshot_id)
+    return data
 
 
 async def _discard_snapshot(storage, snapshot_id):

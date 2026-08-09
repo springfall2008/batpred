@@ -2805,16 +2805,17 @@ chart.render();
         ?id=latest / omitted for the newest one), for #4417.
         """
         storage = self._storage()
-        snapshot_id = request.query.get("id") or "latest"
-        data = await debug_history.load_snapshot(storage, snapshot_id)
+        requested_id = request.query.get("id") or "latest"
+        # Resolve "latest" and load its data in one call - resolving it via load_snapshot()
+        # and then separately re-listing to find the id for the filename risks a capture
+        # landing in between, serving one snapshot's bytes under a different one's filename.
+        resolved_id, data = await debug_history.resolve_and_load_snapshot(storage, requested_id)
         if data is None:
-            return web.Response(content_type="text/html", text="Snapshot {} not found".format(snapshot_id), status=404)
+            # requested_id is reflected back unescaped into an HTML response - a raw query
+            # param, so must be escaped rather than trusted.
+            return web.Response(content_type="text/html", text="Snapshot {} not found".format(html_module.escape(requested_id)), status=404)
 
-        if snapshot_id == "latest":
-            snapshots = await debug_history.list_snapshots(storage)
-            snapshot_id = snapshots[0]["id"] if snapshots else snapshot_id
-
-        filename = debug_history.snapshot_filename(snapshot_id)
+        filename = debug_history.snapshot_filename(resolved_id)
         return await self.html_file(filename, data)
 
     async def html_debug_history_download_all(self, request):
