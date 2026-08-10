@@ -2564,14 +2564,19 @@ class Output:
             load_value_pred += forecast_value_pred
             load_value_pred_raw += forecast_value_pred
 
-            # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
+            # Track (but no longer exclude) periods where import exceeds raw load, assumed to
+            # include deliberate battery charging (overnight for example). The house's own load
+            # during that minute was still genuinely consumed regardless of how much extra was
+            # imported to charge the battery, so it stays in the actual/predicted totals - only
+            # the import beyond that load was going to the battery, not the load itself.
+            # Previously this zeroed the whole bucket's load out of both totals, which silently
+            # dropped real consumption on any install that routinely grid-charges overnight
+            # (batpred#4154, #2537).
             car_value_actual = load_value_today_raw - load_value_today
             car_value_pred = load_value_pred_raw - load_value_pred
             if minute < minutes_now and import_value_today >= load_value_today_raw:
-                import_ignored_load_actual += load_value_today
-                load_value_today = 0
-                import_ignored_load_pred += load_value_pred
-                load_value_pred = 0
+                import_ignored_load_actual += import_value_today - load_value_today_raw
+                import_ignored_load_pred += import_value_today - load_value_today_raw
 
             # Only count totals until now
             if minute < minutes_now:
