@@ -357,3 +357,83 @@ def test_config_item_step_min_max_types_consistent(my_predbat):
 
     print("✓ Test passed: all integer-step input_number items have integer-valued min/max")
     return False
+
+
+def test_get_ha_config_normalises_int_default_for_fractional_step(my_predbat):
+    """
+    Mechanism-level regression test for #4296: get_ha_config() must hand back a float default for
+    any input_number item with a fractional step, even if CONFIG_ITEMS happens to declare its
+    "default" as a bare Python int (e.g. 0 instead of 0.0).
+
+    This default is not merely used when a value is missing - get_arg() (the only caller that
+    reaches get_ha_config with default=None) applies a further type coercion to whatever value
+    get_ha_config returns, keyed on the *type* of the resolved default, regardless of whether the
+    returned value actually came from that default or from the item's real, present, configured
+    value. So a call site reading the item with no explicit default (e.g. fetch.py's plain
+    `self.metric_battery_cycle = self.get_arg("metric_battery_cycle")`) can have its correctly
+    resolved value coerced by a default it never fell back to: confirmed live for
+    metric_battery_cycle, whose CONFIG_ITEMS "default" of 0 (an int) caused a genuinely
+    user-configured 0.5 to still be truncated to 0 via get_arg's `int(float(value))`, on every
+    read, every ~5 minutes - not because 0.5 was missing, but because the default's type alone
+    decided how the real value got coerced.
+
+    Fixed at the source in get_ha_config() (userinterface.py) rather than by hand-editing each
+    affected item's "default" to a float literal - a future item added with an int default and a
+    fractional step is protected automatically, regardless of which literal its author happens to
+    write. This test proves that directly: it deliberately restores a real CONFIG_ITEMS entry's
+    "default" to an int (undoing whatever it's currently declared as) to simulate "a new setting
+    with the same mistake", and confirms get_ha_config() still normalises it.
+    """
+    print("**** test_get_ha_config_normalises_int_default_for_fractional_step ****")
+
+    item = my_predbat.config_index.get("metric_battery_cycle")
+    assert item is not None, "metric_battery_cycle config item not found"
+    assert item.get("step") == 0.1, f"metric_battery_cycle step should be fractional (0.1), got {item.get('step')}"
+
+    original_default = item.get("default")
+    original_value = item.get("value")
+    try:
+        # Simulate a future item authored with an int default despite a fractional step -
+        # regardless of what config.py currently declares, get_ha_config must still normalise it.
+        item["default"] = 0
+        item["value"] = None
+
+        value, resolved_default = my_predbat.get_ha_config("metric_battery_cycle", None)
+        assert isinstance(resolved_default, float), f"get_ha_config should normalise an int default to float for a fractional-step item, got {type(resolved_default)}"
+        assert value == 0.0 and isinstance(value, float), f"Expected float 0.0, got {value!r} ({type(value)})"
+    finally:
+        item["default"] = original_default
+        item["value"] = original_value
+
+    print("✓ Test passed: get_ha_config normalises an int default to float for a fractional-step item")
+    return False
+
+
+def test_metric_battery_cycle_fractional_value_not_truncated(my_predbat):
+    """
+    Regression test for #4296: a fractional metric_battery_cycle (e.g. 0.5p/kWh) must survive
+    get_arg(), not get silently truncated to an integer. This is the concrete runtime symptom the
+    mechanism-level test above (test_get_ha_config_normalises_int_default_for_fractional_step)
+    exists to prevent.
+    """
+    print("**** test_metric_battery_cycle_fractional_value_not_truncated ****")
+
+    # metric_battery_cycle is gated on expert_mode - enable it so get_ha_config doesn't just
+    # null the value out and mask the truncation this test is checking for.
+    original_expert_mode = my_predbat.config_index["expert_mode"].get("value")
+    original_value = my_predbat.config_index["metric_battery_cycle"].get("value")
+    my_predbat.expose_config("expert_mode", True, force_ha=True)
+    my_predbat.expose_config("metric_battery_cycle", 0.5, force_ha=True)
+
+    try:
+        value = my_predbat.get_arg("metric_battery_cycle")
+        assert value == 0.5, "get_arg('metric_battery_cycle') should return 0.5, got {} ({})".format(value, type(value))
+
+        my_predbat.fetch_config_options()
+        assert my_predbat.metric_battery_cycle == 0.5, "self.metric_battery_cycle after fetch_config_options() should be 0.5, got {} ({})".format(my_predbat.metric_battery_cycle, type(my_predbat.metric_battery_cycle))
+    finally:
+        my_predbat.expose_config("metric_battery_cycle", original_value, force_ha=True)
+        my_predbat.expose_config("expert_mode", original_expert_mode, force_ha=True)
+
+    print("✓ Test passed: a fractional metric_battery_cycle value is not truncated")
+    return False

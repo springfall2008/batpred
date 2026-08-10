@@ -3018,6 +3018,16 @@ class Plan:
                             export_limits_best[window_n] = 100.0
                             if self.debug_enable:
                                 self.log("Clip freeze export off as already at 100% - window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
+                    elif dp2(soc_max) <= dp2(self.reserve):
+                        # SoC never rises above reserve anywhere in this window, so there is nothing to export
+                        # regardless of the requested limit. The "clip up" branch below only narrows the limit
+                        # towards what's achievable and can't reach 0 here (limit_soc is 0 for a 0% request,
+                        # and soc_max can never be below that), so a 0%-target window would otherwise survive
+                        # clipping with a limit that is technically "on" but physically a no-op.
+                        window["target"] = 100.0
+                        export_limits_best[window_n] = 100.0
+                        if self.debug_enable:
+                            self.log("Clip off export window {} from {} - {} from limit {} to new limit {} - no SoC above reserve in this window".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
                     elif soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
