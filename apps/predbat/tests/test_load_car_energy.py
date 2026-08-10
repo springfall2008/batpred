@@ -12,6 +12,12 @@
 no data at all - e.g. the entity was removed upstream (#4458) rather than a transient gap. Without
 this, car_charging_hold (on by default) silently degrades to the load-threshold heuristic with only
 a benign, error-free log line, on every car-charging day, until someone notices by chance.
+
+The loud log line is throttled to once per incident (not every cycle) since the condition can also
+be persistent-but-intentional (a recorder-excluded entity, a fresh install with no history yet), not
+only a genuine break - see the PR review discussion on #4469. record_status/had_errors still fire on
+every cycle the condition persists, so the status sensor stays accurate; only the log spam is
+suppressed.
 """
 
 
@@ -33,6 +39,8 @@ def test_load_car_energy_warns_when_configured_entity_has_no_data(my_predbat):
     original_had_errors = my_predbat.had_errors
     original_status = my_predbat.current_status
     original_minute_data_import_export = my_predbat.minute_data_import_export
+    original_warned = my_predbat.car_charging_energy_warned
+    original_log = my_predbat.log
 
     try:
         my_predbat.args["car_charging_energy"] = "sensor.ohme_test_energy"
@@ -76,6 +84,40 @@ def test_load_car_energy_warns_when_configured_entity_has_no_data(my_predbat):
         if my_predbat.had_errors:
             print("  ERROR: expected no error when car_charging_hold is off, even with an empty entity")
             failed = True
+
+        print("Test: the loud log warning fires once per incident, not every cycle (PR review on #4469)")
+        my_predbat.car_charging_hold = True
+        my_predbat.car_charging_energy_warned = False
+        my_predbat.minute_data_import_export = lambda *args, **kwargs: {}
+        captured = []
+        my_predbat.log = lambda msg, quiet=True: captured.append(msg)
+
+        my_predbat.had_errors = False
+        my_predbat.load_car_energy(my_predbat.now_utc)  # 1st occurrence - should log
+        if not my_predbat.had_errors:
+            print("  ERROR: expected had_errors on the first occurrence of the empty-entity condition")
+            failed = True
+        if sum(1 for m in captured if "no data could be loaded" in m) != 1:
+            print("  ERROR: expected exactly one loud warning on the first occurrence, captured: {}".format(captured))
+            failed = True
+
+        my_predbat.had_errors = False
+        my_predbat.load_car_energy(my_predbat.now_utc)  # 2nd occurrence, same incident - should not re-log
+        if not my_predbat.had_errors:
+            print("  ERROR: expected had_errors to keep being set on every cycle the condition persists")
+            failed = True
+        if sum(1 for m in captured if "no data could be loaded" in m) != 1:
+            print("  ERROR: expected the loud warning to stay suppressed on a repeat of the same incident, captured: {}".format(captured))
+            failed = True
+
+        my_predbat.minute_data_import_export = lambda *args, **kwargs: {0: 1.5}
+        my_predbat.load_car_energy(my_predbat.now_utc)  # data recovers - clears the incident
+
+        my_predbat.minute_data_import_export = lambda *args, **kwargs: {}
+        my_predbat.load_car_energy(my_predbat.now_utc)  # a fresh incident - should log again
+        if sum(1 for m in captured if "no data could be loaded" in m) != 2:
+            print("  ERROR: expected a fresh occurrence after data recovered to warn again, captured: {}".format(captured))
+            failed = True
     finally:
         my_predbat.minute_data_import_export = original_minute_data_import_export
         if had_car_charging_energy_arg:
@@ -87,5 +129,7 @@ def test_load_car_energy_warns_when_configured_entity_has_no_data(my_predbat):
         my_predbat.car_charging_hold = original_hold
         my_predbat.had_errors = original_had_errors
         my_predbat.current_status = original_status
+        my_predbat.car_charging_energy_warned = original_warned
+        my_predbat.log = original_log
 
     return failed
