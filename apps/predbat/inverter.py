@@ -1773,6 +1773,47 @@ class Inverter:
                     self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
                 self.base.log(f"Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}")
 
+    def adjust_grid_charge(self, allow):
+        """
+        Allow or forbid charging the battery from the grid at the device itself
+
+        A no-op unless one of the optional controls below is configured, so nothing changes for
+        inverters that have no such control. Where the device does have one, asserting it means a
+        grid charge cannot happen even if Predbat's own logic is wrong or a schedule is stale.
+
+        Two forms are supported. An entity is simplest where the integration exposes a switch;
+        the service pair suits cloud inverters driven through REST commands, which is how a
+        Powerwall reaches the Fleet API disallow_charge_from_grid flag.
+
+        Output Entities:
+        ================
+
+            Config arg                         Type          Units
+            ----------                         ----          -----
+            grid_charge_enable                 switch        on/off
+
+        Services:
+        =========
+
+            grid_charge_enable_service         called when grid charging becomes allowed
+            grid_charge_disable_service        called when grid charging becomes forbidden
+
+        Parameters:
+        - allow: True to permit charging from the grid, False to forbid it
+        """
+        entity_id = self.base.get_arg("grid_charge_enable", indirect=False, index=self.id, default=None)
+        if entity_id:
+            self.write_and_poll_switch("grid_charge_enable", entity_id, bool(allow))
+            return
+
+        # Its own dedupe domain, so an unchanged assertion is skipped without interfering with the
+        # charge/discharge service hashes
+        service_data = {"device_id": self.base.get_arg("device_id", index=self.id, default=""), "allow": bool(allow)}
+        if allow:
+            self.call_service_template("grid_charge_enable_service", service_data, domain="grid_charge")
+        else:
+            self.call_service_template("grid_charge_disable_service", service_data, domain="grid_charge")
+
     def adjust_reserve(self, reserve):
         """
         Adjust the output reserve target %

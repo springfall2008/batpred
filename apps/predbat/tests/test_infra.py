@@ -366,6 +366,7 @@ class MockConfigProvider:
             "set_reserve_enable": True,
             "set_export_freeze": True,
             "set_charge_freeze": True,
+            "battery_charging_from_grid": True,
             "set_charge_low_power": False,
             "set_export_low_power": False,
             "charge_low_power_margin": 10,
@@ -560,6 +561,7 @@ def reset_inverter(my_predbat):
     my_predbat.set_export_window = True
     my_predbat.set_charge_freeze = True
     my_predbat.set_export_freeze = True
+    my_predbat.battery_charging_from_grid = True
 
 
 def plot(name, prediction):

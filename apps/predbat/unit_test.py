@@ -39,6 +39,7 @@ from tests.test_load_car_energy import test_load_car_energy_warns_when_configure
 from tests.test_predheat import test_predheat
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_charge_hold import run_charge_hold_tests
+from tests.test_no_grid_charge import run_no_grid_charge_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_fetch_config_options import test_fetch_config_options
@@ -382,6 +383,7 @@ def main():
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
+        ("no_grid_charge", run_no_grid_charge_tests, "battery_charging_from_grid mode tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
         ("rate_min_forward_calc", test_rate_min_forward_calc, "Rate min forward calc tests", False),
         ("rate_export_max_forward_calc", test_rate_export_max_forward_calc, "Rate export max forward calc tests", False),

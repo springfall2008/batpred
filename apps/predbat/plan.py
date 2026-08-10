@@ -1984,6 +1984,16 @@ class Plan:
             if not allow_freeze and (self.reserve in try_socs):
                 try_socs.remove(self.reserve)
 
+        # With grid charging disabled the only legal window states are off and hold. A charge limit above
+        # the SoC is met from the grid in the model (see run_prediction), whereas a hold charges from PV
+        # only and an off window runs in ECO mode, which soaks surplus anyway - so no solar is given up.
+        if not self.allow_grid_charge_window(charge_window, window_n, all_n):
+            try_socs = [try_soc for try_soc in try_socs if try_soc <= self.reserve]
+            if allow_freeze and (self.reserve not in try_socs):
+                try_socs.append(self.reserve)
+            if 0 not in try_socs:
+                try_socs.append(0)
+
         # Run the simulations in parallel
         results = []
         results10 = []
@@ -3603,6 +3613,30 @@ class Plan:
 
             self.log("Swap charge optimisation finished metric {}{}, cost {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr))
 
+    def allow_grid_charge_window(self, charge_window, window_n, all_n=None):
+        """
+        Is the battery allowed to charge from the grid in this window?
+
+        True unless the user has turned battery_charging_from_grid off, in which case the only
+        exemption is a window whose import rate is negative - being paid to import is the one case
+        where filling the battery from the grid is unambiguously worth doing. When several windows
+        are optimised together every one of them must be negative to qualify.
+
+        Parameters:
+        - charge_window: list of charge windows
+        - window_n: index of the window being optimised
+        - all_n: indices when a group of windows is optimised together, else None
+
+        Returns:
+        - bool: True if a charge limit above the current SoC may be considered
+        """
+        if self.battery_charging_from_grid:
+            return True
+        for window_id in all_n if all_n else [window_n]:
+            if charge_window[window_id].get("average", 0) >= 0:
+                return False
+        return True
+
     def allow_this_charge_window(self, charge_window_n):
         """
         Allowed to optimise this charge window?
@@ -4234,7 +4268,13 @@ class Plan:
                 elif self.charge_window_best[window_n]["start"] in self.manual_freeze_export_times:
                     self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_charge_times:
-                    self.charge_limit_best[window_n] = self.soc_max
+                    if self.allow_grid_charge_window(self.charge_window_best, window_n):
+                        self.charge_limit_best[window_n] = self.soc_max
+                    else:
+                        # Grid charging is off, so downgrade the manual charge to a hold rather than
+                        # letting a manual slot quietly do the one thing the mode exists to prevent
+                        self.log("Manual charge at {} downgraded to hold as battery_charging_from_grid is off".format(self.time_abs_str(self.charge_window_best[window_n]["start"])))
+                        self.charge_limit_best[window_n] = self.reserve
                 elif self.charge_window_best[window_n]["start"] in self.manual_freeze_charge_times:
                     self.charge_limit_best[window_n] = self.reserve
 

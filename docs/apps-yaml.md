@@ -1466,6 +1466,7 @@ or
 - **charge_limit_enable** - Optional switch entity that enables the AC charge upper percent limit. When set, Predbat will turn this switch on whenever it writes a new charge limit value. Used by inverters (such as GivEnergy via GE Cloud) that have a separate enable/disable control for the charge limit register.
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
+- **grid_charge_enable** - Optional switch entity for an inverter that can forbid charging the battery from the grid at the device itself. When set, Predbat asserts it every cycle to match **switch.predbat_battery_charging_from_grid**, so the device enforces the rule even if Predbat is restarted or a stale plan is executed. Leave it out for inverters with no such control - Predbat will simply not write it.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
 - **pause_mode** - GivEnergy pause mode register (if present)
 - **pause_start_time** - scheduled pause start time (only if supported by your inverter)

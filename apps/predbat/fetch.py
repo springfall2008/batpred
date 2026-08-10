@@ -2709,6 +2709,7 @@ class Fetch:
         self.set_reserve_hold = True
         self.set_export_freeze = self.get_arg("set_export_freeze")
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
+        self.battery_charging_from_grid = self.get_arg("battery_charging_from_grid")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")

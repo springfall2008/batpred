@@ -35,6 +35,7 @@ def run_optimise_all_windows(
     best_soc_keep=0.0,
     best_soc_keep_weight=0.5,
     second_pass=False,
+    battery_charging_from_grid=True,
 ):
     print("Starting optimise all windows test {}".format(name))
     end_record = my_predbat.forecast_minutes
@@ -50,6 +51,7 @@ def run_optimise_all_windows(
     my_predbat.reserve = 0.5
     my_predbat.set_charge_freeze = True
     my_predbat.calculate_second_pass = second_pass
+    my_predbat.battery_charging_from_grid = battery_charging_from_grid
 
     reset_rates(my_predbat, rate_import, rate_export)
     update_rates_import(my_predbat, charge_window_best)

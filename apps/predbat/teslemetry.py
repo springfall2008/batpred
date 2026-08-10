@@ -521,6 +521,16 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return start <= minutes_now < end
         return minutes_now >= start or minutes_now < end
 
+    def grid_charging_permitted(self):
+        """Return False when Predbat's battery_charging_from_grid switch forbids charging from the grid.
+
+        The Powerwall's disallow_charge_from_grid_with_solar_installed flag is the device-level
+        expression of that switch, so it is asserted here rather than only in the plan - a stale
+        schedule or a Predbat restart must not be able to reintroduce a grid charge. Defaults to
+        permitted when the base has not populated the flag yet, matching Predbat's own default.
+        """
+        return bool(getattr(getattr(self, "base", None), "battery_charging_from_grid", True))
+
     def evaluate_schedule(self, minutes_now, soc):
         """Map the committed schedule + wall clock + live SOC to the desired device tuple.
 
@@ -533,16 +543,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
         reserve = self.schedule.get("reserve", 20)
+        grid_allowed = self.grid_charging_permitted()
         if self.in_window(minutes_now, charge):
             target = int(charge.get("soc", 100))
-            grid = soc < target
+            grid = grid_allowed and soc < target
+            if not grid_allowed:
+                # Solar can still fill the battery towards the target; the grid cannot. Hold the reserve at
+                # the SOC rather than the target, or backup mode would sit waiting for an import that is
+                # forbidden and stop the house drawing on the battery in the meantime.
+                target = min(target, int(soc))
             return {"export_rule": "pv_only", "grid_charging": grid, "reserve": target, "mode": "backup"}
         if self.in_window(minutes_now, discharge):
             target = int(discharge.get("soc", 10))
             if soc > target:
                 return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
-        return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+        return {"export_rule": "pv_only", "grid_charging": grid_allowed, "reserve": int(reserve), "mode": "self_consumption"}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).

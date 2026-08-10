@@ -1330,6 +1330,78 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_call_adjust_grid_charge(test_name, my_predbat, ha, inv, dummy_items):
+    """
+    Tests;
+        def adjust_grid_charge(self, allow)
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    saved_args = {key: my_predbat.args.get(key) for key in ("grid_charge_enable", "grid_charge_enable_service", "grid_charge_disable_service")}
+    # The service dedupe cache is shared across the inverter tests, so leave it exactly as found -
+    # clearing it makes the next test's "this was already called" expectation fail
+    saved_service_hash = dict(my_predbat.last_service_hash)
+
+    def check(label, expected):
+        """Compare the captured service calls against what this case should produce."""
+        result = ha.get_service_store()
+        if json.dumps(expected) != json.dumps(result):
+            print("ERROR: adjust_grid_charge {} should call {} got {}".format(label, expected, result))
+            return True
+        return False
+
+    # Nothing configured: a no-op rather than an error, so inverters without the control are unaffected
+    my_predbat.args["grid_charge_enable"] = None
+    my_predbat.args["grid_charge_enable_service"] = None
+    my_predbat.args["grid_charge_disable_service"] = None
+    ha.service_store_enable = True
+    ha.service_store = []
+    inv.adjust_grid_charge(False)
+    failed |= check("with nothing configured", [])
+
+    # Service form: enable and disable call their own hooks
+    my_predbat.args["grid_charge_enable_service"] = "grid_charge_on"
+    my_predbat.args["grid_charge_disable_service"] = "grid_charge_off"
+    my_predbat.args["device_id"] = "DID0"
+
+    ha.service_store = []
+    my_predbat.last_service_hash = {}
+    inv.adjust_grid_charge(False)
+    failed |= check("disable", [["grid_charge_off", {"device_id": "DID0", "allow": False}]])
+
+    ha.service_store = []
+    my_predbat.last_service_hash = {}
+    inv.adjust_grid_charge(True)
+    failed |= check("enable", [["grid_charge_on", {"device_id": "DID0", "allow": True}]])
+
+    # Repeating the same assertion is deduped, so an unchanged mode costs no API calls
+    ha.service_store = []
+    inv.adjust_grid_charge(True)
+    failed |= check("repeated enable", [])
+
+    # The entity form takes precedence when both are configured: the switch is written and the
+    # service hook is not called. The switch write itself is covered by the write_and_poll_switch tests.
+    my_predbat.args["grid_charge_enable"] = "switch.grid_charge"
+    dummy_items["switch.grid_charge"] = "on"
+    ha.service_store = []
+    my_predbat.last_service_hash = {}
+    inv.adjust_grid_charge(False)
+    result = ha.get_service_store()
+    if any(call[0] in ("grid_charge_off", "grid_charge_on") for call in result):
+        print("ERROR: adjust_grid_charge should not call the service hook when an entity is configured, got {}".format(result))
+        failed = True
+    if not any(call[0] == "switch/turn_off" for call in result):
+        print("ERROR: adjust_grid_charge entity form should write the switch off, got {}".format(result))
+        failed = True
+
+    for key, value in saved_args.items():
+        my_predbat.args[key] = value
+    my_predbat.last_service_hash = saved_service_hash
+    ha.service_store_enable = False
+    return failed
+
+
 def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_items, soc, repeat=False, freeze=False, clear=False, charge_stop=False, discharge_start_time="00:00:00", discharge_end_time="23:55:00", no_freeze=False):
     """
     Tests;
@@ -3283,6 +3355,7 @@ charge_start_service:
     failed |= test_call_adjust_charge_immediate("charge_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_charge_immediate("charge_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
     failed |= test_call_adjust_charge_immediate("charge_immediate9", my_predbat, ha, inv, dummy_items, 51.0)
+    failed |= test_call_adjust_grid_charge("grid_charge_control", my_predbat, ha, inv, dummy_items)
     if failed:
         return failed
 

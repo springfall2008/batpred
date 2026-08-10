@@ -461,6 +461,20 @@ once it has been reached or to protect against discharging beyond the set limit.
 
 **switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. On by default.
 
+**switch.predbat_battery_charging_from_grid** When turned Off, Predbat will never charge the battery from the grid. On by default, which is the existing behaviour.
+
+Use this when your tariff or utility programme forbids grid charging outright, rather than setting an artificially high import rate - a fake rate distorts every other
+number the planner produces, including the cost of holding and the value of exporting.
+
+With this turned Off a charge window can only be left off or held at the reserve, so the battery is charged from solar alone. No solar is given up: a hold still takes PV,
+and a window that is off runs in demand mode which stores surplus anyway. House load that the battery cannot cover is simply imported, and because the plan prices that
+import honestly, Predbat will arrange to run the battery down during the cheapest hours.
+
+The single exception is a negative import rate. If you are being paid to import, Predbat will still charge from the grid in those windows.
+
+Where the inverter has its own grid-charging control, Predbat asserts it too (see **grid_charge_enable** in [apps.yaml](apps-yaml.md)), so a stale plan or a restart cannot
+reintroduce a grid charge. Note that turning this Off does not stop the car or an iBoost from drawing from the grid - it applies to the battery only.
+
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
 
 **switch.predbat_set_export_freeze_only** (_expert mode_) When turned On forced export is prevented, but export freeze can be used (if enabled) to export excess solar rather than charging the battery.

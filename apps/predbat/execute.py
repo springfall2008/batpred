@@ -186,6 +186,10 @@ class Execute:
                 self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
                 break
 
+            # Assert the device's own grid-charge control, where it has one. Negative import rates are
+            # the single exemption: being paid to import is worth taking even in no-grid-charge mode.
+            inverter.adjust_grid_charge(self.battery_charging_from_grid or (self.rate_import.get(self.minutes_now, 0) < 0))
+
             resetDischarge = self.set_charge_window or self.set_export_window
             resetCharge = self.set_charge_window or self.set_export_window
             resetPause = self.set_charge_window or self.set_export_window
@@ -803,8 +807,18 @@ class Execute:
         """
         Check if a charge limit (in kWh) represents a freeze charge (i.e., equals reserve)
         Uses percentage comparison to avoid floating point rounding issues
+
+        A limit that could only be reached by importing is also treated as a freeze when grid charging
+        is disabled. The planner will not produce one, but a plan computed before the switch was turned
+        off - or restored across a restart - otherwise executes an import the planner would now reject.
         """
-        return calc_percent_limit(charge_limit_kwh, self.soc_max) == self.reserve_percent
+        target_percent = calc_percent_limit(charge_limit_kwh, self.soc_max)
+        if target_percent == self.reserve_percent:
+            return True
+        if not self.battery_charging_from_grid and (target_percent > self.soc_percent) and (self.rate_import.get(self.minutes_now, 0) >= 0):
+            self.log("Charge target {}% above SoC {}% downgraded to a hold as battery_charging_from_grid is off".format(target_percent, self.soc_percent))
+            return True
+        return False
 
     def reset_inverter(self):
         """
