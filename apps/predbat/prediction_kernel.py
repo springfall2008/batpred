@@ -31,7 +31,7 @@ from utils import remove_intersecting_windows, get_curve_value, find_battery_tem
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 2
-KERNEL_PARITY_REVISION = 2
+KERNEL_PARITY_REVISION = 3
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = 4

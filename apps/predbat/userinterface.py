@@ -448,6 +448,21 @@ class UserInterface:
                 value = None
             if default is None:
                 default = item.get("default", None)
+                if item.get("type") == "input_number" and isinstance(default, int) and not isinstance(default, bool):
+                    # This default is not just a fallback for a missing value - get_arg() (the only
+                    # caller that reaches here with default=None) applies a further type coercion to
+                    # whatever value this function returns, keyed on the *type* of this default,
+                    # regardless of whether that returned value is this default or the item's real
+                    # configured value. So an int default doesn't just risk supplying an int when
+                    # unset - it forces every read of this item back to an int even when the user has
+                    # genuinely configured a fractional one, via get_arg's int(float(value)) (#4296:
+                    # metric_battery_cycle's real, present, correctly-resolved 0.5 was still coerced
+                    # to 0 downstream, purely because its default happened to be the int 0). Normalise
+                    # here, at the source, so it can't matter which literal a future item's "default"
+                    # happens to be written as.
+                    step = item.get("step", 1)
+                    if isinstance(step, float) and step != int(step):
+                        default = float(default)
             if value is None:
                 value = default
             return value, default

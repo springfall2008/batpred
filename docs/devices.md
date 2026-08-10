@@ -72,9 +72,11 @@ If you are on the Octopus Intelligent GO tariff the integration can be used to m
 
 **car charging energy**
 
+Home Assistant 2026.8.0 removed the Ohme integration's `energy` sensor entirely - it was estimating the car's battery level rather than energy delivered by the charger, so there's no direct replacement sensor. The recommended approach is to derive it yourself from the `power` sensor using a [Riemann sum integral helper](https://www.home-assistant.io/integrations/integration/) (Settings / Devices & Services / Helpers / Add Helper / Integration - Riemann sum integral), pointed at `sensor.ohme_{ohme_name}_power`, with unit `kWh` and method `left`.
+
 ```yaml
   ohme_name: 're:time.ohme_(.+)_target_time'
-  car_charging_energy: 'sensor.ohme_{ohme_name}_energy'
+  car_charging_energy: 'sensor.<your_riemann_sum_helper_name>'
 ```
 
 **Car charging planned**

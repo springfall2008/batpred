@@ -10,10 +10,11 @@
 # fmt on
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
-from gecloud import GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
+from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
 from utils import dp4
 import asyncio
 import json
+import pytz
 from unittest.mock import MagicMock, patch, AsyncMock
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -60,6 +61,12 @@ class MockGECloudDirect(GECloudDirect):
         self.settings_from_cache = False
         self.default_options_stamp = None
         self._read_only = False
+        self.local_tz = pytz.timezone("Europe/London")
+        self.account = {}
+        self.account_timezone = None
+        self.account_timezone_name = None
+        self.account_stamp = None
+        self.account_fetch_stamp = None
 
         class MockHAInterface:
             def __init__(self):
@@ -171,6 +178,7 @@ def test_ge_cloud(my_predbat=None):
     ======================================================================
     Comprehensive test suite for GivEnergy Cloud integration including:
     - API infrastructure (success, auth errors, rate limits, timeouts, JSON errors, retry logic)
+    - Account details (customer timezone used for the start/end time registers)
     - Device management (EMS, gateway, batteries, EV chargers, smart devices)
     - EVC operations (commands, device data, sessions)
     - Inverter operations (status, meter, device info, settings read/write)
@@ -200,6 +208,19 @@ def test_ge_cloud(my_predbat=None):
         ("api_json_error", _test_async_get_inverter_data_json_error, "API JSON error handling"),
         ("api_retry", _test_async_get_inverter_data_retry, "API retry logic"),
         ("api_post", _test_async_get_inverter_data_post, "API POST with/without datain"),
+        ("account", _test_async_get_account, "Get account details and timezone"),
+        ("account_failure", _test_async_get_account_failure, "Failed account fetch retains previous details"),
+        ("account_saved_to_storage", _test_account_saved_to_storage, "Account details saved to storage"),
+        ("account_restored_from_cache", _test_account_restored_from_cache, "Account restored from a fresh storage cache"),
+        ("account_stale_cache", _test_account_stale_cache_refetch, "Stale cached account is re-fetched"),
+        ("account_no_cache", _test_account_no_cache_fetches, "Account fetched when nothing is cached"),
+        ("account_failed_fetch_retry", _test_account_failed_fetch_retries, "Failed account fetch retries without polling"),
+        ("account_timezone", _test_set_account_timezone, "Account timezone parsing and fallbacks"),
+        ("publish_account", _test_publish_account, "Publish account and timezone sensors"),
+        ("publish_account_empty", _test_publish_account_empty, "Publish account with missing details"),
+        ("shift_time_string", _test_shift_time_string, "Shift register time strings across midnight"),
+        ("register_time_timezone", _test_register_time_timezone, "Time registers use the account timezone"),
+        ("register_time_no_timezone", _test_register_time_no_timezone, "Time registers unchanged with no account timezone"),
         ("devices_ems", _test_async_get_devices_with_ems, "Get devices with EMS"),
         ("devices_gateway", _test_async_get_devices_with_gateway, "Get devices with Gateway"),
         ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
@@ -833,6 +854,554 @@ def _test_async_get_inverter_data_post(my_predbat):
                 if result != [{"serial": "test456"}]:
                     print(f"ERROR: Expected device list, got {result}")
                     return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_account(my_predbat):
+    """Test fetching the customer account details and recording the account timezone"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        account_data = {
+            "id": 2,
+            "name": "francesca.holmes.285",
+            "email": "joshua94@martin.com",
+            "country": "GREECE",
+            "timezone": "GMT",
+            "standard_timezone": "Europe/Athens",
+        }
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": account_data})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_account()
+
+                if result != account_data:
+                    print("ERROR: Expected account data returned, got {}".format(result))
+                    return 1
+                if ge_cloud.account != account_data:
+                    print("ERROR: Expected account stored, got {}".format(ge_cloud.account))
+                    return 1
+                if ge_cloud.account_timezone_name != "Europe/Athens":
+                    print("ERROR: Expected account timezone Europe/Athens, got {}".format(ge_cloud.account_timezone_name))
+                    return 1
+                # Athens is always 2 hours ahead of London as both follow the same DST rules
+                if ge_cloud.get_timezone_offset_minutes() != 120:
+                    print("ERROR: Expected offset of 120 minutes, got {}".format(ge_cloud.get_timezone_offset_minutes()))
+                    return 1
+
+                # Verify the account endpoint was used
+                call_url = mock_session.get.call_args[0][0]
+                if not call_url.endswith(GE_API_ACCOUNT):
+                    print("ERROR: Expected account endpoint to be called, got {}".format(call_url))
+                    return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_account_failure(my_predbat):
+    """Test that a failed account fetch leaves the previously known account details alone"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.account = {"standard_timezone": "Europe/Athens"}
+        ge_cloud.account_timezone = pytz.timezone("Europe/Athens")
+        ge_cloud.account_timezone_name = "Europe/Athens"
+
+        mock_response = create_aiohttp_mock_response(status=404, json_data={"error": "Not found"})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_account()
+
+                if result != {"standard_timezone": "Europe/Athens"}:
+                    print("ERROR: Expected previous account to be returned, got {}".format(result))
+                    return 1
+                if ge_cloud.account_timezone_name != "Europe/Athens":
+                    print("ERROR: Expected timezone to be retained, got {}".format(ge_cloud.account_timezone_name))
+                    return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_publish_account(my_predbat):
+    """Test publishing the account and timezone sensors"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.account_timezone = pytz.timezone("Europe/Athens")
+        ge_cloud.account_timezone_name = "Europe/Athens"
+
+        account_data = {
+            "id": 2,
+            "name": "francesca.holmes.285",
+            "email": "joshua94@martin.com",
+            "country": "GREECE",
+            "timezone": "EET",
+            "standard_timezone": "Europe/Athens",
+        }
+        await ge_cloud.publish_account(account_data)
+
+        entity_id = "sensor.predbat_gecloud_account"
+        if entity_id not in ge_cloud.dashboard_items:
+            print("ERROR: Expected account sensor to be published")
+            return 1
+        item = ge_cloud.dashboard_items[entity_id]
+        if item["state"] != "francesca.holmes.285":
+            print("ERROR: Expected account state to be the account name, got {}".format(item["state"]))
+            return 1
+        data = item["attributes"].get("data", None)
+        if data is None:
+            print("ERROR: Expected a data attribute on the account sensor")
+            return 1
+        if "name" in data:
+            print("ERROR: Expected name to be excluded from the account data attribute, got {}".format(data))
+            return 1
+        if data.get("email") != "joshua94@martin.com" or data.get("country") != "GREECE" or data.get("id") != 2:
+            print("ERROR: Expected the remaining account values in the data attribute, got {}".format(data))
+            return 1
+
+        entity_id = "sensor.predbat_gecloud_timezone"
+        if entity_id not in ge_cloud.dashboard_items:
+            print("ERROR: Expected timezone sensor to be published")
+            return 1
+        item = ge_cloud.dashboard_items[entity_id]
+        if item["state"] != "Europe/Athens":
+            print("ERROR: Expected timezone state Europe/Athens, got {}".format(item["state"]))
+            return 1
+        data = item["attributes"].get("data", None)
+        if data is None:
+            print("ERROR: Expected a data attribute on the timezone sensor")
+            return 1
+        if data.get("timezone") != "EET" or data.get("standard_timezone") != "Europe/Athens":
+            print("ERROR: Expected the timezone values in the data attribute, got {}".format(data))
+            return 1
+        if data.get("predbat_timezone") != "Europe/London":
+            print("ERROR: Expected the Predbat timezone in the data attribute, got {}".format(data))
+            return 1
+        if data.get("offset_minutes") != 120:
+            print("ERROR: Expected an offset of 120 minutes in the data attribute, got {}".format(data))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_publish_account_empty(my_predbat):
+    """Test that no sensors are published when the account details are unavailable"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        await ge_cloud.publish_account({})
+
+        if ge_cloud.dashboard_items:
+            print("ERROR: Expected no entities published for an empty account, got {}".format(list(ge_cloud.dashboard_items)))
+            return 1
+
+        # An account with no timezone still publishes, falling back to an unknown timezone
+        await ge_cloud.publish_account({"name": "someone"})
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "unknown":
+            print("ERROR: Expected unknown timezone state, got {}".format(ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", None)))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_account", {}).get("state", None) != "someone":
+            print("ERROR: Expected account name state, got {}".format(ge_cloud.dashboard_items.get("sensor.predbat_gecloud_account", None)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_saved_to_storage(my_predbat):
+    """Account details fetched from the API are saved to storage"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens"}
+
+        async def mock_get_account():
+            ge_cloud.account = account_data
+            ge_cloud.set_account_timezone(account_data)
+            return account_data
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        account_saves = [call for call in storage.save_calls if call["filename"] == "account"]
+        if len(account_saves) != 1:
+            print("ERROR: Expected the account to be saved once, got {}".format(storage.save_calls))
+            return 1
+        if account_saves[0]["module"] != "gecloud" or account_saves[0]["data"] != account_data:
+            print("ERROR: Unexpected account save {}".format(account_saves[0]))
+            return 1
+        if "sensor.predbat_gecloud_account" not in ge_cloud.dashboard_items:
+            print("ERROR: Expected the account sensor to be published")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_restored_from_cache(my_predbat):
+    """A fresh cached account is restored on restart without hitting the API"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens", "timezone": "EET"}
+        await storage.save("gecloud", "account", account_data, format="json")
+        storage.age_overrides[("gecloud", "account")] = 60
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        fetch_calls = []
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            return {}
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        if fetch_calls:
+            print("ERROR: Expected no API fetch when the cached account is fresh")
+            return 1
+        if ge_cloud.account != account_data:
+            print("ERROR: Expected the cached account to be restored, got {}".format(ge_cloud.account))
+            return 1
+        if ge_cloud.account_timezone_name != "Europe/Athens":
+            print("ERROR: Expected the cached timezone to be restored, got {}".format(ge_cloud.account_timezone_name))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "Europe/Athens":
+            print("ERROR: Expected the timezone sensor to be published from the cache")
+            return 1
+
+        # A subsequent run should not fetch either, as the details are still within their lifetime
+        await ge_cloud.update_account(first=False)
+        if fetch_calls:
+            print("ERROR: Expected no API fetch on a later run within the cache lifetime")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_stale_cache_refetch(my_predbat):
+    """A stale cached account is used as a fallback but re-fetched from the API"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        cached_account = {"name": "old-name", "standard_timezone": "Europe/Athens"}
+        await storage.save("gecloud", "account", cached_account, format="json")
+        storage.age_overrides[("gecloud", "account")] = 48 * 60
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        fresh_account = {"name": "new-name", "standard_timezone": "Europe/Paris"}
+        fetch_calls = []
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            ge_cloud.account = fresh_account
+            ge_cloud.set_account_timezone(fresh_account)
+            return fresh_account
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected the stale cache to trigger one API fetch, got {}".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account != fresh_account:
+            print("ERROR: Expected the freshly fetched account to be used, got {}".format(ge_cloud.account))
+            return 1
+        account_saves = [call for call in storage.save_calls if call["filename"] == "account" and call["data"] == fresh_account]
+        if not account_saves:
+            print("ERROR: Expected the freshly fetched account to be saved to storage")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_no_cache_fetches(my_predbat):
+    """With no cached account the details are fetched from the API"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        fetch_calls = []
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            return {}
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected one API fetch with no cached account, got {}".format(len(fetch_calls)))
+            return 1
+        if not any("No valid account details found" in message for message in ge_cloud.log_messages):
+            print("ERROR: Expected a log message about the missing account cache")
+            return 1
+        # Nothing to save or publish when the fetch returns nothing
+        if [call for call in storage.save_calls if call["filename"] == "account"]:
+            print("ERROR: Expected no account save when the fetch returned nothing")
+            return 1
+        if ge_cloud.dashboard_items:
+            print("ERROR: Expected no entities published for an empty account, got {}".format(list(ge_cloud.dashboard_items)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_failed_fetch_retries(my_predbat):
+    """A failed account fetch retries after the retry interval rather than waiting a full day"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        start = ge_cloud._now_utc_exact
+
+        fetch_calls = []
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens"}
+        fail = True
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            if fail:
+                return {}
+            ge_cloud.account = account_data
+            ge_cloud.set_account_timezone(account_data)
+            return account_data
+
+        ge_cloud.async_get_account = mock_get_account
+
+        # First attempt fails, so the details must not be marked fresh
+        await ge_cloud.update_account(first=True)
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected 1 fetch attempt, got {}".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account_stamp is not None:
+            print("ERROR: Expected account_stamp to stay None after a failed fetch, got {}".format(ge_cloud.account_stamp))
+            return 1
+
+        # A run within the retry interval must not hammer the API
+        ge_cloud._now_utc_exact = start + timedelta(minutes=5)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected no retry within the retry interval, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        # Once the retry interval has passed it tries again, well before the 24 hour lifetime
+        fail = False
+        ge_cloud._now_utc_exact = start + timedelta(minutes=31)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 2:
+            print("ERROR: Expected a retry after the retry interval, got {} fetches".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account_stamp != ge_cloud._now_utc_exact:
+            print("ERROR: Expected account_stamp to be set after a successful fetch, got {}".format(ge_cloud.account_stamp))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "Europe/Athens":
+            print("ERROR: Expected the timezone sensor to be published after the successful retry")
+            return 1
+
+        # Now that it succeeded there should be no further fetches until the details expire
+        ge_cloud._now_utc_exact = start + timedelta(hours=12)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 2:
+            print("ERROR: Expected no fetch while the details are fresh, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        ge_cloud._now_utc_exact = start + timedelta(hours=25)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 3:
+            print("ERROR: Expected a fetch once the details expired, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_set_account_timezone(my_predbat):
+    """Test recording the account timezone including bad and missing values"""
+
+    ge_cloud = MockGECloudDirect()
+
+    # Falls back to the non-standard timezone name when standard_timezone is absent
+    ge_cloud.set_account_timezone({"timezone": "Europe/Athens"})
+    if ge_cloud.account_timezone_name != "Europe/Athens":
+        print("ERROR: Expected fallback to timezone field, got {}".format(ge_cloud.account_timezone_name))
+        return 1
+
+    # An unknown timezone is ignored and the previous value retained
+    ge_cloud.set_account_timezone({"standard_timezone": "Mars/Olympus_Mons"})
+    if ge_cloud.account_timezone_name != "Europe/Athens":
+        print("ERROR: Expected unknown timezone to be ignored, got {}".format(ge_cloud.account_timezone_name))
+        return 1
+    if not any("Unknown account timezone" in message for message in ge_cloud.log_messages):
+        print("ERROR: Expected a warning to be logged for an unknown timezone")
+        return 1
+
+    # No timezone at all leaves things unchanged and warns
+    ge_cloud.log_messages = []
+    ge_cloud.set_account_timezone({"name": "someone"})
+    if ge_cloud.account_timezone_name != "Europe/Athens":
+        print("ERROR: Expected missing timezone to be ignored, got {}".format(ge_cloud.account_timezone_name))
+        return 1
+    if not any("No timezone found" in message for message in ge_cloud.log_messages):
+        print("ERROR: Expected a warning to be logged for a missing timezone")
+        return 1
+
+    # No account timezone at all means no shift is applied
+    ge_cloud = MockGECloudDirect()
+    if ge_cloud.get_timezone_offset_minutes() != 0:
+        print("ERROR: Expected zero offset with no account timezone, got {}".format(ge_cloud.get_timezone_offset_minutes()))
+        return 1
+
+    return 0
+
+
+def _test_shift_time_string(my_predbat):
+    """Test shifting register time strings across the midnight boundary"""
+
+    ge_cloud = MockGECloudDirect()
+
+    cases = [
+        ("02:00:00", -120, "00:00:00"),
+        ("23:30", 120, "01:30"),
+        ("01:00:00", -120, "23:00:00"),
+        ("00:15:00", -30, "23:45:00"),
+        ("24:00", -60, "23:00"),
+        ("12:00:00", 0, "12:00:00"),
+        ("bad", 60, "bad"),
+        ("aa:bb", 60, "aa:bb"),
+        (None, 60, None),
+        (45, 60, 45),
+    ]
+    for value, offset, expected in cases:
+        result = ge_cloud.shift_time_string(value, offset)
+        if result != expected:
+            print("ERROR: shift_time_string({}, {}) expected {}, got {}".format(value, offset, expected, result))
+            return 1
+
+    return 0
+
+
+def _test_register_time_timezone(my_predbat):
+    """Test that time registers are published and written using the customer account timezone"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.account_timezone = pytz.timezone("Europe/Athens")
+        ge_cloud.account_timezone_name = "Europe/Athens"
+
+        # Register value is in the account timezone (Athens, 2 hours ahead of the Predbat timezone)
+        registers = {77: {"name": "AC Charge 1 Start Time", "validation_rules": ["date_format:H:i"], "validation": "", "value": "02:00"}}
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+
+        entity_id = "select.predbat_gecloud_test123_ac_charge_1_start_time"
+        if entity_id not in ge_cloud.dashboard_items:
+            print("ERROR: Expected time select entity to be published")
+            return 1
+        state = ge_cloud.dashboard_items[entity_id]["state"]
+        if state != "00:00:00":
+            print("ERROR: Expected published state 00:00:00 in the Predbat timezone, got {}".format(state))
+            return 1
+
+        # Writing back a Predbat local time should be converted into the account timezone
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        await ge_cloud.select_event(entity_id, "23:30:00")
+
+        if len(write_calls) != 1:
+            print("ERROR: Expected 1 write call, got {}".format(len(write_calls)))
+            return 1
+        if write_calls[0]["value"] != "01:30":
+            print("ERROR: Expected 01:30 written in the account timezone, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_register_time_no_timezone(my_predbat):
+    """Test that time registers are left untouched when the account timezone is unknown"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        registers = {77: {"name": "AC Charge 1 Start Time", "validation_rules": ["date_format:H:i"], "validation": "", "value": "02:00"}}
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+
+        entity_id = "select.predbat_gecloud_test123_ac_charge_1_start_time"
+        state = ge_cloud.dashboard_items[entity_id]["state"]
+        if state != "02:00:00":
+            print("ERROR: Expected unshifted state 02:00:00, got {}".format(state))
+            return 1
+
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        await ge_cloud.select_event(entity_id, "23:30:00")
+
+        if write_calls[0]["value"] != "23:30":
+            print("ERROR: Expected unshifted write of 23:30, got {}".format(write_calls[0]["value"]))
+            return 1
 
         return 0
 
@@ -1836,6 +2405,8 @@ def _make_async_storage_mock():
         def __init__(self):
             self._data = {}
             self.save_calls = []
+            # Ages in minutes keyed by (module, filename), overriding the default of 0 (fresh)
+            self.age_overrides = {}
 
         async def load(self, module, filename, format="json"):
             import copy
@@ -1850,8 +2421,10 @@ def _make_async_storage_mock():
             return True
 
         async def age(self, module, filename):
-            # Return 0 (fresh) for any stored key, None for missing keys
-            return 0 if (module, filename) in self._data else None
+            # Return 0 (fresh) for any stored key unless overridden, None for missing keys
+            if (module, filename) not in self._data:
+                return None
+            return self.age_overrides.get((module, filename), 0)
 
     return _AsyncStorageMock()
 
@@ -2027,6 +2600,13 @@ def _test_run_method(my_predbat):
         call_order = []
 
         # Mock all the async functions called by run()
+        async def mock_get_account():
+            call_order.append("async_get_account")
+            return {"standard_timezone": "Europe/London"}
+
+        async def mock_publish_account(account):
+            call_order.append("publish_account")
+
         async def mock_get_devices():
             call_order.append("async_get_devices")
             return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
@@ -2085,6 +2665,8 @@ def _test_run_method(my_predbat):
             call_order.append(f"enable_default_options:{device}")
 
         # Assign all mocks
+        ge_cloud.async_get_account = mock_get_account
+        ge_cloud.publish_account = mock_publish_account
         ge_cloud.async_get_devices = mock_get_devices
         ge_cloud.async_get_evc_devices = mock_get_evc_devices
         ge_cloud.async_get_inverter_status = mock_get_inverter_status
@@ -2112,6 +2694,8 @@ def _test_run_method(my_predbat):
 
         # Verify expected call order for first run
         expected_order = [
+            "async_get_account",
+            "publish_account",
             "async_get_devices",
             "async_get_evc_devices",
             # Device polling (every 60 seconds, also on first)
@@ -3871,6 +4455,12 @@ def _test_enable_default_options(my_predbat):
 def _make_run_mocks(ge_cloud, enable_default_calls=None):
     """Attach minimal async mocks to ge_cloud so run() can execute without real I/O."""
 
+    async def mock_get_account():
+        return {"standard_timezone": "Europe/London"}
+
+    async def mock_publish_account(_account):
+        pass
+
     async def mock_get_devices():
         return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
@@ -3908,6 +4498,8 @@ def _make_run_mocks(ge_cloud, enable_default_calls=None):
         if enable_default_calls is not None:
             enable_default_calls.append(device)
 
+    ge_cloud.async_get_account = mock_get_account
+    ge_cloud.publish_account = mock_publish_account
     ge_cloud.async_get_devices = mock_get_devices
     ge_cloud.async_get_evc_devices = mock_get_evc_devices
     ge_cloud.async_get_inverter_status = mock_get_inverter_status

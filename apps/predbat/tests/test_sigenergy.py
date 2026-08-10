@@ -22,7 +22,9 @@ from sigenergy import (
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_MODE_MSC,
+    SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
     _safe_float,
     _safe_int,
@@ -171,8 +173,13 @@ class MockSigenergyAPI(SigenergyAPI):
         """Store state."""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes or {}}
 
-    def get_arg(self, key, default=None):
-        """Return stored arg or default."""
+    def get_arg(self, key, default=None, **kwargs):
+        """Return stored arg or default.
+
+        Accepts and ignores the wider ComponentBase.get_arg keyword arguments (indirect,
+        combine, attribute, index, domain, can_override, required_unit) so helpers that
+        pass them — such as fetch_axle_active — work against this mock.
+        """
         return self.args.get(key, default)
 
     def set_arg(self, key, value):
@@ -2466,6 +2473,224 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     return failed
 
 
+def _make_contended_api(sid, mode, axle_control=False, axle_event="off"):
+    """Build a MockSigenergyAPI whose system sits in the given operating mode.
+
+    Args:
+        sid: System ID to register.
+        mode: Operating mode integer to report as the system's current mode.
+        axle_control: Value of the axle_control option.
+        axle_event: State of the Axle event binary sensor ("on" or "off").
+
+    Returns:
+        A MockSigenergyAPI with run()'s async helpers stubbed out.
+    """
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: mode}
+    api.system_id_filter = {sid}
+    api.args["axle_control"] = axle_control
+    api.args["axle_session"] = "binary_sensor.predbat_axle_event"
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": axle_event}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock()
+    api.fetch_history_totals = AsyncMock()
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    return api
+
+
+def test_sigenergy_reclaims_vpp_from_third_party_controller(my_predbat):
+    """Without axle_control, a system taken into NBI is reclaimed into VPP, and says so."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert api.last_contended_by[sid] == "Northbound Integration", "records which controller displaced Predbat"
+
+    reclaim_logs = [m for m in api.log_messages if "reclaiming VPP mode" in m]
+    assert len(reclaim_logs) == 1, "reclaim is logged once, got {}".format(api.log_messages)
+    assert "Northbound Integration" in reclaim_logs[0], "log names the displacing controller"
+    assert "onboard" not in reclaim_logs[0].lower(), "reclaim log must not blame onboarding"
+
+    return failed
+
+
+def test_sigenergy_contention_does_not_report_pending_approval(my_predbat):
+    """Contention must not surface as pending_approval — that shows a false 'approve in app' banner."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=300, first=False))
+    assert api.onboard_status[sid] == "active", "contended system stays active, not pending_approval"
+
+    api_msc = _make_contended_api(sid, SIGENERGY_MODE_MSC)
+    api_msc._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api_msc.run(seconds=300, first=False))
+    assert api_msc.onboard_status[sid] == "pending_approval", "MSC still means pending approval"
+
+    return failed
+
+
+def test_sigenergy_contention_marker_published_before_recovery(my_predbat):
+    """A contention episode shorter than a poll interval must still reach the sensor.
+
+    Regression test: the marker used to be cleared on recovery while the sensor only
+    published every 5 minutes, so brief contention was never visible to support.
+    """
+    failed = False
+    sid = "SIG001"
+    sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    # Minute tick during contention — the real _manage_vpp_registration records the marker.
+    run_async(api.run(seconds=60, first=False))
+    assert api.dashboard_items[sensor_key]["attributes"]["last_contended_by"] == "Northbound Integration", "contention published on the minute tick"
+
+    # Mode recovers. The marker must survive so the episode remains visible.
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(api.run(seconds=120, first=False))
+    assert api.dashboard_items[sensor_key]["attributes"]["in_vpp"] is True, "in_vpp reports the live state"
+    assert api.dashboard_items[sensor_key]["attributes"]["last_contended_by"] == "Northbound Integration", "marker is not cleared on recovery"
+
+    return failed
+
+
+def test_sigenergy_reclaim_runs_on_the_minute(my_predbat):
+    """The reclaim check runs every minute, so a displaced system is not left for a full poll."""
+    failed = False
+    sid = "SIG001"
+
+    assert SIGENERGY_VPP_RECLAIM_INTERVAL == 60, "reclaim cadence is one minute"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api._manage_vpp_registration.assert_awaited_once()
+
+    return failed
+
+
+def test_sigenergy_controls_skipped_message_distinguishes_contention(my_predbat):
+    """Skipping controls because another controller holds the system must not blame onboarding."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+
+    skip_logs = [m for m in api.log_messages if "controls skipped" in m]
+    assert skip_logs, "controls-skipped message is logged"
+    assert any("held by another controller" in m for m in skip_logs), "message names contention, got {}".format(skip_logs)
+    assert not any("onboard is approved" in m for m in skip_logs), "must not tell the user to approve onboarding"
+    api.apply_controls.assert_not_awaited()
+
+    return failed
+
+
+def test_sigenergy_axle_control_off_reclaims_as_before(my_predbat):
+    """With axle_control unset, an active Axle event does not change behaviour."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=False, axle_event="on")
+    assert api._axle_has_control() is False, "axle_control off means Predbat keeps ownership"
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+
+    return failed
+
+
+def test_sigenergy_axle_event_leaves_mode_alone(my_predbat):
+    """With axle_control on, Predbat must not touch the mode in either direction."""
+    failed = False
+    sid = "SIG001"
+
+    # Axle has already taken the system into NBI — leave it there.
+    api_nbi = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    result = run_async(api_nbi._manage_vpp_registration(sid, is_readonly=False))
+    assert result is False, "controls do not proceed while Axle owns the inverter"
+    api_nbi.set_operating_mode.assert_not_awaited()
+    assert any("standing down" in m for m in api_nbi.log_messages), "stand-down is logged, got {}".format(api_nbi.log_messages)
+
+    # Event started but Axle has not switched yet — do NOT drop to MSC, which would hand
+    # control to the owner's app rather than to Axle.
+    api_vpp = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    run_async(api_vpp._manage_vpp_registration(sid, is_readonly=False))
+    api_vpp.set_operating_mode.assert_not_awaited()
+
+    return failed
+
+
+def test_sigenergy_axle_event_skips_controls(my_predbat):
+    """Predbat must not issue battery commands while Axle is dispatching."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api.apply_controls.assert_not_awaited()
+
+    api_off = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="off")
+    api_off._manage_vpp_registration = AsyncMock(return_value=True)
+    run_async(api_off.run(seconds=60, first=False))
+    api_off.apply_controls.assert_awaited_once_with(sid)
+
+    return failed
+
+
+def test_sigenergy_axle_event_end_resumes_control(my_predbat):
+    """When the event ends Predbat reclaims VPP and says it has resumed."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
+
+    # Event ends — the live sensor flips, no prediction cycle required.
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": "off"}
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert any("resuming control" in m for m in api.log_messages), "resume is logged, got {}".format(api.log_messages)
+
+    return failed
+
+
+def test_sigenergy_axle_standoff_survives_restart(my_predbat):
+    """A restart mid-event must not reclaim VPP.
+
+    Regression test: reading the cached set_read_only_axle flag failed here, because
+    reset() leaves it False and the component starts before the first update_pred().
+    Evaluating axle_control and the event sensor live is what makes first=True safe.
+    """
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    # Simulate the parent having the stale post-reset value the prediction loop has not
+    # yet refreshed — the component must not depend on it.
+    api.base = MagicMock()
+    api.base.set_read_only_axle = False
+
+    assert api._axle_has_control() is True, "live evaluation sees the event despite the stale flag"
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
+
+    return failed
+
+
 def run_sigenergy_tests(my_predbat):
     """Run all Sigenergy API unit tests.
 
@@ -2542,6 +2767,16 @@ def run_sigenergy_tests(my_predbat):
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
+        ("reclaims_vpp_from_third_party_controller", test_sigenergy_reclaims_vpp_from_third_party_controller),
+        ("contention_does_not_report_pending_approval", test_sigenergy_contention_does_not_report_pending_approval),
+        ("contention_marker_published_before_recovery", test_sigenergy_contention_marker_published_before_recovery),
+        ("reclaim_runs_on_the_minute", test_sigenergy_reclaim_runs_on_the_minute),
+        ("controls_skipped_message_distinguishes_contention", test_sigenergy_controls_skipped_message_distinguishes_contention),
+        ("axle_control_off_reclaims_as_before", test_sigenergy_axle_control_off_reclaims_as_before),
+        ("axle_event_leaves_mode_alone", test_sigenergy_axle_event_leaves_mode_alone),
+        ("axle_event_skips_controls", test_sigenergy_axle_event_skips_controls),
+        ("axle_event_end_resumes_control", test_sigenergy_axle_event_end_resumes_control),
+        ("axle_standoff_survives_restart", test_sigenergy_axle_standoff_survives_restart),
     ]
 
     for name, fn in tests:
