@@ -3376,6 +3376,120 @@ class Output:
         # Update timestamp
         self.savings_last_updated = self.now_utc
 
+    def tune_best_soc_keep(self):
+        """
+        Observer for a possible future best_soc_keep auto-tune (#TBD): computes a slow, bounded
+        daily suggestion based on yesterday's real outcome, rather than re-planning with a sweep
+        of candidate values, and publishes it for comparison - it does NOT change best_soc_keep
+        itself yet. This is deliberate: the correction logic needs a period of dogfooding against
+        real outcomes before it's trusted to write back automatically; a later patch can wire up
+        self.expose_config() once that trust exists.
+
+        - Any import that happened at a worse rate than the export rate available at the same
+          moment is "regret" - real evidence the reserve wasn't big enough. Holding that energy
+          back instead of using/exporting it would only have cost the (cheaper) export income
+          foregone, not the (more expensive) import price actually paid - so the regret is the
+          *difference*, not the raw import cost: 1kWh bought back at 32p while 16p export was
+          available is 16p of regret, not 32p. Weighted in money per minute
+          (import_kwh * max(0, import_rate - export_rate)), summed across the day, then
+          converted back to an equivalent kWh of reserve via the day's average rate.
+        - Otherwise (no regret), if the real minimum SoC reached yesterday sat comfortably
+          above the current keep floor, that unused margin is evidence too much is being
+          reserved for no benefit.
+
+        Deliberately simplified versus a full accounting: round-trip battery losses are not
+        subtracted from the export side of the regret calculation, and the margin (down) side
+        is not rate-weighted the way the regret (up) side is - both are known simplifications
+        to keep this a plain daily nudge, not a full replan.
+        """
+        if not self.get_arg("best_soc_keep_auto_tune", False):
+            return
+        if self.best_soc_keep_last_tune is not None and self.best_soc_keep_last_tune.date() == self.now_utc.date():
+            return
+        self.best_soc_keep_last_tune = self.now_utc
+
+        alpha = self.get_arg("best_soc_keep_auto_tune_alpha", 0.05)
+        old_keep = self.best_soc_keep
+        end_record = 24 * 60
+        minutes_back = self.minutes_now + 1
+
+        past_rates = self.history_to_future_rates(self.rate_import, 24 * 60, end_record + self.minutes_now)
+        past_rates_export = self.history_to_future_rates(self.rate_export, 24 * 60, end_record + self.minutes_now)
+        if not past_rates or not past_rates_export:
+            self.log("Warn: best_soc_keep auto-tune skipped - no rate history available")
+            return
+
+        # Real per-minute import yesterday, from the delta of the cumulative import history -
+        # mirrors calculate_yesterday()'s backwards-indexed reconstruction of cost_data.
+        import_cumulative = {}
+        for minute in range(0, end_record + 1):
+            import_cumulative[minute] = self.import_today.get(minutes_back + 24 * 60 - minute - 5, 0.0) if self.import_today else 0.0
+
+        # Real minimum SoC reached yesterday - prefer the already-fetched in-memory history,
+        # fall back to an HA query, mirroring calculate_yesterday()'s own battery_data lookup.
+        battery_data = self.soc_kwh_history
+        if not battery_data:
+            battery_today_data = self.get_history_wrapper(entity_id=self.prefix + ".soc_kw_h0", days=2, required=False)
+            if battery_today_data:
+                battery_data, _ = minute_data(battery_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
+            else:
+                battery_data = {}
+        soc_min_yesterday = None
+        for minute in range(0, end_record):
+            value = battery_data.get(minutes_back + 24 * 60 - minute - 5, None)
+            if value is not None and (soc_min_yesterday is None or value < soc_min_yesterday):
+                soc_min_yesterday = value
+        if soc_min_yesterday is None:
+            self.log("Warn: best_soc_keep auto-tune skipped - no battery SoC history available")
+            return
+
+        # Regret: money genuinely lost to import versus what the same energy could have earned
+        # exporting, not the raw import cost.
+        regret_pence = 0.0
+        for minute in range(0, end_record):
+            import_kwh = import_cumulative.get(minute + 1, 0.0) - import_cumulative.get(minute, 0.0)
+            if import_kwh <= 0:
+                continue
+            import_rate = past_rates.get(minute, 0.0)
+            export_rate = past_rates_export.get(minute, 0.0)
+            regret_pence += import_kwh * max(0.0, import_rate - export_rate)
+
+        rate_reference = self.rate_average if self.rate_average > 0 else max(self.rate_min, 1.0)
+        shortfall_kwh = (regret_pence / rate_reference) if rate_reference > 0 else 0.0
+        margin_kwh = max(0.0, soc_min_yesterday - old_keep)
+
+        if shortfall_kwh > 0.01:
+            correction = shortfall_kwh
+        else:
+            correction = -margin_kwh
+
+        suggested_keep = old_keep + alpha * correction
+        suggested_keep = max(0.0, min(suggested_keep, self.soc_max))
+        suggested_keep = dp2(suggested_keep)
+
+        self.log(
+            "Best SoC Keep auto-tune (observer only, not applied): current {}kWh, soc_min_yesterday {}kWh, regret {}{} (shortfall {}kWh equiv), margin {}kWh, correction {}kWh, suggested {}kWh".format(
+                old_keep, dp2(soc_min_yesterday), dp2(regret_pence), self.currency_symbols[1], dp2(shortfall_kwh), dp2(margin_kwh), dp2(alpha * correction), suggested_keep
+            )
+        )
+
+        self.dashboard_item(
+            self.prefix + ".best_soc_keep_auto_tune",
+            state=suggested_keep,
+            attributes={
+                "friendly_name": "Best SoC Keep Auto Tune Suggestion",
+                "state_class": "measurement",
+                "unit_of_measurement": "kWh",
+                "icon": "mdi:battery-50",
+                "soc_min_yesterday": dp2(soc_min_yesterday),
+                "regret": dp2(regret_pence),
+                "shortfall_kwh": dp2(shortfall_kwh),
+                "margin_kwh": dp2(margin_kwh),
+                "correction_kwh": dp2(alpha * correction),
+                "applied": False,
+            },
+        )
+
     def publish_rate_and_threshold(self):
         """
         Publish energy rate data and thresholds

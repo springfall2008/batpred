@@ -527,6 +527,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.savings_today_pvbat = 0.0
         self.savings_today_actual = 0.0
         self.savings_last_updated = None
+        self.best_soc_keep_last_tune = None
         self.cost_yesterday_car = 0.0
         self.cost_total_car = 0.0
         self.rate_import = {}
@@ -874,6 +875,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Publish rate data
         self.publish_rate_and_threshold()
+
+        # Auto-tune best_soc_keep from yesterday's real outcome (#TBD), at most once a day
+        self.tune_best_soc_keep()
 
         # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
         if recompute:

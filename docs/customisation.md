@@ -288,6 +288,15 @@ more money to do so.
 
 The default is 0.5 - this is the recommended setting.
 
+**switch.predbat_best_soc_keep_auto_tune** (_expert mode_, default Off, suggest only, not applied) Once a day, compares the real minimum battery
+level reached yesterday against any import that happened at a worse rate than the export rate available at the same moment (a genuine sign that
+best_soc_keep was too low), and publishes a suggested best_soc_keep value to **sensor.predbat_best_soc_keep_auto_tune** for you to compare against
+your own setting. It does not change best_soc_keep itself - this is an observer for judging whether the correction logic is sound before a future
+version wires it up to apply automatically.
+
+**input_number.predbat_best_soc_keep_auto_tune_alpha** (_expert mode_, default 0.05) controls how much of the daily suggestion above feeds into
+each day's change, via `new = old + alpha * correction`. Smaller values move more slowly and are less sensitive to one unusual day.
+
 **input_number.predbat_best_soc_min** (_expert mode_) (default 0kWh) sets the minimum charge level (in kWh) for charging during each slot and the
 minimum force export level also (set to 0 if you want to skip some slots).
 If you set this to a non-zero value you will need to use the low rate threshold to control which slots you charge from or you may charge all the time.
