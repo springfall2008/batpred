@@ -64,6 +64,13 @@ ENPHASE_REFRESH_SETTINGS = 30  # profile, battery settings, schedule config - ch
 ENPHASE_REFRESH_STATUS = 5  # battery SOC/available energy - needs to stay fresh for planning
 ENPHASE_REFRESH_ENERGY = 5  # today energy totals
 ENPHASE_REFRESH_POWER = 5  # latest instantaneous power
+# How often apply_battery_schedule reconciles even without an explicit write-switch trigger, so a
+# missed/dropped trigger cannot leave the cloud diverged from the plan indefinitely - see #4461.
+ENPHASE_REFRESH_SCHEDULE_SYNC = 5
+# How many read-clean-write passes apply_battery_schedule attempts, with a short backoff between,
+# before giving up on this call and leaving it to the next periodic sync or trigger. See
+# docs/superpowers/specs/2026-08-08-enphase-schedule-reconcile-design.md.
+ENPHASE_RECONCILE_MAX_ATTEMPTS = 3
 # How many intra-day buckets to step back when deriving power from the /today energy arrays.
 # 1 would be the just-closed bucket, which the cloud is still back-filling; 2 is settled.
 ENPHASE_SETTLED_BUCKETS = 2
@@ -88,6 +95,7 @@ PROFILE_BACKUP_ONLY = "backup_only"
 SCHEDULE_CHARGE = "CFG"  # charge from grid
 SCHEDULE_EXPORT = "DTG"  # discharge to grid
 SCHEDULE_FREEZE = "RBD"  # restrict battery discharge
+FAMILY_ORDER = ("cfg", "dtg", "rbd")  # lower-case schedule family keys, in a fixed processing order
 
 ENPHASE_RETRIES = 5
 
@@ -351,6 +359,11 @@ class EnphaseAPI(ComponentBase):
         self.last_midnight_utc = None
         self.last_error_status = None  # HTTP status (or None) of the most recent request_json() failure
 
+        # site_id -> {family_key: True} for schedule/reserve writes that failed outright (all
+        # retries exhausted), so the failure is visible on the dashboard instead of only in the
+        # log - see _note_schedule_write_result / _publish_schedule_write_health.
+        self.schedule_write_failed = {}
+
     def is_alive(self):
         """Return True when the component has started and discovered a site."""
         return self.api_started and bool(self.sites)
@@ -448,6 +461,12 @@ class EnphaseAPI(ComponentBase):
             self.sync_local_schedule_from_cloud(site_id)
             await self.publish_data(site_id)
             await self.publish_schedule_settings_ha(site_id)
+            # Periodic reconcile, independent of the write-switch trigger - so a missed/dropped
+            # trigger (e.g. an HA restart mid-cycle) cannot leave the cloud diverged from the plan
+            # indefinitely. apply_battery_schedule is a no-op when nothing has changed. See #4461.
+            if self._needs_refresh("schedule_sync", ENPHASE_REFRESH_SCHEDULE_SYNC):
+                await self.apply_battery_schedule(site_id)
+                self.data_age["schedule_sync"] = datetime.now(timezone.utc)
 
         # Automatic configuration on first successful data load. A site with no controllable
         # battery (e.g. PV-only) cannot be configured as a Predbat inverter - log and report
@@ -678,14 +697,38 @@ class EnphaseAPI(ComponentBase):
                 local[direction]["enable"] = bool(entry.get("enabled"))
         self._schedule_seeded.add(site_id)
 
+    async def _publish_schedule_write_health(self, site_id):
+        """Publish a dedicated sensor reporting whether recent schedule/reserve writes landed.
+
+        A write that fails outright (a conflict surviving every retry, a failed delete or
+        activation) previously only ever appeared as a log warning - `predbat.status` kept
+        reporting the *intended* plan with no visible sign the cloud never actually accepted it
+        (#4461). This sensor stays "on" (ok) until a write fails, and reports exactly which
+        families/writes are currently failing so the mismatch is visible on the dashboard.
+        """
+        failures = self.schedule_write_failed.get(site_id, {})
+        self.dashboard_item(
+            f"binary_sensor.{self.prefix}_enphase_{site_id}_schedule_write_ok",
+            state="off" if failures else "on",
+            attributes={
+                "friendly_name": f"Enphase {site_id} Schedule Write Ok",
+                "icon": "mdi:cloud-check-outline" if not failures else "mdi:cloud-alert-outline",
+                "failed": sorted(failures.keys()),
+            },
+            app="enphase",
+        )
+
     async def publish_schedule_settings_ha(self, site_id):
         """Publish the schedule control entities for a site.
 
         Publishes the reserve control plus both the charge-from-grid and export (discharge-to-grid)
         window controls (a configured inverter always supports both - automatic_config requires
         DTG). There is no separate freeze control: Predbat freezes charge via the reserve, and
-        freeze-export is derived automatically from an export target SOC of 99%.
+        freeze-export is derived automatically from an export target SOC of 99%. Also (re)publishes
+        the schedule-write-health sensor, so a write failure is reflected immediately after the
+        attempt (switch_event) and kept current on every subsequent poll (run()).
         """
+        await self._publish_schedule_write_health(site_id)
         local = self.local_schedule.setdefault(site_id, self._default_local_schedule())
         reserve_min = int(self.battery_settings.get(site_id, {}).get("veryLowSocMin", 5) or 5)
         base_name = f"{self.prefix}_enphase_{site_id}_battery_schedule"
@@ -810,8 +853,9 @@ class EnphaseAPI(ComponentBase):
     async def switch_event(self, entity_id, service):
         """Handle a switch service call routed from HA, updating the local schedule model.
 
-        Turning on a "_write" switch triggers `apply_battery_schedule(site_id)`, which
-        diffs the local schedule model against the cloud and issues only the changed writes.
+        Turning on a "_write" switch triggers `apply_battery_schedule(site_id)`, which reconciles
+        the cloud schedule/reserve state to match this model - the same reconcile that also runs
+        periodically from `run()`.
         """
         site_id, attribute = self._parse_entity(entity_id)
         if not site_id or not attribute.startswith("battery_schedule_"):
@@ -830,90 +874,18 @@ class EnphaseAPI(ComponentBase):
         timezone_name = self.site_settings.get(site_id, {}).get("timezone")
         return timezone_name or str(self.local_tz)
 
-    async def _write_schedule(self, site_id, family, start_time_ha, end_time_ha, limit, enabled):
-        """Create/update one Enphase schedule family if it differs from our cached cloud state.
-
-        Converts the HA "HH:MM:SS" option times to Enphase "HH:MM" format, then compares against
-        the cached cloud schedule via `schedules_equal()`. A matching schedule is a no-op. Otherwise
-        it updates the existing schedule by id (`PUT`) or creates a new one (`POST`). On success it
-        optimistically updates our cached copy to the written state and returns - the periodic
-        settings re-read will correct it if the write did not actually land. A create additionally
-        re-reads the schedules once, to capture the cloud-assigned scheduleId (so later edits update
-        in place rather than creating duplicates - the write responses do not return the id).
-        Returns True if a write was issued.
-        """
-        start_hm = ha_time_to_enphase(start_time_ha)
-        end_hm = ha_time_to_enphase(end_time_ha)
-        family_key = family.lower()
-        cloud_entry = self.schedules.get(site_id, {}).get(family_key, {})
-        if schedules_equal(cloud_entry, start_hm, end_hm, limit, enabled):
-            return False  # already matches our cached state - nothing to do
-
-        payload = {"timezone": self._site_timezone(site_id), "startTime": start_hm, "endTime": end_hm, "scheduleType": family, "days": [1, 2, 3, 4, 5, 6, 7], "isEnabled": bool(enabled)}
-        if limit is not None:
-            payload["limit"] = int(limit)
-        schedule_id = cloud_entry.get("id")
-        if schedule_id and not enabled:
-            # The cloud ignores isEnabled=False on a PUT (it answers 200 with isEnabled still true
-            # and keeps enforcing the window), so the only way to retire a window is to delete it.
-            # A lingering window would also conflict with the other family's next write.
-            self.log(f"Enphase: Deleting {family} schedule {schedule_id} on site {site_id} (window no longer required)")
-            if not await self._delete_schedule(site_id, schedule_id):
-                return False
-            # Drop the id/window so the next apply is a no-op while disabled, and a re-enable creates
-            # a fresh schedule rather than PUTting an id the cloud no longer knows.
-            cleared = dict(cloud_entry)
-            for field in ("id", "startTime", "endTime", "limit"):
-                cleared.pop(field, None)
-            cleared["enabled"] = False
-            self.schedules.setdefault(site_id, {})[family_key] = cleared
-            return True
-        if schedule_id:
-            self.log(f"Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
-            result = await self._put_schedule_with_conflict_retry(site_id, family_key, schedule_id, payload)
-            if result is not None:
-                # Optimistically cache the new state, preserving the id and other fields.
-                updated = dict(self.schedules.get(site_id, {}).get(family_key) or cloud_entry)
-                updated.update({"startTime": start_hm, "endTime": end_hm, "limit": limit, "enabled": bool(enabled)})
-                self.schedules.setdefault(site_id, {})[family_key] = updated
-        else:
-            self.log(f"Enphase: Creating {family} schedule on site {site_id}: {start_hm}-{end_hm} limit={limit} enabled={enabled}")
-            result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config", json_body=payload)
-            if result is not None:
-                # Re-read once so we learn the new schedule's cloud-assigned id for future edits.
-                await self.get_schedules(site_id)
-        return result is not None
-
-    async def _put_schedule_with_conflict_retry(self, site_id, family_key, schedule_id, payload):
-        """PUT a schedule, re-reading and retrying once if the cloud reports a conflict.
-
-        HTTP 409 means some other schedule overlaps the window we asked for. Our cached view of the
-        account is up to 30 minutes stale, so re-read it: that both refreshes the id we should be
-        writing to and prunes any stray sibling that is causing the overlap. Retried once only - a
-        conflict that survives the re-read is a real clash (typically the other family's window)
-        and retrying it again would just burn API calls every cycle.
-        """
-        for attempt in range(2):
-            result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload)
-            if result is not None or self.last_error_status != 409 or attempt:
-                return result
-            self.log(f"Enphase: Schedule {schedule_id} on site {site_id} conflicts with another schedule; re-reading schedules and retrying once")
-            await self.get_schedules(site_id)
-            schedule_id = (self.schedules.get(site_id, {}).get(family_key) or {}).get("id") or schedule_id
-        return None
-
     def _is_read_only(self):
         """Return True when Predbat is in read-only mode and must not write to the account."""
         return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
-    async def _delete_schedule(self, site_id, schedule_id):
+    async def _delete_schedule(self, site_id, schedule_id, context=None):
         """Delete one schedule by id. Returns True on success.
 
         Deletion is a POST to the schedule's /delete sub-resource. The gateway does not allow the
         DELETE verb here - it rejects it with "403 Invalid CORS request" - and because a 403 counts
         as an auth failure, using it also burned a re-login on every attempt.
         """
-        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True)
+        result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}/delete", family="battery_config", allow_empty=True, context=context)
         return result is not None
 
     async def _prune_sibling_schedules(self, site_id, family_key, details, keep):
@@ -937,27 +909,33 @@ class EnphaseAPI(ComponentBase):
             survivors.append(item)
         return survivors
 
-    def _is_schedule_pending(self, site_id, family):
-        """Return True when the cached cloud schedule exists but is stuck in pending status."""
-        family_key = family.lower()
-        entry = self.schedules.get(site_id, {}).get(family_key, {})
+    def _is_schedule_pending(self, site_id, family_key):
+        """Return True when the cached cloud schedule exists but is stuck in pending status.
+
+        Reflects whatever `get_schedules` last read - `_reconcile_once` always re-reads before
+        checking this, so it is never more than one API call stale.
+        """
+        entry = self.schedules.get(site_id, {}).get(family_key.lower(), {})
         # get_schedules always stores a "status" key (None when the cloud omits scheduleStatus),
         # so coalesce to "" before comparing rather than relying on the dict-get default.
         return isinstance(entry, dict) and (entry.get("status") or "").lower() == "pending"
 
-    def _invalidate_cached_schedule(self, site_id, family):
-        """Clear the cached cloud schedule so the next apply detects a diff and retries.
+    def _note_schedule_write_result(self, site_id, family_key, ok):
+        """Track whether the most recent write/activation for a schedule family landed on the cloud.
 
-        Sets startTime to an empty string so that schedules_equal fails its window
-        comparison for an enabled schedule (``""[:5] != start_hm``), causing
-        _write_schedule to re-issue the update on the next apply as a PUT (the id is
-        preserved). Invalidation only runs after a failed activation, which only happens
-        for enabled schedules, so the disable path is never affected.
+        A write that fails outright (a conflict surviving every retry, a failed delete, a failed
+        activation PUT) otherwise only ever shows up as a generic HTTP warning in the log -
+        `predbat.status` keeps reporting the *intended* plan with no visible sign the device never
+        actually changed (#4461). ``count_errors`` feeds the existing per-component error count on
+        the `components_healthy` sensor; ``schedule_write_failed`` backs the dedicated per-family
+        warning published by `_publish_schedule_write_health`. Cleared on the next successful write.
         """
-        family_key = family.lower()
-        entry = self.schedules.get(site_id, {}).get(family_key)
-        if isinstance(entry, dict):
-            entry["startTime"] = ""
+        failures = self.schedule_write_failed.setdefault(site_id, {})
+        if ok:
+            failures.pop(family_key, None)
+        else:
+            failures[family_key] = True
+            self.count_errors += 1
 
     async def _activate_control_mode(self, site_id, family, body, apply_cache, label):
         """Commit a freshly written schedule to the gateway via a batterySettings PUT.
@@ -965,22 +943,23 @@ class EnphaseAPI(ComponentBase):
         A schedule write leaves the schedule in "pending" status; this follow-up PUT
         (carrying a per-mode ``body``) transitions it to active so the gateway acts on it.
         On success it clears the cached pending marker and calls ``apply_cache`` to
-        optimistically record the change in ``battery_settings``; on failure it logs and
-        invalidates the cached schedule so the next apply re-detects a diff and retries
-        write + activation. Returns True if the PUT succeeded.
+        optimistically record the change in ``battery_settings``; on failure it just logs -
+        `_reconcile_once` always re-reads from the cloud on its next attempt, so there is no local
+        cache to invalidate. Returns True if the PUT succeeded.
         """
         params = {"source": "enho"}
         if self.user_id:
             params["userId"] = self.user_id
-        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body)
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/batterySettings/{site_id}", family="battery_config", params=params, json_body=body, context=f"{label} activation")
+        family_key = family.lower()
         if result is not None:
             apply_cache(self.battery_settings.setdefault(site_id, {}))
-            entry = self.schedules.get(site_id, {}).get(family.lower())
+            entry = self.schedules.get(site_id, {}).get(family_key)
             if isinstance(entry, dict):
                 entry.pop("status", None)
         else:
             self.log(f"Warn: Enphase: {label} activation failed for site {site_id}")
-            self._invalidate_cached_schedule(site_id, family)
+        self._note_schedule_write_result(site_id, family_key, result is not None)
         return result is not None
 
     async def _activate_cfg_mode(self, site_id, family=SCHEDULE_CHARGE):
@@ -1016,21 +995,6 @@ class EnphaseAPI(ComponentBase):
 
         return await self._activate_control_mode(site_id, family, {"rbdControl": {"enabled": True}}, apply_cache, "RBD")
 
-    async def _write_and_activate(self, site_id, family, start_time_ha, end_time_ha, limit, enabled, activate, force_activate=False):
-        """Write one schedule family, then activate it when appropriate.
-
-        Activation fires when the mode is enabled and any of: the schedule was just written,
-        ``force_activate`` is set (e.g. the underlying battery setting still needs enabling), or
-        the cached schedule is stuck pending. Activation PUTs are not schedule writes, so the
-        return value reflects only whether _write_schedule issued a write.
-        """
-        wrote = await self._write_schedule(site_id, family, start_time_ha, end_time_ha, limit, enabled)
-        if enabled and (wrote or force_activate or self._is_schedule_pending(site_id, family)):
-            if not wrote:
-                self.log(f"Enphase: {family} schedule for site {site_id} needs activation; activating without rewrite")
-            await activate(site_id)
-        return wrote
-
     async def _ensure_charge_from_grid(self, site_id):
         """Accept the one-time ITC disclaimer required before charge-from-grid can be enabled.
 
@@ -1058,81 +1022,189 @@ class EnphaseAPI(ComponentBase):
         params = {"source": "enho"}
         if self.user_id:
             params["userId"] = self.user_id
-        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": int(reserve)})
+        result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/profile/{site_id}", family="battery_config", params=params, json_body={"profile": profile_name, "batteryBackupPercentage": int(reserve)}, context="reserve update")
         if result is not None:
             # Optimistically cache the written reserve; the periodic profile re-read will correct
             # it if the write did not actually land (e.g. the gateway never activated it).
             self.profile.setdefault(site_id, {})["reserve"] = int(reserve)
+        self._note_schedule_write_result(site_id, "reserve", result is not None)
         return result
 
-    async def apply_battery_schedule(self, site_id):
-        """Diff the local schedule model against the cloud and issue only the changed writes.
+    def _desired_schedule_families(self, local):
+        """Compute the desired {enabled, start, end, limit} state for cfg/dtg/rbd from `local`.
 
-        Reads the latest control-entity state into `local_schedule` first, then writes (only
-        where the desired state differs from the cached cloud state):
-        1. Reserve, via a profile PUT that preserves the current profile name.
-        2. Forced charge-from-grid window (schedule family "CFG"), enabling the
-           `chargeFromGrid` battery setting first if required.
-        3. The export window, derived from Predbat's export/discharge target SOC:
-           - target below 99% -> a real forced export to that floor (schedule family "DTG"),
-             only on sites that support it;
-           - target of exactly 99% -> "freeze export" (hold, don't discharge), mapped to the
-             restrict-battery-discharge family ("RBD") over the export window;
-           - target of 100% -> disabled (same as no export).
-        Each write optimistically updates our cached cloud copy on success and moves on; the
-        periodic settings re-read reconciles it later if a write did not actually land. Returns
-        True if any write was issued.
-
+        Mirrors Predbat's SOC-target encoding for the export direction: target below 99% -> a
+        real forced export to that floor (DTG); exactly 99% -> "freeze export" (hold, don't
+        discharge), mapped to restrict-battery-discharge (RBD); 100% or disabled -> neither. DTG
+        and RBD always share the same window and are mutually exclusive by construction (a target
+        cannot be both <99 and ==99), so at most one of them is ever enabled - see the "Update
+        strategy" note in docs/superpowers/specs/2026-08-08-enphase-schedule-reconcile-design.md.
         Freeze *charge* is not handled here - Predbat freezes charge via the reserve (raising it
         to the current SOC) and disabling the charge window, using the existing reserve/charge
-        controls.
+        controls. Start/end are converted to Enphase "HH:MM" format; everything downstream works
+        in that format only.
+        """
+        charge = local.get("charge", {})
+        export = local.get("export", {})
+        export_enabled = bool(export.get("enable", False))
+        export_soc = int(export.get("soc", 5))
+        export_start = ha_time_to_enphase(export.get("start_time", "00:00:00"))
+        export_end = ha_time_to_enphase(export.get("end_time", "00:00:00"))
+        # Clamp the DTG floor to at least the reserve: Enphase will not discharge below the backup
+        # reserve, and Predbat's own discharge target is max(export, reserve), so keep the written
+        # limit consistent rather than requesting an export below the reserve it can never reach.
+        dtg_limit = max(export_soc, int(local.get("reserve", 0)))
+        return {
+            "cfg": {"enabled": bool(charge.get("enable")), "start": ha_time_to_enphase(charge.get("start_time", "00:00:00")), "end": ha_time_to_enphase(charge.get("end_time", "00:00:00")), "limit": charge.get("soc", 100)},
+            "dtg": {"enabled": export_enabled and export_soc < 99, "start": export_start, "end": export_end, "limit": dtg_limit},
+            "rbd": {"enabled": export_enabled and export_soc == 99, "start": export_start, "end": export_end, "limit": None},
+        }
+
+    async def _cleanup_family(self, site_id, family_key, target, force_recreate):
+        """Delete a family's existing schedule when it must not survive into the write phase.
+
+        Covers two cases: the family is being disabled (the cloud ignores isEnabled=False on a
+        PUT, so deleting is the only way to retire a window), or - per the "Update strategy" rule
+        in the design doc - it is one of several families changing in this pass, so it is cleared
+        before any write happens anywhere. That closes the cross-family overlap gap from #4461: a
+        new window for one family can otherwise collide with a *different* family's old,
+        not-yet-updated one even when neither family's new windows overlap each other. A single
+        family changing alone skips this - `_converge_family`'s PUT-in-place is safe when nothing
+        else is moving.
+        """
+        entry = self.schedules.get(site_id, {}).get(family_key, {})
+        schedule_id = entry.get("id")
+        if not schedule_id or (target["enabled"] and not force_recreate):
+            return True
+        family = family_key.upper()
+        reason = "window no longer required" if not target["enabled"] else "clearing before a multi-family change"
+        self.log(f"Enphase: Deleting {family} schedule {schedule_id} on site {site_id} ({reason})")
+        if not await self._delete_schedule(site_id, schedule_id, context=f"{family} {reason}"):
+            # Always recorded, even when target["enabled"] - a failure here is real even if the
+            # family's own _converge_family call (still to come this pass) goes on to self-heal it
+            # with a fallback PUT to the same id, which would then clear this again.
+            self._note_schedule_write_result(site_id, family_key, False)
+            return False
+        # Drop the id/window so a re-enable creates a fresh schedule rather than PUTting an id the
+        # cloud no longer knows about.
+        cleared = dict(entry)
+        for field in ("id", "startTime", "endTime", "limit"):
+            cleared.pop(field, None)
+        cleared["enabled"] = False
+        self.schedules.setdefault(site_id, {})[family_key] = cleared
+        if not target["enabled"]:
+            self._note_schedule_write_result(site_id, family_key, True)
+        return True
+
+    async def _converge_family(self, site_id, family_key, target, force_activate=False):
+        """Write and activate one family to match `target`, if it still needs it after cleanup.
+
+        Any id present here already survived `_cleanup_family`, so PUT-in-place is safe; its
+        absence means create. Activates when the schedule was just written, when
+        `force_activate` says the underlying battery setting still needs enabling (CFG's
+        chargeFromGrid), or when the cache already matches but the cloud still reports the family
+        pending (written on an earlier pass, activation never landed).
+        """
+        if not target["enabled"]:
+            return True  # nothing to write or activate; _cleanup_family handles disabling
+        family = family_key.upper()
+        entry = self.schedules.get(site_id, {}).get(family_key, {})
+        wrote = False
+        if not schedules_equal(entry, target["start"], target["end"], target["limit"], True):
+            payload = {"timezone": self._site_timezone(site_id), "startTime": target["start"], "endTime": target["end"], "scheduleType": family, "days": [1, 2, 3, 4, 5, 6, 7], "isEnabled": True}
+            if target["limit"] is not None:
+                payload["limit"] = int(target["limit"])
+            schedule_id = entry.get("id")
+            if schedule_id:
+                self.log(f"Enphase: Updating {family} schedule {schedule_id} on site {site_id}: {target['start']}-{target['end']} limit={target['limit']}")
+                result = await self.request_json("PUT", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules/{schedule_id}", family="battery_config", json_body=payload, context=f"{family} schedule update")
+                if result is not None:
+                    updated = dict(entry)
+                    updated.update({"startTime": target["start"], "endTime": target["end"], "limit": target["limit"], "enabled": True})
+                    self.schedules.setdefault(site_id, {})[family_key] = updated
+            else:
+                self.log(f"Enphase: Creating {family} schedule on site {site_id}: {target['start']}-{target['end']} limit={target['limit']}")
+                result = await self.request_json("POST", f"{BATTERY_CONFIG_BASE}/battery/sites/{site_id}/schedules", family="battery_config", json_body=payload, context=f"{family} schedule create")
+                if result is not None:
+                    # Re-read once so we learn the new schedule's cloud-assigned id for future
+                    # edits - the create response does not return it.
+                    await self.get_schedules(site_id)
+            wrote = result is not None
+            self._note_schedule_write_result(site_id, family_key, wrote)
+            if not wrote:
+                return False
+
+        if wrote or force_activate or self._is_schedule_pending(site_id, family_key):
+            activate = {"cfg": self._activate_cfg_mode, "dtg": self._activate_dtg_mode, "rbd": self._activate_rbd_mode}[family_key]
+            if family_key == "cfg":
+                await self._ensure_charge_from_grid(site_id)
+            return await activate(site_id)
+        return True
+
+    async def _converge_reserve(self, site_id, local):
+        """Write the reserve via a profile PUT if it differs from the cached cloud value."""
+        desired_reserve = int(local.get("reserve", 0))
+        cloud = self.profile.get(site_id, {})
+        if not desired_reserve or desired_reserve == int(cloud.get("reserve", -1)):
+            return True
+        return await self.set_reserve(site_id, desired_reserve) is not None
+
+    async def _reconcile_once(self, site_id):
+        """Run one read-clean-write pass, converging the cloud to Predbat's desired local model.
+
+        Always starts from a fresh cloud read - no state is trusted between passes. Cleanup
+        (deleting schedules that must not survive) runs for every changing family before any
+        family writes anything, so a cross-family collision can never happen; see
+        `_cleanup_family`. Returns True only if every step this pass succeeded;
+        `apply_battery_schedule` retries a bounded number of times on False.
         """
         await self.get_schedule_settings_ha(site_id)
         # Bootstrap a fresh XSRF token before writing (the web app GETs siteSettings first); its
         # x-csrf-token response header is absorbed by request_json for the writes below.
         await self.get_site_settings(site_id)
+        await self.get_schedules(site_id)
         local = self.local_schedule.get(site_id, self._default_local_schedule())
-        wrote = False
+        desired = self._desired_schedule_families(local)
 
-        # Reserve via profile PUT, preserving the current profile name
-        desired_reserve = int(local.get("reserve", 0))
-        cloud = self.profile.get(site_id, {})
-        if desired_reserve and desired_reserve != int(cloud.get("reserve", -1)):
-            await self.set_reserve(site_id, desired_reserve)
-            wrote = True
+        changed = [key for key in FAMILY_ORDER if not schedules_equal(self.schedules.get(site_id, {}).get(key, {}), desired[key]["start"], desired[key]["end"], desired[key]["limit"], desired[key]["enabled"])]
+        # PUT-in-place is only safe when nothing else is moving in the same pass - see
+        # _cleanup_family's docstring for why a single family changing alone is fine.
+        force_recreate = len(changed) > 1
 
-        # Forced charge window (CFG). Enabling chargeFromGrid *is* the activation PUT, so force
-        # activation whenever the setting is still off, even if the schedule already matches.
-        charge = local.get("charge", {})
-        charge_enabled = bool(charge.get("enable"))
-        if charge_enabled:
-            await self._ensure_charge_from_grid(site_id)
-        cfg_needs_enable = not self.battery_settings.get(site_id, {}).get("chargeFromGrid")
-        wrote |= await self._write_and_activate(site_id, SCHEDULE_CHARGE, charge.get("start_time", "00:00:00"), charge.get("end_time", "00:00:00"), charge.get("soc", 100), charge_enabled, self._activate_cfg_mode, force_activate=cfg_needs_enable)
+        ok = True
+        for key in changed:
+            if not await self._cleanup_family(site_id, key, desired[key], force_recreate):
+                ok = False
 
-        # Export window. Predbat encodes the mode in the export/discharge target SOC:
-        #   < 99  -> real forced export to that floor (DTG)
-        #   == 99 -> freeze export / restrict discharge (RBD)
-        #   == 100 (or disabled) -> no export
-        export = local.get("export", {})
-        export_enabled = bool(export.get("enable", False))
-        export_soc = int(export.get("soc", 5))
-        export_start = export.get("start_time", "00:00:00")
-        export_end = export.get("end_time", "00:00:00")
-        real_export = export_enabled and export_soc < 99
-        freeze_export = export_enabled and export_soc == 99
+        cfg_force_activate = desired["cfg"]["enabled"] and not self.battery_settings.get(site_id, {}).get("chargeFromGrid")
+        for key in FAMILY_ORDER:
+            force_activate = cfg_force_activate if key == "cfg" else False
+            if not await self._converge_family(site_id, key, desired[key], force_activate):
+                ok = False
 
-        # Clamp the DTG floor to at least the reserve: Enphase will not discharge below the backup
-        # reserve, and Predbat's own discharge target is max(export, reserve), so keep the written
-        # limit consistent rather than requesting an export below the reserve it can never reach.
-        dtg_limit = max(export_soc, int(local.get("reserve", 0)))
+        if not await self._converge_reserve(site_id, local):
+            ok = False
+        return ok
 
-        # Forced export to a target (DTG). A configured inverter always supports DTG.
-        wrote |= await self._write_and_activate(site_id, SCHEDULE_EXPORT, export_start, export_end, dtg_limit, real_export, self._activate_dtg_mode)
+    async def apply_battery_schedule(self, site_id):
+        """Reconcile the cloud schedule/reserve state to match Predbat's desired local model.
 
-        # Freeze export = restrict battery discharge (RBD) over the export window
-        wrote |= await self._write_and_activate(site_id, SCHEDULE_FREEZE, export_start, export_end, None, freeze_export, self._activate_rbd_mode)
-        return wrote
+        Runs `_reconcile_once` up to `ENPHASE_RECONCILE_MAX_ATTEMPTS` times, with a short jittered
+        backoff between attempts on failure (e.g. a conflict, or a family still settling from a
+        previous write). If it still cannot converge, it gives up for this call - the next
+        periodic call (`run()`, every `ENPHASE_REFRESH_SCHEDULE_SYNC` minutes) or the next
+        explicit trigger (the write switch) starts over from a clean read. Does nothing in
+        read-only mode. See docs/superpowers/specs/2026-08-08-enphase-schedule-reconcile-design.md
+        for the design. Returns True if the site converged to the desired state.
+        """
+        if self._is_read_only():
+            return True
+        for attempt in range(ENPHASE_RECONCILE_MAX_ATTEMPTS):
+            if await self._reconcile_once(site_id):
+                return True
+            if attempt < ENPHASE_RECONCILE_MAX_ATTEMPTS - 1:
+                await asyncio.sleep(1 + attempt * random.random() * 3)
+        return False
 
     async def get_battery_status(self, site_id):
         """Fetch and normalise battery SOC/capacity/power for a site."""
@@ -1677,7 +1749,7 @@ class EnphaseAPI(ComponentBase):
         stripped = (text or "").lstrip().lower()
         return stripped.startswith("<!doctype") or stripped.startswith("<html")
 
-    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None, allow_empty=False):
+    async def request_json(self, method, path, family="site", json_body=None, data=None, params=None, allow_empty=False, context=None):
         """Perform an authenticated JSON request with retries and a single 401 re-login.
 
         Builds the request URL from BASE_URL + path and attaches family-appropriate headers
@@ -1688,7 +1760,10 @@ class EnphaseAPI(ComponentBase):
           attempt); otherwise it performs one login() and retries once.
         - HTTP 429 and 5xx responses, plus timeouts/connection errors, are retried with
           jittered backoff up to ENPHASE_RETRIES times.
-        - Any other non-200 status is treated as a terminal failure.
+        - Any other non-200 status is treated as a terminal failure, logged as
+          "HTTP {method} {path} -> {status}" (plus ``context`` when the caller gave one, e.g. the
+          schedule family/window being written) so a bare-path 409 is never ambiguous between the
+          GET, the POST create and the PUT update that all share that path shape.
         ``allow_empty`` additionally accepts a 204/empty body as success (returning {} rather than
         None), as a DELETE returns no content.
         Every outcome is recorded via record_api_call("enphase", ...) for metrics/health.
@@ -1732,7 +1807,8 @@ class EnphaseAPI(ComponentBase):
                 continue
 
             if status != 200 and not (allow_empty and status == 204):
-                self.log(f"Warn: Enphase: HTTP {status} on {path}")
+                context_suffix = f" ({context})" if context else ""
+                self.log(f"Warn: Enphase: HTTP {method} {path} -> {status}{context_suffix}")
                 record_api_call("enphase", False, "client_error")
                 self.last_error_status = status
                 self.failures_total += 1
@@ -1880,6 +1956,59 @@ async def test_write_reserve(username, password, site_id, value):  # pragma: no 
     print("Done")
 
 
+async def test_schedule_reconcile(username, password, site_id):  # pragma: no cover
+    """Drive a scripted sequence of schedule changes against a real account.
+
+    Exercises apply_battery_schedule's reconcile path end-to-end, including the cross-family case
+    that motivated the "Update strategy" rule in
+    docs/superpowers/specs/2026-08-08-enphase-schedule-reconcile-design.md: one family's window
+    moving so that its *old* window overlaps a *different* family's brand new one, even though
+    neither family's *new* windows overlap each other. Every window used is between midnight and
+    05:00, and the export-family steps use RBD (freeze-export/restrict-discharge, soc=99) rather
+    than a real DTG target, so nothing here can actually charge from or export to the grid - it
+    only ever writes schedules a real overnight off-peak window would already contain. The final
+    step disables everything again, leaving the account in a known, inert state.
+    """
+    mock_base = MockBase()
+    api = EnphaseAPI(mock_base, username=username, password=password, site_id=site_id, automatic=False)
+
+    print("Logging in and loading current state...")
+    await api.run(seconds=0, first=True)
+    if not api.sites:
+        print("No sites found")
+        return
+    sid = api.sites[0]["site_id"]
+    base_name = f"{api.prefix}_enphase_{sid}_battery_schedule"
+
+    def _set_window(direction, start, end, soc, enabled):
+        """Push one direction's control entities into the mock HA state, as Predbat's UI would."""
+        mock_base.set_state_wrapper(f"select.{base_name}_{direction}_start_time", start)
+        mock_base.set_state_wrapper(f"select.{base_name}_{direction}_end_time", end)
+        mock_base.set_state_wrapper(f"number.{base_name}_{direction}_soc", soc)
+        mock_base.set_state_wrapper(f"switch.{base_name}_{direction}_enable", "on" if enabled else "off")
+
+    steps = [
+        ("enable charge alone (create)", {"charge": ("00:30:00", "01:00:00", 50, True)}),
+        ("move charge alone (PUT-in-place)", {"charge": ("01:00:00", "01:30:00", 50, True)}),
+        ("move charge + enable freeze-export together (crosses charge's OLD window)", {"charge": ("02:00:00", "02:30:00", 50, True), "export": ("01:15:00", "01:45:00", 99, True)}),
+        ("move both again, crossing back the other way", {"charge": ("01:30:00", "02:00:00", 50, True), "export": ("02:15:00", "02:45:00", 99, True)}),
+        ("disable everything", {"charge": ("00:00:00", "00:00:00", 50, False), "export": ("00:00:00", "00:00:00", 99, False)}),
+    ]
+
+    for label, changes in steps:
+        print(f"\n--- {label} ---")
+        for direction, (start, end, soc, enabled) in changes.items():
+            _set_window(direction, start, end, soc, enabled)
+        ok = await api.apply_battery_schedule(sid)
+        await api.get_schedules(sid)
+        print(f"apply_battery_schedule -> {ok}")
+        print(f"schedules: {json.dumps(api.schedules.get(sid, {}), default=str, indent=2)}")
+        if api.schedule_write_failed.get(sid):
+            print(f"WRITE FAILURES: {api.schedule_write_failed[sid]}")
+
+    print("\nDone")
+
+
 def main():  # pragma: no cover
     """Command-line entry point for exercising the Enphase component standalone."""
     import argparse
@@ -1893,6 +2022,7 @@ def main():  # pragma: no cover
     parser.add_argument("--end-time", default="05:00:00", help="Test charge window end (HH:MM:SS)")
     parser.add_argument("--soc", type=int, default=80, help="Test charge target SOC percent")
     parser.add_argument("--write-reserve", type=int, default=None, help="Write this reserve %% (e.g. 25), then restore the original - a safe real-write test")
+    parser.add_argument("--reconcile-sequence", action="store_true", help="Drive a scripted sequence of schedule changes (midnight-05:00 only) to exercise the reconcile path live, then disable everything again")
 
     args = parser.parse_args()
 
@@ -1900,6 +2030,8 @@ def main():  # pragma: no cover
         asyncio.run(test_write_reserve(args.username, args.password, args.site_id, args.write_reserve))
     elif args.write_schedule:
         asyncio.run(test_write_schedule(args.username, args.password, args.site_id, args.start_time, args.end_time, args.soc))
+    elif args.reconcile_sequence:
+        asyncio.run(test_schedule_reconcile(args.username, args.password, args.site_id))
     else:
         asyncio.run(test_enphase_api(args.username, args.password, args.site_id))
 

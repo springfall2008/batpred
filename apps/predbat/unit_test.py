@@ -157,7 +157,14 @@ from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
-from tests.test_integer_config import test_integer_config_entities, test_expose_config_preserves_integer, test_config_item_range_clamp, test_config_item_step_min_max_types_consistent
+from tests.test_integer_config import (
+    test_integer_config_entities,
+    test_expose_config_preserves_integer,
+    test_config_item_range_clamp,
+    test_config_item_step_min_max_types_consistent,
+    test_get_ha_config_normalises_int_default_for_fractional_step,
+    test_metric_battery_cycle_fractional_value_not_truncated,
+)
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_validate_config import test_validate_config, test_validate_config_retry
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
@@ -403,6 +410,8 @@ def main():
         ("expose_config_integer", test_expose_config_preserves_integer, "Expose config preserves integer tests", False),
         ("config_item_range_clamp", test_config_item_range_clamp, "Config item min/max range clamp tests", False),
         ("config_item_step_min_max_types", test_config_item_step_min_max_types_consistent, "Config item step/min/max type consistency tests", False),
+        ("get_ha_config_fractional_default", test_get_ha_config_normalises_int_default_for_fractional_step, "get_ha_config normalises int default to float for fractional-step items (#4296)", False),
+        ("metric_battery_cycle_fractional", test_metric_battery_cycle_fractional_value_not_truncated, "metric_battery_cycle fractional value not truncated by get_arg (#4296)", False),
         ("data_age_metrics", test_data_age_metrics_round_trip, "Metrics dashboard data_age_days/data_age_required_days tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
