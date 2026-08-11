@@ -2811,10 +2811,17 @@ class Inverter:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
             # Start discharge or discharge freeze
-            if target_soc == self.soc_percent or freeze:
+            # Only the caller's explicit freeze request should invoke discharge_freeze_service -
+            # reaching the target by ordinary export (target_soc == self.soc_percent with no
+            # freeze) is not a deliberate freeze, it just means there's nothing left to discharge,
+            # so it belongs with the "target already at/above current SoC" stop case below.
+            # Conflating the two used to fire discharge_freeze_service (and any automation wired
+            # to it) whenever export naturally reached its target, regardless of set_export_freeze
+            # (batpred#4464).
+            if freeze:
                 if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge", extra_data=extra_data):
                     self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
-            elif target_soc > self.soc_percent:
+            elif target_soc >= self.soc_percent:
                 self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge")
             else:
                 self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
