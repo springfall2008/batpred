@@ -2732,6 +2732,22 @@ class Plan:
                         export_limits_best[window_n] = 100.0
                         if self.debug_enable:
                             self.log("Clip off export window {} from {} - {} from limit {} to new limit {} - no SoC above reserve in this window".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
+                    elif dp2(soc_min) == dp2(soc_max) and soc_min > limit_soc and window["start"] not in self.manual_export_times:
+                        # SoC is above the requested limit yet completely flat across the window: the commanded
+                        # export moved no energy in the simulation (e.g. PV already saturates the export limit),
+                        # so this is a phantom export. In the simulation it pinned SoC - the same behaviour as a
+                        # freeze - so convert it to freeze export to keep the executed plan faithful to what was
+                        # scored, while dropping the force-export command that would dump to grid if PV dips
+                        # below the export limit. Falls back to off when freeze is unsupported, and when SoC is
+                        # pinned at 100% the freeze would be pointless, so clip off - the same rule the limit==99
+                        # branch above applies to native freeze windows. If conditions worsen (the PV10 case) a
+                        # genuine export re-appears on a later plan recompute. Manual exports are preserved.
+                        # See #4453 (lone exports on flat rates).
+                        new_limit = 99.0 if (self.set_export_freeze and dp1(soc_min) != dp1(self.soc_max)) else 100.0
+                        window["target"] = new_limit
+                        export_limits_best[window_n] = new_limit
+                        if self.debug_enable:
+                            self.log("Clip phantom export window {} from {} - {} from limit {} to {} - SoC flat at {} above limit, no energy moved".format(window_n, window_start, window_end, limit, new_limit, dp2(soc_min)))
                     elif soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
