@@ -193,6 +193,7 @@ class Output:
                     show["kwh"] = kwh
                     show["average"] = average
                     show["cost"] = cost
+                    show["solar"] = window.get("solar", False)
                     total_cost += cost
                     total_kwh += kwh
                     plan.append(show)
