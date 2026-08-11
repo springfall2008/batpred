@@ -345,6 +345,95 @@ def run_rate_add_io_slots_tests(my_predbat):
         expected_rates_17[minute] = 4.0
     failed |= run_rate_add_io_slots_test("test17_dup_does_not_waste_cap", my_predbat, slots_17, True, 2, expected_rates_17)
 
+    # Tests 18-23 (#4482): octopus_intelligent_limit_future_slots - Octopus often grants more
+    # daytime dispatch slots than the car actually needs (it can't see the car's real SoC, only
+    # Predbat can). These check that a future out-of-window slot outside what car_charging_slots
+    # still lists a positive kwh for doesn't get the low rate, since it's heading for the same
+    # rescission risk as an unconfirmed slot.
+    saved_car_charging_slots = my_predbat.car_charging_slots[0]
+
+    # Test 18: EV needs the first 2 of 5 future half-hour dispatches - only those two modify rates.
+    print("\n**** Test 18: Only future blocks the car still needs get the low rate ****")
+    slots_18 = []
+    for i in range(5):
+        slot_start = midnight_utc + timedelta(hours=14, minutes=i * 30)
+        slot_end = slot_start + timedelta(minutes=30)
+        slots_18.append({"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"})
+    car_slot_start = int(((midnight_utc + timedelta(hours=14)) - midnight_utc).total_seconds() / 60)  # 840
+    my_predbat.car_charging_slots[0] = [
+        {"start": car_slot_start, "end": car_slot_start + 30, "kwh": 2.5, "average": 4, "cost": 10, "soc": 5, "octopus": True},
+        {"start": car_slot_start + 30, "end": car_slot_start + 60, "kwh": 2.5, "average": 4, "cost": 10, "soc": 10, "octopus": True},
+        {"start": car_slot_start + 60, "end": car_slot_start + 90, "kwh": 0.0, "average": 4, "cost": 0, "soc": 10, "octopus": True},
+        {"start": car_slot_start + 90, "end": car_slot_start + 120, "kwh": 0.0, "average": 4, "cost": 0, "soc": 10, "octopus": True},
+        {"start": car_slot_start + 120, "end": car_slot_start + 150, "kwh": 0.0, "average": 4, "cost": 0, "soc": 10, "octopus": True},
+    ]
+    expected_rates_18 = {}
+    for minute in range(car_slot_start, car_slot_start + 60):
+        expected_rates_18[minute] = 4.0
+    for minute in range(car_slot_start + 60, car_slot_start + 150):
+        expected_rates_18[minute] = 10.0
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    failed |= run_rate_add_io_slots_test("test18_only_needed_future_blocks_low_rate", my_predbat, slots_18, True, 12, expected_rates_18)
+
+    # Test 19: the final required charge ends part-way through a dispatch (14:15 of a 14:00-14:30
+    # slot) - the whole touched 30-min settlement period should still be treated as needed, not
+    # just the covered minutes, matching how the slot rounding elsewhere in this function works.
+    print("\n**** Test 19: Partially-needed settlement period stays fully low rate ****")
+    my_predbat.car_charging_slots[0] = [
+        {"start": car_slot_start, "end": car_slot_start + 15, "kwh": 1.25, "average": 4, "cost": 5, "soc": 5, "octopus": True},
+        {"start": car_slot_start + 15, "end": car_slot_start + 30, "kwh": 0.0, "average": 4, "cost": 0, "soc": 5, "octopus": True},
+        {"start": car_slot_start + 30, "end": car_slot_start + 150, "kwh": 0.0, "average": 4, "cost": 0, "soc": 5, "octopus": True},
+    ]
+    expected_rates_19 = {}
+    for minute in range(car_slot_start, car_slot_start + 30):
+        expected_rates_19[minute] = 4.0
+    for minute in range(car_slot_start + 30, car_slot_start + 150):
+        expected_rates_19[minute] = 10.0
+    failed |= run_rate_add_io_slots_test("test19_partial_settlement_period_stays_low_rate", my_predbat, slots_18, True, 12, expected_rates_19)
+
+    # Test 20: car already at its limit (car_charging_slots has nothing but zero-kwh entries) - no
+    # dispatch that hasn't started modifies the tariff.
+    print("\n**** Test 20: Car already full - no future dispatch gets the low rate ****")
+    my_predbat.car_charging_slots[0] = [{"start": car_slot_start, "end": car_slot_start + 150, "kwh": 0.0, "average": 4, "cost": 0, "soc": 10, "octopus": True}]
+    expected_rates_20 = {minute: 10.0 for minute in range(car_slot_start, car_slot_start + 150)}
+    failed |= run_rate_add_io_slots_test("test20_car_already_full_no_low_rate", my_predbat, slots_18, True, 12, expected_rates_20)
+
+    # Test 21: a dispatch already underway (its slot_start is at-or-before minutes_now, 10:00) is
+    # trusted regardless of what car_charging_slots says about future need - only slots that
+    # haven't started yet are gated.
+    print("\n**** Test 21: Current/completed dispatch periods stay low rate regardless ****")
+    slot_start_21 = midnight_utc + timedelta(hours=9, minutes=30)  # 09:30, already underway at 10:00
+    slot_end_21 = slot_start_21 + timedelta(minutes=30)
+    slots_21 = [{"start": slot_start_21.strftime(TIME_FORMAT), "end": slot_end_21.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    my_predbat.car_charging_slots[0] = []  # Car charging plan says nothing is needed at all
+    expected_rates_21 = {minute: 4.0 for minute in range(570, 600)}  # 09:30-10:00
+    failed |= run_rate_add_io_slots_test("test21_current_dispatch_stays_low_rate", my_predbat, slots_21, True, 12, expected_rates_21)
+
+    # Test 22: feature disabled - existing (unconditional) behaviour is unchanged even with an
+    # empty car_charging_slots that would otherwise have excluded every block.
+    print("\n**** Test 22: Switch off restores unconditional low rate ****")
+    my_predbat.octopus_intelligent_limit_future_slots = False
+    my_predbat.car_charging_slots[0] = []
+    expected_rates_22 = {}
+    for minute in range(car_slot_start, car_slot_start + 150):
+        expected_rates_22[minute] = 4.0
+    failed |= run_rate_add_io_slots_test("test22_switch_off_restores_old_behaviour", my_predbat, slots_18, True, 12, expected_rates_22)
+
+    # Test 23: a future out-of-window slot the car doesn't need is excluded, but a slot inside the
+    # fixed 23:30-05:30 window is never affected regardless, since it's guaranteed cheap by the
+    # tariff itself, not the dispatch mechanism.
+    print("\n**** Test 23: Fixed IOG window unaffected regardless of future need ****")
+    slot_start_23 = midnight_utc + timedelta(hours=2)  # 02:00 - well inside 23:30-05:30
+    slot_end_23 = slot_start_23 + timedelta(minutes=30)
+    slots_23 = [{"start": slot_start_23.strftime(TIME_FORMAT), "end": slot_end_23.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    my_predbat.car_charging_slots[0] = []  # Car charging plan says nothing is needed at all
+    expected_rates_23 = {minute: 4.0 for minute in range(120, 150)}
+    failed |= run_rate_add_io_slots_test("test23_fixed_window_unaffected", my_predbat, slots_23, True, 12, expected_rates_23)
+    my_predbat.octopus_intelligent_limit_future_slots = False  # Restore default for any subsequent tests
+
+    my_predbat.car_charging_slots[0] = saved_car_charging_slots
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 
