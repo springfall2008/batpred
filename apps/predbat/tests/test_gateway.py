@@ -3983,18 +3983,48 @@ class TestEvTelemetry:
         assert GatewayMQTT._ev_suffix(ev, False) == "ev"
 
     def test_disconnected_charger_reports_offline(self):
-        """A charger the gateway reports as disconnected surfaces as offline.
+        """A charger the gateway reports as disconnected surfaces as fully idle.
 
         The gateway now sends known-but-disconnected chargers with connected=false
         instead of omitting them, so these entities must go False rather than
         freezing at their last values (which is how a 2-day EV outage went unseen).
+
+        Critically this asserts the LIVE-SESSION fields too, not just online/connected:
+        car_charging_now is wired to session_active and PredBat plans a charging slot
+        whenever it is true, so a disconnected charger carrying a stale
+        session_active would schedule charging for a charger that is not there.
+        The fixture deliberately supplies session_active=True, power_w=7200 and
+        session_energy_wh=12400 alongside connected=False — the inconsistent payload
+        older firmware can emit.
         """
-        gw = self._make_gateway()
+        gw = self._make_gateway(battery_size=100)
         gw._inject_ev_entities(self._status_with_ev(connected=False, status="Unavailable"))
 
         base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is False
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
+        # Stale live-session values must be suppressed, not republished
+        assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is False
+        assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 0
+        assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == 0
+
+    def test_suffix_slugifies_unsafe_charge_point_ids(self):
+        """Charge point ids are vendor strings; entity ids must stay legal.
+
+        Spaces, dots, slashes, dashes and non-ASCII are not valid in a Home Assistant
+        entity id, and nothing downstream sanitises the value.
+        """
+        from gateway import GatewayMQTT
+
+        for cp_id, expected in [
+            ("CP/AB-123", "ev_pab123"),  # punctuation dropped, last 6 kept
+            ("cp 42.7", "ev_cp427"),  # -> "cp427", shorter than 6
+            ("ABC", "ev_abc"),  # shorter than 6 -> whole id
+            ("charge_point_Ω", "ev_point_"),  # non-ASCII dropped, underscore kept
+            ("///", "ev"),  # slugifies to nothing -> fallback
+        ]:
+            ev = self._status_with_ev(charge_point_id=cp_id).ev_chargers[0]
+            assert GatewayMQTT._ev_suffix(ev, False) == expected, cp_id
 
     def test_ev_entity_attributes_from_table(self):
         """Published EV entities carry their GATEWAY_ATTRIBUTE_TABLE attributes."""
@@ -4101,6 +4131,38 @@ class TestEvAutoConfig:
         ev.max_current_a = max_current_a
         ev.voltage_v = voltage_v
         return status
+
+    def test_registers_connected_charger_not_a_stale_slot(self):
+        """A disconnected charger in slot 0 must not be registered over a connected one.
+
+        Gateway firmware now reports known-but-offline chargers with connected=false
+        (it used to omit them), so the first entry is no longer guaranteed to be live.
+        """
+        status = pb.GatewayStatus()
+        stale = status.ev_chargers.add()
+        stale.connected = False
+        stale.charge_point_id = "CP0000"
+        live = status.ev_chargers.add()
+        live.connected = True
+        live.charge_point_id = "CP0001"
+
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(status)
+
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0001_connected"]
+
+    def test_registers_offline_charger_when_none_connected(self):
+        """A charger that is merely offline right now still registers, so it reappears."""
+        status = pb.GatewayStatus()
+        offline = status.ev_chargers.add()
+        offline.connected = False
+        offline.charge_point_id = "CP0002"
+
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(status)
+
+        assert gw._args["num_cars"] == 1
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0002_connected"]
 
     def test_registers_car_when_none_configured(self):
         """With the flag on and no existing cars, the charger is registered as car 1."""
