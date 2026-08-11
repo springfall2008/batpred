@@ -946,18 +946,30 @@ class GatewayMQTT(ComponentBase):
     def _ev_suffix(ev, multi):
         """Build the entity suffix for an EV charger.
 
-        Single charger (the v1 case) uses a stable "ev" suffix; with more than one
-        charger present, disambiguate by the last 6 chars of the OCPP charge point id.
+        Always identifies the charger by the last 6 chars of its OCPP charge point
+        id, so a given charger keeps the same entity ids for its whole life.
+
+        This used to return a bare "ev" whenever only one charger was present, and
+        only disambiguate when several were. That made the suffix a function of how
+        many chargers happened to be visible in a single status message, so entity
+        ids moved under the user: a site with one charger produced
+        ``sensor.predbat_gateway_ev_power``, but the moment a second charger
+        appeared — or the same charger was briefly seen twice across a reconnect —
+        everything silently renamed to ``sensor.predbat_gateway_ev_<id>_power``,
+        orphaning the old entities and every dashboard and automation bound to
+        them. Pinning to the charge point id removes that whole class of churn.
+
+        Falls back to "ev" only when the charger reports no id at all (a charger
+        that has not completed its BootNotification yet).
 
         Args:
             ev: An EvCharger protobuf message.
-            multi: True when more than one charger is present in the status.
+            multi: Unused; retained for call-site compatibility. The suffix no
+                longer depends on how many chargers are present.
 
         Returns:
-            str: The entity suffix (e.g. "ev" or "ev_b749").
+            str: The entity suffix (e.g. "ev_b749", or "ev" when the id is unknown).
         """
-        if not multi:
-            return "ev"
         charge_point_id = ev.charge_point_id or ""
         return f"ev_{charge_point_id[-6:].lower()}" if charge_point_id else "ev"
 

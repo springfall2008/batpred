@@ -3945,7 +3945,7 @@ class TestEvTelemetry:
         gw = self._make_gateway()
         gw._inject_ev_entities(self._status_with_ev())
 
-        base = "predbat_gateway_ev"
+        base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" → car connected
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
@@ -3961,13 +3961,48 @@ class TestEvTelemetry:
         # Derived charge-rate capability in kW: 32 A × 240 V / 1000
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.68)
 
+    def test_ev_suffix_is_stable_regardless_of_charger_count(self):
+        """A charger keeps the same entity ids whether or not others are present.
+
+        Regression: the suffix used to be a bare "ev" when a single charger was
+        visible and "ev_<id>" only when several were, so entity ids silently
+        renamed the moment a second charger appeared (or the same charger was
+        briefly seen twice across a reconnect), orphaning dashboards bound to them.
+        """
+        from gateway import GatewayMQTT
+
+        ev = self._status_with_ev().ev_chargers[0]
+        assert GatewayMQTT._ev_suffix(ev, False) == "ev_3xb749"
+        assert GatewayMQTT._ev_suffix(ev, True) == "ev_3xb749"
+
+    def test_ev_suffix_falls_back_when_id_unknown(self):
+        """A charger that has not sent its BootNotification yet still gets a suffix."""
+        from gateway import GatewayMQTT
+
+        ev = self._status_with_ev(charge_point_id="").ev_chargers[0]
+        assert GatewayMQTT._ev_suffix(ev, False) == "ev"
+
+    def test_disconnected_charger_reports_offline(self):
+        """A charger the gateway reports as disconnected surfaces as offline.
+
+        The gateway now sends known-but-disconnected chargers with connected=false
+        instead of omitting them, so these entities must go False rather than
+        freezing at their last values (which is how a 2-day EV outage went unseen).
+        """
+        gw = self._make_gateway()
+        gw._inject_ev_entities(self._status_with_ev(connected=False, status="Unavailable"))
+
+        base = "predbat_gateway_ev_3xb749"
+        assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is False
+        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
+
     def test_ev_entity_attributes_from_table(self):
         """Published EV entities carry their GATEWAY_ATTRIBUTE_TABLE attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
 
         gw = self._make_gateway()
         gw._inject_ev_entities(self._status_with_ev())
-        _, attrs = gw._dashboard_calls["sensor.predbat_gateway_ev_power"]
+        _, attrs = gw._dashboard_calls["sensor.predbat_gateway_ev_3xb749_power"]
         assert attrs == GATEWAY_ATTRIBUTE_TABLE["ev_power"]
 
     def test_not_reported_fields_skipped(self):
@@ -3977,7 +4012,7 @@ class TestEvTelemetry:
         status = self._status_with_ev(soc_percent=0, voltage_v=0, max_current_a=0, current_limit_a=0, eco_mode="", status="")
         gw._inject_ev_entities(status)
 
-        base = "predbat_gateway_ev"
+        base = "predbat_gateway_ev_3xb749"
         # soc is now always published — falls back to session_energy / battery_size * 100
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_soc"][0], 12.4)
         assert f"sensor.{base}_voltage" not in gw._dashboard_calls
@@ -3997,14 +4032,14 @@ class TestEvTelemetry:
         gw = self._make_gateway(battery_size=50)
         # session_energy_wh=12400 → 12.4 kWh; battery_size=50 → 12.4/50*100 = 24.8%
         gw._inject_ev_entities(self._status_with_ev(soc_percent=0))
-        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_soc"][0], 24.8)
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_3xb749_soc"][0], 24.8)
 
     def test_charge_rate_uses_230v_when_voltage_missing(self):
         """With max current but no voltage, charge rate assumes 230 V."""
         gw = self._make_gateway()
         gw._inject_ev_entities(self._status_with_ev(max_current_a=16, voltage_v=0))
         # 16 A × 230 V / 1000
-        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_charge_rate"][0], 3.68)
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_3xb749_charge_rate"][0], 3.68)
 
     def test_no_chargers_publishes_nothing(self):
         """A status with no EV chargers publishes no EV entities."""
@@ -4073,14 +4108,14 @@ class TestEvAutoConfig:
         gw._register_ev_car(self._status_with_ev())
 
         assert gw._args["num_cars"] == 1
-        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_connected"]
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_session_active"]
-        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_soc"]
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
+        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
         # car_charging_rate is a UI config item — set via expose_config, not set_arg
         assert "car_charging_rate" not in gw._args
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
         # Session energy sensor for subtracting EV load from history
-        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_session_energy"
+        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
         # Battery size and target limit are left to the existing car_charging_* settings
         assert "car_charging_battery_size" not in gw._args
         assert "car_charging_limit" not in gw._args
@@ -4102,7 +4137,7 @@ class TestEvAutoConfig:
         """car_charging_now is wired to session_active when gateway_evc_control is False."""
         gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=False)
         gw._register_ev_car(self._status_with_ev())
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_session_active"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
 
     def test_car_charging_now_omitted_when_controlling(self):
         """car_charging_now is not set when gateway_evc_control is True to prevent feedback loop."""
