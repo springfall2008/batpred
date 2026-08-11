@@ -2820,6 +2820,22 @@ class Octopus:
                         if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
 
+    def minute_in_iog_fixed_window(self, minute_abs):
+        """
+        True if minute_abs (minutes-since-midnight-of-today, may be negative or beyond
+        forecast_minutes) falls within the fixed IOG off-peak window (23:30-05:30), which is
+        guaranteed cheap by the tariff itself, not by the dispatch mechanism - so a slot inside it
+        is never at risk of being reclaimed the way an out-of-window dispatch slot is (#4482).
+        """
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        start_minute = window["start"][0] * 60 + window["start"][1]
+        end_minute = window["end"][0] * 60 + window["end"][1]
+        minute_of_day = minute_abs % 1440
+        if window["cross_midnight"]:
+            return minute_of_day >= start_minute or minute_of_day < end_minute
+        else:
+            return start_minute <= minute_of_day < end_minute
+
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
@@ -3038,6 +3054,7 @@ class Octopus:
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
+        limit_future_slots = self.octopus_intelligent_limit_future_slots
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -3047,6 +3064,24 @@ class Octopus:
         slots_added_set = set()
         plan_interval_minutes = self.plan_interval_minutes
         saved_slots = set()  # For logging purposes, track which slots we actually applied as low rate
+        current_block = (self.minutes_now // 30) * 30
+
+        # #4482: Octopus often grants more daytime dispatch slots than the car actually needs - it
+        # can't see the car's real SoC, only Predbat can (car_charging_soc/car_charging_limit).
+        # load_octopus_slots() already caps car_charging_slots[car_n] at the car's real remaining
+        # requirement (when octopus_intelligent_consider_full is on), zeroing the kwh of any slot
+        # beyond that - so the 30-min blocks it still lists a positive kwh for are exactly the ones
+        # the car is still expected to draw on. A future block outside that set is heading for the
+        # same fate as a rescinded slot: Octopus will reclaim it once it notices the car has stopped
+        # drawing, so don't commit the house battery to it either.
+        expected_blocks = set()
+        if limit_future_slots:
+            for car_slot in self.car_charging_slots[car_n]:
+                if car_slot.get("kwh", 0) <= 0:
+                    continue
+                block_start = (car_slot["start"] // 30) * 30
+                block_end = ((car_slot["end"] + 29) // 30) * 30
+                expected_blocks.update(range(block_start, block_end, 30))
 
         if octopus_slots:
             # Add in IO slots
@@ -3090,9 +3125,16 @@ class Octopus:
                         # Calculate the 30-min slot start for this minute
                         slot_start = (minute // 30) * 30
 
+                        # A future out-of-window slot the car's own real SoC/limit shows it no
+                        # longer needs (#4482) - only applies to slots that haven't started yet, a
+                        # slot already underway or completed is trusted regardless of what
+                        # car_charging_slots now says about future need, and the fixed window is
+                        # never affected since it's guaranteed cheap by the tariff itself.
+                        needed = (not limit_future_slots) or (slot_start <= current_block) or (slot_start in expected_blocks) or self.minute_in_iog_fixed_window(slot_start)
+
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
-                            if slots_per_day[day_offset] < octopus_slot_max:
+                            if needed and slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
                                 rates[minute] = assumed_price
@@ -3105,8 +3147,8 @@ class Octopus:
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
-                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
-                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
+                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}, needed {}".format(
+                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate, needed
                                 )
                             )
 

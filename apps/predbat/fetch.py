@@ -2834,6 +2834,18 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.octopus_intelligent_limit_future_slots = self.get_arg("octopus_intelligent_limit_future_slots")
+        if self.octopus_intelligent_limit_future_slots and self.octopus_intelligent_charging and not self.octopus_intelligent_consider_full:
+            self.log(
+                "Warn: switch.predbat_octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - "
+                "load_octopus_slots() never zeroes out the slots beyond what the car's real SoC/limit still needs, so this switch "
+                "has nothing to act on and future daytime IOG slots will be treated as low rate exactly as before. Turn "
+                "octopus_intelligent_consider_full On too for this to have any effect."
+            )
+            self.record_status(
+                "Warn: octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - has no effect",
+                had_errors=True,
+            )
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0
