@@ -5284,6 +5284,66 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def plan_car_charging_solar_windows(self):
+        """
+        Find the slots where forecast solar is worth diverting to the car
+
+        A slot qualifies when the forecast PV power is at least car_charging_solar_excess and the export
+        rate is no higher than car_charging_rate_threshold_export - that second test is what "it doesn't
+        make sense to export it" means in practice. The car's own charger modulates to the available
+        surplus, so Predbat only decides when to enable it, never at what current.
+
+        Unlike the paid-import windows these run to the end of the forecast rather than stopping at the
+        ready time. Solar is opportunistic: it tops the car up above the guaranteed minimum whenever the
+        sun is free, and bounding it by a morning ready time would exclude every daylight hour.
+
+        Returns:
+        - list: candidate windows, each marked with solar=True
+        """
+        if not self.car_charging_solar:
+            return []
+
+        windows = []
+        slot_count = 0
+        rejected_sun = 0
+        rejected_export = 0
+        start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
+        end_minute = self.minutes_now + self.forecast_minutes
+        for minute in range(start_minute, end_minute, self.plan_interval_minutes):
+            slot_count += 1
+            pv_kwh = 0.0
+            for pv_minute in range(minute, minute + self.plan_interval_minutes):
+                pv_kwh += self.pv_forecast_minute.get(pv_minute, 0.0)
+            # The threshold is a power, so the slot's energy is converted rather than compared directly:
+            # on a 30 minute plan interval 1.25kWh is 2.5kW. Keeping it a power means the setting does
+            # not silently change meaning if plan_interval_minutes is not 30.
+            power_kw = pv_kwh * 60.0 / self.plan_interval_minutes
+            if power_kw < self.car_charging_solar_excess:
+                rejected_sun += 1
+                continue
+            export_rate = self.rate_export.get(minute, 0.0)
+            if export_rate > self.car_charging_rate_threshold_export:
+                rejected_export += 1
+                continue
+            # Price the slot at the export rate: solar sent to the car is not bought, it is export
+            # given up, so that is its real cost and what the plan should show
+            windows.append({"start": minute, "end": minute + self.plan_interval_minutes, "average": export_rate, "solar": True, "power_kw": dp2(power_kw)})
+
+        if slot_count:
+            accepted = ", ".join("{}={}kW".format(self.time_abs_str(window["start"]), window["power_kw"]) for window in windows)
+            self.log(
+                "Car solar windows: {} of {} slots qualify (need forecast PV >= {}kW and export rate <= {}), rejected {} for low sun and {} for export rate{}".format(
+                    len(windows),
+                    slot_count,
+                    self.car_charging_solar_excess,
+                    self.car_charging_rate_threshold_export,
+                    rejected_sun,
+                    rejected_export,
+                    " - accepted: " + accepted if accepted else "",
+                )
+            )
+        return windows
+
     def plan_car_charging(self, car_n, low_rates):
         """
         Plan when the car will charge, taking into account ready time and pricing
@@ -5329,29 +5389,46 @@ class Plan:
 
             price_sorted = [-1] + price_sorted
 
+        # Solar surplus windows are considered first, so free sunshine is used before any paid import and
+        # the price pass below only has to cover whatever solar cannot deliver.
+        candidate_windows = self.plan_car_charging_solar_windows()
         for window_n in price_sorted:
-            if window_n == -1:
-                window = extra_slot
-            else:
-                window = low_rates[window_n]
+            candidate_windows.append(extra_slot if window_n == -1 else low_rates[window_n])
+
+        # Energy that must be there by the ready time, whatever the weather. Bought slots stop here;
+        # solar carries on to the full limit, which is how "minimum from any source, the rest from sun"
+        # is expressed. Left at 100% (the default) both targets are the same and nothing changes.
+        min_soc_kwh = min(dp3(self.car_charging_plan_min_soc * self.car_charging_battery_size[car_n] / 100.0), self.car_charging_limit[car_n])
+
+        for window in candidate_windows:
+            is_solar = window.get("solar", False)
+            # Solar is opportunistic so it is not bound by the deadline; bought energy is the guarantee
+            window_target = self.car_charging_limit[car_n] if is_solar else min_soc_kwh
+            end_limit = (self.minutes_now + self.forecast_minutes) if is_solar else ready_minutes
 
             start = max(window["start"], self.minutes_now)
-            end = min(window["end"], ready_minutes)
+            end = min(window["end"], end_limit)
             price = window["average"]
 
             length = 0
             kwh = 0
 
-            # Stop once we have enough charge, allow small margin for rounding
-            if (car_soc + 0.1) >= self.car_charging_limit[car_n]:
-                break
+            # Enough charge for what this window is allowed to deliver. Skip rather than stop: solar
+            # windows come first and reach higher, so a later bought window may still owe the minimum
+            if (car_soc + 0.1) >= window_target:
+                continue
 
             # Skip past windows
             if end <= start:
                 continue
 
-            # Skip over prices when they are too high
-            if (max_price != 0) and price > max_price:
+            # A solar window and a cheap-import window can cover the same time; only plan one of them
+            if any((start < slot["end"]) and (end > slot["start"]) for slot in plan):
+                continue
+
+            # Skip over prices when they are too high. Solar windows are exempt: their energy is not
+            # being bought, so the import price of that time of day says nothing about them.
+            if (max_price != 0) and price > max_price and not window.get("solar", False):
                 continue
 
             # Compute amount of charge
@@ -5360,7 +5437,7 @@ class Plan:
             kwh = self.car_charging_rate[car_n] * hours
 
             kwh_add = kwh * self.car_charging_loss
-            kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0)
+            kwh_left = max(window_target - car_soc, 0)
 
             # Clamp length to required amount (shorten the window)
             if kwh_add > kwh_left:
@@ -5382,6 +5459,7 @@ class Plan:
                 new_slot["average"] = window["average"]
                 new_slot["cost"] = dp2(new_slot["average"] * kwh)
                 new_slot["octopus"] = False
+                new_slot["solar"] = window.get("solar", False)
                 plan.append(new_slot)
 
         # Return sorted back in time order
