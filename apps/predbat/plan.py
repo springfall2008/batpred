@@ -2484,10 +2484,12 @@ class Plan:
                         # so this is a phantom export. In the simulation it pinned SoC - the same behaviour as a
                         # freeze - so convert it to freeze export to keep the executed plan faithful to what was
                         # scored, while dropping the force-export command that would dump to grid if PV dips
-                        # below the export limit. Falls back to off when freeze is unsupported. If conditions
-                        # worsen (the PV10 case) a genuine export re-appears on a later plan recompute. Manual
-                        # exports are preserved. See #4453 (lone exports on flat rates).
-                        new_limit = 99.0 if self.set_export_freeze else 100.0
+                        # below the export limit. Falls back to off when freeze is unsupported, and when SoC is
+                        # pinned at 100% the freeze would be pointless, so clip off - the same rule the limit==99
+                        # branch above applies to native freeze windows. If conditions worsen (the PV10 case) a
+                        # genuine export re-appears on a later plan recompute. Manual exports are preserved.
+                        # See #4453 (lone exports on flat rates).
+                        new_limit = 99.0 if (self.set_export_freeze and dp1(soc_min) != dp1(self.soc_max)) else 100.0
                         window["target"] = new_limit
                         export_limits_best[window_n] = new_limit
                         if self.debug_enable:

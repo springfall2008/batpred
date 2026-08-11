@@ -23,6 +23,7 @@ def run_clip_export_slots_tests(my_predbat):
     failed |= test_normal_export_clipped_off_when_soc_never_above_reserve(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat)
     failed |= test_normal_export_clipped_to_freeze_when_soc_flat_above_limit(my_predbat)
+    failed |= test_normal_export_clipped_off_when_soc_flat_at_full(my_predbat)
     failed |= test_normal_export_clipped_off_when_soc_flat_and_freeze_unsupported(my_predbat)
     failed |= test_manual_export_preserved_when_soc_flat_above_limit(my_predbat)
     failed |= test_disabled_window_ignored(my_predbat)
@@ -268,6 +269,35 @@ def test_normal_export_clipped_to_freeze_when_soc_flat_above_limit(my_predbat):
         failed = True
     if result_windows[0]["target"] != 99.0:
         print("ERROR: Expected target 99.0 but got {}".format(result_windows[0]["target"]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_normal_export_clipped_off_when_soc_flat_at_full(my_predbat):
+    """A phantom export whose flat SoC is at soc_max must be clipped off (100), not converted to freeze:
+    the native freeze rule clips a 99 window off when SoC is pinned at 100%, and the conversion must not
+    produce a freeze window that rule would have removed (review finding on #4487)"""
+    print("**** test_normal_export_clipped_off_when_soc_flat_at_full ****")
+    failed = False
+    setup(my_predbat)
+    my_predbat.set_export_freeze = True
+
+    minutes_now = 720
+    windows = [make_window(720, 750)]
+    limits = [50.0]
+    # SoC pinned at full for the whole window: the drain never happened AND a freeze would be pointless
+    predict_soc = make_predict_soc(minutes_now, my_predbat.soc_max, 60)
+
+    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
+
+    if result_limits[0] != 100.0:
+        print("ERROR: Expected phantom export at full SoC clipped off (100.0) but got {}".format(result_limits[0]))
+        failed = True
+    if result_windows[0]["target"] != 100.0:
+        print("ERROR: Expected target 100.0 but got {}".format(result_windows[0]["target"]))
         failed = True
 
     if not failed:
