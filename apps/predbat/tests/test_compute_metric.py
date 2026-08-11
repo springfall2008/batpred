@@ -8,6 +8,22 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+# Everything battery_value_rate reads - snapshotted and restored around each test that pokes at it
+VALUE_RATE_STATE = (
+    "rate_min_forward",
+    "rate_min",
+    "rate_max",
+    "rate_max_base",
+    "inverter_loss",
+    "battery_loss",
+    "battery_loss_discharge",
+    "rate_export_min",
+    "rate_export_max",
+    "rate_export_max_forward",
+    "metric_battery_cycle",
+    "metric_battery_value_export_scaling",
+)
+
 
 def compute_metric_test(
     my_predbat,
@@ -61,6 +77,11 @@ def compute_metric_test(
     my_predbat.metric_self_sufficiency = metric_self_sufficiency
     my_predbat.rate_min = rate_min
     my_predbat.rate_max = rate_max
+    # battery_value_rate prefers the session-free base rate for its ceiling, so pin it alongside
+    # rate_max or a value left behind by an earlier test would decide these metrics instead.
+    my_predbat.rate_max_base = rate_max
+    # Empty means "no forward export data", which sends battery_value_rate back to rate_export_max
+    my_predbat.rate_export_max_forward = {}
     if not end_record:
         end_record = my_predbat.forecast_minutes
 
@@ -114,9 +135,11 @@ def save_state(my_predbat):
         "metric_self_sufficiency",
         "rate_min",
         "rate_max",
+        "rate_max_base",
         "carbon_enable",
         "carbon_metric",
         "rate_min_forward",
+        "rate_export_max_forward",
     ]
     for item in save_items:
         state_dict[item] = getattr(my_predbat, item)
@@ -136,9 +159,7 @@ def battery_value_rate_test(my_predbat):
     re-splitting the formula would reintroduce that divergence, and only the ceiling case catches it.
     """
     failed = False
-    saved = {
-        name: getattr(my_predbat, name) for name in ("rate_min_forward", "rate_min", "rate_max", "inverter_loss", "battery_loss", "battery_loss_discharge", "rate_export_min", "rate_export_max", "metric_battery_cycle", "metric_battery_value_export_scaling")
-    }
+    saved = {name: getattr(my_predbat, name) for name in VALUE_RATE_STATE}
     try:
         my_predbat.inverter_loss = 0.96
         my_predbat.battery_loss = 0.97
@@ -146,11 +167,12 @@ def battery_value_rate_test(my_predbat):
         my_predbat.metric_battery_cycle = 0.0
         my_predbat.rate_export_min = 0.0
         my_predbat.rate_export_max = 6.9
+        my_predbat.rate_export_max_forward = {}
         my_predbat.metric_battery_value_export_scaling = 1.0
         my_predbat.rate_min = 6.9
 
         # Normal spread: the gross-up applies and the ceiling does not bind
-        my_predbat.rate_max = 28.85
+        my_predbat.rate_max = my_predbat.rate_max_base = 28.85
         my_predbat.rate_min_forward = {10: 6.9}
         expected = 6.9 / 0.96 / 0.97
         got = my_predbat.battery_value_rate(10)
@@ -160,7 +182,7 @@ def battery_value_rate_test(my_predbat):
 
         # Flat tariff: rate_min_forward == rate_max, so the ceiling MUST bind and pull the value
         # below the gross-up. Without the ceiling this returns 1.0739*R instead of 0.9312*R.
-        my_predbat.rate_max = 6.9
+        my_predbat.rate_max = my_predbat.rate_max_base = 6.9
         expected_capped = 6.9 * 0.96 * 0.97
         got = my_predbat.battery_value_rate(10)
         if abs(got - expected_capped) > 1e-6:
@@ -168,11 +190,57 @@ def battery_value_rate_test(my_predbat):
             failed = True
 
         # The 1p floor applies when the forward rate is negative (plunge pricing)
-        my_predbat.rate_max = 28.85
+        my_predbat.rate_max = my_predbat.rate_max_base = 28.85
         my_predbat.rate_min_forward = {10: -5.0}
         got = my_predbat.battery_value_rate(10)
         if abs(got - 1.0) > 1e-6:
             print("ERROR: battery_value_rate is {} at a negative forward rate, expected the 1.0 floor".format(got))
+            failed = True
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
+
+
+def battery_value_rate_ceiling_base_test(my_predbat):
+    """Pin the ceiling to the base import tariff, not the session-inflated one.
+
+    load_saving_slot writes the session price into the import rates too, so rate_max can be a one-off
+    event price rather than the tariff's real peak. Ceiling on that and a stored kWh gets credited far
+    above anything the tariff will ever pay for it, which is what makes freeze charge look profitable
+    on a flat tariff. rate_max_base is captured before the session is layered on.
+    """
+    failed = False
+    saved = {name: getattr(my_predbat, name) for name in VALUE_RATE_STATE}
+    try:
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_loss = 0.97
+        my_predbat.battery_loss_discharge = 0.97
+        my_predbat.metric_battery_cycle = 0.0
+        my_predbat.rate_export_min = 0.0
+        my_predbat.rate_export_max = 0.0
+        my_predbat.rate_export_max_forward = {}
+        my_predbat.metric_battery_value_export_scaling = 1.0
+        my_predbat.rate_min = 29.2
+        my_predbat.rate_min_forward = {10: 29.2}
+
+        # A 100p saving session sets rate_max, but the real tariff is flat at 29.2p. The ceiling must
+        # come from the base rate, so the value stays at the flat tariff's 0.9312*R.
+        my_predbat.rate_max = 100.0
+        my_predbat.rate_max_base = 29.2
+        expected = 29.2 * 0.96 * 0.97
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with a session-inflated rate_max, expected the base-capped {}".format(got, expected))
+            failed = True
+
+        # Unset base (an older debug file being replayed) falls back to rate_max so nothing regresses
+        my_predbat.rate_max = 31.2
+        my_predbat.rate_max_base = 0
+        expected = 31.2 * 0.96 * 0.97
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with rate_max_base unset, expected the rate_max fallback {}".format(got, expected))
             failed = True
     finally:
         for name, value in saved.items():
@@ -189,8 +257,7 @@ def battery_value_export_scaling_test(my_predbat):
     plans that have no export problem at all.
     """
     failed = False
-    names = ("rate_min_forward", "rate_min", "rate_max", "inverter_loss", "battery_loss", "battery_loss_discharge", "rate_export_min", "rate_export_max", "metric_battery_cycle", "metric_battery_value_export_scaling")
-    saved = {name: getattr(my_predbat, name) for name in names}
+    saved = {name: getattr(my_predbat, name) for name in VALUE_RATE_STATE}
     try:
         my_predbat.inverter_loss = 0.96
         my_predbat.battery_loss = 0.97
@@ -198,8 +265,9 @@ def battery_value_export_scaling_test(my_predbat):
         my_predbat.metric_battery_cycle = 0.0
         my_predbat.rate_export_min = 0.0
         my_predbat.rate_min = 6.9
-        my_predbat.rate_max = 28.85
+        my_predbat.rate_max = my_predbat.rate_max_base = 28.85
         my_predbat.rate_min_forward = {10: 6.9}
+        my_predbat.rate_export_max_forward = {}
         my_predbat.metric_battery_value_export_scaling = 0.8
         full = 6.9 / 0.96 / 0.97
 
@@ -231,6 +299,72 @@ def battery_value_export_scaling_test(my_predbat):
     return failed
 
 
+def battery_value_export_forward_test(my_predbat):
+    """Pin the export-recovery ratio to the forward base export tariff.
+
+    The haircut asks "can I sell surplus?", which is a property of the tariff. Answering it with
+    rate_export_max - the highest export price anywhere in the horizon, saving sessions included -
+    let a single 2-hour 100p session switch the haircut off for a whole 48-hour plan on a system whose
+    export tariff pays nothing. The value then sat above what a stored kWh can realise, and the planner
+    freeze charged every window up to end_record because holding energy scored better than using it.
+
+    Scoping to the forward base tariff fixes both halves: sessions never enter it, and a session that
+    has already passed cannot keep counting.
+    """
+    failed = False
+    saved = {name: getattr(my_predbat, name) for name in VALUE_RATE_STATE}
+    try:
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_loss = 0.97
+        my_predbat.battery_loss_discharge = 0.97
+        my_predbat.metric_battery_cycle = 0.0
+        my_predbat.rate_export_min = 0.0
+        my_predbat.rate_min = 6.9
+        my_predbat.rate_max = my_predbat.rate_max_base = 28.85
+        my_predbat.rate_min_forward = {10: 6.9}
+        my_predbat.metric_battery_value_export_scaling = 0.8
+        full = 6.9 / 0.96 / 0.97
+
+        # A saving session pushes rate_export_max to 100p, but the export tariff itself pays nothing,
+        # so the forward base view is 0 and the full haircut must still apply.
+        my_predbat.rate_export_max = 100.0
+        my_predbat.rate_export_max_forward = {10: 0.0}
+        expected = full * 0.8
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with a saving session in rate_export_max, expected the haircut {} - a one-off event is standing in for the tariff".format(got, expected))
+            failed = True
+
+        # Base tariff that genuinely recovers half the import cost takes half the haircut
+        my_predbat.rate_export_max_forward = {10: 3.45}
+        expected = full * 0.9
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with a base export of 3.45, expected {}".format(got, expected))
+            failed = True
+
+        # A real export tariff matching the cheapest import still takes no haircut - the forward view
+        # must not be read as "export is always worthless"
+        my_predbat.rate_export_max_forward = {10: 6.9}
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - full) > 1e-6:
+            print("ERROR: battery_value_rate is {} with a base export matching import, expected the undiscounted {}".format(got, full))
+            failed = True
+
+        # No forward data at all (an older debug file being replayed) falls back to rate_export_max
+        my_predbat.rate_export_max = 3.45
+        my_predbat.rate_export_max_forward = {}
+        expected = full * 0.9
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with no forward export data, expected the rate_export_max fallback {}".format(got, expected))
+            failed = True
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
+
+
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
@@ -238,7 +372,9 @@ def run_compute_metric_tests(my_predbat):
     failed = False
     print("**** Running compute metric tests ****")
     failed |= battery_value_rate_test(my_predbat)
+    failed |= battery_value_rate_ceiling_base_test(my_predbat)
     failed |= battery_value_export_scaling_test(my_predbat)
+    failed |= battery_value_export_forward_test(my_predbat)
     state_dict = save_state(my_predbat)
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)

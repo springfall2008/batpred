@@ -1001,6 +1001,9 @@ class Fetch:
             self.rate_scan_export(export_rates, print=False)
             export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False)
             self.rate_export_base = export_rates.copy()
+            # Built here, from the base rates, so the saving session and overrides applied below stay
+            # out of it - battery_value_rate needs the tariff's own export price, not an event price
+            self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
@@ -1945,6 +1948,34 @@ class Fetch:
             # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
             self.rate_min_forward = self.rate_min_forward_calc(rates)
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
+
+    def rate_export_max_forward_calc(self, rates):
+        """
+        Work out the highest export rate from each minute forwards
+
+        The export mirror of rate_min_forward_calc. Fed from the base export tariff (see
+        rate_export_base) so a saving session cannot stand in for the tariff's general ability to sell
+        surplus - that question is what the export haircut in battery_value_rate asks, and answering it
+        with a one-off event price makes stored energy look fully recoverable on a system that in fact
+        cannot sell a single kWh.
+        """
+        rate_array = []
+        rate_export_max_forward = {}
+        rate = 0.0
+
+        for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
+            if minute in rates:
+                rate = rates[minute]
+            rate_array.append(rate)
+
+        # Work out the max rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        running_max = rate_array[-1] if rate_array else 0.0
+        for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
+            running_max = max(running_max, rate_array[minute])
+            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
+                rate_export_max_forward[minute] = running_max
+
+        return rate_export_max_forward
 
     def rate_scan_gas(self, rates, print=True):
         """
