@@ -2650,10 +2650,16 @@ class Plan:
         genuine slot from actual state, so nothing is permanently lost.
 
         Runs after the pre-clip scoring snapshot (see calculate_plan), so plan selection still
-        compares plans as optimised (#4403). Windows covering the current minute are never trialled
-        (an in-progress export must not be cancelled mid-flight - the #4402 commitment) and manual
-        windows are preserved. Later removals are compared against the running baseline, so an
-        earlier accepted removal cannot make a later one look free.
+        compares plans as optimised (#4403). Manual windows are preserved. Later removals are
+        compared against the running baseline, so an earlier accepted removal cannot make a later
+        one look free.
+
+        A window covering the current minute is trialled like any other - it is the slot being
+        executed right now, so a dead one left in place is precisely the spurious command that
+        reaches the inverter. This does not reopen #4402: that regression came from writing back a
+        window change scored on optimise_export's adjusted metric (commitment bonus and tie-break
+        weightings), and the fix was to gate on the unadjusted whole-plan metric, which is what this
+        trial uses. An in-progress export worth anything at all fails the gate and is kept.
         """
         eps = 0.02
         record_limit = self.end_record + self.minutes_now
@@ -2667,8 +2673,6 @@ class Plan:
                 if not active:
                     continue
                 if window["end"] <= self.minutes_now or window["start"] >= record_limit:
-                    continue
-                if window["start"] <= self.minutes_now < window["end"]:
                     continue
                 if window["start"] in self.manual_all_times:
                     continue
@@ -2796,9 +2800,8 @@ class Plan:
                     # directly (does the nominal plan change without this slot?) instead of inferring it from the
                     # SoC trace, and subsumes the removal branches that used to live here: freeze-at-100%,
                     # no-SoC-above-reserve (#4171/#4434), phantom export (#4453/#4487) and target-unreachable.
-                    # The one case it deliberately does not cover is a window covering the current minute, which
-                    # it must not cancel mid-flight (#4402); an in-progress phantom is instead left to be
-                    # re-planned on the next cycle from real inverter state.
+                    # That includes the window covering the current minute, so a dead slot is never left
+                    # commanding the inverter.
                     if limit != 99.0 and soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)

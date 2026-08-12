@@ -24,7 +24,8 @@ def run_prune_dead_slots_tests(my_predbat):
     failed |= test_prune_drops_neutral_slot(my_predbat)
     failed |= test_prune_keeps_slot_when_removal_worsens(my_predbat)
     failed |= test_prune_allows_improvement_and_updates_baseline(my_predbat)
-    failed |= test_prune_skips_in_progress_window(my_predbat)
+    failed |= test_prune_drops_dead_in_progress_window(my_predbat)
+    failed |= test_prune_keeps_valuable_in_progress_window(my_predbat)
     failed |= test_prune_skips_manual_window(my_predbat)
     failed |= test_prune_drops_neutral_charge_freeze(my_predbat)
     failed |= test_prune_ignores_windows_outside_record(my_predbat)
@@ -228,16 +229,47 @@ def test_prune_allows_improvement_and_updates_baseline(my_predbat):
     return failed
 
 
-def test_prune_skips_in_progress_window(my_predbat):
-    """A window covering minutes_now is never trialled - an in-progress export must not be cancelled
-    by the prune (the #4402 commitment)"""
-    print("**** test_prune_skips_in_progress_window ****")
+def test_prune_drops_dead_in_progress_window(my_predbat):
+    """A window covering minutes_now IS trialled: it is the slot being executed right now, so a dead one
+    must not be left commanding the inverter. Removal is still gated on the whole-plan metric, which is
+    the yardstick #4402 requires - a genuinely valuable in-progress export is protected by the metric
+    itself, not by being exempt from the trial."""
+    print("**** test_prune_drops_dead_in_progress_window ****")
     failed = False
     setup(my_predbat)
 
     my_predbat.export_window_best = [make_window(700, 750)]  # covers minutes_now=720
     my_predbat.export_limits_best = [0.0]
-    install_metric_stub(my_predbat, {}, default=100.0)  # removal would look neutral
+    install_metric_stub(my_predbat, {}, default=100.0)  # removal is neutral - the slot is dead
+
+    try:
+        my_predbat.prune_dead_plan_slots()
+    finally:
+        restore_metric(my_predbat)
+
+    if my_predbat.export_limits_best[0] != 100.0:
+        print("ERROR: Dead in-progress export slot was not pruned, limit is {}".format(my_predbat.export_limits_best[0]))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_prune_keeps_valuable_in_progress_window(my_predbat):
+    """An in-progress export that is genuinely worth something is kept - the metric gate protects it, so
+    an export in flight at a good price is never cancelled (the #4402 regression)"""
+    print("**** test_prune_keeps_valuable_in_progress_window ****")
+    failed = False
+    setup(my_predbat)
+
+    my_predbat.export_window_best = [make_window(700, 750)]  # covers minutes_now=720
+    my_predbat.export_limits_best = [0.0]
+    table = {
+        ((), (0.0,)): 100.0,  # as planned
+        ((), (100.0,)): 104.0,  # cancelling it mid-flight loses real export revenue
+    }
+    install_metric_stub(my_predbat, table)
 
     try:
         my_predbat.prune_dead_plan_slots()
@@ -245,7 +277,7 @@ def test_prune_skips_in_progress_window(my_predbat):
         restore_metric(my_predbat)
 
     if my_predbat.export_limits_best[0] != 0.0:
-        print("ERROR: In-progress export slot was pruned, limit is {}".format(my_predbat.export_limits_best[0]))
+        print("ERROR: Valuable in-progress export was cancelled mid-flight, limit is {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
     if not failed:
