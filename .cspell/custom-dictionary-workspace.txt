@@ -393,6 +393,8 @@ pytz
 randn
 rarr
 reactivepower
+readback
+readbacks
 recp
 redownload
 Referer
