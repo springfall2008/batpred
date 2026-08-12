@@ -3391,6 +3391,15 @@ class Inverter:
         """
         Configure discharge to percent via REST
         """
+
+        def to_int(value):
+            """GivTCP reports these as strings, so coerce before comparing or a successful write
+            reads back as '4' and never matches the int target."""
+            try:
+                return int(float(value))
+            except (ValueError, TypeError):
+                return None
+
         target = int(target)
         url = self.rest_api + "/setDischargeTarget"
         data = {"dischargeToPercent": target, "slot": 1}
@@ -3398,20 +3407,21 @@ class Inverter:
 
         for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
-            # GivTCP's runAll status is a separately-cached snapshot, refreshed on its own polling
-            # cycle rather than synchronously with this POST - reading it back immediately can catch
-            # data from before GivTCP has applied and exposed the write, reporting a spurious failure
-            # even though the write itself succeeded (#4421). A short settle delay gives that cache
-            # a chance to catch up before we check it.
+            # GivTCP's write handler updates Control.Discharge_Target_SOC_1 synchronously the
+            # moment it accepts the command (confirmed against GivTCP's own source - write.py's
+            # setDischargeTarget() calls updateControlCache() straight after the Modbus write), so
+            # it's checked first. raw.invertor.discharge_target_soc_1 is kept as a fallback, but on
+            # its own it's an unreliable signal: it only refreshes on GivTCP's separate background
+            # self_run poll cycle, which can be tens of seconds away, not synchronous with this
+            # POST at all (#4421). A short settle delay still helps for the much smaller residual
+            # gap - the physical inverter itself taking a moment to apply the write, which a
+            # same-moment self_run poll could otherwise briefly overwrite Control with a stale read
+            # of.
             self.sleep(1)
             self.rest_data = self.rest_runAll(self.rest_data)
-            # GivTCP reports the raw registers as strings, so coerce before comparing or a
-            # successful write reads back as '4' and never matches the int target
-            result = self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None)
-            try:
-                result = int(float(result))
-            except (ValueError, TypeError):
-                result = None
+            result = to_int(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None))
+            if result != target:
+                result = to_int(self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None))
             if result == target:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
