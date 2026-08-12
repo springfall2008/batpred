@@ -9,12 +9,17 @@ batpred.code-workspace
 .Trashes
 ehthumbs.db
 Thumbs.db
+dev_code
+sigenergy_mqtt_key
 
 # Python cache files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+# Cross-built prediction kernel binaries are checked in (per-platform, see
+# build_kernel_cross.sh); the local native build prediction_kernel_lib.so stays ignored
+!apps/predbat/prediction_kernel_lib_*.so
 .Python
 build/
 develop-eggs/
@@ -41,6 +46,7 @@ coverage/*.txt
 coverage/*.db
 coverage/*.html
 coverage/*.prof
+coverage/*.py
 coverage/cache/
 coverage/debug/
 coverage/predbat_standalone/
@@ -103,3 +109,6 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+
+# Claude Code local worktrees
+.claude/worktrees/

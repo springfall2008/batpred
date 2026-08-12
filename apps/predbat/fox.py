@@ -25,6 +25,7 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
@@ -38,8 +39,49 @@ FOX_DOMAIN = "https://www.foxesscloud.com"
 FOX_LANG = "en"
 TIMEOUT = 60
 FOX_RETRIES = 10
-FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+FOX_SETTINGS = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
 OPTIONS_WORK_MODE = ["SelfUse", "ForceCharge", "ForceDischarge", "Feedin"]
+
+# Fox errno codes meaning "this device does not support this setting" - permanent, not transient,
+# so once seen for a given device/key we stop polling and writing that setting entirely
+FOX_SETTINGS_UNSUPPORTED_ERRNO = (42015, 44096)
+
+# Fallback values applied when a setting is found to be unsupported, so the rest of Predbat still
+# has something sensible to work with instead of a missing entry. Keys not listed here (ExportLimit,
+# MinSocOnGrid) are simply left absent - existing callers already treat a missing setting as the
+# safe default (e.g. export_limit falls back to unlimited). WorkMode carries an enumList so it
+# still publishes as a select entity: automatic_config wires inverter_mode to a hardcoded
+# select.*_setting_workmode entity id, and a plain sensor there would leave it unresolvable (None).
+FOX_SETTINGS_DEFAULTS = {
+    "workmode": {"value": "SelfUse", "enumList": OPTIONS_WORK_MODE},
+    "maxsoc": {"value": 100},
+    "gridcode": {"value": None},
+    "minsoc": {"value": 10},
+}
+
+# Bump this whenever the shape/derivation of device_settings entries changes (e.g. adding
+# range/unit/precision to schedule-derived settings) so a persisted cache from before that
+# change is detected as stale and forces one settings/scheduler refresh regardless of age,
+# instead of being reused as-is - potentially forever, since nothing else would ever correct it.
+FOX_SETTINGS_CACHE_VERSION = 2
+
+# Storage cache keys for device data persisted between reboots
+FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "device_settings_unavailable", "device_settings_version", "scheduler_state", "device_values", "device_production_month"]
+
+# Maximum age (minutes) of cached data before an API refresh is triggered
+FOX_REFRESH_STATIC = 24 * 60  # Device list, detail and battery charge times rarely change
+FOX_REFRESH_SETTINGS = 60  # Device settings and scheduler
+FOX_REFRESH_PRODUCTION = 15  # Monthly production totals
+FOX_REFRESH_REALTIME = 5  # Real time monitoring data
+
+# Fox productType codes that must use the v2/v3 scheduler API. Fox's v1 scheduler
+# endpoints return errno 41200 permanently for these (EVO series) even though the
+# devices fully support the scheduler — verified against EVO 10-5-H units (productType
+# "812"); KH-series and others (which work on v1) are deliberately excluded. Detection is
+# by productType, not by v1 failure: errno 41200 doubles as a transient rate-limit code, so
+# keying off a v1 failure would wrongly reroute a healthy device after a single blip.
+# Extend this set as new EVO product types are confirmed.
+FOX_V2_SCHEDULER_PRODUCT_TYPES = {"812"}
 
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
@@ -68,6 +110,38 @@ def schedules_are_equal(time_now, schedule1, schedule2):
             if not same:
                 break
     return same
+
+
+def print_schedule_diff(label1, schedule1, label2, schedule2):  # pragma: no cover
+    """
+    Print a per-group, per-key diff between two schedules for debugging a reported mismatch.
+
+    Sorts/strips both schedules the same way schedules_are_equal does, then - unlike
+    schedules_are_equal, which stops at the first mismatched key - compares the union of keys
+    across every group so a difference caused by a field one side simply doesn't have (e.g.
+    exportLimit only appearing in a read-back) is reported clearly instead of read as a generic
+    "not equal".
+    """
+    sorted1 = sort_schedule_by_start_time(schedule1)
+    sorted2 = sort_schedule_by_start_time(schedule2)
+
+    if len(sorted1) != len(sorted2):
+        print(f"Group count differs: {label1}={len(sorted1)} groups, {label2}={len(sorted2)} groups")
+
+    for i in range(max(len(sorted1), len(sorted2))):
+        entry1 = sorted1[i] if i < len(sorted1) else None
+        entry2 = sorted2[i] if i < len(sorted2) else None
+        if entry1 is None:
+            print(f"  [{i}] only in {label2}: {entry2}")
+            continue
+        if entry2 is None:
+            print(f"  [{i}] only in {label1}: {entry1}")
+            continue
+        diff_keys = [key for key in sorted(set(entry1) | set(entry2)) if entry1.get(key, None) != entry2.get(key, None)]
+        if diff_keys:
+            print(f"  [{i}] start={entry1.get('startHour')}:{entry1.get('startMinute', 0):02d} mismatched keys: {diff_keys}")
+            for key in diff_keys:
+                print(f"      {key}: {label1}={entry1.get(key, '<missing>')}  {label2}={entry2.get(key, '<missing>')}")
 
 
 def end_minute_inclusive_to_exclusive(end_hour, end_minute):
@@ -216,6 +290,49 @@ def validate_schedule(new_schedule, reserve, fdPwr_max, target_count=0):
     return pad_schedule(result_schedule, target_count, reserve, fdPwr_max)
 
 
+# Group fields that the v3 scheduler API nests inside 'extraParam'
+V3_EXTRA_PARAM_KEYS = ["minSocOnGrid", "fdSoc", "fdPwr", "maxSoc", "importLimit", "exportLimit", "pvLimit", "reactivePower"]
+
+# Schedule group field -> FOX device-setting name, for exportLimit/importLimit/pvLimit values
+# that a schedule read observes but Predbat's own schedule writes never populate. Carried
+# forward on a v3 write (see get_schedule_extra_param) using the max seen across all groups
+# (see update_settings_from_schedule) so writing a new schedule does not implicitly clear them.
+SCHEDULE_DERIVED_LIMITS = [("exportLimit", "ExportLimit"), ("importLimit", "ImportLimit"), ("pvLimit", "PvLimit")]
+
+# All schedule group fields derived into device_settings on a read, each with the aggregate used
+# to combine per-slot values into a single device-level setting. Includes SCHEDULE_DERIVED_LIMITS
+# plus maxSoc (max) and minSocOnGrid (min), which are read-only derivations - not carried on
+# write since Predbat's schedule groups already set those per-slot from the live plan.
+SCHEDULE_DERIVED_SETTINGS = [(group_key, setting_key, max) for group_key, setting_key in SCHEDULE_DERIVED_LIMITS] + [("maxSoc", "MaxSoc", max), ("minSocOnGrid", "MinSocOnGrid", min)]
+
+
+def groups_to_v3(groups, extra_extra_param=None):
+    """
+    Convert flat v1 scheduler groups into the nested shape used by the v3 API
+
+    Only enabled groups are carried (v1 uses fixed slots with enable flags while v3
+    takes just the active periods) and SOC/power fields move inside 'extraParam',
+    matching the request shape the foxesscloud reference library sends.
+
+    extra_extra_param merges additional extraParam fields (exportLimit/importLimit/pvLimit)
+    into every group, since Predbat's own schedule groups never populate them and omitting
+    them from the write risks Fox resetting them to a default. It must not contain maxSoc or
+    minSocOnGrid, which already come from the live plan per-group via V3_EXTRA_PARAM_KEYS.
+    """
+    v3_groups = []
+    for group in groups:
+        if not group.get("enable", 1):
+            continue
+        v3_group = {key: value for key, value in group.items() if key not in V3_EXTRA_PARAM_KEYS and key != "enable"}
+        extra_param = {key: group[key] for key in V3_EXTRA_PARAM_KEYS if key in group}
+        if extra_extra_param:
+            extra_param.update(extra_extra_param)
+        if extra_param:
+            v3_group["extraParam"] = extra_param
+        v3_groups.append(v3_group)
+    return v3_groups
+
+
 class FoxAPI(ComponentBase, OAuthMixin):
     """Fox API client."""
 
@@ -231,6 +348,16 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.available_variables = {}
         self.device_values = {}
         self.device_settings = {}
+        # {deviceSN: [key_lower, ...]} of settings the device has reported as unsupported (errno
+        # 42015/44096), so they are never polled or written to again
+        self.device_settings_unavailable = {}
+        # Version of the persisted device_settings cache actually on disk; 0 (never matches
+        # FOX_SETTINGS_CACHE_VERSION) until load_cached_data() loads a real value, so a fresh
+        # install/first-ever poll is treated the same as a stale cache - both force one refresh
+        self.device_settings_version = 0
+        # Set within request_get_func for the duration of a single request_get() call, so callers
+        # can tell an "unsupported" failure (permanent) apart from a transient one
+        self.last_unsupported = False
         self.device_production_month = {}
         self.device_production_year = {}
         self.device_battery_charging_time = {}
@@ -239,6 +366,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
+        # Age (datetime of last update) of each cached data category, used to drive age-based refresh
+        self.data_age = {}
         # Rate limiting tracking
         self.requests_today = 0
         self.rate_limit_errors_today = 0
@@ -303,47 +432,129 @@ class FoxAPI(ComponentBase, OAuthMixin):
             retry_allowed = self.should_allow_retry()
             self.log(f"Fox: API usage: {self.requests_today} requests over {elapsed_minutes:.1f} minutes " f"({hourly_rate:.1f}/hour), retry_allowed={retry_allowed}")
 
+        # On first start, restore cached device data from storage so that a quick reboot can
+        # avoid re-polling the Fox cloud API for settings/production/realtime data that is still fresh
         if first:
-            # Only do these once as battery charging times are ignored with the scheduler
-            # and we get the realtime data every 5 minutes
-            await self.get_device_list()
+            await self.load_cached_data()
+
+        # Device list rarely changes - refresh based on the age of the cached data
+        if first or self._needs_refresh("device_list", FOX_REFRESH_STATIC):
+            prev_sns = {d.get("deviceSN") for d in self.device_list}
+            devices = await self.get_device_list()
             self.log("Fox API: Found {} devices".format(len(self.device_list)))
-            if not self.device_list:
-                self.log("Error: FoxAPI: No devices found, unable to start API")
-                return False
+            # Only persist and reset the 24h refresh timer when the poll actually succeeded; on a
+            # transient API failure we keep any cached list and retry on the next cycle
+            if devices:
+                await self._save_cache("device_list", self.device_list)
+                # If the set of device serial numbers changed, drop all per-device caches so
+                # every category is re-fetched for the new device immediately
+                new_sns = {d.get("deviceSN") for d in self.device_list}
+                if new_sns != prev_sns:
+                    for key in FOX_CACHE_KEYS:
+                        if key != "device_list":
+                            self.data_age.pop(key, None)
 
-            # Get per device data
+        if not self.device_list:
+            self.log("Error: FoxAPI: No devices found, unable to start API")
+            return False
+
+        # Device detail and battery charging times rarely change - refresh based on age
+        if self._needs_refresh("device_detail", FOX_REFRESH_STATIC):
+            detail_updated = False
+            battery_updated = False
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_device_detail(sn)
+                    # get_device_detail returns None on failure, the data (always non-empty) on success
+                    if await self.get_device_detail(sn) is not None:
+                        detail_updated = True
+                    # get_battery_charging_time returns {} on failure or for a non-battery device
+                    if await self.get_battery_charging_time(sn) is not None:
+                        battery_updated = True
+            # Persist each cache once after polling all devices, only when a poll succeeded
+            if detail_updated:
+                await self._save_cache("device_detail", self.device_detail)
+            if battery_updated:
+                await self._save_cache("battery_charging_time", self.device_battery_charging_time)
+
+        # Seed device values from history only on a cold start where we have nothing cached
+        if first and not self.device_values:
+            for device in self.device_list:
+                sn = device.get("deviceSN", None)
+                if sn:
                     await self.get_device_history(sn)
-                    await self.get_battery_charging_time(sn)
 
-        if first or (seconds % (60 * 60) == 0):
-            # Regular updates for registers and scheduler data
+        # Device settings and scheduler - refresh based on age. Also force a refresh, regardless
+        # of age, when the persisted cache predates FOX_SETTINGS_CACHE_VERSION - a one-time
+        # self-heal after a code update changes how settings are derived/shaped (e.g. adding
+        # range/unit/precision), so a customer isn't stuck reusing a stale-shaped cached value
+        # for up to FOX_REFRESH_SETTINGS. Once refreshed, the version is saved and this stops
+        # firing - restarts do not otherwise force a refresh, to avoid hammering the API.
+        stale_cache_version = self.device_settings_version != FOX_SETTINGS_CACHE_VERSION
+        settings_refresh = stale_cache_version or self._needs_refresh("device_settings", FOX_REFRESH_SETTINGS)
+        if settings_refresh:
+            settings_updated = False
+            scheduler_updated = False
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_device_settings(sn)
+                    # Both return {} on failure or for a non-battery device, the data on success
+                    if await self.get_device_settings(sn) is not None:
+                        settings_updated = True
+                    if await self.get_scheduler(sn) is not None:
+                        scheduler_updated = True
+            if settings_updated or scheduler_updated:
+                # update_settings_from_schedule() (called from get_scheduler()) mutates
+                # device_settings too, so this must save on scheduler_updated as well - not
+                # just settings_updated - or a schedule-derived upgrade is lost on restart
+                await self._save_cache("device_settings", self.device_settings)
+            if stale_cache_version and scheduler_updated:
+                # Only get_scheduler() -> update_settings_from_schedule() can actually produce
+                # the upgraded (range/unit/precision) shape this version tracks, so the version
+                # must not be marked current on settings_updated alone
+                self.device_settings_version = FOX_SETTINGS_CACHE_VERSION
+                await self._save_cache("device_settings_version", FOX_SETTINGS_CACHE_VERSION)
+            if self.device_settings_unavailable:
+                await self._save_cache("device_settings_unavailable", self.device_settings_unavailable)
+            if scheduler_updated:
+                await self._save_cache("scheduler_state", self._scheduler_state())
+
+        # Recompute the local schedule (cheap, no API calls) on first start or after a refresh
+        if first or settings_refresh:
+            for device in self.device_list:
+                sn = device.get("deviceSN", None)
+                if sn:
                     await self.get_schedule_settings_ha(sn)
-                    await self.get_scheduler(sn)
                     await self.compute_schedule(sn)
 
-        # Refresh total metrics every 15 minutes
-        if first or (seconds % (15 * 60) == 0):
+        # Total production metrics - refresh based on age
+        production_refresh = self._needs_refresh("device_production_month", FOX_REFRESH_PRODUCTION)
+        if production_refresh:
+            production_updated = False
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_device_production_month(sn)
+                    # get_device_production_month returns None on failure
+                    if await self.get_device_production_month(sn) is not None:
+                        production_updated = True
+            if production_updated:
+                await self._save_cache("device_production_month", self.device_production_month)
 
-        # Real time data every 5 minutes
-        if first or (seconds % (5 * 60) == 0):
+        # Real time monitoring data - refresh based on age
+        realtime_refresh = self._needs_refresh("device_values", FOX_REFRESH_REALTIME)
+        if realtime_refresh:
+            realtime_updated = False
             for device in self.device_list:
                 sn = device.get("deviceSN", None)
                 if sn:
-                    await self.get_real_time_data(sn)
-            # Refresh HA entities
+                    # get_real_time_data returns None on failure
+                    if await self.get_real_time_data(sn) is not None:
+                        realtime_updated = True
+            if realtime_updated:
+                await self._save_cache("device_values", self.device_values)
+
+        # Publish to HA whenever we have refreshed data (or on first start to populate entities)
+        if first or settings_refresh or production_refresh or realtime_refresh:
             await self.publish_data()
 
         # Automatic configuration on first run
@@ -351,6 +562,111 @@ class FoxAPI(ComponentBase, OAuthMixin):
             await self.automatic_config()
 
         return True
+
+    def _data_age_minutes(self, key):
+        """
+        Return the age in minutes of the in-memory data for a cache key, or None if unknown.
+        """
+        timestamp = self.data_age.get(key, None)
+        if timestamp is None:
+            return None
+        return (datetime.now(timezone.utc) - timestamp).total_seconds() / 60.0
+
+    def _needs_refresh(self, key, max_age_minutes):
+        """
+        Return True if the data for a cache key is missing or older than max_age_minutes.
+        """
+        age = self._data_age_minutes(key)
+        return age is None or age >= max_age_minutes
+
+    def _scheduler_state(self):
+        """
+        Bundle the scheduler-derived state into a single object for caching.
+        """
+        return {
+            "scheduler": self.device_scheduler,
+            "fdpwr_max": self.fdpwr_max,
+            "fdsoc_min": self.fdsoc_min,
+            "count": self.device_scheduler_count,
+        }
+
+    async def _save_cache(self, key, data):
+        """
+        Save data to storage under the fox module and record its update time in memory.
+        """
+        now = datetime.now(timezone.utc)
+        self.data_age[key] = now
+        if self.storage:
+            # Expire after a day so stale data doesn't linger in the cache forever
+            await self.storage.save("fox", key, data, format="json", expiry=now + timedelta(days=1))
+
+    async def _load_cache(self, key):
+        """
+        Load cached data for a key from storage, recording its age. Returns None if absent.
+        """
+        if not self.storage:
+            return None
+        data = await self.storage.load("fox", key)
+        if data is None:
+            return None
+        age = await self.storage.age("fox", key)
+        if age is None:
+            return None
+        self.data_age[key] = datetime.now(timezone.utc) - timedelta(minutes=age)
+        return data
+
+    async def load_cached_data(self):
+        """
+        Restore cached device data from storage on startup.
+
+        Loads each category of device data that was previously saved, recording its age so the
+        age-based refresh logic can decide whether a fresh API poll is needed. This avoids
+        re-polling the Fox cloud API after a quick reboot when the data is still fresh.
+        """
+        if not self.storage:
+            return
+
+        device_list = await self._load_cache("device_list")
+        if device_list is not None:
+            self.device_list = device_list
+            self.update_success_timestamp()
+
+        device_detail = await self._load_cache("device_detail")
+        if device_detail is not None:
+            self.device_detail = device_detail
+
+        battery_charging_time = await self._load_cache("battery_charging_time")
+        if battery_charging_time is not None:
+            self.device_battery_charging_time = battery_charging_time
+
+        device_settings = await self._load_cache("device_settings")
+        if device_settings is not None:
+            self.device_settings = device_settings
+
+        device_settings_unavailable = await self._load_cache("device_settings_unavailable")
+        if device_settings_unavailable is not None:
+            self.device_settings_unavailable = device_settings_unavailable
+
+        device_settings_version = await self._load_cache("device_settings_version")
+        if device_settings_version is not None:
+            self.device_settings_version = device_settings_version
+
+        scheduler_state = await self._load_cache("scheduler_state")
+        if isinstance(scheduler_state, dict):
+            self.device_scheduler = scheduler_state.get("scheduler", {})
+            self.fdpwr_max = scheduler_state.get("fdpwr_max", {})
+            self.fdsoc_min = scheduler_state.get("fdsoc_min", {})
+            self.device_scheduler_count = scheduler_state.get("count", {})
+
+        device_values = await self._load_cache("device_values")
+        if device_values is not None:
+            self.device_values = device_values
+
+        device_production_month = await self._load_cache("device_production_month")
+        if device_production_month is not None:
+            self.device_production_month = device_production_month
+
+        self.log("Fox: Restored cached data from storage for keys {}".format(sorted(self.data_age.keys())))
 
     async def get_available_variables(self):
         """
@@ -527,6 +843,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             if deviceSN not in self.device_values:
                                 self.device_values[deviceSN] = {}
                             self.device_values[deviceSN][variable] = {"timestamp": timestamp, "value": value, "unit": unit, "name": name}
+        return result
 
     async def get_device_history(self, deviceSN):
         """
@@ -589,24 +906,57 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
         if result is not None:
             self.device_detail[deviceSN] = result
+        return result
 
     async def get_device_settings(self, deviceSN, checkBattery=True):
         """
         Get device settings
+
+        Returns non-None once every key has been settled (read successfully or marked
+        unavailable), even if none of them are actually supported by this device - otherwise a
+        device where every setting is unsupported would never persist a cache age, and the
+        scheduler poll sharing the same refresh gate would run every cycle instead of hourly.
         """
         # Check if device has battery
         if checkBattery and not self.device_detail.get(deviceSN, {}).get("hasBattery", False):
             # These controls don't exist for non-battery devices
             return {}
+        settled = True
         for key in FOX_SETTINGS:
-            await self.get_device_setting(deviceSN, key)
-        return self.device_settings.get(deviceSN, {})
+            if await self.get_device_setting(deviceSN, key) is None and not self.is_setting_unavailable(deviceSN, key):
+                settled = False
+        if not settled:
+            return None
+        else:
+            return self.device_settings.get(deviceSN, {})
+
+    def is_setting_unavailable(self, deviceSN, key):
+        """
+        Return True if this device has already reported the setting as unsupported.
+        """
+        return key.lower() in self.device_settings_unavailable.get(deviceSN, [])
+
+    def mark_setting_unavailable(self, deviceSN, key):
+        """
+        Record that a Fox device does not support a setting (errno 42015/44096) so it is never
+        polled or written to again, applying a safe fallback value where one is defined.
+        """
+        key_lower = key.lower()
+        unavailable = self.device_settings_unavailable.setdefault(deviceSN, [])
+        if key_lower not in unavailable:
+            unavailable.append(key_lower)
+        self.log(f"Fox: Warn: Setting {key} is not supported by device {deviceSN}, will not read or write it again")
+        if key_lower in FOX_SETTINGS_DEFAULTS:
+            self.device_settings.setdefault(deviceSN, {})[key] = dict(FOX_SETTINGS_DEFAULTS[key_lower])
 
     async def get_device_setting(self, deviceSN, key):
         """
         Get device setting
         {'enumList': ['PeakShaving', 'Feedin', 'SelfUse'], 'unit': '', 'precision': 1.0, 'value': 'SelfUse'}
         """
+        if self.is_setting_unavailable(deviceSN, key):
+            return self.device_settings.get(deviceSN, {}).get(key, None)
+
         GET_DEVICE_SETTING = "/op/v0/device/setting/get"
         result = await self.request_get(GET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key}, post=True)
         if result is not None:
@@ -614,6 +964,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 self.device_settings[deviceSN] = {}
             self.device_settings[deviceSN][key] = result
             return result
+        elif self.last_unsupported:
+            self.mark_setting_unavailable(deviceSN, key)
         else:
             self.log(f"Fox: Warn: Failed to get device setting for {deviceSN} key {key}")
         return None
@@ -622,9 +974,16 @@ class FoxAPI(ComponentBase, OAuthMixin):
         """
         Set device setting
         """
+        if self.is_setting_unavailable(deviceSN, key):
+            self.log(f"Fox: Warn: Ignoring write to unsupported setting {key} for device {deviceSN}")
+            return True
+
         SET_DEVICE_SETTING = "/op/v0/device/setting/set"
         result = await self.request_get(SET_DEVICE_SETTING, datain={"sn": deviceSN, "key": key, "value": value, "lang": FOX_LANG}, post=True)
         if result is None:
+            if self.last_unsupported:
+                self.mark_setting_unavailable(deviceSN, key)
+                return True
             if self.device_settings.get(deviceSN, {}).get(key, None) is None:
                 # Failed to write setting after failure to read, assume it doesn't exist
                 self.log(f"Fox: Warn: Failed to set device setting for {deviceSN} key {key} value {value}, assuming not supported")
@@ -665,7 +1024,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if result is not None:
             self.device_battery_charging_time[deviceSN] = result
             return result
-        return {}
+        return None
 
     async def compute_schedule(self, deviceSN):
         """
@@ -798,6 +1157,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_PRODUCTION, datain={"sn": deviceSN, "year": year, "month": month, "dimension": "month", "variables": variables}, post=True)
         if result is not None:
             self.device_production_month[deviceSN] = result
+        return result
 
     async def get_device_power_generation(self, deviceSN):
         """
@@ -807,10 +1167,76 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_POWER, datain={"sn": deviceSN})
         if result is not None:
             self.device_power_generation[deviceSN] = result
+        return result
+
+    def uses_v2_scheduler(self, deviceSN):
+        """
+        Return True if this device must use the v2/v3 scheduler API instead of v1
+
+        Detection is by productType (EVO series fail the v1 scheduler endpoints
+        permanently) so a device is classified deterministically, never as a side
+        effect of a transient v1 error. Falls back to v1 for any device whose detail
+        is not yet cached or whose productType is unknown.
+        """
+        product_type = self.device_detail.get(deviceSN, {}).get("productType")
+        return product_type in FOX_V2_SCHEDULER_PRODUCT_TYPES
+
+    def get_schedule_extra_param(self, deviceSN):
+        """
+        Build the exportLimit/importLimit/pvLimit values to carry into a v3 scheduler write
+        from stored device settings, so writing a new schedule does not implicitly clear them.
+
+        maxSoc and minSocOnGrid are deliberately excluded - Predbat's own schedule groups
+        already set those per-slot from the live plan, and overwriting them here with a
+        historical aggregate would corrupt the write. reactivePower is never sent - there is
+        no stored value to carry forward for it.
+        """
+        extra_param = {}
+        for group_key, setting_key in SCHEDULE_DERIVED_LIMITS:
+            value = self.device_settings.get(deviceSN, {}).get(setting_key, {}).get("value")
+            if value is not None:
+                extra_param[group_key] = value
+        return extra_param
+
+    def update_settings_from_schedule(self, deviceSN, groups, properties):
+        """
+        Derive settings from a live schedule read that the settings/get endpoint may not
+        support (e.g. errno 42015) or that are not part of FOX_SETTINGS at all (ImportLimit,
+        PvLimit). exportLimit/importLimit/maxSoc/pvLimit use the max seen across all groups;
+        minSocOnGrid uses the min. A setting that already has a working register-backed entry
+        is left untouched so its range/precision metadata is not clobbered by a bare value.
+
+        properties supplies the real range/unit/precision Fox reports for each field, so the
+        derived setting publishes as a proper editable number entity - without it, automatic_
+        config still wires a hardcoded number.*_setting_xxx entity id (e.g. for export_limit)
+        that a bare {"value": ...} stub, having no range, would never actually publish as (it
+        would end up a sensor instead, leaving the number entity unresolvable). Required rather
+        than defaulted so a caller can't silently omit it and reintroduce that bug - pass {} if
+        a read genuinely has none.
+        """
+        for group_key, setting_key, aggregate in SCHEDULE_DERIVED_SETTINGS:
+            values = [group[group_key] for group in groups if group_key in group]
+            if not values:
+                continue
+            if setting_key not in self.device_settings.get(deviceSN, {}) or self.is_setting_unavailable(deviceSN, setting_key):
+                entry = {"value": aggregate(values)}
+                prop = properties.get(group_key.lower(), {})
+                if "range" in prop:
+                    entry["range"] = prop["range"]
+                if "unit" in prop:
+                    entry["unit"] = prop["unit"]
+                if "precision" in prop:
+                    entry["precision"] = prop["precision"]
+                self.device_settings.setdefault(deviceSN, {})[setting_key] = entry
 
     async def set_scheduler_enabled(self, deviceSN, enabled):
         """
         Set scheduler enabled/disabled
+
+        Note: only reached via set_scheduler with an empty schedule, which
+        apply_battery_schedule never produces (validate_schedule always returns at
+        least one all-day slot). Left on the v1 flag endpoint as it is unreachable in
+        production; there is no v2/v3 flag endpoint (EVO disables via a written schedule).
         """
         enabled_value = 1 if enabled else 0
 
@@ -835,6 +1261,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Set scheduler groups, also disables scheduler if no groups provided
         """
         SET_SCHEDULER = "/op/v1/device/scheduler/enable"
+        SET_SCHEDULER_V3 = "/op/v3/device/scheduler/enable"
         current_enable = self.device_scheduler.get(deviceSN, {}).get("enable", None)
         current_groups = self.device_scheduler.get(deviceSN, {}).get("groups", [])
         if not groups:
@@ -846,7 +1273,13 @@ class FoxAPI(ComponentBase, OAuthMixin):
             same = schedules_are_equal(datetime.now(), current_groups, groups)
             self.log("Fox: Debug: Setting scheduler for {} same={} current_enable={} current_groups={} new_groups={}".format(deviceSN, same, current_enable, current_groups, groups))
             if not same:
-                result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
+                # EVO-series devices use the v3 write endpoint (v1 fails permanently for
+                # them); every other device stays on v1, which it supports.
+                if self.uses_v2_scheduler(deviceSN):
+                    extra_extra_param = self.get_schedule_extra_param(deviceSN)
+                    result = await self.request_get(SET_SCHEDULER_V3, datain={"deviceSN": deviceSN, "groups": groups_to_v3(groups, extra_extra_param)}, post=True)
+                else:
+                    result = await self.request_get(SET_SCHEDULER, datain={"deviceSN": deviceSN, "groups": groups}, post=True)
                 if result is not None:
                     if deviceSN not in self.device_scheduler:
                         self.device_scheduler[deviceSN] = {}
@@ -1033,7 +1466,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
         detail = self.device_detail.get(deviceSN, {})
         inverter_capacity = detail.get("capacity", 0) * 1000.0
 
-        result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
+        # EVO-series devices fail the v1 scheduler API permanently (errno 41200); route
+        # them to v2 by productType. Every other device stays on v1, which it supports.
+        if self.uses_v2_scheduler(deviceSN):
+            result = await self.get_scheduler_v2(deviceSN)
+        else:
+            result = await self.request_get(GET_SCHEDULER, datain={"deviceSN": deviceSN}, post=True)
+            self.log("Fetch scheduler V1 returned {}".format(result))
+
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
@@ -1043,10 +1483,72 @@ class FoxAPI(ComponentBase, OAuthMixin):
             # Min SOC On grid can change as Predbat writes reserve so this must be the real min
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)
             self.device_scheduler_count[deviceSN] = len(result.get("groups", []))
-            self.log("Fox: Fetched schedule got {} fdPwr max {} fdSoc min {} groups {}".format(result, self.fdpwr_max[deviceSN], self.fdsoc_min[deviceSN], self.device_scheduler_count[deviceSN]))
             self.device_scheduler[deviceSN] = result
+            self.update_settings_from_schedule(deviceSN, result.get("groups", []), result.get("properties", {}))
             return result
-        return {}
+        return None
+
+    async def get_scheduler_v2(self, deviceSN):
+        """
+        Get the device scheduler via the v2 API, normalised to the v1 response shape
+
+        Fox's v1 scheduler endpoints return errno 41200 permanently for EVO-series
+        inverters (productType 812) even though those devices fully support the
+        scheduler. The v2 response nests each group's SOC/power fields inside
+        'extraParam'; flatten them back into the group so the rest of the code can
+        treat v1 and v2 results identically. v2 does return a 'properties' block (unlike
+        earlier assumed) with real per-field ranges/units, so it is passed through unchanged
+        for get_scheduler() and update_settings_from_schedule() to use, exactly like v1.
+
+        {'enable': 1, 'groups':
+            [
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 1, 'startHour': 0, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 59},
+                {'endHour': 20, 'workMode': 'ForceDischarge', 'enable': 0, 'startHour': 20, 'extraParam': {'fdPwr': 0.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 36.0, 'importLimit': 12000.0, 'maxSoc': 10.0}, 'startMinute': 0, 'endMinute': 29},
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 20, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 30, 'endMinute': 59},
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 20, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 30, 'endMinute': 59},
+                {'endHour': 23, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 0.0, 'minSocOnGrid': 5.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 59},
+                {'endHour': 0, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 0},
+                {'endHour': 0, 'workMode': 'SelfUse', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 5000.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 0},
+                {'endHour': 0, 'workMode': 'ForceDischarge', 'enable': 0, 'startHour': 0, 'extraParam': {'fdPwr': 0.0, 'minSocOnGrid': 10.0, 'pvLimit': 16000.0, 'reactivePower': 0.0, 'exportLimit': 12000.0, 'fdSoc': 10.0, 'importLimit': 12000.0, 'maxSoc': 100.0}, 'startMinute': 0, 'endMinute': 0}
+            ],
+        'properties':
+            {'fdpwr': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 12000.0}},
+                'endhour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}},
+                'endminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}},
+                'fdsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 5.0, 'max': 100.0}},
+                'workmode': {'enumList': ['ForceDischarge', 'Feedin', 'ForceCharge(BAT)', 'ForceDischarge(BAT)', 'Backup', 'SelfUse', 'ForceCharge'], 'unit': '', 'precision': 1.0},
+                'minsocongrid': {'unit': '%', 'precision': 1.0, 'range': {'min': 5.0, 'max': 100.0}},
+                'maxsoc': {'unit': '%', 'precision': 1.0, 'range': {'min': 10.0, 'max': 100.0}},
+                'pvlimit': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 24000.0}},
+                'startminute': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 59.0}},
+                'exportlimit': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 100000.0}},
+                'importlimit': {'unit': 'W', 'precision': 1.0, 'range': {'min': 0.0, 'max': 100000.0}},
+                'starthour': {'unit': '', 'precision': 1.0, 'range': {'min': 0.0, 'max': 23.0}},
+                'reactivepower': {'unit': 'Var', 'precision': 1.0, 'range': {'min': -6000.0, 'max': 6000.0}}
+            }
+        }
+        """
+        GET_SCHEDULER_V2 = "/op/v2/device/scheduler/get"
+
+        result = await self.request_get(GET_SCHEDULER_V2, datain={"deviceSN": deviceSN}, post=True)
+        if result is None:
+            return None
+
+        self.log("Fetch scheduler V2 returned {}".format(result))
+
+        groups = []
+        # `or []` guards a present-but-null groups value (dict.get's default only applies
+        # when the key is absent)
+        for group in result.get("groups") or []:
+            flat_group = {key: value for key, value in group.items() if key != "extraParam"}
+            flat_group.update(group.get("extraParam", {}) or {})
+            # v2 active periods may omit `enable`; default to enabled so downstream
+            # schedule_strip_disabled does not discard them
+            flat_group.setdefault("enable", 1)
+            groups.append(flat_group)
+        # Default enable to 1 when the key is absent: v2 returned groups, so the scheduler
+        # is active (compute_schedule treats a falsy enable as "scheduler disabled")
+        return {"enable": result.get("enable", 1), "groups": groups, "properties": result.get("properties", {})}
 
     async def get_device_list(self):
         """
@@ -1068,13 +1570,15 @@ class FoxAPI(ComponentBase, OAuthMixin):
         GET_DEVICE_LIST = "/op/v0/device/list"
         query = {"pageSize": 100, "currentPage": 1}
         result = await self.request_get(GET_DEVICE_LIST, post=True, datain=query)
-        devices = []
-        if result is not None:
-            devices = result.get("data", [])
-            # If self.inverter_sn_filter is set, keep only devices whose deviceSN is in that filter
-            if self.inverter_sn_filter:
-                devices = [device for device in devices if device.get("deviceSN", "") in self.inverter_sn_filter]
-            self.device_list = devices
+        # Return None on API failure so callers can distinguish a failed poll (keep cached
+        # data) from a successful poll that genuinely returned no devices
+        if result is None:
+            return None
+        devices = result.get("data", [])
+        # If self.inverter_sn_filter is set, keep only devices whose deviceSN is in that filter
+        if self.inverter_sn_filter:
+            devices = [device for device in devices if device.get("deviceSN", "") in self.inverter_sn_filter]
+        self.device_list = devices
         return devices
 
     def get_headers(self, path):
@@ -1107,6 +1611,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         Retry wrapper
         """
         retries = 0
+        self.last_unsupported = False
         self.log("Fox: API Requesting {} {} - data {}".format("POST" if post else "GET", path, datain))
 
         while retries < FOX_RETRIES:
@@ -1205,8 +1710,9 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     self.log(f"Warn: Fox: Has run out of API calls for today {msg}:{errno}, sleeping...")
                     await asyncio.sleep(5 * 60)
                     return None, False
-                elif errno in [44096, 42015]:
+                elif errno in FOX_SETTINGS_UNSUPPORTED_ERRNO:
                     # Unsupported function code
+                    self.last_unsupported = True
                     self.log(f"Warn: Fox: Unsupported function code {msg}:{errno} from {url}")
                     return None, False
                 elif errno in [40257]:
@@ -1286,7 +1792,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.dashboard_item(
                 entity_name_sensor + "_" + sn.lower() + "_battery_soh",
                 state=soh_fraction,
-                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "device_class": "battery", "state_class": "measurement", "icon": "mdi:battery-heart"},
+                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "state_class": "measurement", "icon": "mdi:battery-heart"},
                 app="fox",
             )
 
@@ -1429,7 +1935,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 }
                 if units in ["kWh", "Wh"]:
                     attributes["device_class"] = "energy"
-                if variable.lower() in ["generation", "feedin", "gridconsumption", "chargeenergytotal", "dischargeenergytotal", "pvenergytotal"]:
+                if variable.lower() in ["generation", "feedin", "feedin2", "gridconsumption", "chargeenergytotal", "dischargeenergytotal", "pvenergytotal"]:
                     attributes["state_class"] = "total"
 
                 self.dashboard_item(entity_id, state=state, attributes=attributes, app="fox")
@@ -1636,9 +2142,9 @@ class FoxAPI(ComponentBase, OAuthMixin):
                             "endMinute": end_minute,
                             "workMode": "ForceCharge",
                             "fdSoc": 100,
-                            "maxSoc": soc,
+                            "maxSoc": max(soc, reserve),
                             "fdPwr": power,
-                            "minSocOnGrid": soc,
+                            "minSocOnGrid": max(soc, reserve),
                         }
                     )
                 elif direction == "discharge":
@@ -1657,12 +2163,14 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         batteries = []
         pvs = []
+        third_party = []
         hasExportLimit = {}
         for device in self.device_list:
             sn = device.get("deviceSN", None)
             detail = self.device_detail.get(sn, {})
             hasPV = detail.get("hasPV", False)
             hasBattery = detail.get("hasBattery", False)
+            thirdPartyGen = detail.get("thirdPartyGen", False)
             capacity = detail.get("capacity", 0) * 1000.0
             hasScheduler = detail.get("function", {}).get("scheduler", False)
 
@@ -1671,6 +2179,8 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 # Check if this battery inverter also has PV
                 if hasPV:
                     pvs.append(sn.lower())
+                if thirdPartyGen:
+                    third_party.append(sn.lower())
 
         for sn in self.device_settings:
             for setting in self.device_settings[sn]:
@@ -1699,13 +2209,19 @@ class FoxAPI(ComponentBase, OAuthMixin):
         self.set_arg("import_today", [f"sensor.{self.prefix}_fox_{device}_gridconsumption" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_fox_{device}_feedin" for device in batteries])
         if not self.automatic_ignore_pv:
-            self.set_arg("pv_today", [f"sensor.{self.prefix}_fox_{device}_pvenergytotal_today" for device in pvs])
+            if not pvs and not third_party:
+                self.set_arg("pv_today", [0])
+            else:
+                self.set_arg("pv_today", [f"sensor.{self.prefix}_fox_{device}_pvenergytotal_today" for device in pvs] + [f"sensor.{self.prefix}_fox_{device}_feedin2" for device in third_party])
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_fox_{device}_battery_rate_max" for device in batteries])
         self.set_arg("battery_power", [f"sensor.{self.prefix}_fox_{device}_invbatpower" for device in batteries])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_fox_{device}_meterpower" for device in batteries])
         self.set_arg("grid_power_invert", [True for device in batteries])
         if not self.automatic_ignore_pv:
-            self.set_arg("pv_power", [f"sensor.{self.prefix}_fox_{device}_pvpower" for device in pvs])
+            if not pvs and not third_party:
+                self.set_arg("pv_power", [0])
+            else:
+                self.set_arg("pv_power", [f"sensor.{self.prefix}_fox_{device}_pvpower" for device in pvs] + [f"sensor.{self.prefix}_fox_{device}_meterpower2" for device in third_party])
         self.set_arg("load_power", [f"sensor.{self.prefix}_fox_{device}_loadspower" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.{self.prefix}_fox_{device}_soc" for device in batteries])
         self.set_arg("soc_max", [f"sensor.{self.prefix}_fox_{device}_battery_capacity" for device in batteries])
@@ -1729,56 +2245,6 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base class for testing"""
-
-    def __init__(self):
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover
@@ -1817,7 +2283,7 @@ async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_u
     await fox_api.get_device_detail(serial)
 
     # Initial read back to check connectivity
-    read_back = await fox_api.get_scheduler(serial, checkBattery=False)
+    read_back_original = await fox_api.get_scheduler(serial, checkBattery=False) or {}
 
     # Write the schedule
     print(f"Writing schedule:\n{json.dumps(schedule, indent=2)}")
@@ -1827,17 +2293,27 @@ async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_u
 
     # Read back and print
     print("Reading back schedule...")
-    read_back = await fox_api.get_scheduler(serial, checkBattery=False)
+    read_back = await fox_api.get_scheduler(serial, checkBattery=False) or {}
     read_back_groups = read_back.get("groups", [])
     print(f"Read back schedule:\n{json.dumps(read_back, indent=2)}")
 
-    # Compare written schedule against read-back groups
+    # Compare written schedule against read-back groups. Argument order matters:
+    # schedules_are_equal only walks schedule2's keys, so read_back_groups (which carries the
+    # extra exportLimit/importLimit/pvLimit/reactivePower fields a read adds) must be schedule1
+    # here - matching how set_scheduler() itself calls it - or those extra fields falsely report
+    # a mismatch just because "schedule" (Predbat's own canonical group shape) never carries them.
     from datetime import datetime as _dt
 
-    match = schedules_are_equal(_dt.now(), schedule, read_back_groups)
+    match = schedules_are_equal(_dt.now(), read_back_groups, schedule)
     print(f"Schedule match: {match}")
     if not match:
         print("WARNING: Written schedule does not match read-back schedule")
+        print_schedule_diff("written", schedule, "read-back", read_back_groups)
+
+    # Final put back original
+    await fox_api.set_scheduler(serial, read_back_original.get("groups", []))
+
+    print("Done")
 
 
 async def test_fox_api(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover

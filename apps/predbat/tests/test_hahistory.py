@@ -10,7 +10,7 @@
 
 import pytz
 from datetime import datetime, timedelta
-from ha import HAHistory
+from ha import HAHistory, EntityHistory
 from utils import str2time
 from tests.test_infra import run_async
 
@@ -565,9 +565,9 @@ def test_hahistory_update_entity_merge_new(my_predbat=None):
     else:
         print("✓ New entries merged correctly")
 
-    # Verify ordering (oldest to newest)
+    # Verify ordering (oldest to newest) - numeric states come back as floats from the columnar store
     states = [entry["state"] for entry in ha_history.history_data[entity_id]]
-    expected_states = ["10", "20", "30", "40", "50"]
+    expected_states = [10.0, 20.0, 30.0, 40.0, 50.0]
     if states != expected_states:
         print(f"ERROR: Expected states {expected_states}, got {states}")
         failed += 1
@@ -591,7 +591,7 @@ def test_hahistory_prune_history(my_predbat=None):
 
     # Create history spanning 60 days
     history = create_mock_history(entity_id, days=60, step_minutes=60, start_time=now - timedelta(days=60))
-    ha_history.history_data[entity_id] = history
+    ha_history.history_data[entity_id] = EntityHistory.from_records(history)
     ha_history.history_entities[entity_id] = 30  # Only keep 30 days
 
     initial_count = len(ha_history.history_data[entity_id])
@@ -635,7 +635,7 @@ def test_hahistory_prune_empty_history(my_predbat=None):
     ha_history.initialize()
 
     entity_id = "sensor.battery"
-    ha_history.history_data[entity_id] = []
+    ha_history.history_data[entity_id] = EntityHistory()
     ha_history.history_entities[entity_id] = 30
 
     now = datetime.now(pytz.UTC)
@@ -757,7 +757,7 @@ def test_hahistory_run_periodic_update(my_predbat=None):
         initial_history = create_mock_history(entity_id, days=1, step_minutes=5, start_time=base_time - timedelta(days=1))
 
         ha_history.add_entity(entity_id, 30)
-        ha_history.history_data[entity_id] = initial_history
+        ha_history.history_data[entity_id] = EntityHistory.from_records(initial_history)
 
         # Add new history to mock interface (simulating new data)
         new_history = create_mock_history(entity_id, days=1, step_minutes=5, start_time=base_time)
@@ -812,7 +812,7 @@ def test_hahistory_run_hourly_prune(my_predbat=None):
         history = create_mock_history(entity_id, days=60, step_minutes=60, start_time=now - timedelta(days=60))
 
         ha_history.add_entity(entity_id, 30)
-        ha_history.history_data[entity_id] = history
+        ha_history.history_data[entity_id] = EntityHistory.from_records(history)
 
         initial_count = len(ha_history.history_data[entity_id])
 
@@ -883,6 +883,101 @@ def test_hahistory_run_no_update_timing(my_predbat=None):
     return failed
 
 
+def test_entity_history_store(my_predbat=None):
+    """Test the EntityHistory columnar store round-trip, exceptions, indexing and pruning"""
+    print("\n=== Testing EntityHistory columnar store ===")
+    failed = 0
+
+    base_time = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
+    records = [
+        {"state": "10.5", "last_updated": (base_time + timedelta(minutes=0)).isoformat(), "attributes": {}},
+        {"state": "unknown", "last_updated": (base_time + timedelta(minutes=5)).isoformat(), "attributes": {}},
+        {"state": "20.25", "last_updated": (base_time + timedelta(minutes=10)).isoformat(), "attributes": {"special": True}},
+        {"state": "Charging", "last_updated": (base_time + timedelta(minutes=15)).isoformat(), "attributes": {}},
+        {"state": "30", "last_updated": (base_time + timedelta(minutes=20)).isoformat(), "attributes": {}},
+    ]
+
+    store = EntityHistory.from_records(records)
+
+    # Test 1: length and iteration
+    if len(store) != 5:
+        print(f"ERROR: Expected 5 records in store, got {len(store)}")
+        failed += 1
+    else:
+        print("✓ Store holds all records")
+
+    # Test 2: round-trip states - numeric become floats, non-numeric preserved exactly
+    output = store.to_records()
+    states = [entry["state"] for entry in output]
+    expected = [10.5, "unknown", 20.25, "Charging", 30.0]
+    if states != expected:
+        print(f"ERROR: Expected states {expected}, got {states}")
+        failed += 1
+    else:
+        print("✓ States round-trip correctly (numeric as float, non-numeric preserved)")
+
+    # Test 3: round-trip timestamps parse back to the same instant
+    times_in = [str2time(entry["last_updated"]) for entry in records]
+    times_out = [str2time(entry["last_updated"]) for entry in output]
+    if times_in != times_out:
+        print(f"ERROR: Timestamps did not round-trip, in {times_in} out {times_out}")
+        failed += 1
+    else:
+        print("✓ Timestamps round-trip to the same instant")
+
+    # Test 4: attribute exceptions are preserved, shared attributes for the rest
+    if output[2]["attributes"] != {"special": True}:
+        print(f"ERROR: Expected exception attributes for record 2, got {output[2]['attributes']}")
+        failed += 1
+    elif output[0]["attributes"] != {} or output[4]["attributes"] != {}:
+        print(f"ERROR: Expected empty shared attributes, got {output[0]['attributes']} and {output[4]['attributes']}")
+        failed += 1
+    else:
+        print("✓ Attribute exceptions preserved, shared attributes returned for the rest")
+
+    # Test 5: mutation of materialised records does not corrupt the store
+    output[0]["state"] = "corrupted"
+    output[0]["attributes"]["injected"] = True
+    fresh = store.to_records()
+    if fresh[0]["state"] != 10.5 or "injected" in fresh[0]["attributes"]:
+        print(f"ERROR: Store was corrupted by mutating materialised records: {fresh[0]}")
+        failed += 1
+    else:
+        print("✓ Materialised records are safe to mutate")
+
+    # Test 6: indexing (including negative) and iteration match to_records
+    if store[0]["state"] != 10.5 or store[-1]["state"] != 30.0 or [entry["state"] for entry in store] != expected:
+        print(f"ERROR: Indexing/iteration mismatch: first {store[0]} last {store[-1]}")
+        failed += 1
+    else:
+        print("✓ Indexing and iteration materialise records correctly")
+
+    # Test 7: prune drops older records and their exceptions
+    store.prune((base_time + timedelta(minutes=12)).timestamp())
+    remaining = [entry["state"] for entry in store.to_records()]
+    if remaining != ["Charging", 30.0]:
+        print(f"ERROR: Expected ['Charging', 30.0] after prune, got {remaining}")
+        failed += 1
+    elif store.state_exceptions and min(store.state_exceptions) < (base_time + timedelta(minutes=12)).timestamp():
+        print(f"ERROR: Prune left stale state exceptions: {store.state_exceptions}")
+        failed += 1
+    elif store.attribute_exceptions:
+        print(f"ERROR: Prune left stale attribute exceptions: {store.attribute_exceptions}")
+        failed += 1
+    else:
+        print("✓ Prune drops old records and stale exceptions")
+
+    # Test 8: records without a valid last_updated are not stored
+    bad_store = EntityHistory.from_records([{"state": "1"}, {"state": "2", "last_updated": "junk"}, {"state": "3", "last_updated": base_time.isoformat()}])
+    if len(bad_store) != 1:
+        print(f"ERROR: Expected 1 valid record stored, got {len(bad_store)}")
+        failed += 1
+    else:
+        print("✓ Records without a valid last_updated are dropped")
+
+    return failed
+
+
 def run_hahistory_tests(my_predbat):
     """Run all HAHistory unit tests"""
     print("\n" + "=" * 80)
@@ -892,6 +987,7 @@ def run_hahistory_tests(my_predbat):
     failed = 0
 
     # Basic functionality tests
+    failed += test_entity_history_store(my_predbat)
     failed += test_hahistory_initialize(my_predbat)
     failed += test_hahistory_add_entity(my_predbat)
 

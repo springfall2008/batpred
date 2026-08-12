@@ -448,10 +448,37 @@ class UserInterface:
                 value = None
             if default is None:
                 default = item.get("default", None)
+                if item.get("type") == "input_number" and isinstance(default, int) and not isinstance(default, bool):
+                    # This default is not just a fallback for a missing value - get_arg() (the only
+                    # caller that reaches here with default=None) applies a further type coercion to
+                    # whatever value this function returns, keyed on the *type* of this default,
+                    # regardless of whether that returned value is this default or the item's real
+                    # configured value. So an int default doesn't just risk supplying an int when
+                    # unset - it forces every read of this item back to an int even when the user has
+                    # genuinely configured a fractional one, via get_arg's int(float(value)) (#4296:
+                    # metric_battery_cycle's real, present, correctly-resolved 0.5 was still coerced
+                    # to 0 downstream, purely because its default happened to be the int 0). Normalise
+                    # here, at the source, so it can't matter which literal a future item's "default"
+                    # happens to be written as.
+                    step = item.get("step", 1)
+                    if isinstance(step, float) and step != int(step):
+                        default = float(default)
             if value is None:
                 value = default
             return value, default
         return None, default
+
+    def convert_currency_unit(self, unit):
+        """
+        Convert a config item unit string (using the default £/p symbols) into the
+        user's configured currency symbols so displayed units match the rates.
+        """
+        if not unit:
+            return unit
+        major = self.currency_symbols[0] if self.currency_symbols and len(self.currency_symbols) > 0 else "£"
+        minor = self.currency_symbols[1] if self.currency_symbols and len(self.currency_symbols) > 1 else "p"
+        unit = unit.replace("£", "%%CURR_MAJOR%%").replace("p", minor).replace("%%CURR_MAJOR%%", major)
+        return unit
 
     async def async_expose_config(self, name, value, quiet=True, event=False, force=False, in_progress=False):
         return await self.run_in_executor(self.expose_config, name, value, quiet, event, force, in_progress)
@@ -475,16 +502,14 @@ class UserInterface:
                     if has_changed and item.get("reset_inverter_force", False):
                         self.inverter_needs_reset = True
                         self.log("Set reset inverter true due to reset_inverter_force on item {}".format(name))
-                        if event:
+                        if event and item.get("value", None) is not None:
                             self.inverter_needs_reset_force = name
                             self.log("Set reset inverter force true due to reset_inverter_force on item {}".format(name))
                     item["value"] = value
                     if item["type"] == "input_number":
                         """INPUT_NUMBER"""
                         icon = item.get("icon", "mdi:numeric")
-                        unit = item["unit"]
-                        unit = unit.replace("£", self.currency_symbols[0])
-                        unit = unit.replace("p", self.currency_symbols[1])
+                        unit = self.convert_currency_unit(item["unit"])
                         self.set_state_wrapper(
                             entity_id=entity,
                             state=value,
@@ -718,6 +743,10 @@ class UserInterface:
                     new_inverters.append(inverter_obj)
                 self.inverters = new_inverters
 
+        # Handle old-format octopus_slots (flat list of dicts) vs new format (list-of-lists per car)
+        if isinstance(self.octopus_slots, list) and self.octopus_slots and isinstance(self.octopus_slots[0], dict):
+            self.octopus_slots = [self.octopus_slots] + [[] for _ in range(7)]
+
         for item in debug["CONFIG_ITEMS"]:
             current = self.config_index.get(item["name"], None)
             if current:
@@ -822,11 +851,11 @@ class UserInterface:
         """
         if attribute:
             ha_value = self.get_state_wrapper(entity, attribute=attribute)
-            if ha_value is not None:
+            if ha_value is not None and ha_value not in ("unavailable", "unknown"):
                 return ha_value
         else:
             ha_value = self.get_state_wrapper(entity)
-            if ha_value is not None:
+            if ha_value is not None and ha_value not in ("unavailable", "unknown"):
                 return ha_value
 
         # Try history if no current state
@@ -890,7 +919,31 @@ class UserInterface:
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
-    def load_user_config(self, quiet=True, register=False):
+    def is_new_install(self):
+        """
+        Determine whether this is a genuinely new install, used to set sensible defaults
+        (e.g. mode defaults to Monitor rather than Control charge & discharge).
+        """
+        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
+        if current_status:
+            return False
+
+        # HA's live state and history can both come back empty for a moment right after an
+        # abrupt restart, before HA's own state store has fully warmed back up. A single
+        # failed predbat.status read isn't enough evidence of a fresh install on its own -
+        # predbat_config.json only exists once Predbat has actually saved a config before,
+        # so its presence is a persistent, restart-proof signal that this is a real install,
+        # not a new one (see #4397/#4396 root cause, and #3259/#3306 for the resulting
+        # spurious config resets this was letting through).
+        config_path = os.path.join(self.config_root or "", "predbat_config.json")
+        if not self.ha_interface.db_primary and os.path.isfile(config_path):
+            self.log("predbat.status unavailable but predbat_config.json exists - not treating this as a new install")
+            return False
+
+        self.log("New install detected")
+        return True
+
+    def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
         """
@@ -899,12 +952,7 @@ class UserInterface:
         self.log("Refreshing Predbat configuration")
 
         # New install, used to set default of expert mode
-        new_install = True
-        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
-        if current_status:
-            new_install = False
-        else:
-            self.log("New install detected")
+        new_install = self.is_new_install()
 
         # Build config index
         for item in self.CONFIG_ITEMS:
@@ -918,8 +966,14 @@ class UserInterface:
                 # If the item is in args, use it as the default
                 item["default"] = self.args[name]
 
-        # Load current config (if there is one)
-        if register:
+        # Load current config from JSON file when explicitly requested via load_config=True.
+        # This is done on the very first startup call (before HA state is read) so that
+        # JSON-saved values populate item["value"] and take priority over transient HA states.
+        # During HA restart, entities can return "unavailable"/"unknown", and without this
+        # pre-load those transient states would overwrite the saved JSON via save_current_config().
+        # Subsequent periodic calls omit load_config so in-memory values updated by HA events
+        # are not overwritten by the (potentially stale) JSON.
+        if load_config:
             self.log("Loading current config")
             self.load_current_config()
 
@@ -944,7 +998,10 @@ class UserInterface:
 
             # Get from current state, if not from HA directly
             ha_value = item.get("value", None)
-            if ha_value is None:
+            # The update entity is synthesised after release discovery and is explicitly
+            # non-restorable. Looking in history when its current state is absent registers
+            # an empty 30-day query with HAHistory, which then retries every two minutes.
+            if ha_value is None and type != "update":
                 ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu
@@ -971,7 +1028,25 @@ class UserInterface:
                 try:
                     # Convert to float first
                     ha_value = float(ha_value)
-                    # For entities with integer step, convert to int to preserve integer format
+
+                    # Clamp to the declared min/max. This is reachable from an apps.yaml override,
+                    # which bypasses the HA input_number entity's own min/max enforcement entirely -
+                    # an out-of-range value here can otherwise silently distort the optimiser (e.g.
+                    # pv_metric10_weight is documented/limited to 0.0-1.0 but a raw apps.yaml value
+                    # of, say, 30 passes straight through unclamped).
+                    item_min = item.get("min", None)
+                    item_max = item.get("max", None)
+                    if item_min is not None and ha_value < item_min:
+                        self.record_status("Warn: Config item {} value {} is below the minimum {} - clamping to {}".format(name, ha_value, item_min, item_min), had_errors=True)
+                        ha_value = float(item_min)
+                    elif item_max is not None and ha_value > item_max:
+                        self.record_status("Warn: Config item {} value {} is above the maximum {} - clamping to {}".format(name, ha_value, item_max, item_max), had_errors=True)
+                        ha_value = float(item_max)
+
+                    # For entities with integer step, convert to int to preserve integer format.
+                    # Done after clamping since min/max can themselves be declared as floats (e.g.
+                    # metric_min_improvement_plan has step=1 but max=250.0) - clamping alone would
+                    # otherwise silently hand back a float and defeat this normalisation.
                     step = item.get("step", 1)
                     if isinstance(step, int) or (isinstance(step, float) and step == int(step)):
                         # Step is an integer (e.g., 1, 2, etc.), so keep value as integer if it has no decimal part

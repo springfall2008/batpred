@@ -2,6 +2,8 @@
 
 Home battery prediction and automatic charging for Home Assistant supporting multiple inverters including:
 
+- Deye (Cloud)
+- Enphase (Cloud)
 - Fox (Local & Cloud)
 - GivEnergy Hybrid, AC, AIO and EMS (Local & Cloud)
 - Huawei
@@ -44,7 +46,15 @@ If you want to buy me a beer then please use [Paypal](https://paypal.me/predbat?
 ![image](https://github.com/springfall2008/batpred/assets/48591903/b3a533ef-0862-4e0b-b272-30e254f58467)
 
 If you are finding Home Assistant and Predbat too difficult to set up yourself there is now [PredBat Cloud](https://predbat.com/) which is a paid for version of Predbat hosted in the cloud.
-Please note that while I have given permission for PredBat Cloud to operate, this is not my company and PredBat will remain open source for personal use.
+Please note that while I have given permission for PredBat Cloud to operate under license, PredBat will remain open source for personal use.
+
+## Not sure whether it is worth it yet?
+
+[What If](annual-prediction.md) projects a full year of electricity costs through the same
+planning engine, comparing no PV or battery against PV alone, PV with a battery on a
+timer, and PV with a battery run by Predbat — then works out the install cost and how long
+each takes to pay back. It needs no hardware and no configured Predbat, so you can try
+sizes and tariffs before buying anything.
 
 ## Taster
 
@@ -72,7 +82,7 @@ Power charts can show you how the prediction maps to your inverter:
 ![image](https://github.com/springfall2008/batpred/assets/48591903/a84c8de0-4f6a-48a6-81c8-09b0f7828563)
 
 You can model iBoost or similar solar diverters, this will be shown on your plan and you can even use it to trigger smart devices e.g.
-an emersion heater based on energy rates.
+an immersion heater based on energy rates.
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/758d380c-4cfa-4e92-b53a-167496bf888c)
 

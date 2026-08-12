@@ -29,10 +29,48 @@ Predbat now has some unit-level tests, to run them on your local machine:
 
 You can add --quick to run just the faster tests. If the tests fail then debug them.
 
-For coverage analysis installed the 'coverage' library with Python
+For coverage analysis install the 'coverage' library with Python, or use the version installed from `requirements.txt`.
 
 1. ./run_cov --quick
 2. Open `htmlcov/index.html` in your web browser
+
+## The C++ prediction kernel
+
+Predbat has an experimental compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), Off by default while it's tested more widely.
+
+### Building it locally
+
+You don't need a compiler to run Predbat or the normal test suite - if no compiled kernel is present, Predbat transparently falls back to the Python engine.
+
+To build a kernel for your own machine (for local testing):
+
+```bash
+bash apps/predbat/build_kernel.sh
+```
+
+This produces `apps/predbat/prediction_kernel_lib.so`, built with `g++`/`clang`, no external dependencies. It's not committed to the repository (see `.gitignore`).
+
+Predbat also ships pre-built binaries for each supported platform/architecture (`apps/predbat/prediction_kernel_lib_<arch>.so`), which **are** committed to the repository so they're delivered by Predbat's self-update mechanism. These are produced by a separate cross-compilation script using [zig](https://ziglang.org/) as the toolchain:
+
+```bash
+bash apps/predbat/build_kernel_cross.sh
+```
+
+A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`) runs this automatically on every pull request and commits any changed binaries back to the PR branch - similar to how `pre-commit.ci` auto-fixes formatting issues. You shouldn't normally need to run the cross-build script yourself.
+
+### Testing the kernel
+
+Three test targets exercise the kernel:
+
+- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the results match to within `1e-6`
+- `./run_all --test model_kernel` - runs the standard model test suite (`./run_all --test model`) with the kernel enabled
+- `./run_all --test optimise_windows_kernel` - runs the optimiser test suite with and without the kernel, checking results match and reporting the speedup
+
+These automatically build a local kernel via `build_kernel.sh` if one isn't already present, and skip (or fail, if `PREDBAT_KERNEL_REQUIRED=1` is set, as it is in CI) if the build fails.
+
+### Keeping the two engines in sync
+
+**This is important:** if you change the behaviour of the hot loop in `Prediction.run_prediction()`, you must mirror the change in `prediction_kernel.cpp`, and bump both `KERNEL_PARITY_REVISION` (in `apps/predbat/prediction_kernel.py`) and `PK_PARITY_REVISION` (in `apps/predbat/prediction_kernel.cpp`). This isn't just good practice - it's enforced: the two revision numbers are checked when the kernel loads, and a mismatch disables the kernel (falling back to Python) rather than risking silently divergent results. Run `./run_all --test kernel_parity` before submitting any change to `prediction.py`'s simulation loop.
 
 ## Editing the code
 
@@ -148,8 +186,8 @@ and creating HTML files from those files. `mkdocs` can be used locally for previ
 but is also used as part of the documentation build process that publishes
 the official documentation site.
 
-The publishing of the documentation is triggered by a GitHub action,
-as defined in `.github/workflows/main.yml`.
+The publishing of the documentation is triggered by a GitHub action when a release is published,
+as defined in `.github/workflows/publish-docs.yml`.
 
 In short, after configuring the build environment, `mkdocs` builds the
 site then pushes the HTML produced to the `gh-pages` branch,
@@ -272,7 +310,7 @@ again (still unstaged).
 Running `pre-commit` automatically:
 
 - If you run `pre-commit install` in a terminal window it will install a pre-commit hook -
-this is a file which tells `git` to run some code for each type you do a
+this is a file which tells `git` to run some code each time you do a
 particular action (a pre-commit hook runs at the start of processing
 a commit, but there are other hooks e.g. pre-push).
 
@@ -286,7 +324,7 @@ automated checks that it will do on commits.
 #### Running the checks from within GitHub
 
 When commits are done on pull requests, and in any other scenarios
-added to the `on` section of`.github/workflows/linting.yml`,
+added to the `on` section of `.github/workflows/code-quality.yml`,
 the GitHub Actions in that file will run.
 
 In particular, the [pre-commit.ci lite](https://pre-commit.ci/lite.html)

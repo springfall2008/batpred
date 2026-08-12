@@ -13,7 +13,7 @@ To setup the inverter with Predbat you will need to:
 3. Confirm that the integration is working.  Are you receiving data from the various sensors (grid energy, charge limit, solar PV generated, etc)?<BR>
    Can you control the inverter using its Home Assistant controls?
 
-4. For each inverter there is a custom `apps.yaml` template configuration file that must be used in place of the GivTCP template file installed by default with Predbat:
+4. For most inverters there is a custom `apps.yaml` template configuration file that must be used in place of the GivTCP template file installed by default with Predbat:
 
    - Open the inverter-specific template file with a browser
    - Using a [file editor in Home Assistant](install.md#editing-configuration-files-in-home-assistant), edit the default `apps.yaml` configuration file
@@ -31,7 +31,7 @@ To setup the inverter with Predbat you will need to:
 The table below lists the inverters and required Home Assistant integrations that have had Predbat configurations developed.
 
 Additionally, if your inverter type is not listed, you can create a [custom inverter definition for Predbat](#i-want-to-add-an-unsupported-inverter-to-predbat).
-Once you get everything working please share the configuration as a github issue so it can be incorporated into the Predbat documentation.
+Once you get everything working please share the configuration as a GitHub issue so it can be incorporated into the Predbat documentation.
 
    | Name | Integration | Template |
    | :---------------------------- | :------------- | :------------ |
@@ -39,6 +39,8 @@ Once you get everything working please share the configuration as a github issue
    | [Givenergy with GE Cloud](#givenergy-with-ge-cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
+   | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
@@ -46,7 +48,8 @@ Once you get everything working please share the configuration as a github issue
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
-   | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
+   | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Local-Modbus) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
+   | [SigEnergy Cloud](#sigenergy-cloud) | Predbat built-in | [sigenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_cloud.yaml) |
    | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
    | [Solax Cloud](#solax-cloud) | Predbat | [solax_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solax_cloud.yaml) |
@@ -56,6 +59,7 @@ Once you get everything working please share the configuration as a github issue
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+   | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
    | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
@@ -166,6 +170,8 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - If you set **ge_cloud_automatic** to `true` in `apps.yaml` then Predbat will auto-configure itself to use the appropriate GE Cloud controls and will ignore any inverter and battery controls set in `apps.yaml`
 - Make sure that the 'discharge down to' registers are set to 4% and charge and discharge slots 2, 3 and 4 are disabled in the portal by setting the start and end times to 00:00 (if you have them).
 - If you have set **ge_cloud_automatic** to `true` and the GE Cloud does not return accurate **load_today** energy information, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to true in `apps.yaml`.
+- The charge/export slot start and end times are stored by GivEnergy in the timezone set on your GivEnergy account. Predbat reads this timezone from the GivEnergy account details and translates the slot times into
+  the Predbat **timezone** setting, so the times shown on the Predbat select entities may differ from those shown in the GivEnergy portal if the two timezones do not match.
 
 ## GivEnergy with GE Cloud EMS
 
@@ -185,6 +191,58 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
+
+## DEYE Cloud
+
+**Experimental**
+
+Predbat has a built-in DEYE Cloud integration for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing monitoring and battery control - no local Modbus/RS485 Home Assistant integration is required.
+
+### What you need (self-hosted Home Assistant add-on)
+
+DeyeCloud authentication needs **two separate credential pairs** - it is easy to confuse them:
+
+1. **Developer application** - an *App ID* and *App Secret* that identify the API integration itself. Create a developer app once at [developer.deyecloud.com/app](https://developer.deyecloud.com/app); these become `deye_app_id` and `deye_app_secret`. This is **not** your normal login.
+2. **DeyeCloud account login** - the email/username and password you use in the Deye/Sunsynk mobile app. These become `deye_username` and `deye_password`, and are what scope the connection to *your* stations and inverters.
+
+Both pairs are required together - the token endpoint authenticates the *application* and the *account* in one call, so neither pair works on its own. Your account password is stored in `apps.yaml` and sent SHA-256 hashed by Predbat (never in plain text over the wire).
+
+Also set the **data centre** your DeyeCloud account is registered in - `eu`, `am` or `india` - via `deye_data_center`.
+
+Add the following to `apps.yaml` (all four credentials plus the data centre are required; `deye_company_id` is only needed for installer/business accounts):
+
+```yaml
+  deye_app_id: !secret deye_app_id          # developer App ID (developer.deyecloud.com/app)
+  deye_app_secret: !secret deye_app_secret  # developer App Secret
+  deye_username: !secret deye_username      # your DeyeCloud account email/username
+  deye_password: !secret deye_password      # your DeyeCloud account password
+  deye_data_center: 'eu'                    # eu | am | india
+  deye_automatic: True
+```
+
+### Predbat.com (SaaS)
+
+None of the above credentials are needed - connect your DeyeCloud account through Predbat.com and the token is injected and refreshed by the platform (`deye_auth_method: 'oauth'`).
+
+### Automatic configuration
+
+Set `deye_automatic: True` to have Predbat discover every battery inverter on your DeyeCloud account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
+
+See the components documentation for details [Components - DEYE Cloud API](components.md#deye-cloud-api-deye)
+
+## Enphase Cloud
+
+**Experimental**
+
+Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enlighten cloud (the same unofficial web endpoints used by the Enlighten app/web site) for monitoring and battery control of Enphase IQ Battery systems - no local Home Assistant integration is required.
+
+**Important**: there is no official Enphase API with battery control, so this relies on the unofficial Enlighten web-app API which Enphase may change without notice. Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use.
+
+- Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
+- Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
+
+See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
 ## Fox
 
@@ -491,63 +549,64 @@ Growatt has two popular series of inverters, SPA and SPH. Copy the template that
 
 ## Huawei
 
-The discussion ticket is here: <https://github.com/springfall2008/batpred/issues/684>
+Copy the Huawei template over your existing `apps.yaml` and modify all entity IDs, battery capacity and power limits for your own system:
 
-- Please copy the template <https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml> over the top of your `apps.yaml`, and modify it for your system
+<https://github.com/springfall2008/batpred/blob/main/templates/huawei.yaml>
 
-- Ensure you set **input_number.predbat_set_reserve_min** to the minimum value for your system which may be 12%
+Configure the Huawei inverter operating mode according to your installation. The example setup linked below has been tested using **Maximise self-consumption**.
 
-- Huawei inverters can charge the battery from DC solar and discharge at one power level (e.g. 5kWh), but have a lower limit (e.g. 3kWh) for AC charging.
-  At present Predbat doesn't have the ability to model separate DC and AC charging limits,
-  so battery_rate_max is set to the lower limit in watts (e.g. 3000) in the template `apps.yaml` to ensure that Predbat correctly plans AC charging of the battery at the right rate.
+Set `input_number.predbat_set_reserve_min` to a suitable minimum value for your battery system. This may be 12%, but some installations use a lower reserve.
 
-- However this means Predbat will also limit DC solar charging to this lower limit and to avoid that an automation is used to overwrite the **inverter_limit_charge** during the hours of sunrise and sunset:
+Huawei systems may have different limits for AC grid charging, DC solar charging and battery discharge. Predbat can model these separately:
 
 ```yaml
-alias: Predbat change inverter charge rate at sunrise and sunset
-description: Using predbat_manual_api
-triggers:
-    - trigger: time
-    at:
-      entity_id: sensor.sun_next_rising
-    id: sunrise
-    - trigger: time
-    at:
-      entity_id: sensor.sun_next_setting
-    id: sunset
-conditions: []
-actions:
-    - choose:
-      - conditions:
-          - condition: trigger
-            alias: Sunrise
-            id:
-              - sunrise
-        sequence:
-          - action: select.select_option
-            alias: set inverter charge rate to 5000W at sunrise for maximum DC solar charging
-            target:
-              entity_id:
-                - select.predbat_manual_api
-            data:
-              option: inverter_limit_charge(0)=5000
-      - conditions:
-          - condition: trigger
-            alias: Sunset
-            id:
-              - sunset
-        sequence:
-          - action: select.select_option
-            alias: set inverter charge rate to 1500W at sunset for reduced AC charging rate
-            target:
-              entity_id:
-                - select.predbat_manual_api
-            data:
-              option: inverter_limit_charge(0)=3000
-mode: single
+  inverter_limit:
+  - 11000
+
+  battery_rate_max:
+  - 5000
+
+  inverter_limit_charge:
+  - 5000
+
+  inverter_limit_discharge:
+  - 5000
+
+  inverter_limit_charge_dc:
+  - 5000
 ```
 
-- Set the Huawei inverter work mode to 'TOU' (Time Of Use).
+All values are in watts.
+
+The tested Huawei Solar setup uses:
+
+```yaml
+  charge_start_service:
+    service: huawei_solar.forcible_charge_soc
+    device_id: YOUR_HUAWEI_DEVICE_ID
+    target_soc: "{target_soc}"
+    power: "{power}"
+
+  charge_stop_service:
+    service: huawei_solar.stop_forcible_charge
+    device_id: YOUR_HUAWEI_DEVICE_ID
+
+  discharge_start_service:
+    service: huawei_solar.forcible_discharge_soc
+    device_id: YOUR_HUAWEI_DEVICE_ID
+    target_soc: "{target_soc}"
+    power: "{power}"
+
+  discharge_stop_service:
+    service: huawei_solar.stop_forcible_charge
+    device_id: YOUR_HUAWEI_DEVICE_ID
+```
+
+Start in Monitor or Read Only mode and test all Huawei service calls manually before enabling active control.
+
+A more complete working example, including Home Assistant package sensors, EV charging and Manual API automations, is available here:
+
+<https://github.com/JohanAlvedal/Predbat-setup>
 
 ## Kostal Plenticore
 
@@ -1522,8 +1581,8 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
-    - sensor.sigen_plant_ess_max_charging_limit
-    - sensor.sigen_plant_ess_max_discharging_limit
+    - number.sigen_plant_ess_max_charging_limit
+    - number.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_max_active_power
 
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
@@ -1579,14 +1638,15 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       target:
         entity_id: select.sigen_plant_remote_ems_control_mode
       data:
-        option: >
-          {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
-          {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
-          {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
-          {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
-          {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
-          {% endif %}
-
+        # Rendered as a single Jinja expression (not a folded if/elif block) so there's no
+        # embedded literal newline/whitespace in the result - select.select_option requires an
+        # exact match against the target entity's options list.
+        option: >-
+          {{ "Maximum Self Consumption" if is_state('input_select.predbat_requested_mode', "Demand")
+             else "Command Charging (PV First)" if is_state('input_select.predbat_requested_mode', "Charging")
+             else "Maximum Self Consumption" if is_state('input_select.predbat_requested_mode', "Freeze Charging")
+             else "Command Discharging (PV First)" if is_state('input_select.predbat_requested_mode', "Discharging")
+             else "Maximum Self Consumption" }}
     - choose:
         # Freeze Charging
         # Docs:
@@ -1595,24 +1655,38 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
         #  power above the house load, the excess solar will be used to charge the battery
         # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
+        #
+        # discharge_cut_off_state_of_charge is pinned once here, to current SoC minus a small
+        # margin, not a hardcoded value and not continuously re-pinned. Sigenergy has confirmed a
+        # firmware bug: if this is set above current SoC, the inverter actively imports from grid
+        # to reach it - even with grid_import_limitation at 0 below - so the target must never sit
+        # above SoC. Setting it once, fixed, is what actually implements "frozen": any real deficit
+        # against that fixed point (house load, or even the inverter's own standby losses) gets
+        # corrected by grid import back up to the target, rather than the target chasing SoC
+        # downward and never enforcing anything. The small margin exists only to stop ordinary
+        # sensor-reading noise around the target from triggering a real (if tiny) grid import to
+        # "correct" a fluctuation that was never a real deficit - see the note after this
+        # automation for the full reasoning.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
               state: "Freeze Charging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
-                value: 100
-            - service: number.set_value
               data_template:
+                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(100)) - 0.25, 0] | max }}"
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 0
-
         # Freeze Discharging
         # Docs:
         #  Freeze exporting (mapped to Freeze Discharging in sigenergy_sigenstor.yaml) - The battery is in demand mode,
@@ -1620,24 +1694,34 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
         #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
         # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
+        #
+        # charge_cut_off_state_of_charge is left as a simple hardcoded 0 here, unlike the
+        # discharge cut-off above. A mirrored bug (SoC above charge_cut_off forcing extra
+        # discharge/export) was considered - 0 is always below current SoC by the same
+        # structural shape as the confirmed discharge-side bug - but it was never
+        # vendor-confirmed, and 0 has been in real use across the wider community template
+        # for months without anyone reporting the kind of dramatic, easily-noticed symptom
+        # a real mirrored bug would produce. Kept simple rather than adding unproven complexity.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
               state: "Freeze Discharging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 0
-
         # If neither of the above conditions are met, set the limits to the input numbers
         - conditions:
           - condition: not
@@ -1649,17 +1733,20 @@ Add the following automations to `automations.yaml` (or configure via the UI):
                 entity_id: input_select.predbat_requested_mode
                 state: "Freeze Discharging"
           sequence:
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_charge_cut_off_state_of_charge
+              data:
                 value: 100
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
+              data:
                 value: 0
-            - service: number.set_value
-              data_template:
+            - action: number.set_value
+              target:
                 entity_id: number.sigen_plant_grid_import_limitation
+              data:
                 value: 100
 
 - id: automation_sigen_ess_max_charging_limit_input_number_action
@@ -1703,9 +1790,128 @@ so you may need to adapt the above automations and `apps.yaml` (or rename your e
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 
-## Sofar Inverters
+*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even with **grid_import_limitation** set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
 
-For this integration, the key elements are:
+The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (0.25 percentage points) below the pinned value exists to cover possible imprecision in that one reading - not ongoing noise tolerance, since the pin is fixed rather than re-sampled, so only the single initial reading matters. It still matters because the underlying mechanism only ever corrects one way: a reading that's a hair low at the moment of pinning would cost a real, if tiny, import to "correct" a gap that was never really there, while a reading that's a hair high costs nothing - so even a one-off imprecise read isn't self-cancelling without some margin.
+
+The margin is clamped at 0 (`[value, 0] | max`) rather than allowed to go negative. This isn't just tidiness: `discharge_cut_off_state_of_charge` is an unsigned 16-bit Modbus register on the wire, and the integration's own write encoding has no guard against a negative value - it would silently wrap around into a huge, nonsensical raw value rather than being rejected. At very low SoC (below the margin) an unclamped template could produce exactly that.
+
+See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and the wider [Sigenergy setup discussion](https://github.com/springfall2008/batpred/issues/2077) for the full investigation, including a more advanced (currently experimental, untested) variant that ratchets the target up in response to confirmed solar surplus over each period rather than using a fixed one-off value.
+
+## Sigenergy Cloud
+
+**Experimental**
+
+Predbat has a built-in Sigenergy Cloud integration that connects directly to the Sigenergy OpenAPI and MQTT broker — no local Home Assistant integration is required.
+It publishes all necessary sensor entities itself and can automatically configure Predbat to use them.
+
+See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigenergy) documentation for full configuration options.
+
+### Obtaining Sigenergy Cloud API credentials
+
+1. Log in to the [Sigenergy Developer Portal](https://developer.sigencloud.com).
+
+2. Create a new application (if you do not already have one):
+   - Give it a descriptive name, e.g. *PredBat home battery prediction*
+   - Make sure you tick **VPP Mode** — this is required for Predbat to send charge and discharge commands
+
+3. Submit the application for approval. Approval may take a few days.
+
+4. Once approved, go to **Dashboard → (your application) → Settings**.
+
+5. Copy the **App Key** shown on the settings page.
+
+6. Click **Reset** next to App Secret and copy the secret that is displayed.
+   **Save it immediately** — it will not be shown again.
+
+7. Go to **Data Subscription → MQTT Certificates** (expand the section).
+
+8. Download all three certificate files:
+   - **CA Certificate** (`.pem`)
+   - **Client Certificate** (`.pem`)
+   - **Client Key** (`.key` or `.pem`)
+
+### Storing credentials in secrets.yaml
+
+The certificate files contain multi-line PEM text. YAML supports multi-line strings with the `|` (literal block scalar) syntax — each line of the certificate must be indented consistently below the key name.
+
+Add the following to your `secrets.yaml`:
+
+```yaml
+sigenergy_app_key: "your-app-key-here"
+sigenergy_app_secret: "your-app-secret-here"
+
+sigenergy_ca_pem: |
+  -----BEGIN CERTIFICATE-----
+  ... note entire key must be indented 2 spaces
+  -----END CERTIFICATE-----
+
+sigenergy_client_pem: |
+  -----BEGIN CERTIFICATE-----
+  ... note entire key must be indented 2 spaces
+  -----END CERTIFICATE-----
+
+sigenergy_client_key: |
+  -----BEGIN RSA PRIVATE KEY-----
+  ... note entire key must be indented 2 spaces
+  -----END RSA PRIVATE KEY-----
+```
+
+### Configuring apps.yaml
+
+Copy the template [sigenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_cloud.yaml) over your `apps.yaml` and configure the Sigenergy Cloud component section:
+
+```yaml
+  sigenergy_app_key: !secret sigenergy_app_key
+  sigenergy_app_secret: !secret sigenergy_app_secret
+  sigenergy_ca_pem: !secret sigenergy_ca_pem
+  sigenergy_client_pem: !secret sigenergy_client_pem
+  sigenergy_client_key: !secret sigenergy_client_key
+  sigenergy_automatic: true
+  sigenergy_system_id:
+    - "YOUR_SYSTEM_ID"
+```
+
+You must set at least one system ID as it is required to onboard your system.
+The System ID can be found in the **SigEnergy app** under **Settings → System Settings → About → System ID**. Tap the System ID to copy it to the clipboard.
+
+With `automatic: true`, Predbat will wire all sensor and control entities automatically — no manual `apps.yaml` sensor configuration is needed.
+
+```yaml
+```
+
+### First run — onboarding approval
+
+The first time Predbat starts with the Sigenergy Cloud integration enabled, Sigenergy sends an **onboarding approval email** to the account holder.
+You must click the approval link in that email before Predbat can subscribe to live data from the MQTT broker.
+Once approved, the authorisation persists and no further action is required.
+
+### Temporarily returning control to the Sigenergy app
+
+While your system is in VPP mode, the native Sigenergy app cannot send its own schedule or mode commands.
+To temporarily hand control back, turn on the Predbat **Read-only** switch:
+
+```text
+switch.predbat_set_read_only
+```
+
+When read-only mode is enabled, Predbat switches the inverter back to **Maximise Self-Consumption** (self-use) mode, which restores full control in the Sigenergy app.
+Turn read-only mode back **off** and Predbat will automatically switch the inverter back to VPP mode on the next cycle.
+
+### Offboarding — leaving Predbat VPP entirely
+
+If you want to stop using Predbat's cloud integration altogether, flip the per-system **Offboard** toggle in Home Assistant:
+
+```text
+switch.predbat_sigenergy_<slug>_offboard
+```
+
+Turning this switch **on** calls the Sigenergy offboard API, which removes the system from VPP and exits VPP mode automatically.
+Predbat will not attempt to re-onboard or re-enter VPP mode while this switch remains on.
+
+**Note:** If you later want Predbat to resume control, turn the offboard switch back **off** — but be aware that re-onboarding will require a new approval from Sigenergy (another approval email to the account holder).
+
+## Sofar Inverters
 
 - Hardware - [sofar2mqtt EPS board](https://www.instructables.com/Sofar2mqtt-Remote-Control-for-Sofar-Solar-Inverter/) - Relatively easy to solder and flash, or can be bought pre-made.
 
@@ -2111,7 +2317,7 @@ Please see this ticket in Github for ongoing discussion: <https://github.com/spr
 
 - Predbat now has a built-in Solis cloud integration.
 
-See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solax)
+See the components documentation for details [Components - Solis cloud](components.md#solis-cloud-api-solis)
 
 ## Solis Inverters before FB00
 
@@ -2363,6 +2569,23 @@ template:
 
 ## Tesla Powerwall
 
+### Teslemetry component (beta)
+
+!!! warning "Beta"
+    Predbat's built-in Teslemetry component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual configuration](#manual-configuration-via-home-assistant-integrations) below.
+
+The component needs only your token in `apps.yaml` and no Home Assistant Tesla integration (`site_id` is optional - omit it to use the first site on your account):
+
+```yaml
+  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
+  teslemetry_automatic: True
+```
+
+Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
+
+### Manual configuration via Home Assistant integrations
+
 Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
 Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 
@@ -2426,15 +2649,78 @@ input_text:
     max: 255
     mode: password
 
+  tesla_access_token_part5:
+    name: "Tesla Access Token - Part 5"
+    max: 255
+    mode: password
+
   tesla_energy_site_id:
     name: "Tesla Energy Site ID"
     unit_of_measurement: ""
     icon: mdi:lightning-bolt-outline
 ```
 
-- Use the [Access Token Generator for Tesla](https://chromewebstore.google.com/detail/access-token-generator-fo/djpjpanpjaimfjalnpkppkjiedmgpjpe?hl=en) to create a token
+You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-- This token needs to be copied, and then split into 4 parts (up to 255 characters long), so each part can be copied into the "refresh" input helpers
+### Option 1: Tesla Fleet Integration
+
+The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
+
+Create a shell command to access the Tesla Fleet token:
+
+```yaml
+shell_command:
+  get_tesla_fleet_token: >-
+    jq -r 'first(.data.entries[] | select(.domain == "tesla_fleet")) | .data.token.access_token' /config/.storage/core.config_entries
+```
+
+Now create an automation to populate the access token:
+
+```yaml
+- id: refresh_tesla_access_token
+  alias: Refresh Tesla Access Token
+  description: Sync Tesla Fleet token from HA integration every hour
+  triggers:
+    - hours: /1
+      trigger: time_pattern
+    - event: start
+      trigger: homeassistant
+  actions:
+    - action: shell_command.get_tesla_fleet_token
+      response_variable: token_response
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part1
+      data:
+        value: "{{ token_response.stdout[0:250] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part2
+      data:
+        value: "{{ token_response.stdout[250:500] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part3
+      data:
+        value: "{{ token_response.stdout[500:750] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part4
+      data:
+        value: "{{ token_response.stdout[750:1000] }}"
+    - action: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part5
+      data:
+        value: "{{ token_response.stdout[1000:] }}"
+  mode: single
+  ```
+
+### Option 2: Another integration
+
+- Consult either the [Tesla Fleet API Documentation](https://developer.tesla.com/docs/fleet-api/authentication/third-party-tokens) or use the [Easy Tesla API Token Generator](https://www.myteslamate.com/tesla-token) to generate an access + refresh token.
+
+- This token needs to be copied, and then split into 4-5 parts (up to 255 characters long), so each part can be copied into the input helpers
 
 - An automation then uses the refresh token to generate an access token valid for 8 hours, and a new refresh token than is valid for ~30 days.<BR>
   Create the following automation using the HA UI or by adding to `configuration.yaml`, the automation triggers an automatic refresh of the access token every 8 hours:
@@ -2468,7 +2754,12 @@ automation:
       target:
         entity_id: input_text.tesla_access_token_part4
       data:
-        value: "{{ tesla_response.content.access_token[750:] }}"
+        value: "{{ tesla_response.content.access_token[750:1000] }}"
+    - service: input_text.set_value
+      target:
+        entity_id: input_text.tesla_access_token_part5
+      data:
+        value: "{{ tesla_response.content.access_token[1000:] }}"
     - service: input_text.set_value
       target:
         entity_id: input_text.tesla_refresh_token_part1
@@ -2501,8 +2792,11 @@ automation:
       notification_id: "tesla_token_update"
 ```
 
-- An automation executes every time HA starts and every midnight to populate the Tesla site id input_helper.
-  Create the following automation using the HA UI or by adding to `configuration.yaml`:
+### Automations
+
+Whether using Fleet or another method, you will need to create a site ID automation.
+
+Create the following automation using the HA UI or by adding to `configuration.yaml`:
 
 ```yaml
 automation:
@@ -2547,34 +2841,37 @@ rest_command:
         (states('input_text.tesla_refresh_token_part5') or '') }}&scope=openid%20email%20offline_access"
 
   tesla_api_get_products:
-    url: "https://owner-api.teslamotors.com/api/1/products"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/products"
     method: GET
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_get_current_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/tariff_rate"
     method: GET
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
 
   tesla_api_set_export_now_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
       Content-Type: application/json
     payload: >
       {% set now = now() %}
@@ -2681,14 +2978,15 @@ rest_command:
       }
 
   tesla_api_set_iog_custom_tariff:
-    url: "https://owner-api.teslamotors.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
+    url: "https://fleet-api.prd.eu.vn.cloud.tesla.com/api/1/energy_sites/{{ states('input_text.tesla_energy_site_id') }}/time_of_use_settings"
     method: POST
     headers:
       Authorization: >-
         Bearer {{ (states('input_text.tesla_access_token_part1') or '') +
           (states('input_text.tesla_access_token_part2') or '') +
           (states('input_text.tesla_access_token_part3') or '') +
-          (states('input_text.tesla_access_token_part4') or '') }}
+          (states('input_text.tesla_access_token_part4') or '') +
+          (states('input_text.tesla_access_token_part5') or '') }}
       Content-Type: application/json
     payload: >
       {
@@ -2798,7 +3096,11 @@ rest_command:
 
 ## Victron
 
-This is at an early stage of development, see Github discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
+This is at an early stage of development, see GitHub discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
+
+The Victron inverter type is configured with `has_charge_enable_time: false` and `has_discharge_enable_time: false` (only `has_target_soc: true`) - Predbat has no way to enable or disable a charge/discharge window on a Victron/Cerbo system, in any Predbat mode. All it can do is write a target SoC percentage.
+
+This means Predbat can only actually cause charging or discharging if a charge/discharge schedule is already permanently enabled on the Victron/Cerbo side (e.g. covering all day, or whatever hours you want available) - Predbat then just moves the target SoC up or down within that always-open window: raising the target causes charging, lowering it causes discharging, and leaving it at the current SoC holds. There's currently no way to have Predbat also switch a schedule on and off for you.
 
 ## I want to add an unsupported inverter to Predbat
 
@@ -2809,6 +3111,7 @@ This is at an early stage of development, see Github discussion [#789](https://g
 - You **must** set [inverter_type in apps.yaml](apps-yaml.md#inverter_type) with a custom name ('MINE' in the example below) - if you do not do this then Predbat will assume you have a GivEnergy inverter
   and will apply inverter limits for that inverter (e.g. max charge/discharge of 2600W)
 - Configure Predbat with the appropriate Home Assistant services to start charges and discharges, etc.
+- If your inverter doesn't expose a sensor for its power limits, set them as **literal watt values** in `apps.yaml` (e.g. `inverter_limit: 5000` not `inverter_limit: 5`). Predbat's unit auto-conversion only fires for sensor references — literal values are taken as watts regardless. See [Inverter control configurations](apps-yaml.md#inverter-control-configurations) for the full list of affected keys.
 
 The following template can be used as a starting point:
 

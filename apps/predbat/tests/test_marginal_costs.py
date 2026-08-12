@@ -47,6 +47,10 @@ def test_marginal_costs(my_predbat):
     # Simple flat import rate, no export
     reset_rates(my_predbat, 20.0, 5.0)
 
+    # Populate base rate dicts to mirror the flat import/export rates (no IOG/saving-session distortion)
+    my_predbat.rate_import_base = my_predbat.rate_import.copy()
+    my_predbat.rate_export_base = my_predbat.rate_export.copy()
+
     # Empty charge/export plan (no windows)
     my_predbat.charge_limit_best = []
     my_predbat.charge_window_best = []
@@ -134,6 +138,24 @@ def test_marginal_costs(my_predbat):
                 except (TypeError, ValueError):
                     print("ERROR: sensor '{}' = '{}' is not numeric".format(attr, attrs[attr]))
                     failed = True
+        for attr in ("rate_min", "rate_max"):
+            if attr not in attrs:
+                print("ERROR: sensor missing '{}' attribute".format(attr))
+                failed = True
+            else:
+                try:
+                    float(attrs[attr])
+                except (TypeError, ValueError):
+                    print("ERROR: sensor '{}' = '{}' is not numeric".format(attr, attrs[attr]))
+                    failed = True
+        # Assert *_base anchor values match the flat rates set in reset_rates (grid_*_now)
+        for attr, expected in (("import_rate_base", float(attrs.get("grid_import_now", 20.0))), ("export_rate_base", float(attrs.get("grid_export_now", 5.0)))):
+            if attr not in attrs:
+                print("ERROR: sensor missing '{}' attribute".format(attr))
+                failed = True
+            elif attrs[attr] != expected:
+                print("ERROR: sensor '{}' = {} but expected {} (should match grid anchor)".format(attr, attrs[attr], expected))
+                failed = True
         for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
             attr = "rate_now_{}_consumption".format(state_name)
             if attr not in attrs:

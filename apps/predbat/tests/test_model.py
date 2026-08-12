@@ -11,8 +11,9 @@
 from tests.test_infra import reset_rates, reset_inverter, simple_scenario, reset_rates2
 
 
-def run_model_tests(my_predbat):
-    print("**** Running Model tests ****")
+def run_model_tests(my_predbat, prediction_kernel=False):
+    print("**** Running Model tests{} ****".format(" (C++ prediction kernel enabled)" if prediction_kernel else ""))
+    my_predbat.prediction_kernel_enable = prediction_kernel
     reset_inverter(my_predbat)
     import_rate = 10.0
     export_rate = 5.0
@@ -409,6 +410,118 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("load_discharge_reserve", my_predbat, 1, 0, assert_final_metric=import_rate * 15, assert_final_soc=1, battery_soc=10.0, with_battery=True, reserve=1.0)
     failed |= simple_scenario("load_discharge_reserve2", my_predbat, 1, 0, assert_final_metric=import_rate * 20, assert_final_soc=2, battery_soc=10.0, with_battery=True, reserve=2.0, battery_loss=0.5)
     failed |= simple_scenario("load_discharge_loss", my_predbat, 1, 0, assert_final_metric=import_rate * 19, assert_final_soc=0, battery_soc=10.0, with_battery=True, battery_loss=0.5)
+    # Forced export with PV on a lossy hybrid inverter. The battery exports through the inverter (DC->AC) so
+    # when battery + solar would exceed the export limit the battery discharge must be scaled back by the loss
+    # reciprocal to bring grid export down to the limit. Otherwise a small residual is left above the limit and
+    # gets clipped off the solar. Regression test: with the scale-back correct, no solar should be clipped.
+    # battery_draw(DC) = (export_limit - pv_ac) / inverter_loss = (3 - 2*0.8) / 0.8 = 1.75 kW, over 24h = 42 kWh.
+    failed |= simple_scenario(
+        "export_pv_clip_loss",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24 * 3,
+        assert_final_soc=100 - 42,
+        battery_soc=100.0,
+        with_battery=True,
+        hybrid=True,
+        inverter_loss=0.8,
+        export_limit=3.0,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        discharge=0,
+        assert_clipped=0,
+    )
+    # Forced export with PV so large that even stopping the battery leaves the solar over the export limit. With
+    # inverter_can_charge_during_export the battery should charge from the surplus PV (DC side) to keep grid export
+    # at the limit, rather than clipping the solar. Regression test for the AC/DC unit mismatch in that charge branch.
+    # remaining_ac = pv_ac - export_limit = 2*0.8 - 1 = 0.6; hybrid DC charge = 0.6 / 0.8 = 0.75 kW, over 24h = 18 kWh.
+    failed |= simple_scenario(
+        "export_pv_charge_clip_loss",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=40 + 18,
+        battery_soc=40.0,
+        with_battery=True,
+        hybrid=True,
+        inverter_loss=0.8,
+        export_limit=1.0,
+        inverter_limit=10.0,
+        battery_rate_max_charge=1.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=0,
+    )
+    # Band case for the scale-back vs charge decision. The AC over-export (1.5kW) is larger than the battery's
+    # AC contribution (battery_draw 2kW DC * inverter_loss 0.5 = 1kW) but smaller than the raw DC discharge (2kW).
+    # The branch pivot must use the AC contribution: even after stopping the battery the 1kW AC PV is still over
+    # the 0.5kW export limit, so the battery should charge to absorb the 0.5kW surplus (0.25kW DC, 6kWh over 24h)
+    # instead of clipping it. Comparing against the raw DC value sends this to the scale-back path which just
+    # stops the battery and clips the solar.
+    failed |= simple_scenario(
+        "export_pv_charge_band_loss",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=50 + 0.25 * 24,
+        battery_soc=50.0,
+        with_battery=True,
+        inverter_loss=0.5,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=2.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=0,
+    )
+    # Full battery during a high-PV forced export. PV alone (2kW) exceeds the 0.5kW export limit so the charge
+    # path is entered, but the battery is already at 100% so it has no headroom to absorb anything. The charge
+    # must be clamped by battery_to_max (0 here) so all 1.5kW AC surplus is clipped. Clamping by battery_to_min
+    # instead would let the model "charge" a full battery and under-report the clipping (clip 12 instead of 36).
+    failed |= simple_scenario(
+        "export_pv_charge_full_battery",
+        my_predbat,
+        0,
+        2,
+        assert_final_metric=-export_rate * 24 * 0.5,
+        assert_final_soc=100,
+        battery_soc=100.0,
+        with_battery=True,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=1.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=24 * 1.5,
+    )
+    # Hybrid forced export where PV (4kW DC) exceeds the inverter limit (2kW) but the grid export limit is not
+    # binding, so the inverter-limit charge branch absorbs the surplus PV into the battery. total_inverted counts
+    # the battery and the DC-diverted PV 1:1, so the battery must charge by reduce_by = pv - inverter_limit = 2kW
+    # (not reduce_by * inverter_loss). Charging the full 2kW DC keeps total_inverted exactly on the 2kW limit with
+    # no clipping; charging only 1.6kW (the under-charge bug) leaves total_inverted at 2.4kW and clips 0.4kW of PV.
+    failed |= simple_scenario(
+        "export_pv_inverter_limit_charge",
+        my_predbat,
+        0,
+        4,
+        assert_final_metric=-export_rate * 1.6 * 24,
+        assert_final_soc=100 + 2.0 * 24,
+        battery_soc=100.0,
+        battery_size=200.0,
+        with_battery=True,
+        hybrid=True,
+        inverter_loss=0.8,
+        export_limit=100.0,
+        inverter_limit=2.0,
+        battery_rate_max_charge=1.0,
+        battery_rate_max_charge_dc=10.0,
+        discharge=0,
+        inverter_can_charge_during_export=True,
+        assert_clipped=0,
+    )
     failed |= simple_scenario("load_pv", my_predbat, 1, 1, assert_final_metric=0, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("pv10_only", my_predbat, 0, 1, assert_final_metric=-export_rate * 24, assert_final_soc=0, with_battery=False, pv10=True)
@@ -561,7 +674,7 @@ def run_model_tests(my_predbat):
     failed |= simple_scenario("battery_charge", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10)
 
     failed |= simple_scenario("battery_charge_low_off", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=24.59)
-    failed |= simple_scenario("battery_charge_low_on", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.89)
+    failed |= simple_scenario("battery_charge_low_on", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.8947)
     failed |= simple_scenario(
         "battery_charge_low_on_monitor", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=24.59, set_charge_window=False
     )
@@ -573,7 +686,7 @@ def run_model_tests(my_predbat):
         "battery_charge_low_temp2", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=False, keep=5, assert_keep=80.00, battery_temperature=1
     )
     failed |= simple_scenario(
-        "battery_charge_low_temp3", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.89, battery_temperature=1
+        "battery_charge_low_temp3", my_predbat, 0, 0, assert_final_metric=import_rate * 10, assert_final_soc=10, with_battery=True, charge=10, battery_size=10, set_charge_low_power=True, keep=5, assert_keep=88.8947, battery_temperature=1
     )
 
     if failed:
@@ -1147,14 +1260,18 @@ def run_model_tests(my_predbat):
         0,
         2,
         assert_final_metric=-export_rate * 24 * 0.5,
-        assert_final_soc=50 + 1.0 * 24 * 0.5,
+        # 1.5kW AC PV surplus (2kW - 0.5kW export limit). AC-coupled charging stores AC * inverter_loss as DC,
+        # so absorbing all 1.5kW only needs 1.5 * 0.5 = 0.75kW DC, which is within the 1kW charge rate. The
+        # battery therefore soaks up all the surplus and nothing is clipped (was previously under-charging at
+        # 0.5kW DC and clipping the rest due to an AC/DC unit mismatch in the export-limit charge branch).
+        assert_final_soc=50 + 0.75 * 24,
         with_battery=True,
         discharge=0,
         battery_soc=50,
         export_limit=0.5,
         inverter_limit=2.0,
         inverter_loss=0.5,
-        assert_clipped=24 * 0.5,
+        assert_clipped=0,
     )
     failed |= simple_scenario(
         "battery_discharge_export_limit_ac_pv5",
@@ -1892,6 +2009,41 @@ def run_model_tests(my_predbat):
     # pv_ac_limit must NOT apply to hybrid inverters (PV is DC-coupled, clipping handled by inverter_limit)
     failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5, assert_clipped=0)
 
+    # Low power charging must not make the plan more expensive when the charge window overlaps PV production.
+    # The planner costs every charge window at the full charge rate as low power is only applied to the final
+    # plan, so a throttled rate that caps how much PV reaches the battery pushes the cost above the plan.
+    reset_rates(my_predbat, import_rate, export_rate)
+    reset_inverter(my_predbat)
+
+    # 6kW of PV for the first 2 hours only, with an 8 hour charge window to 12kWh and a 6kW max charge rate.
+    # At full rate the PV alone fills the battery inside those 2 hours, costing nothing. Throttled to fit the
+    # 8 hour window the battery would take only 1.5kW, exporting the other 4.5kW of PV at 5p and then
+    # importing the missing 9kWh at 10p once the sun has gone - 45p worse than the planner costed it at.
+    low_power_pv = {
+        "load_amount": 0,
+        "pv_amount": 6.0,
+        "pv_hours": 2,
+        "charge": 12,
+        "charge_window_best": [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 480, "average": import_rate}],
+        "battery_size": 20,
+        "battery_soc": 0,
+        "battery_rate_max_charge": 6.0,
+        "inverter_limit": 10.0,
+        "export_limit": 10.0,
+        "assert_final_soc": 12,
+        "assert_final_metric": 0,
+    }
+    failed |= simple_scenario("low_power_pv_full_rate", my_predbat, set_charge_low_power=False, **low_power_pv)
+    failed |= simple_scenario("low_power_pv_low_power", my_predbat, set_charge_low_power=True, **low_power_pv)
+
+    # With no PV in the window low power charging still applies, the whole 12kWh comes from the grid either way
+    low_power_dark = dict(low_power_pv)
+    low_power_dark["pv_amount"] = 0
+    low_power_dark["assert_final_metric"] = import_rate * 12
+    failed |= simple_scenario("low_power_dark_full_rate", my_predbat, set_charge_low_power=False, **low_power_dark)
+    failed |= simple_scenario("low_power_dark_low_power", my_predbat, set_charge_low_power=True, **low_power_dark)
+
+    my_predbat.prediction_kernel_enable = False
     if failed:
         print("**** ERROR: Some Model tests failed ****")
     return failed

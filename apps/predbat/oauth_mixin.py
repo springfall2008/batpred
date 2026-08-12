@@ -24,6 +24,11 @@ from datetime import datetime
 # 2 hours in seconds — refresh when less than this remaining
 TOKEN_REFRESH_THRESHOLD = 2 * 60 * 60
 
+# The oauth-refresh edge function (and the provider behind it) can fail transiently —
+# an HTTP 502 has been seen in the wild — so a refresh is retried before being given up on.
+OAUTH_REFRESH_RETRIES = 3
+OAUTH_REFRESH_BACKOFF = 2  # seconds for the first retry, doubled each attempt
+
 
 class OAuthMixin:
     """Mixin for components that support OAuth token refresh.
@@ -90,7 +95,19 @@ class OAuthMixin:
         if self._refresh_in_progress:
             return True  # Another coroutine is refreshing
 
-        return await self._do_refresh()
+        if await self._do_refresh():
+            return True
+
+        # A proactive refresh is an optimisation, not a gate. The edge function can fail
+        # transiently (an HTTP 502 has been seen) while the token already held is still
+        # valid for weeks, and skipping the whole cycle over that loses control of the
+        # battery for no reason. Carry on with the current token: if it really is dead the
+        # request fails auth and handle_oauth_401() refreshes reactively. A token that
+        # genuinely needs re-authorisation still stops us here, via oauth_failed.
+        if self.oauth_failed or not self.access_token:
+            return False
+        self.log(f"Warn: OAuth refresh failed for {self.provider_name} but the existing token is still held, continuing with it")
+        return True
 
     async def _do_refresh(self):
         """Call the oauth-refresh edge function to get a new access token."""
@@ -122,13 +139,29 @@ class OAuthMixin:
             self.log(f"Info: Refreshing OAuth token for {self.provider_name}")
 
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status != 200:
-                        self.log(f"Warn: OAuth refresh HTTP error {response.status} for {self.provider_name}")
-                        return False
+            data = None
+            last_error = None
+            for attempt in range(OAUTH_REFRESH_RETRIES):
+                try:
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.post(url, headers=headers, json=payload) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                break
+                            last_error = f"HTTP error {response.status}"
+                            # 5xx is the edge function or the provider behind it failing
+                            # transiently and is worth retrying; 4xx is a real rejection.
+                            if response.status < 500:
+                                break
+                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                    last_error = f"network error {e}"
+                if attempt < OAUTH_REFRESH_RETRIES - 1:
+                    self.log(f"Warn: OAuth refresh {last_error} for {self.provider_name}, retrying")
+                    await asyncio.sleep(OAUTH_REFRESH_BACKOFF * (2**attempt))
 
-                    data = await response.json()
+            if data is None:
+                self.log(f"Warn: OAuth refresh {last_error} for {self.provider_name}")
+                return False
 
             if data.get("success"):
                 self.access_token = data["access_token"]

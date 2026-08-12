@@ -1,2 +1,3 @@
 cp ../apps/predbat/*.py /Volumes/addon_configs/6adb4f0d_predbat
 cp ../apps/predbat/*.proto /Volumes/addon_configs/6adb4f0d_predbat
+cp ../apps/predbat/*.so /Volumes/addon_configs/6adb4f0d_predbat

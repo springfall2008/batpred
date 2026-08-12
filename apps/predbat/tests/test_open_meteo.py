@@ -668,6 +668,75 @@ def test_fetch_pv_forecast_open_meteo_not_selected_when_forecast_solar_configure
 
 
 # ============================================================================
+# azimuth_zero_south tests
+# ============================================================================
+
+
+def test_download_open_meteo_data_azimuth_zero_south(my_predbat):
+    """
+    When azimuth_zero_south is True the azimuth is passed to the Open-Meteo API
+    as-is (0=South convention); when False (default) convert_azimuth is applied first.
+    """
+    print("  - test_download_open_meteo_data_azimuth_zero_south")
+    failed = False
+
+    forecast_response = _make_forecast_response(
+        times=["2025-06-15T12:00", "2025-06-15T13:00"],
+        gti=[500.0, 500.0],
+        temp=[25.0, 25.0],
+    )
+    ensemble_response = _make_ensemble_response(
+        times=["2025-06-15T12:00", "2025-06-15T13:00"],
+        members={"global_tilted_irradiance_member01": [400.0, 400.0]},
+    )
+
+    def create_mock_session(*args, **kwargs):
+        return test_api.mock_aiohttp_session()
+
+    # --- Case 1: azimuth_zero_south=True, azimuth=0 (South in Open-Meteo convention) ---
+    # URL should contain azimuth=0
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 0, "kwp": 3.0, "efficiency": 1.0, "azimuth_zero_south": True}]
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response("api.open-meteo.com", forecast_response)
+        test_api.set_mock_response("ensemble-api.open-meteo.com", ensemble_response)
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.download_open_meteo_data())
+        om_calls = [r for r in test_api.request_log if "api.open-meteo.com" in r["url"]]
+        if not om_calls:
+            print("ERROR: No Open-Meteo API call made (azimuth_zero_south=True)")
+            failed = True
+        elif "azimuth=0" not in om_calls[0]["url"]:
+            print(f"ERROR: Expected azimuth=0 in URL with azimuth_zero_south=True, got: {om_calls[0]['url']}")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    # --- Case 2: azimuth_zero_south=False (default), azimuth=0 (North in Predbat convention) ---
+    # convert_azimuth(0) → 180; URL should contain azimuth=180
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 0, "kwp": 3.0, "efficiency": 1.0}]
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response("api.open-meteo.com", forecast_response)
+        test_api.set_mock_response("ensemble-api.open-meteo.com", ensemble_response)
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            run_async(test_api.solar.download_open_meteo_data())
+        om_calls = [r for r in test_api.request_log if "api.open-meteo.com" in r["url"]]
+        if not om_calls:
+            print("ERROR: No Open-Meteo API call made (azimuth_zero_south=False)")
+            failed = True
+        elif "azimuth=180" not in om_calls[0]["url"]:
+            print(f"ERROR: Expected azimuth=180 in URL without azimuth_zero_south, got: {om_calls[0]['url']}")
+            failed = True
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# ============================================================================
 # Test runner
 # ============================================================================
 
@@ -690,5 +759,6 @@ def run_open_meteo_tests(my_predbat):
     failed |= test_download_open_meteo_data_http_failure(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_not_selected_when_forecast_solar_configured(my_predbat)
+    failed |= test_download_open_meteo_data_azimuth_zero_south(my_predbat)
 
     return failed

@@ -1,6 +1,6 @@
 # Web Interface
 
-The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including view the current plan, adjust the configuration, view the charts, check your apps.yaml and view the logfiles.
+The Predbat Web Interface provides an easy to use way to see and change different aspects of your Predbat system including viewing the current plan, adjusting the configuration, viewing the charts, checking your apps.yaml and viewing the logfiles.
 
 ![image](images/web-interface-plan-view.png)
 
@@ -191,9 +191,11 @@ These are intended for debugging and developer activities, in normal use you can
 
 ### Metrics View
 
-The Metrics view provides a self-contained dashboard giving an overview of Predbat and what's happening with your batteries.  The dashboard auto-refreshes every 30 seconds and contains the following 5 sections:
+The Metrics view provides a dashboard giving an overview of Predbat internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
+The dashboard auto-refreshes every 30 seconds and contains the following 5 sections:
 
-- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using
+- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using.
+The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
 - **Battery Status** - shows battery SoC doughnut and power meters for current battery charge, discharge, house load, PV, grid import and grid export
 - **Energy Today** - shows total energy today for house load, grid import, grid export and PV generation
 - **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat

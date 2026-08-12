@@ -191,6 +191,26 @@ def _make_history_mock(my_predbat, now_utc, cost_value=100.0, soc_value=5.0):
     return _get_history_wrapper
 
 
+def _make_recording_step_data(pv_today_ref, my_predbat, forecast_minutes_snapshots):
+    """Like _make_mock_step_data, but also records self.forecast_minutes at
+    the moment of each call, so a test can verify it was already widened
+    before yesterday_load_step/yesterday_pv_step are built (issue #4418:
+    step_data_history() only fills offsets up to forecast_minutes, so a
+    late minutes_now needs forecast_minutes widened *before* these calls,
+    not just later when the "yesterday" plan_html is rendered)."""
+
+    def _mock(item, minutes_now, forward, step=5, scale_today=1.0, scale_fixed=1.0, **kwargs):
+        forecast_minutes_snapshots.append(my_predbat.forecast_minutes)
+        if item is None:
+            return {minute: 0.0 for minute in range(0, 24 * 60, step)}
+        elif item is pv_today_ref:
+            return {minute: FLAT_PV_KWH for minute in range(0, 24 * 60, step)}
+        else:
+            return {minute: FLAT_LOAD_KWH for minute in range(0, 24 * 60, step)}
+
+    return _mock
+
+
 def _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0):
     """Apply all mocks and return the captured-load list."""
     captured_load_steps = []
@@ -331,6 +351,57 @@ def _test_basic_no_car(my_predbat, failed):
     # --- run_prediction was called (once for baseline, once for no-pvbat) ---
     if len(captured_load) < 2:
         print("ERROR: run_prediction should have been called at least twice, got {} captures".format(len(captured_load)))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_forecast_minutes_widened_before_step_data(my_predbat, failed):
+    """Regression test for #4418.
+
+    step_data_history() only fills in offsets up to
+    self.forecast_minutes + plan_interval_minutes. The "History" view needs
+    a full "yesterday" (24h) plus "today so far" up to minutes_now, i.e.
+    offsets up to 24*60 + minutes_now. If forecast_minutes is not widened
+    to at least that *before* yesterday_load_step/yesterday_pv_step are
+    built, any offset beyond the live plan's normal horizon silently reads
+    back as zero load/PV for the rest of the day (reproduced live with
+    forecast_plan_hours=30 i.e. forecast_minutes=1800, minutes_now=910 -
+    Load kWh read 0 from ~06:00 onward every day in the History tab).
+
+    Uses a late minutes_now (910, i.e. 15:10) with a forecast_minutes
+    (1800) too small to cover 24*60 + minutes_now (2350) unless widened
+    first, matching the real-world reproduction.
+    """
+    print("calculate_yesterday: Test – forecast_minutes widened before yesterday_load_step/yesterday_pv_step (#4418)")
+    now_utc = _setup_base(my_predbat, minutes_now=910)
+    my_predbat.forecast_minutes = 1800
+
+    forecast_minutes_snapshots = []
+    my_predbat.step_data_history = _make_recording_step_data(my_predbat.pv_today, my_predbat, forecast_minutes_snapshots)
+    my_predbat.get_history_wrapper = _make_history_mock(my_predbat, now_utc)
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    required_minutes = 24 * 60 + 910
+    if not forecast_minutes_snapshots:
+        print("ERROR: step_data_history was never called")
+        failed = True
+    elif forecast_minutes_snapshots[0] < required_minutes:
+        print("ERROR: forecast_minutes was only {} at the first step_data_history call, needed >= {} " "(yesterday_load_step/yesterday_pv_step built before widening)".format(forecast_minutes_snapshots[0], required_minutes))
+        failed = True
+    elif any(snap < required_minutes for snap in forecast_minutes_snapshots):
+        print("ERROR: forecast_minutes dropped below {} partway through the step_data_history calls: {}".format(required_minutes, forecast_minutes_snapshots))
+        failed = True
+
+    if my_predbat.forecast_minutes != 1800:
+        print("ERROR: forecast_minutes was not restored to its original value (expected 1800, got {})".format(my_predbat.forecast_minutes))
         failed = True
 
     _restore_methods(my_predbat, original_run_pred)
@@ -964,6 +1035,94 @@ def _test_soc_not_mutated_and_override_passed(my_predbat, failed):
     return failed
 
 
+def _make_counting_run_pred(counter_list):
+    """Factory: create a run_prediction mock that increments counter_list[0] on each call."""
+
+    def _mock(self_pb, *args, **kwargs):
+        """Mock run_prediction that counts invocations and clears soc arrays."""
+        counter_list[0] += 1
+        self_pb.predict_soc = {}
+        self_pb.predict_soc_best = {}
+        self_pb.predict_metric_best = {}
+        return (500, 1.0, 5.0, 0.5, 3.0, 5.0, 120, 2.0, 0, 0.0, 0)
+
+    return _mock
+
+
+def _test_soc_kw_h0_fallback(my_predbat, failed):
+    """Test: calculate_yesterday does NOT return early when soc_kw_h0 HA history is
+    unavailable; it falls back to soc_kwh_history (in-memory) if populated, and to
+    soc_yesterday (from savings_total_soc) when both sources are absent.
+
+    Covers the regression introduced in v8.39.4 where missing soc_kw_h0 HA history
+    (possible in cost-optimised operation or after a fresh install) caused the entire
+    calculate_yesterday run to be skipped every cycle, leaving savings_* entities
+    stuck in 'unavailable'.
+    """
+    print("calculate_yesterday: Test – soc_kw_h0 fallback when HA history unavailable")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    # History mock that provides cost_today but NOT soc_kw_h0
+    def _history_no_soc(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        return None  # soc_kw_h0 returns None
+
+    # --- sub-case A: soc_kwh_history empty, soc_kw_h0 HA history missing ---
+    # Ensure soc_kwh_history is empty (the default after reset)
+    my_predbat.soc_kwh_history = {}
+
+    my_predbat.get_history_wrapper = _history_no_soc
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    original_run_pred = my_predbat.run_prediction
+
+    ran_count = [0]
+    my_predbat.run_prediction = lambda *a, **kw: _make_counting_run_pred(ran_count)(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if ran_count[0] == 0:
+        print("ERROR: calculate_yesterday returned early (ran_count=0); should continue with fallback soc values")
+        failed = True
+    else:
+        print("Sub-case A passed: calculate_yesterday ran {} prediction(s) despite missing soc_kw_h0 HA history".format(ran_count[0]))
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+
+    # --- sub-case B: soc_kwh_history populated, soc_kw_h0 HA history missing ---
+    # Populate soc_kwh_history directly (as fetch.py would have done)
+    minutes_back = my_predbat.minutes_now + 1
+    my_predbat.soc_kwh_history = {minutes_back: 7.5}
+
+    my_predbat.get_history_wrapper = _history_no_soc  # still returns None for soc_kw_h0
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    original_run_pred = my_predbat.run_prediction
+    ran_count_b = [0]
+    my_predbat.run_prediction = lambda *a, **kw: _make_counting_run_pred(ran_count_b)(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if ran_count_b[0] == 0:
+        print("ERROR: calculate_yesterday returned early in sub-case B (ran_count=0)")
+        failed = True
+    elif not my_predbat.savings_last_updated:
+        print("ERROR: sub-case B: savings_last_updated was not set after calculate_yesterday")
+        failed = True
+    else:
+        print("Sub-case B passed: calculate_yesterday ran {} prediction(s) using in-memory soc_kwh_history".format(ran_count_b[0]))
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    my_predbat.soc_kwh_history = {}
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -979,10 +1138,12 @@ def test_calculate_yesterday(my_predbat):
 
     failed = _test_early_exit(my_predbat, failed)
     failed = _test_basic_no_car(my_predbat, failed)
+    failed = _test_forecast_minutes_widened_before_step_data(my_predbat, failed)
     failed = _test_car_slot_subtraction(my_predbat, failed)
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
+    failed = _test_soc_kw_h0_fallback(my_predbat, failed)
 
     return failed

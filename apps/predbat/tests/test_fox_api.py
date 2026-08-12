@@ -12,7 +12,7 @@ import pytz
 import aiohttp
 import json
 from unittest.mock import MagicMock, patch, AsyncMock
-from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal
+from fox import validate_schedule, minutes_to_schedule_time, end_minute_inclusive_to_exclusive, FoxAPI, schedules_are_equal, FOX_CACHE_KEYS, FOX_REFRESH_SETTINGS, FOX_REFRESH_REALTIME, OPTIONS_WORK_MODE, FOX_SETTINGS_CACHE_VERSION
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -66,6 +66,11 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.available_variables = {}
         self.device_values = {}
         self.device_settings = {}
+        self.device_settings_unavailable = {}
+        # Default to "current" so existing tests aren't affected by the stale-cache-version
+        # self-heal check; tests exercising that mechanism explicitly set an older value
+        self.device_settings_version = FOX_SETTINGS_CACHE_VERSION
+        self.last_unsupported = False
         self.device_production_month = {}
         self.device_production_year = {}
         self.device_battery_charging_time = {}
@@ -74,6 +79,7 @@ class MockFoxAPIWithRequests(FoxAPI):
         self.fdpwr_max = {}
         self.fdsoc_min = {}
         self.device_scheduler_count = {}
+        self.data_age = {}
         self.local_tz = pytz.timezone("Europe/London")
         self.inverter_sn_filter = []
 
@@ -1780,6 +1786,83 @@ def test_api_get_device_setting(my_predbat):
     return False
 
 
+def test_api_get_device_setting_unsupported_applies_default(my_predbat):
+    """
+    Test get_device_setting marks a setting unavailable and applies its default value when
+    the API reports it unsupported (errno 42015/44096), then never polls it again
+    """
+    print("  - test_api_get_device_setting_unsupported_applies_default")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    # No mock response registered so request_get returns None, simulating an unsupported
+    # setting response; last_unsupported is what request_get_func would have set for errno 42015/44096
+    fox.last_unsupported = True
+
+    result = asyncio.run(fox.get_device_setting(deviceSN, "WorkMode"))
+
+    assert result is None
+    assert len(fox.request_log) == 1
+    assert "workmode" in fox.device_settings_unavailable[deviceSN]
+    assert fox.device_settings[deviceSN]["WorkMode"]["value"] == "SelfUse"
+    # Must carry an enumList so it still publishes as a select entity - automatic_config wires
+    # inverter_mode to a hardcoded select.*_setting_workmode entity id
+    assert fox.device_settings[deviceSN]["WorkMode"]["enumList"] == OPTIONS_WORK_MODE
+
+    # Second call must be served from the cached default without hitting the API again
+    result2 = asyncio.run(fox.get_device_setting(deviceSN, "WorkMode"))
+    assert result2 == {"value": "SelfUse", "enumList": OPTIONS_WORK_MODE}
+    assert len(fox.request_log) == 1
+
+    return False
+
+
+def test_api_get_device_setting_unsupported_no_default_leaves_absent(my_predbat):
+    """
+    Test get_device_setting marks ExportLimit unavailable without inventing a stub entry, so
+    existing "missing setting" fallback behaviour (unlimited export) keeps working unchanged
+    """
+    print("  - test_api_get_device_setting_unsupported_no_default_leaves_absent")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.last_unsupported = True
+
+    result = asyncio.run(fox.get_device_setting(deviceSN, "ExportLimit"))
+
+    assert result is None
+    assert "exportlimit" in fox.device_settings_unavailable[deviceSN]
+    assert "ExportLimit" not in fox.device_settings.get(deviceSN, {})
+
+    # Second call is still skipped (no further API traffic) despite there being no stub value
+    result2 = asyncio.run(fox.get_device_setting(deviceSN, "ExportLimit"))
+    assert result2 is None
+    assert len(fox.request_log) == 1
+
+    return False
+
+
+def test_api_get_device_setting_already_marked_unavailable_skips_poll(my_predbat):
+    """
+    Test get_device_setting skips the API entirely when the setting was already marked
+    unavailable (e.g. restored from a persisted cache) without needing last_unsupported set
+    """
+    print("  - test_api_get_device_setting_already_marked_unavailable_skips_poll")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.device_settings_unavailable[deviceSN] = ["gridcode"]
+    fox.set_mock_response("/op/v0/device/setting/get", {"value": "should not be used"})
+
+    result = asyncio.run(fox.get_device_setting(deviceSN, "GridCode"))
+
+    assert result is None
+    assert len(fox.request_log) == 0
+
+    return False
+
+
 def test_api_set_device_setting(my_predbat):
     """
     Test set_device_setting API endpoint
@@ -1803,6 +1886,34 @@ def test_api_set_device_setting(my_predbat):
     assert fox.request_log[0]["datain"]["sn"] == deviceSN
     assert fox.request_log[0]["datain"]["key"] == "MinSoc"
     assert fox.request_log[0]["datain"]["value"] == 20
+
+    return False
+
+
+def test_api_set_device_setting_unsupported_marks_unavailable(my_predbat):
+    """
+    Test set_device_setting marks a setting unavailable and applies its default when the
+    write is rejected as unsupported, then never writes to it again
+    """
+    print("  - test_api_set_device_setting_unsupported_marks_unavailable")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.last_unsupported = True
+
+    result = asyncio.run(fox.set_device_setting(deviceSN, "MaxSoc", 90))
+
+    assert result == True
+    assert len(fox.request_log) == 1
+    assert "maxsoc" in fox.device_settings_unavailable[deviceSN]
+    assert fox.device_settings[deviceSN]["MaxSoc"]["value"] == 100
+
+    # A later write attempt must be ignored entirely - no further API traffic
+    fox.set_mock_response("/op/v0/device/setting/set", {})
+    result2 = asyncio.run(fox.set_device_setting(deviceSN, "MaxSoc", 50))
+    assert result2 == True
+    assert len(fox.request_log) == 1
+    assert fox.device_settings[deviceSN]["MaxSoc"]["value"] == 100
 
     return False
 
@@ -1837,12 +1948,12 @@ def test_api_get_device_settings(my_predbat):
 
     run_async(fox.get_device_settings(deviceSN))
 
-    # Should have made requests for all 7 FOX_SETTINGS
-    assert len(fox.request_log) == 7
+    # Should have made requests for all 6 FOX_SETTINGS
+    assert len(fox.request_log) == 6
 
     # Verify each setting was requested
     requested_keys = [req["datain"]["key"] for req in fox.request_log]
-    expected_keys = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "ExportLimitPower", "MinSoc", "MinSocOnGrid"]
+    expected_keys = ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]
     for key in expected_keys:
         assert key in requested_keys, f"Expected key {key} in requests"
 
@@ -1850,6 +1961,82 @@ def test_api_get_device_settings(my_predbat):
     assert deviceSN in fox.device_settings
     for key in expected_keys:
         assert key in fox.device_settings[deviceSN], f"Expected key {key} in device_settings"
+
+    return False
+
+
+def test_api_get_device_settings_with_unsupported_setting(my_predbat):
+    """
+    Test get_device_settings applies the default and stops polling a setting reported as
+    unsupported, while the other settings continue to be read normally each cycle
+    """
+    print("  - test_api_get_device_settings_with_unsupported_setting")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+
+    async def fake_request_get(path, post=False, datain=None):
+        fox.request_log.append({"path": path, "post": post, "datain": datain})
+        key = (datain or {}).get("key")
+        if key == "WorkMode":
+            fox.last_unsupported = True
+            return None
+        fox.last_unsupported = False
+        return {"value": "100", "unit": "%", "precision": 1.0}
+
+    fox.request_get = fake_request_get
+
+    result = run_async(fox.get_device_settings(deviceSN))
+
+    # get_device_settings should still report success since the other 5 settings succeeded
+    assert result is not None
+
+    # WorkMode was marked unavailable with its SelfUse default applied
+    assert "workmode" in fox.device_settings_unavailable[deviceSN]
+    assert fox.device_settings[deviceSN]["WorkMode"]["value"] == "SelfUse"
+
+    # The other settings were read normally
+    for key in ["ExportLimit", "MaxSoc", "GridCode", "MinSoc", "MinSocOnGrid"]:
+        assert fox.device_settings[deviceSN][key]["value"] == "100"
+
+    # A second poll must not query WorkMode again
+    fox.request_log = []
+    run_async(fox.get_device_settings(deviceSN))
+    queried_keys = [req["datain"]["key"] for req in fox.request_log]
+    assert "WorkMode" not in queried_keys
+    assert len(queried_keys) == 5
+
+    return False
+
+
+def test_api_get_device_settings_all_unsupported_still_settles(my_predbat):
+    """
+    Test get_device_settings returns non-None immediately when every FOX_SETTINGS key is
+    unsupported, so callers persist the cache age and stop re-polling every cycle. Regression
+    guard: this used to leave the age-based refresh gate permanently open (age stays None
+    forever), which also dragged the scheduler poll along since it shares the same gate.
+    """
+    print("  - test_api_get_device_settings_all_unsupported_still_settles")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+    fox.device_detail[deviceSN] = {"hasBattery": True}
+    fox.last_unsupported = True
+    # No mock response registered so every setting/get call fails as unsupported
+
+    result = run_async(fox.get_device_settings(deviceSN))
+
+    assert result is not None
+    assert len(fox.request_log) == 6
+    for key in ["ExportLimit", "MaxSoc", "GridCode", "WorkMode", "MinSoc", "MinSocOnGrid"]:
+        assert key.lower() in fox.device_settings_unavailable[deviceSN]
+
+    # A second poll must not repeat any of the API calls
+    fox.request_log = []
+    result2 = run_async(fox.get_device_settings(deviceSN))
+    assert result2 is not None
+    assert len(fox.request_log) == 0
 
     return False
 
@@ -2068,6 +2255,495 @@ def test_api_set_scheduler_enabled(my_predbat):
 
     # Verify local state was updated
     assert fox.device_scheduler[deviceSN]["enable"] == 1
+
+    return False
+
+
+def test_api_get_scheduler_v2_evo(my_predbat):
+    """
+    Test get_scheduler uses the v2 API for EVO-series devices (productType 812)
+
+    Fox's v1 scheduler endpoints return errno 41200 permanently for EVO-series
+    inverters even though the devices support the scheduler. EVO is detected by
+    productType, so the v1 endpoint is never polled. The v2 response nests SOC/power
+    fields inside extraParam, which must be flattened back to the v1 group shape.
+    """
+    print("  - test_api_get_scheduler_v2_evo")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+
+    # EVO device (productType 812), 10kW inverter
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {
+                    "enable": 1,
+                    "startHour": 0,
+                    "startMinute": 0,
+                    "endHour": 5,
+                    "endMinute": 30,
+                    "workMode": "ForceCharge",
+                    "extraParam": {"fdPwr": 5000.0, "minSocOnGrid": 10.0, "fdSoc": 100.0, "maxSoc": 100.0, "pvLimit": 16000.0, "importLimit": 12000.0, "exportLimit": 12000.0, "reactivePower": 0.0},
+                },
+            ],
+        },
+    )
+
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    # EVO detected by productType: v2 used directly, v1 never polled
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v2/device/scheduler/get"
+
+    # Result must be normalised to the flat v1 group shape
+    assert result["enable"] == 1
+    assert len(result["groups"]) == 1
+    group = result["groups"][0]
+    assert group["workMode"] == "ForceCharge"
+    assert group["enable"] == 1
+    assert group["startHour"] == 0
+    assert group["endHour"] == 5
+    assert group["endMinute"] == 30
+    assert group["fdPwr"] == 5000.0
+    assert group["fdSoc"] == 100.0
+    assert group["minSocOnGrid"] == 10.0
+    assert group["maxSoc"] == 100.0
+    assert "extraParam" not in group
+
+    # This mocked response has no properties block: fall back to defaults, capped at capacity
+    assert fox.fdpwr_max[deviceSN] == 8000
+    assert fox.fdsoc_min[deviceSN] == 10
+    assert fox.device_scheduler_count[deviceSN] == 1
+
+    return False
+
+
+def test_api_get_scheduler_v2_uses_real_properties(my_predbat):
+    """
+    Test get_scheduler uses the real per-field ranges from a v2 response's properties block
+    instead of the generic defaults, when the device actually returns one.
+
+    Regression guard: get_scheduler_v2 used to discard the properties block entirely on the
+    (incorrect) assumption that v2 never returns one - production responses do include it.
+    """
+    print("  - test_api_get_scheduler_v2_uses_real_properties")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 20, "productType": "812"}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {"enable": 1, "startHour": 0, "endHour": 5, "workMode": "ForceCharge", "extraParam": {"fdPwr": 5000.0, "fdSoc": 100.0}},
+            ],
+            "properties": {
+                "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 12000.0}},
+                "fdsoc": {"unit": "%", "precision": 1.0, "range": {"min": 5.0, "max": 100.0}},
+                "exportlimit": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 100000.0}},
+            },
+        },
+    )
+
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    # Real reported max (12000) must win over the generic 8000 default
+    assert fox.fdpwr_max[deviceSN] == 12000
+    # Real reported min (5) must win over the generic 10 default
+    assert fox.fdsoc_min[deviceSN] == 5
+    # The properties block itself must be preserved on the result, not discarded
+    assert result["properties"]["exportlimit"]["range"] == {"min": 0.0, "max": 100000.0}
+
+    return False
+
+
+def test_api_get_scheduler_derives_settings_from_schedule(my_predbat):
+    """
+    Test get_scheduler derives ExportLimit/ImportLimit/MaxSoc/PvLimit (max) and MinSocOnGrid
+    (min) from the schedule groups and stores them in device_settings, filling the gap left by
+    a settings/get endpoint that doesn't support these (e.g. errno 42015), without clobbering a
+    setting that already has a real register-backed entry
+    """
+    print("  - test_api_get_scheduler_derives_settings_from_schedule")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 20, "productType": "812"}
+
+    # GridCode already has a real register-backed reading - must not be touched by this
+    fox.device_settings[deviceSN] = {"GridCode": {"value": "50Hz", "enumList": ["50Hz", "60Hz"]}}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {
+                    "enable": 1,
+                    "startHour": 0,
+                    "endHour": 5,
+                    "workMode": "ForceCharge",
+                    "extraParam": {"fdPwr": 5000.0, "minSocOnGrid": 5.0, "fdSoc": 100.0, "maxSoc": 90.0, "pvLimit": 10000.0, "importLimit": 8000.0, "exportLimit": 9000.0, "reactivePower": 0.0},
+                },
+                {
+                    "enable": 1,
+                    "startHour": 5,
+                    "endHour": 23,
+                    "workMode": "SelfUse",
+                    "extraParam": {"fdPwr": 5000.0, "minSocOnGrid": 10.0, "fdSoc": 10.0, "maxSoc": 100.0, "pvLimit": 16000.0, "importLimit": 12000.0, "exportLimit": 12000.0, "reactivePower": 0.0},
+                },
+            ],
+        },
+    )
+
+    asyncio.run(fox.get_scheduler(deviceSN))
+
+    settings = fox.device_settings[deviceSN]
+    # max() across the two groups
+    assert settings["ExportLimit"]["value"] == 12000.0
+    assert settings["ImportLimit"]["value"] == 12000.0
+    assert settings["MaxSoc"]["value"] == 100.0
+    assert settings["PvLimit"]["value"] == 16000.0
+    # min() across the two groups
+    assert settings["MinSocOnGrid"]["value"] == 5.0
+    # reactivePower is never derived/stored
+    assert "ReactivePower" not in settings
+
+    # A setting with a real register-backed entry is left untouched
+    assert settings["GridCode"] == {"value": "50Hz", "enumList": ["50Hz", "60Hz"]}
+
+    return False
+
+
+def test_api_get_scheduler_derives_settings_with_range_from_properties(my_predbat):
+    """
+    Test update_settings_from_schedule attaches the real range/unit/precision from a v2
+    response's properties block to a derived setting, not just a bare value.
+
+    Regression guard: without this, ExportLimit derived purely as {"value": ...} publishes as
+    a sensor (no range/enumList), but automatic_config wires export_limit to a hardcoded
+    number.*_setting_exportlimit entity id - leaving that entity unresolvable (HA reports
+    None) even though Predbat believes it configured a working export limit.
+    """
+    print("  - test_api_get_scheduler_derives_settings_with_range_from_properties")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 20, "productType": "812"}
+
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [
+                {"enable": 1, "startHour": 0, "endHour": 23, "workMode": "SelfUse", "extraParam": {"fdPwr": 5000.0, "fdSoc": 10.0, "exportLimit": 12000.0, "minSocOnGrid": 10.0, "maxSoc": 100.0}},
+            ],
+            "properties": {
+                "exportlimit": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 100000.0}},
+            },
+        },
+    )
+
+    asyncio.run(fox.get_scheduler(deviceSN))
+
+    export_limit_setting = fox.device_settings[deviceSN]["ExportLimit"]
+    assert export_limit_setting["value"] == 12000.0
+    assert export_limit_setting["range"] == {"min": 0.0, "max": 100000.0}
+    assert export_limit_setting["unit"] == "W"
+    assert export_limit_setting["precision"] == 1.0
+
+    # A field with no matching properties entry (maxSoc here) still just gets a bare value
+    assert fox.device_settings[deviceSN]["MaxSoc"] == {"value": 100.0}
+
+    return False
+
+
+def test_publish_data_derived_export_limit_publishes_as_number(my_predbat):
+    """
+    End-to-end regression guard: a schedule-derived ExportLimit with real range metadata must
+    publish as a number entity, matching the hardcoded number.*_setting_exportlimit entity id
+    automatic_config wires export_limit to - not a sensor, which would leave that entity
+    unresolvable and fail apps.yaml validation (HA reports state None).
+    """
+    print("  - test_publish_data_derived_export_limit_publishes_as_number")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    # Simulate a schedule-derived ExportLimit, with range metadata from a real properties block
+    fox.update_settings_from_schedule(
+        deviceSN,
+        [{"exportLimit": 12000.0}],
+        {"exportlimit": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 100000.0}}},
+    )
+
+    run_async(fox.publish_data())
+
+    export_limit_entity = f"number.predbat_fox_{deviceSN.lower()}_setting_exportlimit"
+    assert export_limit_entity in fox.dashboard_items
+    assert fox.dashboard_items[export_limit_entity]["state"] == 12000.0
+    assert fox.dashboard_items[export_limit_entity]["attributes"]["max"] == 100000.0
+
+    # Must NOT have also published as a sensor
+    assert f"sensor.predbat_fox_{deviceSN.lower()}_setting_exportlimit" not in fox.dashboard_items
+
+    return False
+
+
+def test_api_get_scheduler_v2_null_groups(my_predbat):
+    """
+    Test get_scheduler_v2 tolerates a present-but-null groups value and defaults enable
+    """
+    print("  - test_api_get_scheduler_v2_null_groups")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+
+    # groups is null (idle scheduler) and a group omits its enable flag
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {"groups": None},
+    )
+
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+    assert result["groups"] == []
+    assert result["enable"] == 1  # defaulted when the key is absent
+
+    # A group without an explicit enable defaults to enabled
+    fox.set_mock_response(
+        "/op/v2/device/scheduler/get",
+        {"enable": 1, "groups": [{"startHour": 0, "endHour": 5, "workMode": "ForceCharge", "extraParam": {"fdSoc": 100}}]},
+    )
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+    assert result["groups"][0]["enable"] == 1
+    assert result["groups"][0]["fdSoc"] == 100
+
+    return False
+
+
+def test_api_get_scheduler_kh_stays_v1(my_predbat):
+    """
+    Test a non-EVO (KH) device stays on v1 and is NOT rerouted to v2 on failure
+
+    Regression guard: errno 41200 doubles as a transient rate-limit code, so a v1
+    failure must not switch a healthy KH device to the v2/v3 API.
+    """
+    print("  - test_api_get_scheduler_kh_stays_v1")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "KH1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 8, "productType": "KH"}
+
+    # v1 is NOT mocked so it returns None (simulating a transient failure); v2 IS mocked
+    fox.set_mock_response("/op/v2/device/scheduler/get", {"enable": 1, "groups": []})
+
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    # KH must only ever try v1 — never the v2 endpoint
+    paths = [request["path"] for request in fox.request_log]
+    assert paths == ["/op/v1/device/scheduler/get"]
+    assert result is None
+
+    return False
+
+
+def test_api_get_scheduler_v2_evo_fails(my_predbat):
+    """
+    Test get_scheduler returns None (no crash) when an EVO device's v2 API also fails
+    """
+    print("  - test_api_get_scheduler_v2_evo_fails")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+
+    # Neither v1 nor v2 mocked: both return None
+    result = asyncio.run(fox.get_scheduler(deviceSN))
+
+    assert result is None
+    paths = [request["path"] for request in fox.request_log]
+    assert paths == ["/op/v2/device/scheduler/get"]
+
+    return False
+
+
+def test_api_set_scheduler_v3_evo(my_predbat):
+    """
+    Test set_scheduler uses the v3 enable API for EVO-series devices (productType 812)
+
+    The v3 request nests SOC/power fields inside extraParam and only carries enabled
+    groups; time fields and workMode stay flat (matching the shape the foxesscloud
+    reference library sends). v1 is never polled.
+    """
+    print("  - test_api_set_scheduler_v3_evo")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+
+    fox.set_mock_response("/op/v3/device/scheduler/enable", {})
+
+    groups = [
+        {
+            "enable": 1,
+            "startHour": 2,
+            "startMinute": 30,
+            "endHour": 5,
+            "endMinute": 29,
+            "workMode": "ForceCharge",
+            "fdSoc": 100,
+            "maxSoc": 100,
+            "fdPwr": 8000,
+            "minSocOnGrid": 10,
+        },
+        {
+            "enable": 0,
+            "startHour": 0,
+            "startMinute": 0,
+            "endHour": 0,
+            "endMinute": 0,
+            "workMode": "Invalid",
+            "fdSoc": 10,
+            "maxSoc": 100,
+            "fdPwr": 0,
+            "minSocOnGrid": 10,
+        },
+    ]
+
+    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+
+    assert result == True
+
+    # EVO detected by productType: v3 used directly, v1 never polled
+    assert len(fox.request_log) == 1
+    assert fox.request_log[0]["path"] == "/op/v3/device/scheduler/enable"
+
+    # v3 request carries only the enabled group, with extraParam nesting
+    sent_groups = fox.request_log[0]["datain"]["groups"]
+    assert len(sent_groups) == 1
+    sent = sent_groups[0]
+    assert sent["workMode"] == "ForceCharge"
+    assert sent["startHour"] == 2
+    assert sent["startMinute"] == 30
+    assert sent["endHour"] == 5
+    assert sent["endMinute"] == 29
+    assert sent["extraParam"]["fdSoc"] == 100
+    assert sent["extraParam"]["fdPwr"] == 8000
+    assert sent["extraParam"]["minSocOnGrid"] == 10
+    assert sent["extraParam"]["maxSoc"] == 100
+    assert "fdSoc" not in sent
+    assert "fdPwr" not in sent
+    assert "minSocOnGrid" not in sent
+    assert "maxSoc" not in sent
+
+    # Local state keeps the original flat groups
+    assert fox.device_scheduler[deviceSN]["enable"] == True
+    assert fox.device_scheduler[deviceSN]["groups"] == groups
+
+    return False
+
+
+def test_api_set_scheduler_v3_evo_carries_stored_limits(my_predbat):
+    """
+    Test set_scheduler carries exportLimit/importLimit/pvLimit from stored device settings into
+    the v3 write's extraParam, since Predbat's own schedule groups never populate them and
+    omitting them risks Fox resetting them to a default. maxSoc/minSocOnGrid must keep coming
+    from the live plan group (not a stale stored value), and reactivePower must never be sent.
+    """
+    print("  - test_api_set_scheduler_v3_evo_carries_stored_limits")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "EVO1234567"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "productType": "812"}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+    # A stale MaxSoc reading must not leak into the write - the live group's maxSoc must win
+    fox.device_settings[deviceSN] = {
+        "ExportLimit": {"value": 12000.0},
+        "ImportLimit": {"value": 8000.0},
+        "PvLimit": {"value": 16000.0},
+        "MaxSoc": {"value": 55},
+    }
+
+    fox.set_mock_response("/op/v3/device/scheduler/enable", {})
+
+    groups = [
+        {
+            "enable": 1,
+            "startHour": 2,
+            "startMinute": 30,
+            "endHour": 5,
+            "endMinute": 29,
+            "workMode": "ForceCharge",
+            "fdSoc": 100,
+            "maxSoc": 100,
+            "fdPwr": 8000,
+            "minSocOnGrid": 10,
+        },
+    ]
+
+    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+
+    assert result == True
+    sent_groups = fox.request_log[0]["datain"]["groups"]
+    sent = sent_groups[0]
+
+    # Stored limits are carried into extraParam
+    assert sent["extraParam"]["exportLimit"] == 12000.0
+    assert sent["extraParam"]["importLimit"] == 8000.0
+    assert sent["extraParam"]["pvLimit"] == 16000.0
+
+    # maxSoc/minSocOnGrid come from the live plan group, not the stale stored MaxSoc value
+    assert sent["extraParam"]["maxSoc"] == 100
+    assert sent["extraParam"]["minSocOnGrid"] == 10
+
+    # reactivePower is never sent - there is no stored value to carry forward
+    assert "reactivePower" not in sent["extraParam"]
+
+    return False
+
+
+def test_api_set_scheduler_kh_stays_v1(my_predbat):
+    """
+    Test a non-EVO (KH) device's writes stay on v1 and never fall back to v3
+
+    Regression guard: a transient v1 write failure must not reroute a healthy KH
+    device to the v3 endpoint.
+    """
+    print("  - test_api_set_scheduler_kh_stays_v1")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "KH1234567"
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 8, "productType": "KH"}
+    fox.device_scheduler[deviceSN] = {"enable": False, "groups": []}
+
+    # v1 enable NOT mocked (transient failure); v3 IS mocked
+    fox.set_mock_response("/op/v3/device/scheduler/enable", {})
+
+    groups = [{"enable": 1, "startHour": 2, "startMinute": 30, "endHour": 5, "endMinute": 29, "workMode": "ForceCharge", "fdSoc": 100, "maxSoc": 100, "fdPwr": 8000, "minSocOnGrid": 10}]
+    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+
+    # KH must only ever try v1 — never the v3 endpoint — and report failure
+    assert result == False
+    paths = [request["path"] for request in fox.request_log]
+    assert paths == ["/op/v1/device/scheduler/enable"]
 
     return False
 
@@ -3099,6 +3775,7 @@ class MockFoxAPIForRequestTesting(FoxAPI):
         self.local_tz = pytz.timezone("Europe/London")
         self.log_messages = []
         self.auth_method = "password"
+        self.last_unsupported = False
 
         # Rate limiting attributes
         self.requests_today = 0
@@ -3254,6 +3931,72 @@ def test_request_get_func_real_fox_errno_api_limit(my_predbat):
     assert allow_retry == False  # API limit should NOT retry
     assert fox.failures_total == 1
     mock_sleep.assert_called_once()  # Should sleep for 5 minutes
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_unsupported_42015(my_predbat):
+    """
+    Test real request_get_func flags errno 42015 (unsupported function) via last_unsupported
+    """
+    print("  - test_request_get_func_real_fox_errno_unsupported_42015")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 42015, "msg": "This device does not currently support this feature"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting/get"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.last_unsupported == True
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_unsupported_44096(my_predbat):
+    """
+    Test real request_get_func flags errno 44096 (unsupported function) via last_unsupported
+    """
+    print("  - test_request_get_func_real_fox_errno_unsupported_44096")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 44096, "msg": "Unsupported function"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting/get"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.last_unsupported == True
+
+    return False
+
+
+def test_request_get_func_real_fox_errno_other_leaves_unsupported_false(my_predbat):
+    """
+    Test real request_get_func leaves last_unsupported False for an unrelated errno
+    """
+    print("  - test_request_get_func_real_fox_errno_other_leaves_unsupported_false")
+
+    fox = MockFoxAPIForRequestTesting()
+
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"errno": 40257, "msg": "Invalid parameter"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+
+    with patch("fox.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = mock_session
+        result, allow_retry = run_async(fox.request_get_func("/op/v0/device/setting/get"))
+
+    assert result is None
+    assert allow_retry == False
+    assert fox.last_unsupported == False
 
     return False
 
@@ -3505,31 +4248,39 @@ class MockFoxAPIWithRunTracking(MockFoxAPIWithRequests):
         return self.device_list
 
     async def get_device_detail(self, deviceSN):
+        # Return a truthy result to mirror a successful poll (real method returns the data)
         self.method_calls.append(f"get_device_detail:{deviceSN}")
+        return {"deviceSN": deviceSN}
 
     async def get_device_history(self, deviceSN):
         self.method_calls.append(f"get_device_history:{deviceSN}")
 
     async def get_battery_charging_time(self, deviceSN):
         self.method_calls.append(f"get_battery_charging_time:{deviceSN}")
-        return {}
+        return {"enable1": True}
 
     async def get_device_settings(self, deviceSN):
         self.method_calls.append(f"get_device_settings:{deviceSN}")
+        return {"WorkMode": {}}
 
     async def get_schedule_settings_ha(self, deviceSN):
         self.method_calls.append(f"get_schedule_settings_ha:{deviceSN}")
 
     async def get_scheduler(self, deviceSN):
         self.method_calls.append(f"get_scheduler:{deviceSN}")
-        return {}
+        return {"enable": 0}
 
     async def compute_schedule(self, deviceSN):
         self.method_calls.append(f"compute_schedule:{deviceSN}")
         return {}
 
+    async def get_device_production_month(self, deviceSN):
+        self.method_calls.append(f"get_device_production_month:{deviceSN}")
+        return [{"variable": "generation"}]
+
     async def get_real_time_data(self, deviceSN):
         self.method_calls.append(f"get_real_time_data:{deviceSN}")
+        return [{"datas": []}]
 
     async def publish_data(self):
         self.method_calls.append("publish_data")
@@ -3583,50 +4334,323 @@ def test_run_first_call_no_devices(my_predbat):
 
 def test_run_subsequent_call(my_predbat):
     """
-    Test run() with first=False only updates real-time data (not at hourly boundary)
+    Test run() only refreshes data that has aged out, leaving fresh data alone
     """
     print("  - test_run_subsequent_call")
+
+    from datetime import datetime, timezone
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
 
-    # seconds=300 (5 minutes), not an hourly boundary, first=False
+    # Mark all cached data as freshly updated except the real-time values, which are absent
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+    del fox.data_age["device_values"]  # Force a real-time refresh only
+
     result = run_async(fox.run(300, first=False))
 
     assert result == True
-    # Should NOT call initialisation methods
+    # Fresh data should NOT be re-fetched
     assert "get_device_list" not in fox.method_calls
     assert "get_device_detail:TEST123" not in fox.method_calls
-    # Should call real-time data update
+    assert "get_device_settings:TEST123" not in fox.method_calls
+    # Aged-out real-time data should be refreshed and published
     assert "get_real_time_data:TEST123" in fox.method_calls
     assert "publish_data" in fox.method_calls
-    # Should NOT call hourly methods (since 300 % 3600 != 0)
+
+    return False
+
+
+def test_run_settings_refresh_on_age(my_predbat):
+    """
+    Test run() refreshes settings and scheduler once that cached data has aged out
+    """
+    print("  - test_run_settings_refresh_on_age")
+
+    from datetime import datetime, timedelta, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+
+    # All data fresh except the device settings, which are older than FOX_REFRESH_SETTINGS
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+    fox.data_age["device_settings"] = now - timedelta(minutes=FOX_REFRESH_SETTINGS + 1)
+
+    result = run_async(fox.run(120, first=False))
+
+    assert result == True
+    # Should refresh settings and scheduler
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_schedule_settings_ha:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    assert "compute_schedule:TEST123" in fox.method_calls
+    assert "publish_data" in fox.method_calls
+    # Fresh real-time data should not be re-fetched
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_settings_refresh_forced_by_stale_cache_version(my_predbat):
+    """
+    Test run() forces a settings/scheduler refresh, regardless of cache age, when the
+    persisted device_settings_version predates FOX_SETTINGS_CACHE_VERSION - a one-time
+    self-heal so a customer isn't stuck reusing a stale-shaped cached setting (e.g. one
+    missing range/unit/precision from before that shape existed) for up to FOX_REFRESH_SETTINGS
+    after every restart. Also verifies the version is persisted afterwards so a subsequent,
+    still-fresh run does NOT force another refresh.
+    """
+    print("  - test_run_settings_refresh_forced_by_stale_cache_version")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = 0  # Simulates a cache persisted before this version existed
+
+    # Everything else, including device_settings itself, is freshly updated
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    result = run_async(fox.run(0, first=False))
+
+    assert result == True
+    # Forced despite a fresh device_settings cache age, because the version is stale
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    # The version must be bumped to current so it stops forcing a refresh going forward
+    assert fox.device_settings_version == FOX_SETTINGS_CACHE_VERSION
+
+    # A second run, still with a fresh cache age, must NOT force another refresh now that the
+    # version matches - otherwise every restart would keep hammering the API forever
+    fox.method_calls = []
+    fox.data_age["device_settings"] = now
+    result2 = run_async(fox.run(0, first=False))
+    assert result2 == True
     assert "get_device_settings:TEST123" not in fox.method_calls
 
     return False
 
 
-def test_run_hourly_update(my_predbat):
+def test_run_stale_cache_version_not_cleared_without_scheduler_success(my_predbat):
     """
-    Test run() with first=False at hourly boundary updates settings and scheduler
+    Regression guard: the stale cache version must only clear once get_scheduler() (via
+    update_settings_from_schedule()) has actually had a chance to produce the upgraded shape -
+    not merely because get_device_settings() succeeded. Otherwise a cycle where settings
+    succeed but the scheduler read fails would wrongly mark the migration "done", permanently
+    losing the retry and leaving the customer stuck with the stale-shaped cached value.
     """
-    print("  - test_run_hourly_update")
+    print("  - test_run_stale_cache_version_not_cleared_without_scheduler_success")
+
+    from datetime import datetime, timezone
+
+    class MockFoxAPISchedulerFails(MockFoxAPIWithRunTracking):
+        async def get_scheduler(self, deviceSN):
+            self.method_calls.append(f"get_scheduler:{deviceSN}")
+            return None  # Simulates a failed scheduler read this cycle
+
+    fox = MockFoxAPISchedulerFails()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = 0
+
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    result = run_async(fox.run(0, first=False))
+
+    assert result == True
+    # Settings still succeeded and get attempted every cycle while the version stays stale
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+    # Version must remain stale - the scheduler read (and any range upgrade it would apply)
+    # never actually succeeded
+    assert fox.device_settings_version == 0
+
+    # A second run, still with a fresh device_settings cache age, must keep retrying rather
+    # than silently giving up because the version never cleared
+    fox.method_calls = []
+    result2 = run_async(fox.run(0, first=False))
+    assert result2 == True
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_scheduler:TEST123" in fox.method_calls
+
+    return False
+
+
+def test_run_realtime_refresh_after_cache_expires(my_predbat):
+    """
+    Test run() leaves fresh real-time data alone but re-fetches it once the cache expires,
+    proving the age-based refresh actually fires after the staleness threshold is crossed
+    """
+    print("  - test_run_realtime_refresh_after_cache_expires")
+
+    from datetime import datetime, timedelta, timezone
 
     fox = MockFoxAPIWithRunTracking()
     fox.device_list = [{"deviceSN": "TEST123"}]
 
-    # seconds=3600 (1 hour), first=False
-    result = run_async(fox.run(3600, first=False))
+    # All categories fresh, including real-time data updated just now
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
 
+    # First run while real-time data is fresh: it must NOT be re-fetched
+    result = run_async(fox.run(60, first=False))
     assert result == True
-    # Should call hourly methods
-    assert "get_device_settings:TEST123" in fox.method_calls
-    assert "get_schedule_settings_ha:TEST123" in fox.method_calls
-    assert "get_scheduler:TEST123" in fox.method_calls
-    assert "compute_schedule:TEST123" in fox.method_calls
-    # Should call real-time data update
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    # Age the real-time cache past its threshold and run again: it must be re-fetched
+    fox.method_calls = []
+    fox.data_age["device_values"] = now - timedelta(minutes=FOX_REFRESH_REALTIME + 1)
+
+    result = run_async(fox.run(120, first=False))
+    assert result == True
     assert "get_real_time_data:TEST123" in fox.method_calls
     assert "publish_data" in fox.method_calls
+
+    # And after refreshing, the cache age is reset so a subsequent run does not re-fetch
+    fox.method_calls = []
+    result = run_async(fox.run(180, first=False))
+    assert result == True
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat):
+    """
+    Test that a failed device list poll does not reset the refresh timer, so the next run
+    retries instead of being suppressed for 24h by a falsely-fresh cache entry
+    """
+    print("  - test_run_device_list_failure_does_not_mark_cache_fresh")
+
+    fox = MockFoxAPIWithRequests()
+    # No mock response set for the device list path, so request_get returns None (poll fails)
+
+    # A failed poll must report None (not an empty list) and leave the device list untouched
+    result = run_async(fox.get_device_list())
+    assert result is None
+    assert fox.device_list == []
+
+    # After a failed refresh in run(), the cache age must remain unset so a retry can happen
+    fox.device_list = [{"deviceSN": "TEST123"}]  # Pretend we still have a cached list
+    run_async(fox.run(0, first=False))
+    assert "device_list" not in fox.data_age, "Failed device list poll must not mark the cache fresh"
+
+    return False
+
+
+def test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat):
+    """
+    Test run() always re-fetches the device list on first start, even when the cached data
+    is still fresh, so a new inverter or changed serial number is picked up. Device detail
+    and all other age-gated categories are skipped while the cache is fresh and the settings
+    cache version is current.
+    """
+    print("  - test_run_first_refreshes_device_list_despite_fresh_cache")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = FOX_SETTINGS_CACHE_VERSION
+
+    # Mark every cache category as freshly updated
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    # Device list must always refresh on first start regardless of cache age
+    assert "get_device_list" in fox.method_calls
+    # Age-based categories with fresh data and a current settings cache version should NOT be
+    # re-fetched on first start
+    assert "get_device_detail:TEST123" not in fox.method_calls
+    assert "get_real_time_data:TEST123" not in fox.method_calls
+    assert "get_device_settings:TEST123" not in fox.method_calls
+
+    return False
+
+
+def test_run_new_device_invalidates_detail_cache(my_predbat):
+    """
+    Test that when the device list changes (new inverter added), the device_detail cache is
+    invalidated so the new device's detail is fetched immediately rather than waiting 24 hours.
+    """
+    print("  - test_run_new_device_invalidates_detail_cache")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    # Start with one device and a fully fresh cache
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # Simulate get_device_list returning a second, new device
+    async def get_device_list_with_new_device():
+        fox.method_calls.append("get_device_list")
+        fox.device_list = [{"deviceSN": "TEST123"}, {"deviceSN": "NEW456"}]
+        return fox.device_list
+
+    fox.get_device_list = get_device_list_with_new_device
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert "get_device_list" in fox.method_calls
+    # All per-device caches must be re-fetched for both old and new devices
+    assert "get_device_detail:TEST123" in fox.method_calls
+    assert "get_device_detail:NEW456" in fox.method_calls
+    assert "get_device_settings:TEST123" in fox.method_calls
+    assert "get_device_settings:NEW456" in fox.method_calls
+    assert "get_real_time_data:TEST123" in fox.method_calls
+    assert "get_real_time_data:NEW456" in fox.method_calls
+
+    return False
+
+
+def test_run_unchanged_device_list_preserves_cache(my_predbat):
+    """
+    Test that when the device list is re-fetched but the set of serial numbers is unchanged,
+    per-device caches are not invalidated and no redundant API calls are made.
+    """
+    print("  - test_run_unchanged_device_list_preserves_cache")
+
+    from datetime import datetime, timezone
+
+    fox = MockFoxAPIWithRunTracking()
+    fox.device_list = [{"deviceSN": "TEST123"}]
+    fox.device_settings_version = FOX_SETTINGS_CACHE_VERSION
+    now = datetime.now(timezone.utc)
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = now
+
+    # get_device_list returns the same device SN as before
+    async def get_device_list_same():
+        fox.method_calls.append("get_device_list")
+        fox.device_list = [{"deviceSN": "TEST123"}]
+        return fox.device_list
+
+    fox.get_device_list = get_device_list_same
+
+    result = run_async(fox.run(0, first=True))
+
+    assert result == True
+    assert "get_device_list" in fox.method_calls
+    # Cache is still fresh and device set unchanged — no per-device fetches should happen
+    assert "get_device_detail:TEST123" not in fox.method_calls
+    assert "get_device_settings:TEST123" not in fox.method_calls
+    assert "get_real_time_data:TEST123" not in fox.method_calls
 
     return False
 
@@ -4514,7 +5538,7 @@ def test_publish_data_battery_soh(my_predbat):
     assert soh_entity in fox.dashboard_items, f"battery_soh entity not found in {list(fox.dashboard_items.keys())}"
     assert fox.dashboard_items[soh_entity]["state"] == 0.95, f"Expected 0.95, got {fox.dashboard_items[soh_entity]['state']}"
     assert fox.dashboard_items[soh_entity]["attributes"]["unit_of_measurement"] == "*"
-    assert fox.dashboard_items[soh_entity]["attributes"]["device_class"] == "battery"
+    assert "device_class" not in fox.dashboard_items[soh_entity]["attributes"]
     assert fox.dashboard_items[soh_entity]["attributes"]["state_class"] == "measurement"
     assert fox.dashboard_items[soh_entity]["attributes"]["icon"] == "mdi:battery-heart"
 
@@ -4657,6 +5681,41 @@ def test_publish_data_device_settings(my_predbat):
     assert fox.dashboard_items[minsoc_entity]["state"] == 10
     assert fox.dashboard_items[minsoc_entity]["attributes"]["min"] == 10
     assert fox.dashboard_items[minsoc_entity]["attributes"]["max"] == 100
+
+    return False
+
+
+def test_publish_data_workmode_default_publishes_as_select(my_predbat):
+    """
+    Regression guard: when WorkMode is unsupported (errno 42015/44096) its fallback default
+    must still publish as a select entity, not a sensor. automatic_config wires inverter_mode
+    to a hardcoded select.*_setting_workmode entity id - a sensor there would leave it
+    unresolvable (get_arg returns None) and break force-export mode switching for Fox.
+    """
+    print("  - test_publish_data_workmode_default_publishes_as_select")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    # Simulate WorkMode being reported unsupported by the device
+    fox.mark_setting_unavailable(deviceSN, "WorkMode")
+
+    run_async(fox.publish_data())
+
+    workmode_entity = f"select.predbat_fox_{deviceSN.lower()}_setting_workmode"
+    assert workmode_entity in fox.dashboard_items
+    assert fox.dashboard_items[workmode_entity]["state"] == "SelfUse"
+    assert fox.dashboard_items[workmode_entity]["attributes"]["options"] == OPTIONS_WORK_MODE
+
+    # Must NOT have also published as a sensor
+    assert f"sensor.predbat_fox_{deviceSN.lower()}_setting_workmode" not in fox.dashboard_items
 
     return False
 
@@ -5164,6 +6223,109 @@ def test_automatic_config_pv_ignore_disabled(my_predbat):
     return False
 
 
+def test_automatic_config_third_party_gen(my_predbat):
+    """
+    Test automatic_config with thirdPartyGen=True and hasPV=False uses meterpower2/feedin2.
+    This covers the case of a Fox AC-coupled battery inverter with a separate Solis PV inverter
+    whose output is measured via CT2 (meterPower2/feedin2).
+    """
+    print("  - test_automatic_config_third_party_gen")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "60WC50205AYA038"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": False,
+        "thirdPartyGen": True,
+        "hasBattery": True,
+        "capacity": 5,
+        "function": {"scheduler": True},
+    }
+
+    run_async(fox.automatic_config())
+
+    assert fox.args_set.get("num_inverters") == 1
+
+    pv_power = fox.args_set.get("pv_power", [])
+    assert f"sensor.predbat_fox_{sn_lower}_meterpower2" in pv_power, f"Expected meterpower2 in pv_power, got {pv_power}"
+
+    pv_today = fox.args_set.get("pv_today", [])
+    assert f"sensor.predbat_fox_{sn_lower}_feedin2" in pv_today, f"Expected feedin2 in pv_today, got {pv_today}"
+
+    # pvpower/pvenergytotal_today must NOT appear — there is no DC PV on the Fox inverter
+    assert f"sensor.predbat_fox_{sn_lower}_pvpower" not in pv_power, f"pvpower should not be in pv_power, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_pvenergytotal_today" not in pv_today, f"pvenergytotal_today should not be in pv_today, got {pv_today}"
+
+    return False
+
+
+def test_automatic_config_battery_only_no_third_party(my_predbat):
+    """
+    Test automatic_config with hasPV=False and thirdPartyGen=False sets no PV sensors.
+    A battery-only system must not pick up meterpower2/feedin2 as phantom PV.
+    """
+    print("  - test_automatic_config_battery_only_no_third_party")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "BATT0000001"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": False,
+        "thirdPartyGen": False,
+        "hasBattery": True,
+        "capacity": 5,
+        "function": {"scheduler": True},
+    }
+
+    run_async(fox.automatic_config())
+
+    pv_power = fox.args_set.get("pv_power", [])
+    pv_today = fox.args_set.get("pv_today", [])
+
+    assert f"sensor.predbat_fox_{sn_lower}_meterpower2" not in pv_power, f"meterpower2 must not appear for battery-only, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_feedin2" not in pv_today, f"feedin2 must not appear for battery-only, got {pv_today}"
+
+    return False
+
+
+def test_automatic_config_third_party_gen_with_own_pv(my_predbat):
+    """
+    Test automatic_config when hasPV=True AND thirdPartyGen=True.
+    Both the Fox's own DC PV (pvpower/pvenergytotal_today) and the third-party
+    AC-coupled generator (meterpower2/feedin2) must appear so neither source is lost.
+    """
+    print("  - test_automatic_config_third_party_gen_with_own_pv")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "HYBRID123456"
+    sn_lower = deviceSN.lower()
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": True,
+        "thirdPartyGen": True,
+        "hasBattery": True,
+        "capacity": 8,
+        "function": {"scheduler": True},
+    }
+
+    run_async(fox.automatic_config())
+
+    pv_power = fox.args_set.get("pv_power", [])
+    pv_today = fox.args_set.get("pv_today", [])
+
+    assert f"sensor.predbat_fox_{sn_lower}_pvpower" in pv_power, f"pvpower must be in pv_power, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_meterpower2" in pv_power, f"meterpower2 must be in pv_power, got {pv_power}"
+    assert f"sensor.predbat_fox_{sn_lower}_pvenergytotal_today" in pv_today, f"pvenergytotal_today must be in pv_today, got {pv_today}"
+    assert f"sensor.predbat_fox_{sn_lower}_feedin2" in pv_today, f"feedin2 must be in pv_today, got {pv_today}"
+
+    return False
+
+
 def test_fox_rate_limiting_normal_operation(my_predbat):
     """Test that normal operation under 60/hour allows retries"""
     print("  - test_fox_rate_limiting_normal_operation")
@@ -5300,6 +6462,11 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
 
     # Update the base object's midnight_utc to simulate day change
     my_predbat.midnight_utc = day2_midnight
+
+    # Mark all cached data as fresh so the age-based refresh does not trigger any API polling
+    fox.device_list = [{"deviceSN": "TEST"}]
+    for key in FOX_CACHE_KEYS:
+        fox.data_age[key] = day2_time
 
     with patch("fox.datetime") as mock_datetime, patch.object(fox, "log") as mock_log, patch.object(fox, "should_allow_retry", return_value=True):
         # Mock datetime.now() to return day2_time
@@ -5575,14 +6742,30 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_available_variables(my_predbat)
         failed |= test_api_get_available_variables_empty(my_predbat)
         failed |= test_api_get_device_setting(my_predbat)
+        failed |= test_api_get_device_setting_unsupported_applies_default(my_predbat)
+        failed |= test_api_get_device_setting_unsupported_no_default_leaves_absent(my_predbat)
+        failed |= test_api_get_device_setting_already_marked_unavailable_skips_poll(my_predbat)
         failed |= test_api_set_device_setting(my_predbat)
+        failed |= test_api_set_device_setting_unsupported_marks_unavailable(my_predbat)
         failed |= test_api_get_device_settings(my_predbat)
+        failed |= test_api_get_device_settings_with_unsupported_setting(my_predbat)
+        failed |= test_api_get_device_settings_all_unsupported_still_settles(my_predbat)
         failed |= test_api_get_device_settings_no_battery(my_predbat)
         failed |= test_api_get_device_settings_missing_detail(my_predbat)
         failed |= test_api_get_battery_charging_time(my_predbat)
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
+        failed |= test_api_get_scheduler_v2_evo(my_predbat)
+        failed |= test_api_get_scheduler_v2_uses_real_properties(my_predbat)
+        failed |= test_api_get_scheduler_derives_settings_from_schedule(my_predbat)
+        failed |= test_api_get_scheduler_derives_settings_with_range_from_properties(my_predbat)
+        failed |= test_api_get_scheduler_v2_null_groups(my_predbat)
+        failed |= test_api_get_scheduler_kh_stays_v1(my_predbat)
+        failed |= test_api_get_scheduler_v2_evo_fails(my_predbat)
         failed |= test_api_set_scheduler(my_predbat)
+        failed |= test_api_set_scheduler_v3_evo(my_predbat)
+        failed |= test_api_set_scheduler_v3_evo_carries_stored_limits(my_predbat)
+        failed |= test_api_set_scheduler_kh_stays_v1(my_predbat)
         failed |= test_api_set_scheduler_enabled(my_predbat)
         failed |= test_api_get_real_time_data(my_predbat)
         failed |= test_api_get_device_production_year(my_predbat)
@@ -5630,6 +6813,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_request_get_func_real_rate_limit_429(my_predbat)
         failed |= test_request_get_func_real_fox_errno_rate_limit(my_predbat)
         failed |= test_request_get_func_real_fox_errno_api_limit(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_unsupported_42015(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_unsupported_44096(my_predbat)
+        failed |= test_request_get_func_real_fox_errno_other_leaves_unsupported_false(my_predbat)
         failed |= test_request_get_func_real_connection_error(my_predbat)
         failed |= test_request_get_func_real_timeout(my_predbat)
         failed |= test_request_get_func_real_json_decode_error(my_predbat)
@@ -5643,7 +6829,14 @@ def run_fox_api_tests(my_predbat):
         failed |= test_run_first_call_with_devices(my_predbat)
         failed |= test_run_first_call_no_devices(my_predbat)
         failed |= test_run_subsequent_call(my_predbat)
-        failed |= test_run_hourly_update(my_predbat)
+        failed |= test_run_settings_refresh_on_age(my_predbat)
+        failed |= test_run_settings_refresh_forced_by_stale_cache_version(my_predbat)
+        failed |= test_run_stale_cache_version_not_cleared_without_scheduler_success(my_predbat)
+        failed |= test_run_realtime_refresh_after_cache_expires(my_predbat)
+        failed |= test_run_device_list_failure_does_not_mark_cache_fresh(my_predbat)
+        failed |= test_run_first_refreshes_device_list_despite_fresh_cache(my_predbat)
+        failed |= test_run_new_device_invalidates_detail_cache(my_predbat)
+        failed |= test_run_unchanged_device_list_preserves_cache(my_predbat)
         failed |= test_run_with_automatic_config(my_predbat)
         failed |= test_run_without_automatic_config(my_predbat)
         failed |= test_run_midnight_reset(my_predbat)
@@ -5686,6 +6879,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_publish_data_device_values(my_predbat)
         failed |= test_publish_data_device_values_dual_soc(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)
+        failed |= test_publish_data_workmode_default_publishes_as_select(my_predbat)
+        failed |= test_publish_data_derived_export_limit_publishes_as_number(my_predbat)
         failed |= test_publish_data_no_battery_skips_settings(my_predbat)
 
         # apply_battery_schedule tests
@@ -5711,6 +6906,9 @@ def run_fox_api_tests(my_predbat):
         failed |= test_automatic_config_export_limit_case_insensitive(my_predbat)
         failed |= test_automatic_config_pv_ignore_enabled(my_predbat)
         failed |= test_automatic_config_pv_ignore_disabled(my_predbat)
+        failed |= test_automatic_config_third_party_gen(my_predbat)
+        failed |= test_automatic_config_battery_only_no_third_party(my_predbat)
+        failed |= test_automatic_config_third_party_gen_with_own_pv(my_predbat)
 
         # Rate limiting tests
         failed |= test_fox_rate_limiting_normal_operation(my_predbat)

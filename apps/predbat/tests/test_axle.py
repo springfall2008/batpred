@@ -33,6 +33,7 @@ class MockAxleAPI(AxleAPI):
         # Initialise instance variables that AxleAPI expects
         self.failures_total = 0
         self.last_updated_timestamp = None
+        self.last_success_timestamp = None
         self.event_history = []
         self.current_event = {
             "start_time": None,
@@ -138,6 +139,7 @@ def test_axle(my_predbat=None):
         ("datetime_parsing", _test_axle_datetime_parsing_variations, "Datetime parsing variations"),
         ("json_parse_error", _test_axle_json_parse_error, "JSON parse error handling"),
         ("run_method", _test_axle_run_method, "Run method execution"),
+        ("publish_after_fetch_failure", _test_axle_publishes_state_after_fetch_failure, "Republish state despite fetch failure"),
         ("history_loading", _test_axle_history_loading, "History loading from state"),
         ("history_cleanup", _test_axle_history_cleanup, "History cleanup old events"),
         ("fetch_sessions", _test_axle_fetch_sessions, "Fetch sessions from API"),
@@ -242,6 +244,7 @@ def _test_axle_fetch_with_active_event(my_predbat=None):
 
     with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
+    axle.publish_axle_event()  # run() always republishes after a fetch attempt
 
     # Verify current event data was parsed correctly (stored as strings)
     assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000"
@@ -422,6 +425,7 @@ def _test_axle_fetch_with_notify_config(my_predbat=None):
     axle2.log_messages.clear()
     with patch("aiohttp.ClientSession", return_value=mock_session2):
         run_async(axle2.fetch_axle_event())
+    axle2.publish_axle_event()  # run() always republishes after a fetch attempt
 
     # Verify NO notification was sent
     alert_messages2 = [msg for msg in axle2.log_messages if msg.startswith("Alert:")]
@@ -457,6 +461,7 @@ def _test_axle_fetch_with_future_event(my_predbat=None):
 
     with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
+    axle.publish_axle_event()  # run() always republishes after a fetch attempt
 
     # Verify event data was parsed (stored as strings)
     assert axle.current_event["start_time"] == "2025-12-20T14:00:00+0000"
@@ -493,6 +498,7 @@ def _test_axle_fetch_with_past_event(my_predbat=None):
 
     with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
+    axle.publish_axle_event()  # run() always republishes after a fetch attempt
 
     # Event should be added to history (ended)
     assert len(axle.event_history) == 1, "Past event should be in history"
@@ -521,6 +527,7 @@ def _test_axle_fetch_no_event(my_predbat=None):
 
     with patch("aiohttp.ClientSession", return_value=mock_session):
         run_async(axle.fetch_axle_event())
+    axle.publish_axle_event()  # run() always republishes after a fetch attempt
 
     # Verify all event data is None
     assert axle.current_event["start_time"] is None
@@ -714,37 +721,139 @@ def _test_axle_json_parse_error(my_predbat=None):
 
 
 def _test_axle_run_method(my_predbat=None):
-    """Test the run method polling logic and history loading"""
+    """Test the run method time-based polling logic and history loading"""
     print("Test: Axle API run method")
 
-    axle = MockAxleAPI()
-    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
-
-    # Mock the fetch method
     fetch_called = []
 
     async def mock_fetch():
         fetch_called.append(True)
 
+    # Test 1: first run with no previous fetch - should load history and fetch
+    print("  Test 1: First run, no previous fetch")
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
     axle.fetch_axle_event = mock_fetch
 
-    # Test first run - should load history and fetch
     result = run_async(axle.run(seconds=0, first=True))
     assert result is True, "Run should return True"
     assert axle.history_loaded is True, "Should load history on first run"
-    assert len(fetch_called) == 1, "Should fetch on first run"
+    assert len(fetch_called) == 1, "Should fetch when updated_at is None"
+    print("    ✓ Fetches when no previous updated_at")
 
-    # Test run at 600 seconds (10 minutes)
+    # Test 2: recent updated_at (< 10 min ago) - should NOT fetch
+    print("  Test 2: Recent updated_at (5 min ago) - should skip")
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle2.fetch_axle_event = mock_fetch
+    axle2.updated_at = (axle2.now_utc - timedelta(minutes=5)).strftime(TIME_FORMAT)
+
     fetch_called.clear()
+    result = run_async(axle2.run(seconds=300, first=False))
+    assert len(fetch_called) == 0, "Should not fetch when updated_at is < 10 min old"
+    print("    ✓ Skips fetch when data is fresh")
+
+    # Test 3: stale updated_at (>= 10 min ago) - should fetch
+    print("  Test 3: Stale updated_at (11 min ago) - should fetch")
+    axle3 = MockAxleAPI()
+    axle3.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle3.fetch_axle_event = mock_fetch
+    axle3.updated_at = (axle3.now_utc - timedelta(minutes=11)).strftime(TIME_FORMAT)
+
+    fetch_called.clear()
+    result = run_async(axle3.run(seconds=660, first=False))
+    assert len(fetch_called) == 1, "Should fetch when updated_at is 10+ min old"
+    print("    ✓ Fetches when data is stale")
+
+    # Test 4: restart with recent updated_at (restored from storage) - should NOT fetch
+    print("  Test 4: Restart with recent updated_at (2 min ago) - should skip")
+    axle4 = MockAxleAPI()
+    axle4.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle4.fetch_axle_event = mock_fetch
+    axle4.updated_at = (axle4.now_utc - timedelta(minutes=2)).strftime(TIME_FORMAT)
+
+    fetch_called.clear()
+    result = run_async(axle4.run(seconds=0, first=True))
+    assert axle4.history_loaded is True, "Should still load history on first run"
+    assert len(fetch_called) == 0, "Should not fetch on restart when updated_at is still fresh"
+    print("    ✓ Skips fetch on restart when updated_at is still fresh")
+
+    # Test 5: exactly 10 minutes - boundary: should fetch
+    print("  Test 5: Exactly 10 minutes old - boundary fetch")
+    axle5 = MockAxleAPI()
+    axle5.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle5.fetch_axle_event = mock_fetch
+    axle5.updated_at = (axle5.now_utc - timedelta(minutes=10)).strftime(TIME_FORMAT)
+
+    fetch_called.clear()
+    run_async(axle5.run(seconds=600, first=False))
+    assert len(fetch_called) == 1, "Should fetch at exactly 10 min boundary"
+    print("    ✓ Fetches at exactly 10 min boundary")
+
+    print("  ✓ Run method time-based polling logic correct")
+    return False
+
+
+def _test_axle_publishes_state_after_fetch_failure(my_predbat=None):
+    """Published state must reflect the current time even when the fetch itself fails.
+
+    Otherwise a component stuck erroring (e.g. an expired API key) never republishes,
+    so a cached event that has since ended keeps being reported as active forever.
+    """
+    print("Test: Axle API republishes state when fetch fails")
+
+    async def failing_fetch():
+        """Simulate a fetch that always raises, as if the Axle API key had expired."""
+        raise RuntimeError("simulated persistent API failure (e.g. expired key)")
+
+    now = datetime(2025, 12, 20, 14, 30, 0, tzinfo=timezone.utc)
+    sensor_id = "binary_sensor.predbat_axle_event"
+
+    # Scenario 1: cached event has already ended - state must flip to "off" even though
+    # the fetch that would normally refresh it is broken.
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle._now_utc = now
+    axle.current_event = {
+        "start_time": "2025-12-20T12:00:00+0000",
+        "end_time": "2025-12-20T13:00:00+0000",  # ended 90 minutes ago
+        "import_export": "export",
+        "pence_per_kwh": 100,
+    }
+    axle.updated_at = None  # force fetch_due True
+    axle.fetch_axle_event = failing_fetch
+
     result = run_async(axle.run(seconds=600, first=False))
-    assert len(fetch_called) == 1, "Should fetch at 10 minute mark"
 
-    # Test run at non-fetch time
-    fetch_called.clear()
-    result = run_async(axle.run(seconds=300, first=False))
-    assert len(fetch_called) == 0, "Should not fetch at 5 minute mark"
+    assert result is True, "Run should still return True even when the fetch fails"
+    assert axle.failures_total == 1, "Failure should be recorded"
+    assert sensor_id in axle.dashboard_items, "State must still be published even though the fetch failed"
+    assert axle.dashboard_items[sensor_id]["state"] == "off", "Expired cached event must not be reported as active forever just because fetching stopped working"
 
-    print("  ✓ Run method polling logic correct")
+    print("    ✓ Expired event correctly reported off despite fetch failure")
+
+    # Scenario 2: cached event is still within its own window - state should still
+    # correctly show "on" from the cached data alone.
+    axle2 = MockAxleAPI()
+    axle2.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+    axle2._now_utc = now
+    axle2.current_event = {
+        "start_time": "2025-12-20T14:00:00+0000",
+        "end_time": "2025-12-20T16:00:00+0000",  # still active
+        "import_export": "export",
+        "pence_per_kwh": 100,
+    }
+    axle2.updated_at = None
+    axle2.fetch_axle_event = failing_fetch
+
+    run_async(axle2.run(seconds=600, first=False))
+
+    assert sensor_id in axle2.dashboard_items, "State must still be published even though the fetch failed"
+    assert axle2.dashboard_items[sensor_id]["state"] == "on", "Still-active cached event should remain correctly reported on"
+
+    print("    ✓ Still-active event correctly reported on despite fetch failure")
+
+    print("  ✓ State republished from cached data regardless of fetch outcome")
     return False
 
 
@@ -780,7 +889,7 @@ def _test_axle_history_loading(my_predbat=None):
     }
 
     # Load history
-    axle.load_event_history()
+    run_async(axle.load_event_history())
 
     # Should only load past events
     assert len(axle.event_history) == 1, "Should only load past events"
@@ -963,7 +1072,7 @@ def _test_axle_load_slot_export(my_predbat=None):
 
     # Load the Axle export slot
     rate_replicate = {}
-    load_axle_slot(base, axle_sessions, export=True, rate_replicate=rate_replicate)
+    load_axle_slot(base, axle_sessions, base.rate_export, export=True, rate_replicate=rate_replicate)
 
     # Verify rates were increased by 100p/kWh during the event period
     for minute in range(start_minutes, end_minutes):
@@ -1046,7 +1155,7 @@ def _test_axle_load_slot_import(my_predbat=None):
     original_rate = base.rate_import[start_minutes]
 
     rate_replicate = {}
-    load_axle_slot(base, axle_sessions, export=False, rate_replicate=rate_replicate)
+    load_axle_slot(base, axle_sessions, base.rate_import, export=False, rate_replicate=rate_replicate)
 
     # Verify import rates were decreased by pence_per_kwh during the event period
     for minute in range(start_minutes, end_minutes):
@@ -1449,6 +1558,7 @@ def _test_axle_managed_fetch_end_to_end(my_predbat=None):
 
     with patch("aiohttp.ClientSession", side_effect=session_factory):
         run_async(axle.fetch_axle_event())
+    axle.publish_axle_event()  # run() always republishes after a fetch attempt
 
     # Should have 4 events: 2 slots × 2 directions
     assert len(axle.event_history) == 4, f"Expected 4 events, got {len(axle.event_history)}"

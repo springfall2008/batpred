@@ -47,6 +47,7 @@ def test_plugin_startup_order(my_predbat):
             test_predbat.expose_config = MagicMock()
             test_predbat.run_time_loop = MagicMock()
             test_predbat.ha_interface = MagicMock()
+            test_predbat.publish_last_started = MagicMock()
             test_predbat.prefix = "test"
             test_predbat.had_errors = False
             test_predbat.dashboard_index = []

@@ -34,10 +34,10 @@ class AlertFeed(ComponentBase):
 
     def initialize(self, alert_config):
         """Initialise the AlertFeed component"""
-        self.alert_cache = {}
         self.alert_config = alert_config
         self.alert_url = self.alert_config.get("url", "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom")
         self.alert_xml = None
+        self.last_downloaded_timestamp = None
 
     async def select_event(self, entity_id, value):
         pass
@@ -48,21 +48,50 @@ class AlertFeed(ComponentBase):
     async def switch_event(self, entity_id, service):
         pass
 
+    async def load_alert_cache(self):
+        """Load cached alert XML from storage and restore the download timestamp."""
+        if not self.storage:
+            return
+        data = await self.storage.load("alertfeed", "feed")
+        if data is not None and isinstance(data, dict):
+            self.alert_xml = data.get("xml")
+            ts = data.get("timestamp")
+            if isinstance(ts, datetime):
+                self.last_downloaded_timestamp = ts.replace(tzinfo=None)
+
+    async def save_alert_cache(self):
+        """Persist the current alert XML to storage."""
+        if self.storage and self.alert_xml is not None:
+            data = {
+                "xml": self.alert_xml,
+                "timestamp": self.last_downloaded_timestamp,
+            }
+            await self.storage.save("alertfeed", "feed", data, format="yaml", expiry=None)
+
     async def run(self, seconds, first):
         """
         Main run loop
         """
         try:
-            if first or (seconds % (60 * 30) == 0):
-                # Download alerts
+            if first:
+                await self.load_alert_cache()
+
+            if self.last_downloaded_timestamp is None:
+                fetch_due = True
+            else:
+                fetch_due = (datetime.now() - self.last_downloaded_timestamp).total_seconds() / 60 >= 30
+
+            if fetch_due:
                 alert_xml = await self.download_alert_data(self.alert_url)
                 if alert_xml is not None:
                     self.alert_xml = alert_xml
+                    self.last_downloaded_timestamp = datetime.now()
+                    await self.save_alert_cache()
+
+            if self.alert_xml is not None:
+                self.update_success_timestamp()
             else:
-                if self.alert_xml is not None:
-                    self.update_success_timestamp()
-                else:
-                    return False
+                return False
         except Exception as e:
             self.log("Warn: AlertFeed: Exception in run loop: {}".format(e))
             return False
@@ -243,17 +272,6 @@ class AlertFeed(ComponentBase):
         """
         Download Weather Alert data directly from a URL
         """
-        # Check the cache first
-        now = datetime.now()
-        if url in self.alert_cache:
-            stamp = self.alert_cache[url]["stamp"]
-            pdata = self.alert_cache[url]["data"]
-            age = now - stamp
-            if age.seconds < (30 * 60):
-                self.log("AlertFeed: Return cached weather alert data from URL {}, age {} minutes".format(url, dp1(age.seconds / 60)))
-                self.update_success_timestamp()
-                return pdata
-
         try:
             timeout = aiohttp.ClientTimeout(total=60)
             async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -266,11 +284,6 @@ class AlertFeed(ComponentBase):
 
                     text = await response.text()
                     self.log("AlertFeed: Downloaded weather alert data from URL {}, size {} bytes".format(url, len(text)))
-
-                    # Return new data
-                    self.alert_cache[url] = {}
-                    self.alert_cache[url]["stamp"] = now
-                    self.alert_cache[url]["data"] = text
                     record_api_call("alertfeed")
                     self.update_success_timestamp()
                     return text

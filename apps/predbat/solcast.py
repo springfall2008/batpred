@@ -18,42 +18,16 @@ personal API tiers.
 
 import hashlib
 import math
+import random
 import aiohttp
 import pytz
 from datetime import datetime, timedelta, timezone
-
-try:
-    from pvlib.temperature import sapm_cell as _pvlib_sapm_cell
-    from pvlib.temperature import TEMPERATURE_MODEL_PARAMETERS as _PVLIB_TEMP_PARAMS
-
-    _PVLIB_SAPM_PARAMS = _PVLIB_TEMP_PARAMS["sapm"]["open_rack_glass_glass"]
-    _HAS_PVLIB = True
-except ImportError:
-    _HAS_PVLIB = False
-
-# PVWatts / SAPM cell temperature model constants (glass/glass, open rack)
-_SAPM_A = -3.47
-_SAPM_B = -0.0594
-_SAPM_DELTA_T = 3.0
-
-
-def pvwatts_cell_temperature(poa_global, temp_air, wind_speed):
-    """Compute PV cell temperature using the SAPM (PVWatts) model.
-
-    Uses pvlib.temperature.sapm_cell when available; falls back to the
-    equivalent inline formula otherwise.  Parameters correspond to a
-    glass/glass module on an open rack (the most common residential case).
-    """
-    if _HAS_PVLIB:
-        return float(_pvlib_sapm_cell(poa_global, temp_air, wind_speed, _PVLIB_SAPM_PARAMS["a"], _PVLIB_SAPM_PARAMS["b"], _PVLIB_SAPM_PARAMS["deltaT"]))
-    # Inline SAPM formula: T_cell = T_air + GTI * exp(a + b*wind) + (GTI/1000) * deltaT
-    return temp_air + poa_global * math.exp(_SAPM_A + _SAPM_B * wind_speed) + (poa_global / 1000.0) * _SAPM_DELTA_T
-
 
 from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
 from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
+from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_temperature  # noqa: F401 - re-exported for tests/test_open_meteo.py parity checks
 
 """
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
@@ -80,6 +54,8 @@ class SolarAPI(ComponentBase):
         solcast_poll_hours,
         forecast_solar,
         forecast_solar_max_age,
+        forecast_solar_open_meteo_backup,
+        forecast_solar_open_meteo_first,
         pv_forecast_today,
         pv_forecast_tomorrow,
         pv_forecast_d3,
@@ -95,6 +71,8 @@ class SolarAPI(ComponentBase):
         self.solcast_poll_hours = solcast_poll_hours
         self.forecast_solar = forecast_solar
         self.forecast_solar_max_age = forecast_solar_max_age
+        self.forecast_solar_open_meteo_backup = forecast_solar_open_meteo_backup
+        self.forecast_solar_open_meteo_first = forecast_solar_open_meteo_first
         self.pv_forecast_today = pv_forecast_today
         self.pv_forecast_tomorrow = pv_forecast_tomorrow
         self.pv_forecast_d3 = pv_forecast_d3
@@ -111,6 +89,7 @@ class SolarAPI(ComponentBase):
         self.solcast_last_success_timestamp = None
         self.forecast_solar_last_success_timestamp = None
         self.open_meteo_last_success_timestamp = None
+        self.forecast_solar_rate_limit_until = None
         self.last_fetched_timestamp = None
         self.forecast_days = 4
 
@@ -184,7 +163,13 @@ class SolarAPI(ComponentBase):
                             record_api_call("solcast", False, "server_error")
                         if is_forecast_solar_api:
                             self.forecast_solar_failures_total += 1
-                            record_api_call("forecast_solar", False, "server_error")
+                            if status_code == 429:
+                                retry_minutes = random.randint(60, 120)
+                                self.forecast_solar_rate_limit_until = datetime.now(timezone.utc) + timedelta(minutes=retry_minutes)
+                                self.log("Warn: SolarAPI: Forecast Solar rate limited (429), will retry after {} minutes (at {})".format(retry_minutes, self.forecast_solar_rate_limit_until.strftime(TIME_FORMAT)))
+                                record_api_call("forecast_solar", False, "rate_limit")
+                            else:
+                                record_api_call("forecast_solar", False, "server_error")
                         if is_open_meteo_api:
                             self.open_meteo_failures_total += 1
                             record_api_call("open_meteo", False, "server_error")
@@ -240,19 +225,7 @@ class SolarAPI(ComponentBase):
 
     URL_FREE = "https://api.forecast.solar/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
     URL_PERSONAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec}/{az}/{kwp}?time=utc"
-
-    def convert_azimuth(self, az):
-        """
-        Convert azimuth from Predbat/Solcast convention to Forecast.solar/Open-Meteo convention.
-        Predbat/Solcast convention:         0 = North, -90 = East, 90 = West, 180 = South
-        Forecast.solar/Open-Meteo convention: 0 = South, -90 = East, 90 = West, ±180 = North
-        """
-        if az >= 0:
-            az = 180 - az
-        else:
-            az = -180 - az
-
-        return az
+    URL_PERSONAL_DUAL = "https://api.forecast.solar/{api_key}/estimate/{lat}/{lon}/{dec1}/{az1}/{kwp1}/{dec2}/{az2}/{kwp2}?time=utc"
 
     async def download_open_meteo_ensemble_data(self, lat, lon, tilt, az, kwp, system_loss):
         """
@@ -286,16 +259,18 @@ class SolarAPI(ComponentBase):
             result[ts] = dp4((gti_p10 / 1000.0) * kwp * (1.0 - system_loss))
         return result
 
-    async def download_open_meteo_data(self):
+    async def download_open_meteo_data(self, configs=None):
         """
         Download Open-Meteo forecast data and convert to PV power estimates.
         Uses GTI (global tilted irradiance) with simple temperature derating for P50,
         and ensemble members for P10. Returns (sorted_data, max_kwh).
+        If configs is provided it is used directly; otherwise self.open_meteo_forecast is used.
         """
         period_data = {}
         max_kwh = 0
 
-        configs = self.open_meteo_forecast
+        if configs is None:
+            configs = self.open_meteo_forecast
         if configs is None:
             raise ValueError("SolarAPI: No Open-Meteo forecast configurations found")
         if not isinstance(configs, list):
@@ -307,7 +282,8 @@ class SolarAPI(ComponentBase):
             postcode = config.get("postcode", None)
             tilt = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
-            az = self.convert_azimuth(az)
+            if not config.get("azimuth_zero_south", False):
+                az = convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             system_loss = 1.0 - config.get("efficiency", 0.95)
             shading_factors = config.get("shading_factors", None)
@@ -348,62 +324,24 @@ class SolarAPI(ComponentBase):
 
             ensemble_p10 = await self.download_open_meteo_ensemble_data(lat, lon, tilt, az, kwp, system_loss)
 
-            # Pass 1: compute instantaneous kW at each UTC timestamp sample.
-            # Open-Meteo returns point-in-time irradiance (W/m²) at the start of each hour,
-            # so we must integrate over the period rather than treating the sample as the period energy.
-            instant_kw = {}  # datetime stamp -> (pv50_kw, pv10_kw)
-            instant_stamps = []
-            for idx, ts in enumerate(times):
-                if idx >= len(gti_values):
-                    break
-                gti = gti_values[idx]
-                if gti is None:
-                    gti = 0.0
-                temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else 25.0
-                wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else 1.0
-                # Cell temperature via SAPM/PVWatts model: irradiance heats the cell above ambient
-                t_cell = pvwatts_cell_temperature(gti, temp, wind)
-                # c-Si temperature coefficient: -0.4%/°C relative to STC (25°C)
-                # No lower clamp on (t_cell - 25): cool cells genuinely produce more power.
-                # Cap at 1.1 (10% above STC) to prevent unrealistic gains at very cold temperatures.
-                eta_temp = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell - 25.0)))
-                pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
-                raw_p10 = ensemble_p10.get(ts)
-                # ensemble_p10 was computed without temperature derating; apply eta_temp now
-                pv10_inst = dp4(min(raw_p10 * eta_temp, pv50_inst) if raw_p10 is not None else pv50_inst * 0.7)
-                try:
-                    stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
-                    stamp = stamp.replace(tzinfo=pytz.utc)
-                except (ValueError, TypeError):
-                    continue
-                instant_kw[stamp] = (pv50_inst, pv10_inst)
-                instant_stamps.append(stamp)
-
-            # Pass 2: trapezoidal integration — energy over [T, T+1h] = 0.5*(kW_at_T + kW_at_T+1h).
-            # This correctly accounts for sunrise/sunset transitions where irradiance changes rapidly
-            # within the hour, e.g. the first post-sunrise hour contains only partial sunshine.
-            for i in range(len(instant_stamps) - 1):
-                stamp = instant_stamps[i]
-                next_stamp = instant_stamps[i + 1]
-                if (next_stamp - stamp) != timedelta(hours=1):
-                    continue
-                pv50_start, pv10_start = instant_kw[stamp]
-                pv50_end, pv10_end = instant_kw[next_stamp]
-                pv50 = dp4(0.5 * (pv50_start + pv50_end))
-                pv10 = dp4(0.5 * (pv10_start + pv10_end))
-
-                # Apply per-month site shading correction from Google Solar API if available
-                if shading_factors and len(shading_factors) == 12:
-                    shading_month = shading_factors[stamp.month - 1]
-                    pv50 = dp4(pv50 * shading_month)
-                    pv10 = dp4(pv10 * shading_month)
-
-                data_item = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
+            array_periods = gti_hourly_to_period_kwh(
+                times,
+                gti_values,
+                temp_values,
+                wind_values,
+                kwp=kwp,
+                system_loss=system_loss,
+                shading_factors=shading_factors,
+                p10_instant=ensemble_p10,
+            )
+            for stamp, values in array_periods.items():
+                pv50 = values["pv_estimate"]
+                pv10 = values["pv_estimate10"]
                 if stamp in period_data:
                     period_data[stamp]["pv_estimate"] = dp4(period_data[stamp]["pv_estimate"] + pv50)
                     period_data[stamp]["pv_estimate10"] = dp4(period_data[stamp]["pv_estimate10"] + pv10)
                 else:
-                    period_data[stamp] = data_item
+                    period_data[stamp] = {"period_start": stamp.strftime(TIME_FORMAT), "pv_estimate": pv50, "pv_estimate10": pv10}
 
         sorted_data = []
         if period_data:
@@ -417,6 +355,14 @@ class SolarAPI(ComponentBase):
         """
         Download forecast.solar data directly from a URL or return from cache if recent.
         """
+        if self.forecast_solar_rate_limit_until is not None:
+            now_utc = datetime.now(timezone.utc)
+            if now_utc < self.forecast_solar_rate_limit_until:
+                self.log("Warn: SolarAPI: Forecast Solar rate limit active, skipping fetch until {}".format(self.forecast_solar_rate_limit_until.strftime(TIME_FORMAT)))
+                return [], 0
+            else:
+                self.forecast_solar_rate_limit_until = None
+
         self.forecast_solar_data = {}
         if self.storage:
             cached = await self.storage.load("solcast", "forecast_solar_data")
@@ -432,13 +378,17 @@ class SolarAPI(ComponentBase):
 
         period_data = {}
         max_kwh = 0
+
+        # Phase 1: Resolve all configs (postcodes, azimuth conversion) into a flat plane list
+        resolved_planes = []
         for config in configs:
             lat = config.get("latitude", 51.5072)
             lon = config.get("longitude", -0.1276)
             postcode = config.get("postcode", None)
             dec = config.get("declination", 35.0)
             az = config.get("azimuth", 180.0)
-            az = self.convert_azimuth(az)  # Convert azimuth to degrees if needed
+            if not config.get("azimuth_zero_south", False):
+                az = convert_azimuth(az)
             kwp = config.get("kwp", 3.0)
             efficiency = config.get("efficiency", 0.95)
             api_key = config.get("api_key", None)
@@ -458,34 +408,68 @@ class SolarAPI(ComponentBase):
                     lat = result.get("latitude", lat)
                     self.log("SolarAPI: Postcode {} resolved to latitude {} longitude {}".format(postcode, lat, lon))
 
-            if api_key:
-                url = self.URL_PERSONAL
-                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp, api_key=api_key)
-                days_data = config.get("days", 3)
+            days_data = config.get("days", 3 if api_key else 2)
+            resolved_planes.append({"lat": lat, "lon": lon, "dec": dec, "az": az, "kwp": kwp, "efficiency": efficiency, "api_key": api_key, "days_data": days_data})
+
+        # Phase 2: Build fetch groups.
+        # Consecutive personal planes (api_key set) at the same lat/lon are paired into a single
+        # dual-plane Personal Plus call, halving the number of API requests for those planes.
+        # Free-tier planes and personal planes at different locations are fetched individually.
+        fetch_groups = []
+        i = 0
+        while i < len(resolved_planes):
+            plane = resolved_planes[i]
+            next_plane = resolved_planes[i + 1] if i + 1 < len(resolved_planes) else None
+            if plane["api_key"] and next_plane is not None and next_plane["api_key"] == plane["api_key"] and next_plane["lat"] == plane["lat"] and next_plane["lon"] == plane["lon"]:
+                fetch_groups.append([plane, next_plane])
+                i += 2
             else:
-                url = self.URL_FREE
-                url = url.format(lat=lat, lon=lon, dec=dec, az=az, kwp=kwp)
-                days_data = config.get("days", 2)
+                fetch_groups.append([plane])
+                i += 1
+
+        # Phase 3: Fetch and parse each group
+        for group in fetch_groups:
+            if len(group) == 2:
+                # Dual-plane Personal Plus call.
+                # Efficiency is baked into the kwp sent to the API so that the combined
+                # response (which cannot be split per-plane) is already correctly scaled.
+                p1, p2 = group
+                url = self.URL_PERSONAL_DUAL.format(
+                    api_key=p1["api_key"],
+                    lat=p1["lat"],
+                    lon=p1["lon"],
+                    dec1=p1["dec"],
+                    az1=p1["az"],
+                    kwp1=p1["kwp"] * p1["efficiency"],
+                    dec2=p2["dec"],
+                    az2=p2["az"],
+                    kwp2=p2["kwp"] * p2["efficiency"],
+                )
+                days_data = max(p1["days_data"], p2["days_data"])
+                self.log("SolarAPI: Fetching dual-plane Forecast Solar for lat {} lon {} (plane1: dec={} az={} kwp={}, plane2: dec={} az={} kwp={})".format(p1["lat"], p1["lon"], p1["dec"], p1["az"], p1["kwp"], p2["dec"], p2["az"], p2["kwp"]))
+            else:
+                p = group[0]
+                if p["api_key"]:
+                    url = self.URL_PERSONAL.format(api_key=p["api_key"], lat=p["lat"], lon=p["lon"], dec=p["dec"], az=p["az"], kwp=p["kwp"] * p["efficiency"])
+                else:
+                    url = self.URL_FREE.format(lat=p["lat"], lon=p["lon"], dec=p["dec"], az=p["az"], kwp=p["kwp"] * p["efficiency"])
+                days_data = p["days_data"]
 
             data = await self.cache_get_url(url, params={}, max_age=self.forecast_solar_max_age * 60)
             if not data:
-                self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings".format(lat, lon))
-                continue
+                self.log("Warn: SolarAPI: Forecast Solar data could not be downloaded, check your Forecast Solar cloud settings")
+                return [], 0
             watts = data.get("result", {}).get("watts", {})
             info = data.get("message", {}).get("info", {})
             if not watts or not info:
-                self.log("Warn: SolarAPI: Forecast Solar data for lat {} lon {} could not be downloaded, check your Forecast Solar cloud settings, got {}".format(lat, lon, data))
-                continue
-
-            # current_time = info.get("time", None)
-            # current_time_stamp = datetime.strptime(current_time, TIME_FORMAT)
+                self.log("Warn: SolarAPI: Forecast Solar data could not be downloaded, check your Forecast Solar cloud settings, got {}".format(data))
+                return [], 0
 
             period_start_stamp = None
             forecast_watt_data = {}
             for period_end in watts:
                 period_end_stamp = datetime.strptime(period_end, TIME_FORMAT)
-                # Convert period_end_stamp to a offset aware time using current_time_offset as the timezone
-                pv50 = watts[period_end] * efficiency  # Apply efficiency to the watt
+                pv50 = watts[period_end]  # efficiency already baked into kwp in the URL
                 if period_start_stamp:
                     if period_end_stamp - period_start_stamp > timedelta(minutes=60):
                         period_start_stamp = None
@@ -497,7 +481,6 @@ class SolarAPI(ComponentBase):
                 minutes_end = (period_end_stamp - self.midnight_utc).total_seconds() / 60
                 for minute in range(int(minutes_start), int(minutes_end) + 1):
                     forecast_watt_data[minute] = pv50
-
                 period_start_stamp = period_end_stamp
 
             for minute in range(0, days_data * 24 * 60, self.plan_interval_minutes):
@@ -505,7 +488,7 @@ class SolarAPI(ComponentBase):
                 for offset in range(0, self.plan_interval_minutes, 1):
                     pv50 += dp4(forecast_watt_data.get(minute + offset, 0) / 1000.0)
                 pv50 /= 60
-                period_start_stamp = self.midnight_utc.replace(tzinfo=pytz.utc) + timedelta(minutes=minute)
+                period_start_stamp = self.midnight_utc + timedelta(minutes=minute)
                 data_item = {"period_start": period_start_stamp.strftime(TIME_FORMAT), "pv_estimate": pv50}
                 if period_start_stamp in period_data:
                     period_data[period_start_stamp]["pv_estimate"] += pv50
@@ -864,7 +847,7 @@ class SolarAPI(ComponentBase):
                     app="solar",
                 )
 
-    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
+    def pv_calibration(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by, max_kwh, forecast_days, period=None):
         """
         Perform PV calibration based on historical data and forecast data.
         This will adjust the forecast data based on historical PV production and forecast data.
@@ -893,9 +876,20 @@ class SolarAPI(ComponentBase):
         for minute in range(pv_today_hist_max_minute - 5, -5, -5):
             current_value = pv_today_hist.get(minute, current_value)
             next_value = pv_today_hist.get(minute - 5, current_value)
+            if current_value is None or next_value is None:
+                # No PV history yet at this point (e.g. brand new sensor) - nothing to calibrate against
+                continue
             power_amount = max(0, next_value - current_value) * 60.0 / 5.0
             for sub_minute in range(1, 6):
                 pv_power_hist[minute + 5 - sub_minute] = power_amount
+
+        # Past days actual data
+        past_day_actual = {}
+        for minute in pv_power_hist:
+            minute_absolute = self.minutes_now - minute
+            if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
 
         # Find the forecast history
         pv_forecast, pv_forecast_hist_days = history_attribute_to_minute_data(
@@ -907,78 +901,125 @@ class SolarAPI(ComponentBase):
         if hist_days < 3:
             enabled_calibration = False
             self.log("SolarAPI: PV Calibration: Not enough historical data for calibration, only {} days of history".format(hist_days))
+        # Note: enabled_calibration may be further disabled after down_days are computed below
 
-        pv_power_hist_by_slot = {}
-        pv_power_hist_by_slot_count = {}
-        pv_forecast_by_slot = {}
-        pv_forecast_by_slot_count = {}
+        # Past days forecast data
         past_day_forecast = {}
-        past_day_actual = {}
-        max_pv_power_hist = 0
-
-        # Work out the history for each slot in the day, and the history for each day, and the max power in the history for scaling purposes
-        for minute in pv_power_hist:
-            minute_absolute = self.minutes_now - minute
-            if minute_absolute < 0:
-                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
-                slot_abs = minute_absolute % (24 * 60)
-                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
-                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute]
-                pv_power_hist_by_slot_count[slot] = pv_power_hist_by_slot_count.get(slot, 0) + 1
-                past_day_actual[days_prev] = past_day_actual.get(days_prev, 0) + pv_power_hist[minute]
-                max_pv_power_hist = max(max_pv_power_hist, pv_power_hist[minute])
-
-        # Average the history for each slot in the day
-        for slot in pv_power_hist_by_slot:
-            if pv_power_hist_by_slot_count[slot] > 0:
-                pv_power_hist_by_slot[slot] = dp4(pv_power_hist_by_slot[slot] / pv_power_hist_by_slot_count[slot])
-
-        # Work out the forecast for each slot in the day, and the forecast for each day, and the max power in the forecast for scaling purposes
-        max_pv_power_forecast = 0
         for minute in pv_forecast:
             minute_absolute = self.minutes_now - minute
             if minute_absolute < 0:
-                slot_abs = minute_absolute % (24 * 60)
-                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
-                pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute]
-                pv_forecast_by_slot_count[slot] = pv_forecast_by_slot_count.get(slot, 0) + 1
-                max_pv_power_forecast = max(max_pv_power_forecast, pv_forecast[minute])
                 days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
                 if days_prev <= hist_days:
                     past_day_forecast[days_prev] = past_day_forecast.get(days_prev, 0) + pv_forecast[minute]
 
+        # Convert to kWh
+        for day in past_day_forecast:
+            past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
+            past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
+
+        # Work out which days are missing either a forecast or had insufficient actual production (system was likely down)
+        down_days = set()
+        for day in range(1, hist_days + 1):
+            if day not in past_day_forecast or past_day_forecast[day] < 0.1:
+                down_days.add(day)
+            elif past_day_actual.get(day, 0) < 0.1 * past_day_forecast[day]:
+                self.log("SolarAPI: PV Calibration: Past day {} skipped - actual {} kWh is less than 10% of forecast {} kWh (system may have been down)".format(day, dp2(past_day_actual.get(day, 0)), dp2(past_day_forecast[day])))
+                down_days.add(day)
+
+        valid_days = hist_days - len(down_days)
+        if valid_days < 3:
+            enabled_calibration = False
+            self.log("SolarAPI: PV Calibration: Not enough valid (non-down) days for calibration, only {} valid days after excluding {} down days".format(valid_days, len(down_days)))
+
+        pv_power_hist_by_slot = {}
+        pv_power_hist_by_slot_weight = {}
+        pv_forecast_by_slot = {}
+        pv_forecast_by_slot_weight = {}
+        max_pv_power_hist = 0
+
+        # Work out the history for each slot in the day, and the history for each day, and the max power in the history for scaling purposes.
+        # Weight more recent days higher (same recency weight as the worst/best/average day scaling above) so that the
+        # calibrated forecast tracks a recent change in system performance rather than being diluted by a flat multi-day average.
+        for minute in pv_power_hist:
+            minute_absolute = self.minutes_now - minute
+            if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                if days_prev > hist_days or days_prev in down_days:
+                    continue
+                weight = max(1.0 - 0.1 * (days_prev - 1), 0.3)
+                slot_abs = minute_absolute % (24 * 60)
+                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
+                pv_power_hist_by_slot[slot] = pv_power_hist_by_slot.get(slot, 0) + pv_power_hist[minute] * weight
+                pv_power_hist_by_slot_weight[slot] = pv_power_hist_by_slot_weight.get(slot, 0) + weight
+                max_pv_power_hist = max(max_pv_power_hist, pv_power_hist[minute])
+
+        # Average the history for each slot in the day
+        for slot in pv_power_hist_by_slot:
+            if pv_power_hist_by_slot_weight[slot] > 0:
+                pv_power_hist_by_slot[slot] = dp4(pv_power_hist_by_slot[slot] / pv_power_hist_by_slot_weight[slot])
+
+        # Work out the forecast for each slot in the day, and the forecast for each day, and the max power in the forecast for scaling purposes.
+        # Same recency weighting as above so the history and forecast slot averages stay on a like-for-like basis.
+        max_pv_power_forecast = 0
+        for minute in pv_forecast:
+            minute_absolute = self.minutes_now - minute
+            if minute_absolute < 0:
+                days_prev = int(abs(minute_absolute) / (24 * 60)) + 1
+                if days_prev > hist_days or days_prev in down_days:
+                    continue
+                weight = max(1.0 - 0.1 * (days_prev - 1), 0.3)
+                slot_abs = minute_absolute % (24 * 60)
+                slot = int(slot_abs / self.plan_interval_minutes) * self.plan_interval_minutes
+                pv_forecast_by_slot[slot] = pv_forecast_by_slot.get(slot, 0) + pv_forecast[minute] * weight
+                pv_forecast_by_slot_weight[slot] = pv_forecast_by_slot_weight.get(slot, 0) + weight
+                max_pv_power_forecast = max(max_pv_power_forecast, pv_forecast[minute])
+
         # Average the forecast for each slot in the day
         for slot in pv_forecast_by_slot:
-            if pv_forecast_by_slot_count[slot] > 0:
-                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_count[slot])
+            if pv_forecast_by_slot_weight[slot] > 0:
+                pv_forecast_by_slot[slot] = dp4(pv_forecast_by_slot[slot] / pv_forecast_by_slot_weight[slot])
 
         # Work out the scaling factor for the forecast based on the history, looking at each day and each slot, and find the best and worst case day to use as a guide for scaling the forecast.
         # More recent days are weighted higher: weight = max(1.0 - 0.1 * (day - 1), 0.3)
         # so day1=1.0, day2=0.9, day3=0.8 ... day7=0.4, day8+=0.3
-        worst_day_scaling = 1.0
-        best_day_scaling = 1.0
-        average_day_scaling = 0
-        total_weight = 0.0
+        # Seed worst/best from the first observed day's ratio (not a fixed 1.0) so that a run of
+        # days that are all above (or all below) forecast is reflected honestly - otherwise a
+        # hardcoded 1.0 seed can never be displaced by real ratios that are all on the same side of it.
+        worst_day_scaling = None
+        best_day_scaling = None
+        weighted_actual_sum = 0.0
+        weighted_forecast_sum = 0.0
         for day in past_day_forecast:
-            past_day_forecast[day] = dp4(past_day_forecast[day] / 60.0)  # Convert to kWh
-            past_day_actual[day] = dp4(past_day_actual.get(day, 0) / 60.0)  # Convert to kWh
+            if day in down_days:
+                continue
             scaling_factor = dp4(past_day_actual[day] / past_day_forecast[day] if past_day_forecast[day] > 0 else 1.0)
-            worst_day_scaling = min(worst_day_scaling, scaling_factor)
-            best_day_scaling = max(best_day_scaling, scaling_factor)
+            worst_day_scaling = scaling_factor if worst_day_scaling is None else min(worst_day_scaling, scaling_factor)
+            best_day_scaling = scaling_factor if best_day_scaling is None else max(best_day_scaling, scaling_factor)
             weight = max(1.0 - 0.1 * (day - 1), 0.3)
-            average_day_scaling += scaling_factor * weight
-            total_weight += weight
+            # Weight and sum the actual/forecast energy directly (ratio-of-sums) rather than averaging
+            # the per-day ratios (average-of-ratios). This avoids over-weighting low-forecast days whose
+            # ratio is noisier and less representative of the actual energy involved.
+            weighted_actual_sum += past_day_actual[day] * weight
+            weighted_forecast_sum += past_day_forecast[day] * weight
             self.log("SolarAPI: PV Calibration: Past day {} had {} kWh of forecast PV, and actual {} kWh PV generation (weight {})".format(day, dp2(past_day_forecast[day]), dp2(past_day_actual[day]), dp2(weight)))
-        average_day_scaling = dp4(average_day_scaling / total_weight) if past_day_forecast else 1.0
+        average_day_scaling = dp4(weighted_actual_sum / weighted_forecast_sum) if weighted_forecast_sum > 0 else 1.0
         average_day_scaling = min(max(average_day_scaling, 0.1), 2.0)
+        worst_day_scaling = 1.0 if worst_day_scaling is None else worst_day_scaling
+        best_day_scaling = 1.0 if best_day_scaling is None else best_day_scaling
 
         # Now adjust worst and best day scaling through by average scaling so they are just a factor on the average day, and clamp to sensible values to prevent extreme outliers from causing crazy forecasts.
         worst_day_scaling = dp4(worst_day_scaling / average_day_scaling)
         best_day_scaling = dp4(best_day_scaling / average_day_scaling)
 
-        # Clamp best and worst day scaling factors to sensible values
-        worst_day_scaling = max(worst_day_scaling, 0.5)
-        best_day_scaling = min(best_day_scaling, 1.7)
+        # Clamp best and worst day scaling factors to sensible values. worst_day_scaling is a
+        # "worst day relative to average" multiplier, so it is semantically incoherent above
+        # 1.0 - and capping it there also guarantees pv_forecast_minute10 (which is derived
+        # from the already-capped P50 series by multiplying by this factor, see create_pv10
+        # below) can never exceed P50 or the per-slot cap. average_day_scaling is hard-clamped
+        # to 2.0 above, so when every day's actual/forecast ratio exceeds 2.0 the division below
+        # would otherwise leave worst_day_scaling > 1.0.
+        worst_day_scaling = min(max(worst_day_scaling, 0.3), 1.0)
+        best_day_scaling = min(best_day_scaling, 2.0)
         if not enabled_calibration:
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
@@ -1059,17 +1100,98 @@ class SolarAPI(ComponentBase):
         pv_estimateCL = {}
         pv_estimate10 = {}
         pv_estimate90 = {}
-        # The after scaling cap will be applied, but remember that the input data is
-        capped_data = max(max_pv_power_hist, max_pv_power_forecast) / 60 * self.plan_interval_minutes
-        capped_data = min(max_kwh / 60 * self.plan_interval_minutes, capped_data)
+        # Cap the calibrated forecast so calibration cannot scale it above what the array can
+        # physically produce. The ceiling is the declared array capacity (max_kwh, which is
+        # kwp * efficiency - NOT the inverter rating) plus 20% headroom, since cloud-edge
+        # enhancement and cool cells briefly push an array above its nameplate. The ceiling is
+        # never below the observed peak: measured generation is direct evidence and beats a
+        # declared figure, which is often understated (users enter the inverter size, or one
+        # string of two).
+        #
+        # Within that ceiling each slot is allowed up to the larger of the observed peak and
+        # that slot's own pre-scaling forecast, so the cap only ever limits scaling upwards and
+        # never clips the raw forecast itself - otherwise a dull week would suppress the first
+        # sunny day. Because the ceiling and the inner max are both >= observed_slot, the cap
+        # can never fall below observed generation.
+        #
+        # max_pv_power_forecast is deliberately NOT used here: it is read back from the
+        # published pv_forecast_h0 sensor, whose state is this same capped output, so including
+        # it made the cap depend on its own previous result.
+        observed_slot = max_pv_power_hist / 60 * self.plan_interval_minutes
+        ceiling_slot = max(1.2 * max_kwh, max_pv_power_hist) / 60 * self.plan_interval_minutes
+        capped_slots = 0
+        raw_exceeds_ceiling_slots = 0
+        raw_exceeds_ceiling_peak = 0
+        # Per-slot best_day_scaling for the planner's p90 series, held back so the create_pv10 block
+        # below can apply the same ceiling this loop applies to the published pv_estimate90.
+        slot_best_scaling = {}
         for minute in range(0, max(pv_forecast_minute.keys()) + 1, self.plan_interval_minutes):
             pv_value = 0
+            raw_value = 0
             for offset in range(0, self.plan_interval_minutes, 1):
                 pv_value += pv_forecast_minute_adjusted.get(minute + offset, 0)
-            # Force timezone to UTC
-            pv_estimateCL[minute] = dp4(min(pv_value, capped_data))  # Clamp to max_kwh scaled to 30 minute slots
-            pv_estimate10[minute] = dp4(min(pv_value * worst_day_scaling, capped_data))
-            pv_estimate90[minute] = dp4(min(pv_value * best_day_scaling, capped_data))
+                raw_value += pv_forecast_minute.get(minute + offset, 0)
+            if raw_value > ceiling_slot:
+                raw_exceeds_ceiling_slots += 1
+                raw_exceeds_ceiling_peak = max(raw_exceeds_ceiling_peak, raw_value)
+            capped_data = min(ceiling_slot, max(observed_slot, raw_value))
+            # Derive all three published series from the capped P50 so they agree with the
+            # planner series built below from the (also capped) pv_forecast_minute_adjusted.
+            # pv_estimate10 needs no clamp at all: worst_day_scaling is clamped to at most 1.0
+            # above, so capped_p50 * worst_day_scaling <= capped_p50 <= capped_data always holds.
+            # pv_estimate90 keeps a clamp because best_day_scaling can exceed 1.0 (up to 2.0, and
+            # 1.3 by default when calibration is off), so the optimistic case can genuinely exceed
+            # what the array can physically produce.
+            #
+            # That clamp is against ceiling_slot, the physical ceiling, NOT against capped_data.
+            # capped_data is min(ceiling_slot, max(observed_slot, raw_value)), so it collapses to the
+            # raw forecast itself whenever the raw forecast sits below the ceiling - and capped_p50
+            # then equals capped_data, making the clamp bite at exactly 1.0 and erasing the upside
+            # entirely. On a system whose forecast is comfortably inside its array limit (the normal
+            # case) that would leave pv90 identical to nominal, silently: the scenario would still be
+            # simulated and still cost planning time while measuring nothing on the axis it exists
+            # for. Only the array limit may cap the upside case.
+            capped_p50 = min(pv_value, capped_data)
+            pv_estimateCL[minute] = dp4(capped_p50)
+            pv_estimate10[minute] = dp4(capped_p50 * worst_day_scaling)
+            pv_estimate90[minute] = dp4(min(capped_p50 * best_day_scaling, ceiling_slot))
+
+            # The planner's p90 series (built in the create_pv10 block below from the capped
+            # per-minute data) must land on the same ceiling as pv_estimate90 above, or the two
+            # disagree exactly where the comment above says they must agree. ceiling_slot is kWh per
+            # plan interval, so the clamp cannot be applied per minute; record the scaling that
+            # holds this slot's p90 total at min(capped_p50 * best_day_scaling, ceiling_slot) instead
+            # and let the block below scale every minute of the slot by it. An empty slot has no
+            # ratio to take, and needs no clamp either - scaling zero by anything stays zero.
+            slot_best_scaling[minute] = min(best_day_scaling, ceiling_slot / capped_p50) if capped_p50 > 0 else best_day_scaling
+
+            # Apply the same cap to the per-minute data the planner consumes. Scale rather than
+            # clamp per minute: capped_data is kWh per plan interval, not per minute.
+            if pv_value > capped_data and pv_value > 0:
+                scale_down = capped_data / pv_value
+                for offset in range(0, self.plan_interval_minutes, 1):
+                    if (minute + offset) in pv_forecast_minute_adjusted:
+                        pv_forecast_minute_adjusted[minute + offset] = dp4(pv_forecast_minute_adjusted[minute + offset] * scale_down)
+                capped_slots += 1
+
+        if capped_slots:
+            ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
+            self.log("SolarAPI: PV Calibration: Capped {} slots to the array ceiling ({}kW observed peak, {}kW ceiling)".format(capped_slots, dp2(max_pv_power_hist), dp2(ceiling_kw)))
+
+        if raw_exceeds_ceiling_slots:
+            # The raw forecast (before any calibration scaling) already exceeds the array
+            # ceiling on its own - distinct from the capped_slots log above, which can also
+            # fire when calibration scaling alone pushes an otherwise-sane raw forecast over
+            # the ceiling. This is a config problem: either kwp is under-declared, or
+            # pv_scaling has been raised to compensate for an under-declared kwp, which is
+            # the wrong knob.
+            raw_peak_kw = raw_exceeds_ceiling_peak * 60 / self.plan_interval_minutes
+            ceiling_kw = ceiling_slot * 60 / self.plan_interval_minutes
+            self.log(
+                "Warn: SolarAPI: PV Calibration: Raw forecast exceeds the array ceiling in {} slots (peak {}kW vs {}kW ceiling) - check kwp and pv_scaling (currently {}), forecast is being clipped to the ceiling".format(
+                    raw_exceeds_ceiling_slots, dp2(raw_peak_kw), dp2(ceiling_kw), self.pv_scaling
+                )
+            )
 
         for entry in pv_forecast_data:
             period_start = entry.get("period_start", "")
@@ -1112,35 +1234,61 @@ class SolarAPI(ComponentBase):
 
         # Creation of PV10 data using worst day scaling factor
         if create_pv10:
+            capped_best_slots = 0
             for minute in range(0, max(pv_forecast_minute_adjusted.keys()) + 1):
                 pv_value = pv_forecast_minute_adjusted.get(minute, 0)
-                # Use the worst day scaling factor to create pv_estimate10
+                # Use the worst day scaling factor to create pv_estimate10. No ceiling clamp is
+                # needed: worst_day_scaling is capped at 1.0 above, so this can only scale down.
                 pv_forecast_minute10[minute] = dp4(pv_value * worst_day_scaling)
-            self.log("SolarAPI: PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {}".format(dp2(worst_day_scaling)))
+                # Use the best day scaling factor to create pv_estimate90, clamped to this slot's
+                # array ceiling. best_day_scaling has no floor at 1.0 and reaches 2.0 (1.3 when
+                # calibration is disabled), so without the clamp the planner's upside case would
+                # predict more solar than the panels can physically produce - and would disagree
+                # with the published pv_estimate90 for the very same slot, which is clamped.
+                slot_start = int(minute / self.plan_interval_minutes) * self.plan_interval_minutes
+                best_scaling_slot = slot_best_scaling.get(slot_start, best_day_scaling)
+                if best_scaling_slot < best_day_scaling:
+                    capped_best_slots += 1
+                pv_forecast_minute90[minute] = dp4(pv_value * best_scaling_slot)
+            self.log(
+                "SolarAPI: PV Calibration: Created pv_estimate10/pv_estimate90 data using worst day scaling factor {} and best day scaling factor {} ({} minutes held at the array ceiling)".format(
+                    dp2(worst_day_scaling), dp2(best_day_scaling), capped_best_slots
+                )
+            )
 
         # Do we use calibrated or raw data?
         if self.get_arg("metric_pv_calibration_enable", default=True):
             self.log("SolarAPI: PV Calibration: Using calibrated PV data")
-            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_data
+            return pv_forecast_minute_adjusted, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
         else:
-            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_data
+            return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data
 
-    def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10):
+    def pack_and_store_forecast(self, pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90):
+        """
+        Pack the p50/p10/p90 minute forecast series into sparse minute-keyed dicts and publish them
+        as attributes of the raw PV forecast sensor.
+        """
         pv_forecast_pack = {}
         pv_forecast_pack10 = {}
+        pv_forecast_pack90 = {}
 
         prev_value = -1
         prev_value10 = -1
+        prev_value90 = -1
 
         for minute in range(0, self.forecast_days * 24 * 60):
             current_value = dp4(pv_forecast_minute.get(minute, 0))
             current_value10 = dp4(pv_forecast_minute10.get(minute, 0))
+            current_value90 = dp4(pv_forecast_minute90.get(minute, 0))
             if current_value != prev_value:
                 pv_forecast_pack[minute] = current_value
                 prev_value = current_value
             if current_value10 != prev_value10:
                 pv_forecast_pack10[minute] = current_value10
                 prev_value10 = current_value10
+            if current_value90 != prev_value90:
+                pv_forecast_pack90[minute] = current_value90
+                prev_value90 = current_value90
 
         current_pv_power = dp4(pv_forecast_minute.get(self.minutes_now, 0))
 
@@ -1153,12 +1301,27 @@ class SolarAPI(ComponentBase):
                 "relative_time": self.midnight_utc.strftime(TIME_FORMAT),
                 "forecast": pv_forecast_pack,
                 "forecast10": pv_forecast_pack10,
+                "forecast90": pv_forecast_pack90,
                 "unit_of_measurement": "kW",
                 "device_class": "power",
                 "state_class": "measurement",
             },
             app="solar",
         )
+
+    async def log_source_change(self, source):
+        """Warn when the configured solar forecast source changes so the PV calibration settling period is visible."""
+        if not source:
+            return
+        if not self.storage:
+            return
+        stored = await self.storage.load("solcast", "active_forecast_source")
+        previous = stored.get("source") if isinstance(stored, dict) else None
+        if previous == source:
+            return
+        if previous:
+            self.log("Warn: SolarAPI: Configured solar forecast source changed from {} to {}, PV calibration will settle over the next 7 days".format(previous, source))
+        await self.storage.save("solcast", "active_forecast_source", {"source": source}, format="json", expiry=None)
 
     async def fetch_pv_forecast(self):
         """
@@ -1167,28 +1330,50 @@ class SolarAPI(ComponentBase):
         """
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
+        pv_forecast_minute90 = {}
         pv_forecast_data = []
         pv_forecast_total_data = 0
         pv_forecast_total_sensor = 0
         create_pv10 = False
+        configured_source = None
         max_kwh = 9999
+        using_ha_data = False
 
-        if self.forecast_solar:
+        if self.forecast_solar and self.forecast_solar_open_meteo_first:
+            self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API (primary, Forecast Solar fallback)")
+            primary_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=primary_configs)
+            divide_by = 30.0
+            create_pv10 = True
+            configured_source = "open_meteo"
+            if not pv_forecast_data:
+                self.log("Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar")
+                pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+        elif self.forecast_solar:
             self.log("SolarAPI: Obtaining solar forecast from Forecast Solar API")
             pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
             divide_by = 30.0
             create_pv10 = True
+            configured_source = "forecast_solar"
+            if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
+                self.log("SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup")
+                backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+                pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
         elif self.open_meteo_forecast:
             self.log("SolarAPI: Obtaining solar forecast from Open-Meteo API")
             pv_forecast_data, max_kwh = await self.download_open_meteo_data()
             divide_by = 30.0
             create_pv10 = True
+            configured_source = "open_meteo"
         elif self.solcast_host and self.solcast_api_key:
             self.log("SolarAPI: Obtaining solar forecast from Solcast API")
             pv_forecast_data = await self.download_solcast_data()
             divide_by = 30.0
+            configured_source = "solcast"
         else:
             self.log("SolarAPI: Using Solcast integration from inside HA for solar forecast")
+            using_ha_data = True
+            configured_source = "ha_sensors"
 
             # Fetch data from each sensor
             for argname in ["pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4"]:
@@ -1218,6 +1403,8 @@ class SolarAPI(ComponentBase):
                 self.log("SolarAPI: PV Forecast today adds up to {} kWh, and total sensors add up to {} kWh, factor is {}".format(pv_forecast_total_data, pv_forecast_total_sensor, factor))
 
         if pv_forecast_data:
+            await self.log_source_change(configured_source)
+
             # Detect the actual period of the forecast data (e.g. 15 or 30 minutes)
             # by examining the time difference between consecutive entries.
             # This ensures 15-minute resolution data is handled correctly.
@@ -1235,12 +1422,14 @@ class SolarAPI(ComponentBase):
                 except (ValueError, TypeError, KeyError):
                     pass
 
-            # For the HA sensor path the divide_by was computed assuming 30-minute periods;
-            # recalculate it using the actual detected period so that the per-minute kWh
-            # values are correctly scaled regardless of the forecast resolution.
-            if not self.forecast_solar and not (self.solcast_host and self.solcast_api_key):
-                factor = divide_by / 30.0
-                divide_by = dp2(period * factor)
+            # divide_by was computed assuming 30-minute periods; recalculate it using the actual
+            # detected period so that the per-minute kWh values are correctly scaled regardless of
+            # the forecast resolution. This applies to every source: the direct API downloaders all
+            # emit kWh per slot but the slot length varies (Forecast.Solar uses plan_interval_minutes,
+            # Open-Meteo is hourly, Solcast reports PT15M or PT30M), and the HA sensor path carries
+            # its own unit factor, which this division preserves.
+            factor = divide_by / 30.0
+            divide_by = dp2(period * factor)
 
             if period != 30:
                 self.log("SolarAPI: PV Forecast data has {} minute resolution, adjusting calculations".format(period))
@@ -1268,12 +1457,35 @@ class SolarAPI(ComponentBase):
                 spreading=period,
             )
 
+            # Solcast publishes a real p90; only build the series when at least one entry carries it,
+            # otherwise leave it empty so the p50 fallback below applies.
+            has_p90 = any("pv_estimate90" in entry for entry in pv_forecast_data)
+            if has_p90:
+                pv_forecast_minute90, _ = minute_data(
+                    pv_forecast_data,
+                    self.forecast_days,
+                    self.midnight_utc,
+                    "pv_estimate90",
+                    "period_start",
+                    backwards=False,
+                    divide_by=divide_by,
+                    scale=self.pv_scaling,
+                    spreading=period,
+                )
+            else:
+                pv_forecast_minute90 = dict(pv_forecast_minute)
+
             # Run calibration on the data
-            pv_forecast_minute, pv_forecast_minute10, pv_forecast_data = self.pv_calibration(pv_forecast_minute, pv_forecast_minute10, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period)
+            pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
+                pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period
+            )
             self.publish_pv_stats(pv_forecast_data, divide_by / period, period)
-            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10)
+            self.pack_and_store_forecast(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
             self.update_success_timestamp()
             self.last_fetched_timestamp = self.now_utc_exact
         else:
-            self.log("Warn: SolarAPI: No solar data has been configured.")
+            if using_ha_data:
+                self.log("Warn: SolarAPI: No solar forecast data was returned from HA sensors.")
+            else:
+                self.log("Warn: SolarAPI: No solar data was returned.")
             self.last_fetched_timestamp = self.now_utc_exact

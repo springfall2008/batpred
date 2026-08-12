@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Predbat is a Home Assistant AppDaemon app that predicts and optimizes home battery charging/discharging based on electricity rates, solar forecasts, and historical load data. It supports inverters from GivEnergy, Solis, Huawei, SolarEdge, and Sofar, and integrates with energy providers like Octopus Energy, Kraken (EDF/E.ON), and Axle Energy VPP.
+Predbat is a Home Assistant addon (app) that predicts and optimizes home battery charging/discharging based on electricity rates, solar forecasts, and historical load data. It supports inverters from GivEnergy, Solis, Huawei, SolarEdge, and Sofar, and integrates with energy providers like Octopus Energy, Kraken (EDF/E.ON), and Axle Energy VPP.
 
-## Documentation for AI Bots
-
-See .github/copilot-instructions.md for more details.
+It also supports Predbat.com which is a cloud based product that does not use Home Assistant and can run in a Docker environment.
 
 ## Running Tests
+
+Tests take time to run, _always_ save the test output to a file and then grep the file afterwards.
+Never just pipe the output to grep as if you search for the wrong thing you will have to re-run it again.
 
 Tests live in `apps/predbat/tests/` and are run from the `coverage/` directory:
 
@@ -105,9 +106,15 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 3. `Execute` sends the resulting commands to the inverter
 4. `Output` publishes the plan and metrics as HA sensor states
 
+### Storage
+
+The Storage component provides an abstraction of saving/loading from a cache and must be used instead of direct file access.
+
 ### Testing Infrastructure
 
 `unit_test.py` uses `TestHAInterface` (from `tests/test_infra.py`) to mock the Home Assistant connection. Tests call `create_predbat()` which builds a full `PredBat` instance against the mock. Individual test modules in `tests/` follow the naming convention `test_<feature>.py` with an exported `run_<feature>_tests()` or `test_<feature>()` function registered in `TEST_REGISTRY` in `unit_test.py`.
+
+**IMPORTANT** Unit tests must be added for all new code.
 
 ## Documentation
 

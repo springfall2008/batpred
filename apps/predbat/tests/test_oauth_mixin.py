@@ -12,7 +12,12 @@ from unittest.mock import MagicMock, patch
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 # Import the real mixin (will exist in SaaS builds)
-from oauth_mixin import OAuthMixin
+from oauth_mixin import OAuthMixin, OAUTH_REFRESH_RETRIES
+
+
+async def _no_sleep(seconds):
+    """Stand in for asyncio.sleep so retry backoff does not slow the tests."""
+    return None
 
 
 class MockOAuthComponent(OAuthMixin):
@@ -258,6 +263,151 @@ def test_check_and_refresh_token_still_valid():
     return failed
 
 
+def test_check_and_refresh_survives_transient_failure_with_token():
+    """A failed proactive refresh does not stop the cycle when a token is still held.
+
+    Regression: a 502 from the oauth-refresh edge function returned False here, which
+    made the whole component skip its run even though the token it held was valid for
+    weeks. A dead token is caught reactively by handle_oauth_401 instead.
+    """
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "still-good-token", None, "deye")
+    comp.token_expires_at = 0  # forces a refresh attempt
+
+    async def failed_refresh():
+        """Simulate a transient edge-function failure (e.g. HTTP 502)."""
+        return False
+
+    with patch.object(comp, "_do_refresh", side_effect=failed_refresh):
+        result = run_async(comp.check_and_refresh_oauth_token())
+
+    if not result:
+        print("ERROR: check_and_refresh should continue with the existing token after a transient failure")
+        failed = True
+    if comp.access_token != "still-good-token":
+        print(f"ERROR: existing token should be retained, got {comp.access_token}")
+        failed = True
+    if not any("continuing with it" in m for m in comp.log_messages):
+        print(f"ERROR: expected a warning that the existing token is being used: {comp.log_messages}")
+        failed = True
+
+    if not failed:
+        print("PASS: check_and_refresh survives a transient refresh failure")
+    return failed
+
+
+def test_check_and_refresh_fails_without_a_token():
+    """A failed refresh with no token held is still fatal — there is nothing to continue with."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "", None, "deye")
+    comp.token_expires_at = 0
+
+    async def failed_refresh():
+        """Simulate a refresh failure."""
+        return False
+
+    with patch.object(comp, "_do_refresh", side_effect=failed_refresh):
+        result = run_async(comp.check_and_refresh_oauth_token())
+
+    if result:
+        print("ERROR: check_and_refresh should return False when no token is held")
+        failed = True
+
+    if not failed:
+        print("PASS: check_and_refresh fails when there is no token to fall back on")
+    return failed
+
+
+def test_check_and_refresh_fails_on_needs_reauth():
+    """needs_reauth is fatal even though a token is held — that token is known dead."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "dead-token", None, "deye")
+    comp.token_expires_at = 0
+
+    async def reauth_refresh():
+        """Simulate the edge function reporting needs_reauth."""
+        comp.oauth_failed = True
+        return False
+
+    with patch.object(comp, "_do_refresh", side_effect=reauth_refresh):
+        result = run_async(comp.check_and_refresh_oauth_token())
+
+    if result:
+        print("ERROR: check_and_refresh must return False when the token needs re-authorization")
+        failed = True
+
+    if not failed:
+        print("PASS: check_and_refresh fails on needs_reauth")
+    return failed
+
+
+def test_do_refresh_retries_transient_5xx_then_succeeds():
+    """A 502 is retried and a later success is accepted."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "deye")
+    comp.token_expires_at = 0
+
+    resp_502 = create_aiohttp_mock_response(status=502, json_data={})
+    resp_ok = create_aiohttp_mock_response(status=200, json_data={"success": True, "access_token": "new-token", "expires_at": "2026-09-24T17:50:44+00:00"})
+    mock_session = create_aiohttp_mock_session([resp_502, resp_ok])
+
+    with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            with patch("oauth_mixin.asyncio.sleep", new=_no_sleep):
+                result = run_async(comp._do_refresh())
+
+    if not result:
+        print("ERROR: _do_refresh should succeed on the retry after a 502")
+        failed = True
+    if comp.access_token != "new-token":
+        print(f"ERROR: token not updated, got {comp.access_token}")
+        failed = True
+
+    if not failed:
+        print("PASS: _do_refresh retries a transient 502")
+    return failed
+
+
+def test_do_refresh_does_not_retry_4xx():
+    """A 4xx is a real rejection and is not retried."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "deye")
+    comp.token_expires_at = 0
+
+    calls = {"post": 0}
+    responses = [create_aiohttp_mock_response(status=403, json_data={}) for _ in range(OAUTH_REFRESH_RETRIES)]
+    mock_session = create_aiohttp_mock_session(responses)
+    real_post = mock_session.post
+
+    def counting_post(*args, **kwargs):
+        """Count how many times the refresh endpoint is called."""
+        calls["post"] += 1
+        return real_post(*args, **kwargs)
+
+    mock_session.post = counting_post
+
+    with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            with patch("oauth_mixin.asyncio.sleep", new=_no_sleep):
+                result = run_async(comp._do_refresh())
+
+    if result:
+        print("ERROR: _do_refresh should return False on HTTP 403")
+        failed = True
+    if calls["post"] != 1:
+        print(f"ERROR: a 4xx must not be retried, got {calls['post']} calls")
+        failed = True
+
+    if not failed:
+        print("PASS: _do_refresh does not retry a 4xx")
+    return failed
+
+
 def test_do_refresh_success():
     """Test successful token refresh via edge function."""
     failed = False
@@ -341,10 +491,11 @@ def test_do_refresh_http_error():
 
     with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
         with patch("aiohttp.ClientSession", return_value=mock_session):
-            result = run_async(comp._do_refresh())
+            with patch("oauth_mixin.asyncio.sleep", new=_no_sleep):
+                result = run_async(comp._do_refresh())
 
     if result:
-        print("ERROR: _do_refresh should return False on HTTP 500")
+        print("ERROR: _do_refresh should return False on HTTP 500 that never recovers")
         failed = True
 
     if not failed:
@@ -363,7 +514,8 @@ def test_do_refresh_network_error():
 
     with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
         with patch("aiohttp.ClientSession", return_value=mock_session):
-            result = run_async(comp._do_refresh())
+            with patch("oauth_mixin.asyncio.sleep", new=_no_sleep):
+                result = run_async(comp._do_refresh())
 
     if result:
         print("ERROR: _do_refresh should return False on network error")
@@ -506,6 +658,11 @@ def run_oauth_mixin_tests(my_predbat):
         ("check_apikey_mode", test_check_and_refresh_api_key_mode),
         ("check_oauth_failed", test_check_and_refresh_oauth_failed),
         ("check_valid_token", test_check_and_refresh_token_still_valid),
+        ("check_survives_transient", test_check_and_refresh_survives_transient_failure_with_token),
+        ("check_fails_no_token", test_check_and_refresh_fails_without_a_token),
+        ("check_fails_needs_reauth", test_check_and_refresh_fails_on_needs_reauth),
+        ("refresh_retries_5xx", test_do_refresh_retries_transient_5xx_then_succeeds),
+        ("refresh_no_retry_4xx", test_do_refresh_does_not_retry_4xx),
         ("refresh_success", test_do_refresh_success),
         ("refresh_needs_reauth", test_do_refresh_needs_reauth),
         ("refresh_http_error", test_do_refresh_http_error),

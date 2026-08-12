@@ -20,7 +20,7 @@ single orchestrator that runs the main prediction/optimisation loop every 5 minu
 import copy
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import traceback
 import sys
 import gc
@@ -33,12 +33,11 @@ IS_COMPILED = getattr(sys, "frozen", False)
 
 import hass as hass
 import pytz
-import requests
 import asyncio
 
-THIS_VERSION = "v8.39.4"
+THIS_VERSION = "v8.48.0"
 
-from download import predbat_update_move, predbat_update_download, check_install, resolve_predbat_repository, DEFAULT_PREDBAT_REPOSITORY
+from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
@@ -75,7 +74,7 @@ from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from stromligning import Stromligning
-from components import Components
+from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
@@ -84,9 +83,11 @@ from output import Output
 from userinterface import UserInterface
 from compare import Compare
 from plugin_system import PluginSystem
+from github import GitHub
+from ha import run_async
 
 
-class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface):
+class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
     """Main PredBat orchestrator combining all subsystems via multiple inheritance.
 
     Inherits from Hass (HA interface), Octopus (rate loading), Energidataservice, Stromligning,
@@ -94,142 +95,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
     Output (sensor publishing), and UserInterface (config management).
     Runs the main prediction/optimisation loop every 5 minutes via update_pred().
     """
-
-    def get_predbat_repository(self):
-        """Return the GitHub repository used for main-branch self-update operations.
-
-        This override is applied to ``download_predbat_version('main')`` only.
-        Release discovery and tagged-version updates remain pinned to
-        ``DEFAULT_PREDBAT_REPOSITORY``.
-        """
-        repository = self.get_arg("predbat_repository", default="", indirect=False)
-        if isinstance(repository, str):
-            repository = repository.strip()
-        return resolve_predbat_repository(repository=repository)
-
-    def download_predbat_releases_url(self, url):
-        """
-        Download release data from GitHub, but use the cache for 2 hours
-        """
-        # Check the cache first
-        now = datetime.now()
-        if url in self.github_url_cache:
-            stamp = self.github_url_cache[url]["stamp"]
-            pdata = self.github_url_cache[url]["data"]
-            age = now - stamp
-            if age.seconds < (120 * 60):
-                self.log("Using cached GitHub data for {} age {} minutes".format(url, dp1(age.seconds / 60)))
-                return pdata
-
-        try:
-            r = requests.get(url)
-        except Exception:
-            self.log("Warn: Unable to load data from GitHub URL: {}".format(url))
-            return []
-
-        try:
-            pdata = r.json()
-        except requests.exceptions.JSONDecodeError:
-            self.log("Warn: Unable to decode data from GitHub URL: {}".format(url))
-            return []
-
-        # Save to cache
-        self.github_url_cache[url] = {}
-        self.github_url_cache[url]["stamp"] = now
-        self.github_url_cache[url]["data"] = pdata
-
-        return pdata
-
-    def download_predbat_releases(self):
-        """
-        Download release data
-        """
-        global PREDBAT_UPDATE_OPTIONS
-        auto_update = self.get_arg("auto_update")
-        repository = DEFAULT_PREDBAT_REPOSITORY
-        url = "https://api.github.com/repos/{}/releases".format(repository)
-        data = self.download_predbat_releases_url(url)
-        self.releases = {}
-        if data and isinstance(data, list):
-            found_latest = False
-            found_latest_beta = False
-
-            release = data[0]
-            self.releases["this"] = THIS_VERSION
-            self.releases["latest"] = "Unknown"
-            self.releases["latest_beta"] = "Unknown"
-
-            for release in data:
-                if release.get("tag_name", "Unknown") == THIS_VERSION:
-                    self.releases["this_name"] = release.get("name", "Unknown")
-                    self.releases["this_body"] = release.get("body", "Unknown")
-
-                if not found_latest and not release.get("prerelease", True):
-                    self.releases["latest"] = release.get("tag_name", "Unknown")
-                    self.releases["latest_name"] = release.get("name", "Unknown")
-                    self.releases["latest_body"] = release.get("body", "Unknown")
-                    found_latest = True
-
-                if not found_latest_beta:
-                    self.releases["latest_beta"] = release.get("tag_name", "Unknown")
-                    self.releases["latest_beta_name"] = release.get("name", "Unknown")
-                    self.releases["latest_beta_body"] = release.get("body", "Unknown")
-                    found_latest_beta = True
-
-            self.log("Predbat {} repository {} version {} currently running, latest version is {}, latest beta is {}".format(__file__, repository, self.releases["this"], self.releases["latest"], self.releases["latest_beta"]))
-            PREDBAT_UPDATE_OPTIONS = ["main"]
-            this_tag = THIS_VERSION
-            new_version = False
-
-            # Find all versions for the dropdown menu
-            for release in data:
-                prerelease = release.get("prerelease", True)
-                tag = release.get("tag_name", None)
-                if tag:
-                    if prerelease:
-                        full_name = tag + " (beta) " + release.get("name", "")
-                    else:
-                        full_name = tag + " " + release.get("name", "")
-                    PREDBAT_UPDATE_OPTIONS.append(full_name)
-                    if this_tag == tag:
-                        this_tag = full_name
-                if len(PREDBAT_UPDATE_OPTIONS) >= 25:
-                    break
-
-            # Update the drop down menu
-            item = self.config_index.get("update", None)
-            if item:
-                item["options"] = PREDBAT_UPDATE_OPTIONS
-                item["value"] = None
-
-            # See what version we are on and auto-update
-            if this_tag not in PREDBAT_UPDATE_OPTIONS:
-                this_tag = this_tag + " (?)"
-                PREDBAT_UPDATE_OPTIONS.append(this_tag)
-                self.log("Autoupdate: Currently on unknown version {}".format(this_tag))
-            else:
-                if self.releases["this"] == self.releases["latest"]:
-                    self.log("Autoupdate: Currently up to date")
-                elif self.releases["this"] == self.releases["latest_beta"]:
-                    self.log("Autoupdate: Currently on latest beta")
-                else:
-                    latest_version = self.releases["latest"] + " " + self.releases["latest_name"]
-                    if auto_update:
-                        self.log("Autoupdate: There is an update pending {} - auto update triggered!".format(latest_version))
-                        self.download_predbat_version(latest_version)
-                    else:
-                        self.log("Autoupdate: There is an update pending {} - auto update is off".format(latest_version))
-                        new_version = True
-
-            # Refresh the list
-            self.expose_config("update", this_tag)
-            self.expose_config("version", new_version, force=True)
-
-        else:
-            self.log("Warn: Unable to download Predbat version information from GitHub, return code: {}".format(data))
-            self.expose_config("version", False, force=True)
-
-        return self.releases
 
     def unit_conversion(self, entity_id, state, units, required_unit, going_to=False):
         """
@@ -434,6 +299,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}
+        self.validate_config_retries_remaining = 0
+        self.validate_config_next_retry_time = None
         self.ha_interface = None
         self.num_cars = 0
         self.fatal_error = False
@@ -475,6 +342,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.previous_status = None
         self.had_errors = False
         self.plan_valid = False
+        self.plan_preclip = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
         self.plugin_system = None
@@ -486,6 +354,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.minutes_to_midnight = 0
         self.days_previous = [7]
         self.days_previous_weight = [1]
+        self.max_days_previous = max(self.days_previous) + 1
         self.forecast_days = 0
         self.forecast_minutes = 0
         self.soc_kw = 0
@@ -501,8 +370,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.metric_min_improvement_export = 0.1
         self.metric_min_improvement_export_freeze = 0.1
         self.metric_min_improvement_plan = 2.0
+        self.export_more_solar = False
+        self.export_more_solar_threshold = 1.0
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
+        self.metric_battery_value_export_scaling = 0.8
+        self.calculate_pv90_plan = False
+        self.pv_metric90_weight = 0.15
+        self.load_scaling90 = 0.7
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
@@ -514,7 +389,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.iboost_value_scaling = 1.0
         self.rate_import = {}
         self.rate_import_no_io = {}
+        self.rate_import_base = {}
         self.rate_export = {}
+        self.rate_export_base = {}
         self.rate_gas = {}
         self.rate_slots = []
         self.low_rates = []
@@ -525,7 +402,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_saving_slots = []
         self.car_charging_slots = []
         self.reserve = 0
+        self.reserve_percent = 0.0
         self.reserve_current = 0
+        self.reserve_current_percent = 0.0
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
@@ -535,7 +414,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
-        self.best_soc_margin = 0
         self.best_soc_keep = 0
         self.best_soc_keep_weight = 0.5
         self.rate_min = 0
@@ -554,6 +432,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_export_min_minute = 0
         self.rate_export_max = 0
         self.rate_export_max_minute = 0
+        self.rate_export_max_forward = {}
         self.rate_export_average = 0
         self.rate_gas_min = 0
         self.rate_gas_max = 0
@@ -575,6 +454,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.grid_power = 0
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
+        self.current_charge_limit_kwh = 0.0
+        self.inverter_limit = 0.0
+        self.export_limit = 0.0
         self.charge_limit = []
         self.charge_limit_best = []
         self.charge_window = []
@@ -589,10 +471,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_limits = []
         self.export_limits_best = []
         self.export_window_best = []
-        self.battery_rate_max_charge = 0
+        self.battery_rate_max_charge = 0.0333
         self.battery_rate_max_charge_dc = 0
-        self.battery_rate_max_discharge = 0
-        self.battery_rate_max_export = 0
+        self.battery_rate_max_discharge = 0.0333
+        self.battery_rate_max_export = 0.0333
         self.battery_rate_min = 0
         self.battery_rate_max_scaling = 1.0
         self.battery_rate_max_scaling_discharge = 1.0
@@ -603,6 +485,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_manual_soc = []
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
+        self.car_charging_energy_warned = False
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
@@ -628,6 +511,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_inday_adjustment = 1.0
         self.set_read_only = True
         self.set_read_only_axle = False
+        self.set_reserve_enable = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
@@ -670,6 +554,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
+        self.pv_forecast_minute90 = {}
+        # (p50, p90) content signatures from the previous plan run, used to spot a p90 that has been
+        # left behind by a p50 reassigned underneath it - see Plan.refresh_pv_forecast_minute90()
+        self.pv_forecast_minute90_signatures = None
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
@@ -719,6 +607,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_last_joined_try = None
         self.calculate_savings_max_charge_slots = 1
         self.inverter_data_last_fetch = None
+        self.octopus_url_cache_loaded = False
+        self.github_url_cache_loaded = False
+        self.load_forecast_history = False
+        self.prediction_kernel_enable = False
 
         for root in CONFIG_ROOTS:
             if os.path.exists(root):
@@ -794,6 +686,141 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.had_errors:
             m.errors_total.labels(type="general").inc()
 
+    def save_plan(self):
+        """Save the current best plan via the storage component so it can be restored on next startup."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            self.log("Warning: Storage component unavailable, cannot save plan")
+            return
+        plan_data = {
+            "charge_window_best": self.charge_window_best,
+            "charge_limit_best": self.charge_limit_best,
+            "export_window_best": self.export_window_best,
+            "export_limits_best": self.export_limits_best,
+            "plan_preclip": self.plan_preclip,
+            "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
+            "plan_last_updated_minutes": self.plan_last_updated_minutes,
+        }
+        try:
+            expiry = self.now_utc + timedelta(hours=8)
+            run_async(storage.save("predbat", "plan", plan_data, format="json", expiry=expiry))
+            self.log("Saved plan to storage")
+        except Exception as e:
+            self.log("Warning: Failed to save plan: {}".format(e))
+
+    def load_plan(self):
+        """Restore a previously saved plan from storage if it is recent enough."""
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            self.log("Warning: Storage component unavailable, cannot load plan")
+            return
+
+        try:
+            plan_data = run_async(storage.load("predbat", "plan"))
+        except Exception as e:
+            self.log("Warning: Failed to load saved plan: {}".format(e))
+            return
+
+        if not plan_data:
+            self.log("No saved plan found in storage")
+            return
+
+        if not isinstance(plan_data, dict):
+            self.log("Warning: Saved plan has unexpected type {}, ignoring".format(type(plan_data).__name__))
+            return
+
+        saved_updated = plan_data.get("plan_last_updated")
+        if not saved_updated:
+            self.log("Saved plan has no timestamp, ignoring")
+            return
+
+        try:
+            saved_dt = datetime.fromisoformat(saved_updated)
+        except (ValueError, TypeError):
+            self.log("Warning: Saved plan timestamp is invalid, ignoring")
+            return
+
+        if saved_dt.tzinfo is None:
+            saved_dt = saved_dt.replace(tzinfo=timezone.utc)
+
+        age_minutes = (self.now_utc - saved_dt).total_seconds() / 60
+
+        self.charge_window_best = plan_data.get("charge_window_best", [])
+        self.charge_limit_best = plan_data.get("charge_limit_best", [])
+        self.export_window_best = plan_data.get("export_window_best", [])
+        self.export_limits_best = plan_data.get("export_limits_best", [])
+        # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
+        # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
+        preclip = plan_data.get("plan_preclip")
+        self.plan_preclip = tuple(preclip) if isinstance(preclip, (list, tuple)) and len(preclip) == 4 else None
+        self.plan_last_updated = saved_dt
+        self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
+        self.plan_valid = True
+        self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+
+    def record_final_run_status(self, status, status_extra):
+        """
+        Publish the component health dashboard item and record the final run status for this cycle.
+        Any component that is active but not alive fails the run, even if the plan itself computed successfully.
+        """
+        failed_components = []
+        if self.components:
+            all_components = self.components.get_all()
+            active_components = self.components.get_active()
+            error_count = 0
+            component_status = {}
+            component_error_count = {}
+            all_healthy = True
+            for component_name in all_components:
+                is_active = self.components.is_active(component_name)
+                is_alive = self.components.is_alive(component_name)
+                component_error_count[component_name] = self.components.get_error_count(component_name)
+                if is_active and not is_alive:
+                    # Component is active but not alive - error state
+                    component_status[component_name] = "error"
+                    all_healthy = False
+                    error_count += 1
+                    component = self.components.get_component(component_name)
+                    if not component.is_calculating():
+                        failed_components.append(COMPONENT_LIST.get(component_name, {}).get("name", component_name))
+                elif is_active:
+                    component_status[component_name] = "running"
+                else:
+                    component_status[component_name] = "disabled"
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_components_healthy",
+                state="on" if all_healthy else "off",
+                attributes={
+                    "friendly_name": "Predbat components healthy",
+                    "icon": "mdi:cog-outline" if all_healthy else "mdi:cog-off-outline",
+                    "components": component_status,
+                    "component_error_count": component_error_count,
+                    "active_count": len(active_components),
+                    "total_count": len(all_components),
+                    "error_count": error_count,
+                },
+            )
+
+        if self.had_errors:
+            self.log("Error: Completed run status {} with Errors reported (check log)".format(status))
+        elif failed_components:
+            error_status = "Error: Complete run status {} with component errors: {}".format(status, ", ".join(failed_components))
+            self.log(error_status)
+            self.record_status(
+                error_status,
+                debug="best_charge_limit={} best_charge_window={} best_export_limit= {} best_export_window={}".format(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best),
+                notify=True,
+                had_errors=True,
+            )
+        else:
+            self.log("Info: Completed run status {}".format(status))
+            self.record_status(
+                status,
+                debug="best_charge_limit={} best_charge_window={} best_export_limit= {} best_export_window={}".format(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best),
+                notify=True,
+                extra=status_extra,
+            )
+
     def update_pred(self, scheduled=True):
         """
         Update the prediction state, everything is called from here right now
@@ -805,9 +832,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.update_time()
         self.save_current_config()
 
-        # Check our version
-        self.download_predbat_releases()
+        # Check our version, don't check for cloud version which can't update directly
+        if not self.get_arg("user_id", None):
+            self.download_predbat_releases()
 
+        # Check if we are still running the template configuration, if so don't run the plan
         if self.get_arg("template", False):
             self.log("Error: You have not completed editing the apps.yaml template, Predbat cannot run. Please comment out 'Template: True' line in apps.yaml to start Predbat running")
             self.record_status("Error: Template Configuration, remove 'Template: True' line in apps.yaml to start predbat running", had_errors=True)
@@ -823,7 +852,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             recompute = True
 
         # Fetch inverter data
-        self.fetch_inverter_data()
+        if not self.fetch_inverter_data():
+            self.log("Error: Failed to fetch inverter data, not able to compute a plan")
+            self.record_status("Error: Failed to fetch inverter data, not able to compute a plan", had_errors=True)
+            return
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
@@ -846,12 +878,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Calculate the new plan (or re-use existing)
         recompute = self.calculate_plan(recompute=recompute)
 
+        # Persist the plan so it can be restored immediately on next startup
+        if recompute and self.plan_valid:
+            self.save_plan()
+
         # Publish rate data
         self.publish_rate_and_threshold()
 
         # Execute the plan, re-read the inverter first if we had to calculate (as time passes during calculations)
         if recompute:
-            self.fetch_inverter_data()
+            if not self.fetch_inverter_data():
+                self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                return
         status, status_extra = self.execute_plan()
 
         # If the plan was not updated, and the time has expired lets update it now
@@ -869,7 +908,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     time.sleep(delay)
                 # Calculate an updated plan, fetch the inverter data again and execute the plan
                 self.calculate_plan(recompute=True)
-                self.fetch_inverter_data()
+                if not self.fetch_inverter_data():
+                    self.log("Error: Failed to fetch inverter data, not able to execute the plan")
+                    self.record_status("Error: Failed to fetch inverter data, not able to execute the plan", had_errors=True)
+                    return
                 status, status_extra = self.execute_plan()
             else:
                 self.log("Will not recompute the plan, it is {} minutes old and max age is {} minutes".format(dp1(plan_age_minutes), self.calculate_plan_every))
@@ -1060,51 +1102,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.debug_enable:
             self.create_debug_yaml()
 
-        if self.had_errors:
-            self.log("Completed run status {} with Errors reported (check log)".format(status))
-        else:
-            self.log("Completed run status {}".format(status))
-            self.record_status(
-                status,
-                debug="best_charge_limit={} best_charge_window={} best_export_limit= {} best_export_window={}".format(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best),
-                notify=True,
-                extra=status_extra,
-            )
-
-        # Publish component status dashboard item
-        if self.components:
-            all_components = self.components.get_all()
-            active_components = self.components.get_active()
-            error_count = 0
-            component_status = {}
-            component_error_count = {}
-            all_healthy = True
-            for component_name in all_components:
-                is_active = self.components.is_active(component_name)
-                is_alive = self.components.is_alive(component_name)
-                component_error_count[component_name] = self.components.get_error_count(component_name)
-                if is_active and not is_alive:
-                    # Component is active but not alive - error state
-                    component_status[component_name] = "error"
-                    all_healthy = False
-                    error_count += 1
-                elif is_active:
-                    component_status[component_name] = "running"
-                else:
-                    component_status[component_name] = "disabled"
-            self.dashboard_item(
-                "binary_sensor." + self.prefix + "_components_healthy",
-                state="on" if all_healthy else "off",
-                attributes={
-                    "friendly_name": "Predbat components healthy",
-                    "icon": "mdi:cog-outline" if all_healthy else "mdi:cog-off-outline",
-                    "components": component_status,
-                    "component_error_count": component_error_count,
-                    "active_count": len(active_components),
-                    "total_count": len(all_components),
-                    "error_count": error_count,
-                },
-            )
+        self.record_final_run_status(status, status_extra)
 
         self.expose_config("active", False)
         self.save_current_config()
@@ -1520,6 +1518,50 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         return errors
 
+    def validate_config_schedule_retry(self, errors):
+        """
+        Called immediately after validate_config() with its error count. If validation failed,
+        (re-)arms a retry sequence so a self-healed condition (e.g. a slow-starting integration's
+        sensor not populated yet) clears its own error status without needing a manual restart -
+        see #4379. A clean validation cancels any retry sequence already in progress.
+        """
+        if errors:
+            retries = int(self.get_arg("validate_config_retries", 2))
+            if retries > 0:
+                self.validate_config_retries_remaining = retries
+                retry_minutes = max(0, int(self.get_arg("validate_config_retry_minutes", 1)))
+                self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+            else:
+                self.validate_config_retries_remaining = 0
+                self.validate_config_next_retry_time = None
+        else:
+            self.validate_config_retries_remaining = 0
+            self.validate_config_next_retry_time = None
+
+    def validate_config_check_retry(self):
+        """
+        Called every 15 seconds from update_time_loop(). Re-runs validate_config() if a retry is
+        due, only while a retry sequence is armed (i.e. only following an actual validation
+        failure - see #4379) - a no-op the rest of the time.
+        """
+        if self.validate_config_retries_remaining <= 0:
+            return
+        if self.validate_config_next_retry_time is None or self.now_utc < self.validate_config_next_retry_time:
+            return
+
+        self.validate_config_retries_remaining -= 1
+        errors = self.validate_config()
+        if errors == 0:
+            self.log("Info: Config validation retry succeeded, previous errors have now cleared")
+            self.validate_config_retries_remaining = 0
+            self.validate_config_next_retry_time = None
+        elif self.validate_config_retries_remaining <= 0:
+            self.log("Warn: Config validation still failing after all retries, giving up until the next restart or config change")
+            self.validate_config_next_retry_time = None
+        else:
+            retry_minutes = self.get_arg("validate_config_retry_minutes", 1)
+            self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+
     def is_running(self):
         """
         Check if the app is running
@@ -1564,6 +1606,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
+        self.started_time = self.now_utc_real
         run_every = RUN_EVERY * 60
         now = self.now
 
@@ -1608,8 +1651,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.ha_interface.update_states()
             self.auto_config()
-            self.load_user_config(quiet=False, register=False)
-            self.validate_config()
+            self.load_user_config(quiet=False, register=False, load_config=True)
             self.comparison = Compare(self)
 
             self.components.initialize(phase=1)
@@ -1624,12 +1666,19 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=True)
+            self.validate_config_schedule_retry(self.validate_config())
+
+            # Restore the last saved plan so it is immediately active before the first calculation
+            self.load_plan()
 
         except Exception as e:
             self.log("Error: Exception raised {}".format(e))
             self.log("Error: " + traceback.format_exc())
             self.record_status("Error: Exception raised {}".format(e), debug=traceback.format_exc(), had_errors=True)
             raise e
+
+        # Started
+        self.publish_last_started()
 
         # Run every N minutes aligned to the minute
         seconds_now = (now - self.midnight).seconds
@@ -1698,13 +1747,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             raise Exception("HA interface not active")
 
         self.check_entity_refresh()
+        self.validate_config_check_retry()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False
             self.prediction_started = True
             try:
                 self.load_user_config()
-                self.validate_config()
+                self.validate_config_schedule_retry(self.validate_config())
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
             except Exception as e:
@@ -1714,6 +1764,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 raise e
             finally:
                 self.prediction_started = False
+                # Always clear the active flag, even on early return or exception, so the
+                # web spinner and predbat.active switch don't get stuck on
+                self.expose_config("active", False)
                 self.cleanup_pool()
         elif not self.prediction_started:
             time_now = datetime.now()
@@ -1778,7 +1831,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.update_pending = False
                     self.ha_interface.update_states()
                     self.load_user_config()
-                    self.validate_config()
+                    self.validate_config_schedule_retry(self.validate_config())
                     config_changed = True
 
                 # Run the prediction
@@ -1793,6 +1846,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 raise e
             finally:
                 self.prediction_started = False
+                # Always clear the active flag, even on early return or exception, so the
+                # web spinner and predbat.active switch don't get stuck on
+                self.expose_config("active", False)
                 self.cleanup_pool()
 
     def run_time_loop_balance(self, cb_args):

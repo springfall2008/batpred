@@ -27,6 +27,8 @@ async def test_octopus_intelligent_devices(my_predbat):
     - Test 5: Future planned dispatch is kept in planned list
     - Test 6: Completed dispatches are parsed correctly
     - Test 7: Planned dispatch with missing start/end is skipped
+    - Test 8: In-progress flex dispatch not promoted to completed but trimmed to remainder (issue #4114)
+    - Test 9: Future flex dispatch is left untrimmed in planned
     """
     print("**** Running Octopus intelligent devices tests ****")
     failed = 0
@@ -385,6 +387,118 @@ async def test_octopus_intelligent_devices(my_predbat):
     else:
         print("ERROR: device-abc not found in result")
         failed += 1
+
+    # ------------------------------------------------------------------
+    # Test 8: In-progress flex planned dispatch is NOT promoted to completed (issue #4114),
+    # but IS trimmed to the remaining portion so already-delivered energy is not double counted.
+    # A flexPlannedDispatches entry that started a few minutes ago must stay in the planned
+    # list (not be fabricated into completed_dispatches - Octopus routinely withdraws such
+    # provisional SMART flex slots), with its start advanced to now and charge_in_kwh scaled
+    # down to the remaining time.
+    # ------------------------------------------------------------------
+    print("\n*** Test 8: In-progress flex dispatch not promoted, trimmed to remaining portion ***")
+    api = make_api()
+
+    # Slot started 10 min ago and ends 20 min from now -> 30 min total, 20 min remaining (2/3)
+    in_progress_start = (ref_now - timedelta(minutes=10)).strftime(DATE_TIME_STR_FORMAT)
+    in_progress_end = (ref_now + timedelta(minutes=20)).strftime(DATE_TIME_STR_FORMAT)
+    expected_trimmed_start = ref_now.strftime(DATE_TIME_STR_FORMAT)
+    expected_trimmed_kwh = round(0.367 * 20 / 30, 4)  # scaled to remaining portion, dp4
+    dispatch_data_in_progress = {
+        "flexPlannedDispatches": [
+            {
+                "start": in_progress_start,
+                "end": in_progress_end,
+                "energyAddedKwh": "0.367",
+                "type": "smart-charge",
+                "meta": {"source": "SMART"},  # no location, as flexPlannedDispatches carries no location
+            }
+        ],
+        "completedDispatches": [],
+    }
+
+    async def mock_query_in_progress(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return dispatch_data_in_progress
+        elif "get-intelligent-settings" in context:
+            return settings_data
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_in_progress)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+
+    if "device-abc" not in result:
+        print("ERROR: device-abc not found in result")
+        failed += 1
+    else:
+        planned = result["device-abc"].get("planned_dispatches", [])
+        completed = result["device-abc"].get("completed_dispatches", [])
+        if len(completed) != 0:
+            print(f"ERROR: In-progress flex dispatch was promoted to completed (got {len(completed)} completed): {completed}")
+            failed += 1
+        elif len(planned) != 1:
+            print(f"ERROR: Expected 1 planned dispatch (kept in planned), got {len(planned)}")
+            failed += 1
+        elif planned[0].get("start") != expected_trimmed_start:
+            print(f"ERROR: Expected in-progress slot start trimmed to now ({expected_trimmed_start}), got {planned[0].get('start')}")
+            failed += 1
+        elif planned[0].get("charge_in_kwh") != expected_trimmed_kwh:
+            print(f"ERROR: Expected charge_in_kwh scaled to remaining ({expected_trimmed_kwh}), got {planned[0].get('charge_in_kwh')}")
+            failed += 1
+        else:
+            print("PASS: In-progress flex dispatch kept in planned, not promoted, and trimmed to remaining portion")
+
+    # ------------------------------------------------------------------
+    # Test 9: Future flex dispatch (not yet started) is left untrimmed in planned
+    # ------------------------------------------------------------------
+    print("\n*** Test 9: Future flex dispatch is not trimmed ***")
+    api = make_api()
+
+    future_only_start = (ref_now + timedelta(minutes=30)).strftime(DATE_TIME_STR_FORMAT)
+    future_only_end = (ref_now + timedelta(minutes=60)).strftime(DATE_TIME_STR_FORMAT)
+    dispatch_data_future_only = {
+        "flexPlannedDispatches": [
+            {
+                "start": future_only_start,
+                "end": future_only_end,
+                "energyAddedKwh": "2.0",
+                "type": "smart-charge",
+                "meta": {"source": "SMART"},
+            }
+        ],
+        "completedDispatches": [],
+    }
+
+    async def mock_query_future_only(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return dispatch_data_future_only
+        elif "get-intelligent-settings" in context:
+            return settings_data
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_future_only)
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+
+    if "device-abc" not in result:
+        print("ERROR: device-abc not found in result")
+        failed += 1
+    else:
+        planned = result["device-abc"].get("planned_dispatches", [])
+        if len(planned) != 1:
+            print(f"ERROR: Expected 1 planned dispatch, got {len(planned)}")
+            failed += 1
+        elif planned[0].get("start") != future_only_start:
+            print(f"ERROR: Future slot start should be untouched ({future_only_start}), got {planned[0].get('start')}")
+            failed += 1
+        elif planned[0].get("charge_in_kwh") != 2.0:
+            print(f"ERROR: Future slot charge_in_kwh should be untouched (2.0), got {planned[0].get('charge_in_kwh')}")
+            failed += 1
+        else:
+            print("PASS: Future flex dispatch left untrimmed in planned")
 
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")

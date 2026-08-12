@@ -143,7 +143,7 @@ As another example, the configuration entry for the Solcast day 3 forecast follo
 
 Syntax errors will be highlighted by the Home Assistant editor or via other YAML-aware editors such as VSCode.
 
-Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'apps.yaml'. Review any items shown
+Once you have completed your `apps.yaml` and started Predbat you may want to open the Predbat Web Interface and click on 'Apps' at the top. Review any items shown
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
@@ -186,6 +186,15 @@ pred_bat:
   forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
+  deye_app_id: !secret deye_app_id  # DeyeCloud developer app id (if using DEYE Cloud)
+  deye_app_secret: !secret deye_app_secret  # DeyeCloud developer app secret (if using DEYE Cloud)
+  deye_username: !secret deye_username  # DeyeCloud account e-mail/username (if using DEYE Cloud)
+  deye_password: !secret deye_password  # DeyeCloud account password (if using DEYE Cloud)
+  enphase_username: !secret enphase_username  # Enphase Enlighten account e-mail (if using Enphase Cloud)
+  enphase_password: !secret enphase_password  # Enphase Enlighten account password (if using Enphase Cloud)
+  enphase_site_id: !secret enphase_site_id  # Enphase Enlighten site id, optional (if using Enphase Cloud)
+  enphase_automatic: True  # Automatically configure Predbat inverter settings (if using Enphase Cloud)
+  enphase_automatic_ignore_pv: False  # Skip PV sensors during automatic configuration (if using Enphase Cloud)
   axle_api_key: !secret axle_api_key  # Axle API key (if using Axle VPP)
   kraken_key: !secret kraken_key  # Kraken API key (if using Kraken component)
   kraken_password: !secret kraken_password  # Kraken password (if using Kraken component)
@@ -302,6 +311,23 @@ This significantly reduces planning time while maintaining near-optimal results.
   enable_coarse_fine_levels: true
 ```
 
+### prediction_kernel_enable
+
+Enables a compiled C++ prediction kernel that replaces Predbat's Python simulation engine for the vast majority of the scenario evaluations run during planning, giving a significant (several-times) speedup with identical results.
+
+The default is `true` but if it fails to load the correct binary it will automatically fall back to the python version. It can be disabled in the event of a problem with:
+
+```yaml
+  prediction_kernel_enable: false
+```
+
+Notes:
+
+- This is an `apps.yaml`-only setting - there is no HA switch for it.
+- Predbat automatically falls back to the Python engine if the compiled kernel isn't available for your system's CPU architecture, so it is always safe to enable.
+- Predbat logs its status once per plan cycle, e.g. `Prediction kernel: enabled and active (...)` or `Prediction kernel: enabled but NOT available (...) - falling back to the Python engine` - check your Predbat log if you enable this and want to confirm it's actually being used.
+- Results are bit-for-bit identical to the Python engine; this option only affects performance, not the plan produced.
+
 ### Web interface
 
 Docker users can change the web port for the Predbat web interface by setting **web_port** to a new port number. The default port of 5052 must always be used for the Predbat app.
@@ -323,9 +349,10 @@ A list of device names to notify when Predbat sends a notification. The default 
 
 Predbat needs to know what your likely future house load will be to set and manage the battery level to support it.
 days_previous defines a list (which has to be entered as one entry per line) of the previous days of historical house load that are to be used to predict your future daily load.<BR>
-It's recommended that you set days_previous so Predbat calculates an average house load using multiple days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
+By default, [days_previous_auto](#days_previous_auto-weighted-historical-load-forecast) is enabled, in which case days_previous only sets the size (in days) of the history window that's searched - see below for details.
+If you disable days_previous_auto, it's recommended that you set days_previous so Predbat calculates an average house load using multiple days' history so that 'unusual' load activity (e.g. saving sessions, "big washing day", etc) get averaged out.
 
-For example, if you want Predbat to average house load for the past week:
+For example, with days_previous_auto disabled, if you want Predbat to average house load for the past week:
 
 ```yaml
   days_previous:
@@ -354,6 +381,48 @@ Or if you want Predbat to take the average of the same day for the last two week
 ```
 
 Further details and worked examples of [how days_previous works](#understanding-how-days_previous-works) are covered at the end of this document.
+
+#### days_previous_auto (weighted historical load forecast)
+
+**days_previous_auto** switches house-load prediction from the fixed list/weighting approach above to a
+weighted-bucket forecast, and is `True` by default:
+
+```yaml
+  days_previous_auto: True
+```
+
+Set it to `False` in `apps.yaml` if you want to go back to the fixed **days_previous**/**days_previous_weight**
+averaging described above:
+
+```yaml
+  days_previous_auto: False
+```
+
+In this mode Predbat ignores the fixed averaging and instead builds a forward load forecast from **all** of
+the load history within the search window (without padding when fewer days exist). The window is taken from
+`max(days_previous)`, or 7 days when `days_previous` is not set, capped at 30 days. This is more robust when
+there are gaps in your history or when your usage pattern has changed (for example when returning from
+holiday), because it no longer depends on a small number of specific days all being present and
+representative.
+
+Each historical 5-minute sample is combined into a weighted average for the matching time-of-day, where the
+weight of every sample is the product of three factors:
+
+- **Weekday** - 1.0 if the historical day is the same day of the week as today; 0.7 if it is a different day
+  but both are weekdays or both are weekend days; 0.5 if one is a weekday and the other a weekend day.
+- **Holiday** - reduced by 50% if that historical day's [holiday mode](customisation.md#holiday-mode) state
+  does not match today's holiday mode state. The historical holiday state is reconstructed from the recorded
+  history of `holiday_days_left`.
+- **Age** - 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1 (reached after about a
+  month), so recent days count for more.
+
+Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
+down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
+it takes precedence over `days_previous_auto`.
+
+Because the Holiday weighting factor above already accounts for [holiday mode](customisation.md#holiday-mode)
+when `days_previous_auto` is enabled, Predbat does not separately force days_previous to `1` while holiday
+mode is active (unlike when `days_previous_auto` is disabled).
 
 Do keep in mind that Home Assistant only keeps 10 days of history by default, so if you want to access more than this for Predbat you might need to increase the number of days of history
 kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
@@ -431,6 +500,18 @@ you will need to wait until you have a few days of history established (at least
 
 - **ge_cloud_load_today_ignore** - Optional, defaults to false. When set to `true`, Predbat will override the **ge_cloud_automatic** setting and use the **load_today** sensor configured in `apps.yaml`.
 This can be useful if the **load_today** data in the GivEnergy Cloud does not accurately reflect your house load (e.g. multiple inverters that share load) and you want to use a custom load_today sensor.  All other sensors will use either the `apps.yaml` entries or the GivEnergy Cloud entities depending upon **ge_cloud_automatic**.
+
+- **ge_cloud_automatic_shared_ct** - Optional, defaults to false. When set to `true`, Predbat will treat multiple inverters as sharing a single physical CT clamp for grid and load measurement.
+In this mode only the first inverter's grid and load readings are used (the rest are zeroed out), preventing double-counting of grid import/export and house load.
+Use this if you have two or more inverters connected to a single CT clamp and Predbat is not detecting the shared CT automatically (e.g. your inverters have no external dedicated meters, so the cloud API does not report duplicate meter serials).
+See also **ge_cloud_automatic_split_ct** which takes priority over this setting if both are set.
+
+- **ge_cloud_automatic_split_ct** - Optional, defaults to false. When set to `true`, Predbat will treat each inverter as having its own independent CT clamp, summing all inverters' grid and load readings.
+Use this to override automatic shared-CT detection if Predbat incorrectly identifies your system as sharing a CT clamp (e.g. when duplicate meter serials are reported by the cloud API but the inverters actually have separate CT clamps).
+This setting takes priority over **ge_cloud_automatic_shared_ct** if both are set.
+
+- **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
+Use this if you have a separate PV-only inverter alongside your battery inverter(s) and want its solar generation included in Predbat's totals. Leave this off (the default) if your battery inverters already report all of your solar generation, to avoid duplicating or including unwanted readings.
 
 ### SolaX Cloud Direct
 
@@ -689,6 +770,45 @@ If you experience connection issues:
 5. Ensure `soc_max` is set correctly in `apps.yaml` (battery capacity in kWh)
 6. Check that `control_enable` is set appropriately for your needs
 
+### DEYE Cloud API
+
+**EXPERIMENTAL:** This is a new integration and may have issues.
+
+Predbat includes support for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing direct cloud-based monitoring and battery control - no local Modbus/RS485 access is required.
+
+#### DEYE Cloud Configuration
+
+Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.com) to obtain an App ID and App Secret, then add the following to your `apps.yaml`:
+
+```yaml
+  deye_app_id: !secret deye_app_id
+  deye_app_secret: !secret deye_app_secret
+  deye_username: !secret deye_username
+  deye_password: !secret deye_password
+  deye_data_center: 'eu'
+  deye_automatic: True
+```
+
+**Note:** It's strongly recommended to store `deye_app_id`, `deye_app_secret`, `deye_username` and `deye_password` in `secrets.yaml` and reference them as `!secret deye_app_id` etc - see [Storing secrets](#storing-secrets).
+
+**Configuration options:**
+
+- `deye_app_id` - Your DeyeCloud developer app's App ID (obtained from developer.deyecloud.com)
+- `deye_app_secret` - Your DeyeCloud developer app's App Secret
+- `deye_username` - Your DeyeCloud account e-mail address or username
+- `deye_password` - Your DeyeCloud account password
+- `deye_data_center` - The DeyeCloud region your account is registered in: `'eu'` (default), `'am'` or `'india'`
+- `deye_company_id` - Optional, only needed for installer/business accounts
+- `deye_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all battery inverters found on the account
+- `deye_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
+- `deye_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config
+
+`deye_auth_method` defaults to `'app_credentials'` so the self-hosted add-on manages its own DeyeCloud token from the credentials above. On Predbat.com the token is injected and refreshed by the platform instead (`deye_auth_method: 'oauth'`) - self-hosted users should leave this at the default.
+
+When **deye_automatic** is set to `true`, Predbat will discover every battery inverter registered against your DeyeCloud account and automatically create and configure all required sensors and schedule control entities for each one - no manual entity configuration is required.
+
+See [Components - DEYE Cloud API](components.md#deye-cloud-api-deye) for full details.
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities
@@ -701,6 +821,8 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
 
+  DeyeCloud: DEYE Cloud API integration (EXPERIMENTAL)
+  EnphaseCloud: Enphase Cloud integration (EXPERIMENTAL)
   FoxCloud: Fox Cloud integration
   FoxESS: FoxESS via modbus
   GE: GivEnergy via GivTCP
@@ -895,6 +1017,8 @@ The iboost energy sensor should reset to zero each day so if your source sensor 
 
 ## Inverter control configurations
 
+NB: literal numeric values for the power-limit settings below (`inverter_limit`, `pv_ac_limit`, `export_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export`, `inverter_limit_charge_dc`, `battery_rate_max`, `inverter_battery_rate_min`) must always be in **watts** — e.g. `7300` for a 7.3 kW inverter, never `7.3`. Predbat's unit auto-conversion only fires when the value is a sensor reference (it reads `unit_of_measurement` from the HA entity); for literal values there is no entity to read, so the raw number is taken as watts. A literal `inverter_limit: 7.3` will be interpreted as 7.3 W and clamp `battery_draw` to ~0.0006 kWh per 5-min step, producing a plan that looks like Predbat refuses to discharge the battery.
+
 ### **inverter_limit**
 
 One per inverter.
@@ -912,6 +1036,12 @@ For an AC Coupled inverter make sure the Hybrid Inverter toggle is off and set t
 Do not add on separate Micro Inverters to the total power.
 
 If you have multiple inverters then set the value of each one in a list format.
+
+Example:
+
+```yaml
+  inverter_limit: 5000   # 5 kW — must be in watts when set as a literal
+```
 
 NB: inverter_limit is ONLY used by Predbat to improve the quality of the plan, any solar clipping is done by the inverter and is not controlled by Predbat.
 
@@ -1193,6 +1323,7 @@ or
 - **charge_time** - Battery charge time entity for inverters that require a charge time expressed as a range in the format "*start hour*:*start minute*-*end hour*:*end minute*".
 - **discharge_time** = Ditto battery discharge time expressed as a time range.
 - **charge_limit** - Entity name for used to set the SoC target for the battery in percentage (AC charge target)
+- **charge_limit_enable** - Optional switch entity that enables the AC charge upper percent limit. When set, Predbat will turn this switch on whenever it writes a new charge limit value. Used by inverters (such as GivEnergy via GE Cloud) that have a separate enable/disable control for the charge limit register.
 - **scheduled_charge_enable** - Switch to enable/disable battery charge according to the charge start/end times defined above.
 - **scheduled_discharge_enable** - Switch to enable/disable battery discharge according to the discharge start/end times defined above.
 - **discharge_target_soc** - Set the battery target percent for timed exports, will be written to minimum by Predbat.
@@ -1409,7 +1540,12 @@ NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware ca
 
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast, and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
 By default, Predbat will use the central (PV50) estimate and apply to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
-You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.
+You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.<BR>
+The 90% (best case) estimate is not used by default. You can enable it with **switch.predbat_calculate_pv90_plan** (Off by default, and available without
+expert mode as we would like this tested widely). Its weighting is **input_number.predbat_pv_metric90_weight** (expert mode, defaulting to 0.15, but only
+applied once the switch is turned On - while it is Off no PV90 scenario is simulated at all and the plan is unchanged). Turning the switch on makes Predbat
+price in a chance of a better-than-forecast day.
+See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
 Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
 this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
@@ -1420,7 +1556,8 @@ See also [PV configuration options in Home Assistant](customisation.md#solar-pv-
 ### Forecast.solar Solar Forecast
 
 The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
-Predbat Solar calibration can use past data to improve this information and provide the 10% data.
+Predbat Solar calibration can use past data to improve this information and provide both the 10% and the 90% data, each derived from the central forecast
+and capped so neither can exceed what your array can physically produce.
 
 You can create one or more rooftops by providing a list of the data for each one, they will be summed up automatically.
 
@@ -1430,6 +1567,7 @@ The azimuth is the direction of the roof: 0=North, -90=East, 90=West, -180/180 =
 The declination is the angle of the panels, e.g. 45 for a sloped roof or 20 for those on a flat roof
 The efficiency relates to the aging of your panels, 0.95 is for newer systems but they will lose around 1% each year.
 The optional forecast_solar_max_age setting sets the number of hours between updates to PV data, the default is 8.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Forecast.solar convention (0=South, -90=East, 90=West, ±180=North) rather than the default Predbat convention (0=North). When True, Predbat passes the value straight to the API without conversion.
 
 ```yaml
   forecast_solar:
@@ -1459,7 +1597,55 @@ Optionally you can set an api_key for personal or professional accounts and you 
 
 Note you can omit any of these settings for a default value. They do not have to be exact if you use Predbat auto calibration for PV to improve the data quality.
 
-### Open-Meteo Solar Forecast
+### Open-Meteo backup for Forecast.solar
+
+If you set `forecast_solar_open_meteo_backup: true`, Predbat will automatically fall back to the [Open-Meteo](#open-meteo-solar-forecast) API whenever Forecast.solar returns no data (for example, due to a server error, rate limiting, or an outage).
+
+When the fallback is active, Predbat derives the Open-Meteo request from the same `forecast_solar` configuration entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency), so no extra configuration is needed. If you also have an `open_meteo_forecast` section configured, that configuration is used for the backup request instead, which lets you apply Open-Meteo-specific options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+      efficiency: 0.95
+  forecast_solar_open_meteo_backup: true
+```
+
+### Using Open-Meteo as the primary source
+
+Setting `forecast_solar_open_meteo_first: true` reverses the order: Predbat fetches from Open-Meteo
+first and only calls Forecast.solar if Open-Meteo returns no data. Your existing `forecast_solar`
+per-array entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency) are reused
+as-is. If you also have an `open_meteo_forecast` section, that is used instead, which lets you apply
+Open-Meteo-specific options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+  forecast_solar_open_meteo_first: true
+```
+
+While Open-Meteo is succeeding, Forecast.solar is not called at all, so no Forecast.solar API quota
+is consumed.
+
+Note that `forecast_solar_max_age` is not reused while this flag is set — it only applies to the
+Forecast.solar path. The refresh interval instead comes from `open_meteo_forecast_max_age`
+(default 4 hours).
+
+If `forecast_solar_open_meteo_backup` is also set to true, it has no effect: `forecast_solar_open_meteo_first`
+already makes Open-Meteo the primary source, so there is nothing left for the backup setting to do.
+
+Note that PV calibration compares the last seven days of recorded forecasts against actual
+generation. After changing the source, that history still holds values from the previous source, so
+the calibration scaling factor takes up to seven days to settle. Predbat logs a warning when the
+source changes. Do not judge the accuracy of the new source until the settling period has passed.
+
+## Open-Meteo Solar Forecast
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
@@ -1468,6 +1654,7 @@ Ensemble members are used to derive a PV10 pessimistic estimate alongside the ce
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
 The azimuth uses the same convention as all other Predbat solar configs (Solcast/Forecast.solar): 0=North, -90=East, 90=West, -180/180=South. Predbat converts this to the Open-Meteo convention (0=South) internally.
+The optional `azimuth_zero_south` (default False) can be set to True if you prefer to supply the azimuth already in the Open-Meteo convention (0=South, -90=East, 90=West, ±180=North). When True, Predbat passes the value straight to the API without conversion.
 The declination is the angle of the panels from horizontal (e.g. 35 for a typical pitched UK roof).
 For the UK you can use a postcode instead of latitude/longitude.
 The optional `efficiency` (default 1.0) is the panel efficiency as a fraction where 1.0 = 100% (no losses), e.g. 0.95 for 5% losses from wiring and soiling. This uses the same convention as Forecast.solar.
@@ -1670,6 +1857,23 @@ but there is one configuration item in `apps.yaml`:
 
 Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
 
+## Config validation retries
+
+`apps.yaml` is validated at startup and whenever its configuration changes. If a sensor you've mapped isn't populated yet at that exact moment
+(e.g. a slower-starting integration during a Home Assistant restart), Predbat reports a configuration error - correctly, at the time. If that
+sensor comes good on its own a few seconds later, Predbat automatically retries validation a few times, so a self-healed condition clears its
+own error status rather than needing a manual restart.
+
+```yaml
+  validate_config_retries: 2
+  validate_config_retry_minutes: 1
+```
+
+**validate_config_retries** sets how many times to retry after an initial validation failure - the default is 2. **validate_config_retry_minutes**
+sets how long to wait between each retry - the default is 1 minute. Retries only happen after a validation failure; a clean `apps.yaml` is never
+re-checked early. Set **validate_config_retries** to 0 to disable retries entirely and revert to the previous behaviour (a failed validation
+persists until the next restart or config change).
+
 ## Workarounds
 
 There are a number of different configuration items in `apps.yaml` that can be used to tweak the way Predbat operates and workaround
@@ -1680,7 +1884,7 @@ weirdness you may have from your inverter and battery setup.
 Sometimes the load predictions can yield near zero data due to inaccuracy of data (e.g. a second PV system not tracked, car data being unreliable, poor sensors).
 In order to not get unrealistically low values you can set a base load value (in watts) which Predbat will use as a minimum load for a slot duration.
 
-To set a base load set **base_load** as an integer value in watts.
+To set a base load set **base_load** as an integer value in watts. The default is 100 watts if not specified.
 
 ```yaml
    base_load: 300

@@ -170,6 +170,30 @@ def run_load_octopus_slots_tests(my_predbat):
     if failed:
         return failed
 
+    # --- zero chargeKwh active-slot tests ---
+    # Octopus zeros chargeKwh once it calculates the car has hit its SoC target, but the
+    # dispatch window stays open. Active slots must be preserved so the "Hold for car"
+    # guard in execute.py fires for the remainder of the window.
+
+    # Currently-active slot (started 30 min ago) with chargeKwh = 0: preserved, kwh from remaining duration
+    active_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 30)
+    active_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 60)
+    slot_active_zero = [{"start": active_start.strftime(TIME_FORMAT), "end": active_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
+    expected_active_zero = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 5.0, "average": 4, "cost": 20.0, "soc": 0.0, "octopus": True}]
+    failed |= run_load_octopus_slot_test("zero_kwh_active", my_predbat, slot_active_zero, expected_active_zero, False, 0.0, 0.0, 1.0)
+
+    # Fully-past slot with chargeKwh = 0: still dropped (end is before minutes_now)
+    past_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 120)
+    past_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 60)
+    slot_past_zero = [{"start": past_start.strftime(TIME_FORMAT), "end": past_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
+    failed |= run_load_octopus_slot_test("zero_kwh_past", my_predbat, slot_past_zero, [], False, 0.0, 0.0, 1.0)
+
+    # Future slot with chargeKwh = 0: still dropped (hasn't started yet)
+    future_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 60)
+    future_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 120)
+    slot_future_zero = [{"start": future_start.strftime(TIME_FORMAT), "end": future_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
+    failed |= run_load_octopus_slot_test("zero_kwh_future", my_predbat, slot_future_zero, [], False, 0.0, 0.0, 1.0)
+
     print("**** Checking car_charge_slot_kwh ****")
     my_predbat.car_charging_slots[0] = expected_slots5
     my_predbat.num_cars = 1

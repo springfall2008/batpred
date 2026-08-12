@@ -10,10 +10,11 @@
 # fmt on
 
 from gecloud import GECloudDirect, GECloudData, regname_to_ha
-from gecloud import GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
+from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND
 from utils import dp4
 import asyncio
 import json
+import pytz
 from unittest.mock import MagicMock, patch, AsyncMock
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,8 @@ class MockGECloudDirect(GECloudDirect):
         # Initialise instance variables that GECloudDirect expects
         self.requests_total = 0
         self.failures_total = 0
+        self.api_auth_failed = False
+        self.auth_denied_reported = False
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -56,6 +59,14 @@ class MockGECloudDirect(GECloudDirect):
         self.gateway_device = None
         self._now_utc_exact = datetime.now(timezone.utc)
         self.settings_from_cache = False
+        self.default_options_stamp = None
+        self._read_only = False
+        self.local_tz = pytz.timezone("Europe/London")
+        self.account = {}
+        self.account_timezone = None
+        self.account_timezone_name = None
+        self.account_stamp = None
+        self.account_fetch_stamp = None
 
         class MockHAInterface:
             def __init__(self):
@@ -83,13 +94,19 @@ class MockGECloudDirect(GECloudDirect):
         """Mock dashboard_item - tracks calls"""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes}
 
-    def get_arg(self, name, default=None):
+    def get_arg(self, name, default=None, **kwargs):
         """Mock get_arg"""
         return self.config_args.get(name, default)
 
     def set_arg(self, name, value):
         """Mock set_arg"""
         self.config_args[name] = value
+
+    def get_state_wrapper(self, entity_id, default=None):
+        """Mock get_state_wrapper"""
+        if "_set_read_only" in entity_id:
+            return "on" if self._read_only else "off"
+        return default
 
     def update_success_timestamp(self):
         """Mock update_success_timestamp"""
@@ -161,6 +178,7 @@ def test_ge_cloud(my_predbat=None):
     ======================================================================
     Comprehensive test suite for GivEnergy Cloud integration including:
     - API infrastructure (success, auth errors, rate limits, timeouts, JSON errors, retry logic)
+    - Account details (customer timezone used for the start/end time registers)
     - Device management (EMS, gateway, batteries, EV chargers, smart devices)
     - EVC operations (commands, device data, sessions)
     - Inverter operations (status, meter, device info, settings read/write)
@@ -179,16 +197,36 @@ def test_ge_cloud(my_predbat=None):
     sub_tests = [
         ("api_success", _test_async_get_inverter_data_success, "API call success"),
         ("api_auth_error", _test_async_get_inverter_data_auth_error, "API auth error handling"),
+        ("api_auth_sets_flag", _test_async_get_inverter_data_auth_sets_flag, "API 403 sets api_auth_failed flag"),
+        ("api_success_clears_auth_flag", _test_async_get_inverter_data_success_clears_auth_flag, "API success clears api_auth_failed flag"),
+        ("publish_status_auth_unavailable", _test_publish_status_auth_failure_marks_time_unavailable, "Auth failure marks time sensor unavailable"),
+        ("run_auth_denied_scoped", _test_run_reports_auth_denied_scoped, "Auth-denied status scoped to inverter poll cycle"),
+        ("non_auth_clears_auth_flag", _test_async_get_inverter_data_non_auth_clears_flag, "Non-401/403 response clears api_auth_failed"),
+        ("auth_status_transition_only", _test_run_auth_status_reported_on_transition_only, "Auth-denied status reported once per episode"),
         ("api_rate_limit", _test_async_get_inverter_data_rate_limit, "API rate limit handling"),
         ("api_timeout", _test_async_get_inverter_data_timeout, "API timeout handling"),
         ("api_json_error", _test_async_get_inverter_data_json_error, "API JSON error handling"),
         ("api_retry", _test_async_get_inverter_data_retry, "API retry logic"),
         ("api_post", _test_async_get_inverter_data_post, "API POST with/without datain"),
+        ("account", _test_async_get_account, "Get account details and timezone"),
+        ("account_failure", _test_async_get_account_failure, "Failed account fetch retains previous details"),
+        ("account_saved_to_storage", _test_account_saved_to_storage, "Account details saved to storage"),
+        ("account_restored_from_cache", _test_account_restored_from_cache, "Account restored from a fresh storage cache"),
+        ("account_stale_cache", _test_account_stale_cache_refetch, "Stale cached account is re-fetched"),
+        ("account_no_cache", _test_account_no_cache_fetches, "Account fetched when nothing is cached"),
+        ("account_failed_fetch_retry", _test_account_failed_fetch_retries, "Failed account fetch retries without polling"),
+        ("account_timezone", _test_set_account_timezone, "Account timezone parsing and fallbacks"),
+        ("publish_account", _test_publish_account, "Publish account and timezone sensors"),
+        ("publish_account_empty", _test_publish_account_empty, "Publish account with missing details"),
+        ("shift_time_string", _test_shift_time_string, "Shift register time strings across midnight"),
+        ("register_time_timezone", _test_register_time_timezone, "Time registers use the account timezone"),
+        ("register_time_no_timezone", _test_register_time_no_timezone, "Time registers unchanged with no account timezone"),
         ("devices_ems", _test_async_get_devices_with_ems, "Get devices with EMS"),
         ("devices_gateway", _test_async_get_devices_with_gateway, "Get devices with Gateway"),
         ("devices_batteries", _test_async_get_devices_with_batteries, "Get devices with batteries"),
         ("devices_legacy_battery", _test_async_get_devices_legacy_battery, "Get devices with legacy battery (empty connections)"),
         ("devices_empty", _test_async_get_devices_empty, "Get empty devices"),
+        ("devices_stale_last_updated", _test_async_get_devices_stale_last_updated, "Devices with stale last_updated are skipped"),
         ("evc_devices", _test_async_get_evc_devices, "Get EV charger devices"),
         ("smart_devices", _test_async_get_smart_devices, "Get smart devices"),
         ("evc_commands", _test_async_get_evc_commands, "Get EV charger commands"),
@@ -221,6 +259,10 @@ def test_ge_cloud(my_predbat=None):
         ("automatic_config", _test_async_automatic_config, "Automatic config"),
         ("hybrid_detection", _test_hybrid_detection, "Hybrid inverter detection"),
         ("enable_defaults", _test_enable_default_options, "Enable default options"),
+        ("enable_defaults_skip_target", _test_enable_default_options_skips_discharge_target, "Enable defaults skips the discharge target register"),
+        ("enable_defaults_read_only", _test_run_read_only_skips_reset, "Enable defaults skipped in read-only mode"),
+        ("enable_defaults_after_read_only", _test_run_enables_reset_after_read_only, "Enable defaults on first non-read-only run"),
+        ("enable_defaults_24h", _test_run_enables_reset_after_24h, "Enable defaults re-runs after 24 hours"),
         ("download_single", _test_download_ge_data_single_day, "Download single day"),
         ("download_multi", _test_download_ge_data_multi_day, "Download multi-day"),
         ("download_pagination", _test_download_ge_data_pagination, "Download pagination"),
@@ -315,6 +357,247 @@ def _test_async_get_inverter_data_auth_error(my_predbat):
                 if ge_cloud.failures_total != 1:
                     print("ERROR: Expected failures_total=1, got {}".format(ge_cloud.failures_total))
                     return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_auth_sets_flag(my_predbat):
+    """Test that a 403 (e.g. GivEnergy Premium / subscription required) sets the api_auth_failed flag"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.api_auth_failed = False
+
+        mock_response = create_aiohttp_mock_response(status=403, json_data={"error": "Forbidden"})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+                if result != {}:
+                    print("ERROR: Expected empty dict for 403, got {}".format(result))
+                    return 1
+                if not ge_cloud.api_auth_failed:
+                    print("ERROR: Expected api_auth_failed=True after 403")
+                    return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_success_clears_auth_flag(my_predbat):
+    """Test that a successful call clears a previously-set api_auth_failed flag"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.api_auth_failed = True
+
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": {"ok": 1}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+                if ge_cloud.api_auth_failed:
+                    print("ERROR: Expected api_auth_failed=False after a successful call")
+                    return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_publish_status_auth_failure_marks_time_unavailable(my_predbat):
+    """Test that when auth has failed and no fresh status is available, the inverter time
+    sensor is marked unavailable rather than left holding a stale (frozen) timestamp.
+
+    A frozen timestamp drifts against wall-clock and is misdiagnosed downstream as inverter
+    clock skew, triggering false warnings and auto-restart loops.
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.api_auth_failed = True
+
+        await ge_cloud.publish_status("ABC123", {})
+
+        entity = "sensor.predbat_gecloud_abc123_time"
+        item = ge_cloud.dashboard_items.get(entity, {})
+        if item.get("state") != "unavailable":
+            print("ERROR: Expected {} state 'unavailable', got {}".format(entity, item.get("state")))
+            return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_reports_auth_denied_scoped(my_predbat):
+    """run() must report GivEnergy access-denied only on a poll cycle and only for INVERTER auth
+    failures — not from a stale flag on an in-between 60s tick, and not from an EVC/other-endpoint
+    403 while inverter polling succeeded.
+    """
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud.device_list = ["inv001"]
+        ge_cloud.evc_device_list = ["evc-001"]
+        ge_cloud.pending_writes = {"inv001": []}
+
+        status_messages = []
+
+        def capture_status(message, had_errors=False, **kwargs):
+            status_messages.append(message)
+
+        ge_cloud.base.record_status = capture_status
+
+        async def benign(*args, **kwargs):
+            return {}
+
+        async def status_ok(device, previous):
+            ge_cloud.api_auth_failed = False
+            return {"power": 1}
+
+        async def status_auth_fail(device, previous):
+            ge_cloud.api_auth_failed = True
+            return {}
+
+        async def evc_clears_flag(uuid, previous):
+            ge_cloud.api_auth_failed = False
+            return {"serial_number": "evc-serial"}
+
+        async def evc_sets_flag(uuid, previous):
+            ge_cloud.api_auth_failed = True
+            return {"serial_number": "evc-serial"}
+
+        ge_cloud.publish_status = benign
+        ge_cloud.async_get_inverter_meter = benign
+        ge_cloud.publish_meter = benign
+        ge_cloud.async_get_device_info = benign
+        ge_cloud.publish_info = benign
+        ge_cloud.async_get_evc_device_data = benign
+        ge_cloud.async_get_evc_sessions = benign
+        ge_cloud.publish_evc_data = benign
+
+        denied = "access denied"
+
+        # Case 1: inverter status auth-fails on a poll cycle -> report denied, even though the later
+        # EVC call clears the global flag.
+        ge_cloud.async_get_inverter_status = status_auth_fail
+        ge_cloud.async_get_evc_device = evc_clears_flag
+        status_messages.clear()
+        await ge_cloud.run(seconds=120, first=False)
+        if not any(denied in m for m in status_messages):
+            print("ERROR: inverter auth failure on a poll cycle should report access-denied, got {}".format(status_messages))
+            return 1
+
+        # Case 2 (cadence): a stale flag on a non-poll 60s tick must NOT re-report.
+        ge_cloud.api_auth_failed = True
+        status_messages.clear()
+        await ge_cloud.run(seconds=60, first=False)
+        if any(denied in m for m in status_messages):
+            print("ERROR: non-poll 60s tick must not re-report denied from a stale flag, got {}".format(status_messages))
+            return 1
+
+        # Case 3 (scope): inverter ok but an EVC-only 403 must NOT report inverter access-denied.
+        ge_cloud.api_auth_failed = False
+        ge_cloud.async_get_inverter_status = status_ok
+        ge_cloud.async_get_evc_device = evc_sets_flag
+        status_messages.clear()
+        await ge_cloud.run(seconds=120, first=False)
+        if any(denied in m for m in status_messages):
+            print("ERROR: an EVC-only auth failure must not report inverter access-denied, got {}".format(status_messages))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_inverter_data_non_auth_clears_flag(my_predbat):
+    """A non-401/403 response (404/429/5xx) must clear a previously-set api_auth_failed flag, so a
+    transient failure after an auth failure is not reported as an ongoing access-denied condition."""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        for status in (404, 429, 500):
+            ge_cloud.api_auth_failed = True
+            mock_response = create_aiohttp_mock_response(status=status, json_data={"error": "x"})
+            mock_session = create_aiohttp_mock_session(mock_response)
+
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                    mock_session_class.return_value = mock_session
+
+                    await ge_cloud.async_get_inverter_data(GE_API_DEVICES)
+
+                    if ge_cloud.api_auth_failed:
+                        print("ERROR: a {} response should clear api_auth_failed (not an auth failure)".format(status))
+                        return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_auth_status_reported_on_transition_only(my_predbat):
+    """A persistent inverter auth failure must report access-denied only once (on transition), not
+    on every poll cycle, to avoid inflating the HA error_count. A new episode after recovery reports
+    again."""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud.device_list = ["inv001"]
+        ge_cloud.evc_device_list = []
+        ge_cloud.pending_writes = {"inv001": []}
+
+        status_messages = []
+        ge_cloud.base.record_status = lambda message, had_errors=False, **kwargs: status_messages.append(message)
+
+        async def benign(*args, **kwargs):
+            return {}
+
+        async def status_auth_fail(device, previous):
+            ge_cloud.api_auth_failed = True
+            return {}
+
+        async def status_ok(device, previous):
+            ge_cloud.api_auth_failed = False
+            return {"power": 1}
+
+        ge_cloud.publish_status = benign
+        ge_cloud.async_get_inverter_meter = benign
+        ge_cloud.publish_meter = benign
+        ge_cloud.async_get_device_info = benign
+        ge_cloud.publish_info = benign
+
+        denied = "access denied"
+
+        # Two consecutive denied poll cycles -> reported only once.
+        ge_cloud.async_get_inverter_status = status_auth_fail
+        await ge_cloud.run(seconds=120, first=False)
+        await ge_cloud.run(seconds=240, first=False)
+        count = sum(1 for m in status_messages if denied in m)
+        if count != 1:
+            print("ERROR: a persistent auth denial should report once (transition), got {} reports".format(count))
+            return 1
+
+        # Recover, then deny again -> reported again (new episode).
+        ge_cloud.async_get_inverter_status = status_ok
+        await ge_cloud.run(seconds=360, first=False)
+        ge_cloud.async_get_inverter_status = status_auth_fail
+        status_messages.clear()
+        await ge_cloud.run(seconds=480, first=False)
+        if not any(denied in m for m in status_messages):
+            print("ERROR: a new denial episode after recovery should report again")
+            return 1
         return 0
 
     return run_async(test())
@@ -577,6 +860,554 @@ def _test_async_get_inverter_data_post(my_predbat):
     return run_async(test())
 
 
+def _test_async_get_account(my_predbat):
+    """Test fetching the customer account details and recording the account timezone"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        account_data = {
+            "id": 2,
+            "name": "francesca.holmes.285",
+            "email": "joshua94@martin.com",
+            "country": "GREECE",
+            "timezone": "GMT",
+            "standard_timezone": "Europe/Athens",
+        }
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"data": account_data})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_account()
+
+                if result != account_data:
+                    print("ERROR: Expected account data returned, got {}".format(result))
+                    return 1
+                if ge_cloud.account != account_data:
+                    print("ERROR: Expected account stored, got {}".format(ge_cloud.account))
+                    return 1
+                if ge_cloud.account_timezone_name != "Europe/Athens":
+                    print("ERROR: Expected account timezone Europe/Athens, got {}".format(ge_cloud.account_timezone_name))
+                    return 1
+                # Athens is always 2 hours ahead of London as both follow the same DST rules
+                if ge_cloud.get_timezone_offset_minutes() != 120:
+                    print("ERROR: Expected offset of 120 minutes, got {}".format(ge_cloud.get_timezone_offset_minutes()))
+                    return 1
+
+                # Verify the account endpoint was used
+                call_url = mock_session.get.call_args[0][0]
+                if not call_url.endswith(GE_API_ACCOUNT):
+                    print("ERROR: Expected account endpoint to be called, got {}".format(call_url))
+                    return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_account_failure(my_predbat):
+    """Test that a failed account fetch leaves the previously known account details alone"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.account = {"standard_timezone": "Europe/Athens"}
+        ge_cloud.account_timezone = pytz.timezone("Europe/Athens")
+        ge_cloud.account_timezone_name = "Europe/Athens"
+
+        mock_response = create_aiohttp_mock_response(status=404, json_data={"error": "Not found"})
+        mock_session = create_aiohttp_mock_session(mock_response)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+
+                result = await ge_cloud.async_get_account()
+
+                if result != {"standard_timezone": "Europe/Athens"}:
+                    print("ERROR: Expected previous account to be returned, got {}".format(result))
+                    return 1
+                if ge_cloud.account_timezone_name != "Europe/Athens":
+                    print("ERROR: Expected timezone to be retained, got {}".format(ge_cloud.account_timezone_name))
+                    return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_publish_account(my_predbat):
+    """Test publishing the account and timezone sensors"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.account_timezone = pytz.timezone("Europe/Athens")
+        ge_cloud.account_timezone_name = "Europe/Athens"
+
+        account_data = {
+            "id": 2,
+            "name": "francesca.holmes.285",
+            "email": "joshua94@martin.com",
+            "country": "GREECE",
+            "timezone": "EET",
+            "standard_timezone": "Europe/Athens",
+        }
+        await ge_cloud.publish_account(account_data)
+
+        entity_id = "sensor.predbat_gecloud_account"
+        if entity_id not in ge_cloud.dashboard_items:
+            print("ERROR: Expected account sensor to be published")
+            return 1
+        item = ge_cloud.dashboard_items[entity_id]
+        if item["state"] != "francesca.holmes.285":
+            print("ERROR: Expected account state to be the account name, got {}".format(item["state"]))
+            return 1
+        data = item["attributes"].get("data", None)
+        if data is None:
+            print("ERROR: Expected a data attribute on the account sensor")
+            return 1
+        if "name" in data:
+            print("ERROR: Expected name to be excluded from the account data attribute, got {}".format(data))
+            return 1
+        if data.get("email") != "joshua94@martin.com" or data.get("country") != "GREECE" or data.get("id") != 2:
+            print("ERROR: Expected the remaining account values in the data attribute, got {}".format(data))
+            return 1
+
+        entity_id = "sensor.predbat_gecloud_timezone"
+        if entity_id not in ge_cloud.dashboard_items:
+            print("ERROR: Expected timezone sensor to be published")
+            return 1
+        item = ge_cloud.dashboard_items[entity_id]
+        if item["state"] != "Europe/Athens":
+            print("ERROR: Expected timezone state Europe/Athens, got {}".format(item["state"]))
+            return 1
+        data = item["attributes"].get("data", None)
+        if data is None:
+            print("ERROR: Expected a data attribute on the timezone sensor")
+            return 1
+        if data.get("timezone") != "EET" or data.get("standard_timezone") != "Europe/Athens":
+            print("ERROR: Expected the timezone values in the data attribute, got {}".format(data))
+            return 1
+        if data.get("predbat_timezone") != "Europe/London":
+            print("ERROR: Expected the Predbat timezone in the data attribute, got {}".format(data))
+            return 1
+        if data.get("offset_minutes") != 120:
+            print("ERROR: Expected an offset of 120 minutes in the data attribute, got {}".format(data))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_publish_account_empty(my_predbat):
+    """Test that no sensors are published when the account details are unavailable"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        await ge_cloud.publish_account({})
+
+        if ge_cloud.dashboard_items:
+            print("ERROR: Expected no entities published for an empty account, got {}".format(list(ge_cloud.dashboard_items)))
+            return 1
+
+        # An account with no timezone still publishes, falling back to an unknown timezone
+        await ge_cloud.publish_account({"name": "someone"})
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "unknown":
+            print("ERROR: Expected unknown timezone state, got {}".format(ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", None)))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_account", {}).get("state", None) != "someone":
+            print("ERROR: Expected account name state, got {}".format(ge_cloud.dashboard_items.get("sensor.predbat_gecloud_account", None)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_saved_to_storage(my_predbat):
+    """Account details fetched from the API are saved to storage"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens"}
+
+        async def mock_get_account():
+            ge_cloud.account = account_data
+            ge_cloud.set_account_timezone(account_data)
+            return account_data
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        account_saves = [call for call in storage.save_calls if call["filename"] == "account"]
+        if len(account_saves) != 1:
+            print("ERROR: Expected the account to be saved once, got {}".format(storage.save_calls))
+            return 1
+        if account_saves[0]["module"] != "gecloud" or account_saves[0]["data"] != account_data:
+            print("ERROR: Unexpected account save {}".format(account_saves[0]))
+            return 1
+        if "sensor.predbat_gecloud_account" not in ge_cloud.dashboard_items:
+            print("ERROR: Expected the account sensor to be published")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_restored_from_cache(my_predbat):
+    """A fresh cached account is restored on restart without hitting the API"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens", "timezone": "EET"}
+        await storage.save("gecloud", "account", account_data, format="json")
+        storage.age_overrides[("gecloud", "account")] = 60
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        fetch_calls = []
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            return {}
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        if fetch_calls:
+            print("ERROR: Expected no API fetch when the cached account is fresh")
+            return 1
+        if ge_cloud.account != account_data:
+            print("ERROR: Expected the cached account to be restored, got {}".format(ge_cloud.account))
+            return 1
+        if ge_cloud.account_timezone_name != "Europe/Athens":
+            print("ERROR: Expected the cached timezone to be restored, got {}".format(ge_cloud.account_timezone_name))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "Europe/Athens":
+            print("ERROR: Expected the timezone sensor to be published from the cache")
+            return 1
+
+        # A subsequent run should not fetch either, as the details are still within their lifetime
+        await ge_cloud.update_account(first=False)
+        if fetch_calls:
+            print("ERROR: Expected no API fetch on a later run within the cache lifetime")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_stale_cache_refetch(my_predbat):
+    """A stale cached account is used as a fallback but re-fetched from the API"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        cached_account = {"name": "old-name", "standard_timezone": "Europe/Athens"}
+        await storage.save("gecloud", "account", cached_account, format="json")
+        storage.age_overrides[("gecloud", "account")] = 48 * 60
+
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        fresh_account = {"name": "new-name", "standard_timezone": "Europe/Paris"}
+        fetch_calls = []
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            ge_cloud.account = fresh_account
+            ge_cloud.set_account_timezone(fresh_account)
+            return fresh_account
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected the stale cache to trigger one API fetch, got {}".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account != fresh_account:
+            print("ERROR: Expected the freshly fetched account to be used, got {}".format(ge_cloud.account))
+            return 1
+        account_saves = [call for call in storage.save_calls if call["filename"] == "account" and call["data"] == fresh_account]
+        if not account_saves:
+            print("ERROR: Expected the freshly fetched account to be saved to storage")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_no_cache_fetches(my_predbat):
+    """With no cached account the details are fetched from the API"""
+
+    async def test():
+        storage = _make_async_storage_mock()
+        ge_cloud = MockGECloudDirect()
+        ge_cloud._mock_storage = storage
+
+        fetch_calls = []
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            return {}
+
+        ge_cloud.async_get_account = mock_get_account
+
+        await ge_cloud.update_account(first=True)
+
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected one API fetch with no cached account, got {}".format(len(fetch_calls)))
+            return 1
+        if not any("No valid account details found" in message for message in ge_cloud.log_messages):
+            print("ERROR: Expected a log message about the missing account cache")
+            return 1
+        # Nothing to save or publish when the fetch returns nothing
+        if [call for call in storage.save_calls if call["filename"] == "account"]:
+            print("ERROR: Expected no account save when the fetch returned nothing")
+            return 1
+        if ge_cloud.dashboard_items:
+            print("ERROR: Expected no entities published for an empty account, got {}".format(list(ge_cloud.dashboard_items)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_account_failed_fetch_retries(my_predbat):
+    """A failed account fetch retries after the retry interval rather than waiting a full day"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        start = ge_cloud._now_utc_exact
+
+        fetch_calls = []
+        account_data = {"name": "someone", "standard_timezone": "Europe/Athens"}
+        fail = True
+
+        async def mock_get_account():
+            fetch_calls.append(True)
+            if fail:
+                return {}
+            ge_cloud.account = account_data
+            ge_cloud.set_account_timezone(account_data)
+            return account_data
+
+        ge_cloud.async_get_account = mock_get_account
+
+        # First attempt fails, so the details must not be marked fresh
+        await ge_cloud.update_account(first=True)
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected 1 fetch attempt, got {}".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account_stamp is not None:
+            print("ERROR: Expected account_stamp to stay None after a failed fetch, got {}".format(ge_cloud.account_stamp))
+            return 1
+
+        # A run within the retry interval must not hammer the API
+        ge_cloud._now_utc_exact = start + timedelta(minutes=5)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 1:
+            print("ERROR: Expected no retry within the retry interval, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        # Once the retry interval has passed it tries again, well before the 24 hour lifetime
+        fail = False
+        ge_cloud._now_utc_exact = start + timedelta(minutes=31)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 2:
+            print("ERROR: Expected a retry after the retry interval, got {} fetches".format(len(fetch_calls)))
+            return 1
+        if ge_cloud.account_stamp != ge_cloud._now_utc_exact:
+            print("ERROR: Expected account_stamp to be set after a successful fetch, got {}".format(ge_cloud.account_stamp))
+            return 1
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_timezone", {}).get("state", None) != "Europe/Athens":
+            print("ERROR: Expected the timezone sensor to be published after the successful retry")
+            return 1
+
+        # Now that it succeeded there should be no further fetches until the details expire
+        ge_cloud._now_utc_exact = start + timedelta(hours=12)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 2:
+            print("ERROR: Expected no fetch while the details are fresh, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        ge_cloud._now_utc_exact = start + timedelta(hours=25)
+        await ge_cloud.update_account(first=False)
+        if len(fetch_calls) != 3:
+            print("ERROR: Expected a fetch once the details expired, got {} fetches".format(len(fetch_calls)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_set_account_timezone(my_predbat):
+    """Test recording the account timezone including bad and missing values"""
+
+    ge_cloud = MockGECloudDirect()
+
+    # Falls back to the non-standard timezone name when standard_timezone is absent
+    ge_cloud.set_account_timezone({"timezone": "Europe/Athens"})
+    if ge_cloud.account_timezone_name != "Europe/Athens":
+        print("ERROR: Expected fallback to timezone field, got {}".format(ge_cloud.account_timezone_name))
+        return 1
+
+    # An unknown timezone is ignored and the previous value retained
+    ge_cloud.set_account_timezone({"standard_timezone": "Mars/Olympus_Mons"})
+    if ge_cloud.account_timezone_name != "Europe/Athens":
+        print("ERROR: Expected unknown timezone to be ignored, got {}".format(ge_cloud.account_timezone_name))
+        return 1
+    if not any("Unknown account timezone" in message for message in ge_cloud.log_messages):
+        print("ERROR: Expected a warning to be logged for an unknown timezone")
+        return 1
+
+    # No timezone at all leaves things unchanged and warns
+    ge_cloud.log_messages = []
+    ge_cloud.set_account_timezone({"name": "someone"})
+    if ge_cloud.account_timezone_name != "Europe/Athens":
+        print("ERROR: Expected missing timezone to be ignored, got {}".format(ge_cloud.account_timezone_name))
+        return 1
+    if not any("No timezone found" in message for message in ge_cloud.log_messages):
+        print("ERROR: Expected a warning to be logged for a missing timezone")
+        return 1
+
+    # No account timezone at all means no shift is applied
+    ge_cloud = MockGECloudDirect()
+    if ge_cloud.get_timezone_offset_minutes() != 0:
+        print("ERROR: Expected zero offset with no account timezone, got {}".format(ge_cloud.get_timezone_offset_minutes()))
+        return 1
+
+    return 0
+
+
+def _test_shift_time_string(my_predbat):
+    """Test shifting register time strings across the midnight boundary"""
+
+    ge_cloud = MockGECloudDirect()
+
+    cases = [
+        ("02:00:00", -120, "00:00:00"),
+        ("23:30", 120, "01:30"),
+        ("01:00:00", -120, "23:00:00"),
+        ("00:15:00", -30, "23:45:00"),
+        ("24:00", -60, "23:00"),
+        ("12:00:00", 0, "12:00:00"),
+        ("bad", 60, "bad"),
+        ("aa:bb", 60, "aa:bb"),
+        (None, 60, None),
+        (45, 60, 45),
+    ]
+    for value, offset, expected in cases:
+        result = ge_cloud.shift_time_string(value, offset)
+        if result != expected:
+            print("ERROR: shift_time_string({}, {}) expected {}, got {}".format(value, offset, expected, result))
+            return 1
+
+    return 0
+
+
+def _test_register_time_timezone(my_predbat):
+    """Test that time registers are published and written using the customer account timezone"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.account_timezone = pytz.timezone("Europe/Athens")
+        ge_cloud.account_timezone_name = "Europe/Athens"
+
+        # Register value is in the account timezone (Athens, 2 hours ahead of the Predbat timezone)
+        registers = {77: {"name": "AC Charge 1 Start Time", "validation_rules": ["date_format:H:i"], "validation": "", "value": "02:00"}}
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+
+        entity_id = "select.predbat_gecloud_test123_ac_charge_1_start_time"
+        if entity_id not in ge_cloud.dashboard_items:
+            print("ERROR: Expected time select entity to be published")
+            return 1
+        state = ge_cloud.dashboard_items[entity_id]["state"]
+        if state != "00:00:00":
+            print("ERROR: Expected published state 00:00:00 in the Predbat timezone, got {}".format(state))
+            return 1
+
+        # Writing back a Predbat local time should be converted into the account timezone
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        await ge_cloud.select_event(entity_id, "23:30:00")
+
+        if len(write_calls) != 1:
+            print("ERROR: Expected 1 write call, got {}".format(len(write_calls)))
+            return 1
+        if write_calls[0]["value"] != "01:30":
+            print("ERROR: Expected 01:30 written in the account timezone, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_register_time_no_timezone(my_predbat):
+    """Test that time registers are left untouched when the account timezone is unknown"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        registers = {77: {"name": "AC Charge 1 Start Time", "validation_rules": ["date_format:H:i"], "validation": "", "value": "02:00"}}
+        ge_cloud.settings["test123"] = registers
+        await ge_cloud.publish_registers("test123", registers)
+
+        entity_id = "select.predbat_gecloud_test123_ac_charge_1_start_time"
+        state = ge_cloud.dashboard_items[entity_id]["state"]
+        if state != "02:00:00":
+            print("ERROR: Expected unshifted state 02:00:00, got {}".format(state))
+            return 1
+
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        await ge_cloud.select_event(entity_id, "23:30:00")
+
+        if write_calls[0]["value"] != "23:30":
+            print("ERROR: Expected unshifted write of 23:30, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
 def _test_async_get_devices_with_ems(my_predbat):
     """Test device discovery with EMS device"""
 
@@ -722,8 +1553,57 @@ def _test_async_get_devices_empty(my_predbat):
 
             result = await ge_cloud.async_get_devices()
 
-            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}}:
+            if result != {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}:
                 print("ERROR: Expected empty result dict, got {}".format(result))
+                return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_async_get_devices_stale_last_updated(my_predbat):
+    """Test that devices with last_updated older than 5 days are excluded from device discovery"""
+
+    async def test():
+        from datetime import datetime, timezone, timedelta
+
+        ge_cloud = MockGECloudDirect()
+
+        recent = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stale = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        mock_devices = [
+            # Recent battery — should be included
+            {"inverter": {"serial": "fresh001", "last_updated": recent, "info": {"model": "All-In-One"}, "connections": {"batteries": [{"serial": "bat1"}], "meters": []}}},
+            # Stale battery (10 days old) — should be skipped
+            {"inverter": {"serial": "stale001", "last_updated": stale, "info": {"model": "All-In-One"}, "connections": {"batteries": [{"serial": "bat2"}], "meters": []}}},
+            # Stale EMS — should be skipped
+            {"inverter": {"serial": "stale_ems", "last_updated": stale, "info": {"model": "Plant EMS"}, "connections": {"batteries": [], "meters": []}}},
+            # Recent gateway — should be included
+            {"inverter": {"serial": "fresh_gw", "last_updated": recent, "info": {"model": "Gateway"}, "connections": {"batteries": [], "meters": []}}},
+            # No last_updated field — should be included (age check skipped)
+            {"inverter": {"serial": "nots001", "info": {"model": "Hybrid"}, "connections": {"batteries": [{"serial": "bat3"}], "meters": []}}},
+        ]
+
+        async def mock_retry(*args, **kwargs):
+            return mock_devices
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_get_inverter_data_retry = mock_retry
+
+            result = await ge_cloud.async_get_devices()
+
+            if result["battery"] != ["fresh001", "nots001"]:
+                print("ERROR: Expected battery=['fresh001', 'nots001'], got {}".format(result["battery"]))
+                return 1
+            if "stale001" in result["battery"]:
+                print("ERROR: stale001 should have been excluded (last_updated 10 days ago)")
+                return 1
+            if result["ems"] is not None:
+                print("ERROR: stale EMS should have been excluded, got ems={}".format(result["ems"]))
+                return 1
+            if result["gateway"] != "fresh_gw":
+                print("ERROR: Expected gateway='fresh_gw', got {}".format(result["gateway"]))
                 return 1
         return 0
 
@@ -1525,6 +2405,8 @@ def _make_async_storage_mock():
         def __init__(self):
             self._data = {}
             self.save_calls = []
+            # Ages in minutes keyed by (module, filename), overriding the default of 0 (fresh)
+            self.age_overrides = {}
 
         async def load(self, module, filename, format="json"):
             import copy
@@ -1539,8 +2421,10 @@ def _make_async_storage_mock():
             return True
 
         async def age(self, module, filename):
-            # Return 0 (fresh) for any stored key, None for missing keys
-            return 0 if (module, filename) in self._data else None
+            # Return 0 (fresh) for any stored key unless overridden, None for missing keys
+            if (module, filename) not in self._data:
+                return None
+            return self.age_overrides.get((module, filename), 0)
 
     return _AsyncStorageMock()
 
@@ -1557,7 +2441,7 @@ def _test_settings_saved_to_storage(my_predbat):
         expected_settings = {"sid-1": {"name": "Battery Reserve", "value": 4, "validation_rules": ["between:0,100"], "validation": ""}}
 
         async def mock_get_devices():
-            return {"battery": ["inv001"], "ems": None, "gateway": None}
+            return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
         async def mock_get_evc_devices():
             return []
@@ -1639,7 +2523,7 @@ def _test_settings_restored_from_fresh_cache(my_predbat):
         poll_calls = []
 
         async def mock_get_devices():
-            return {"battery": ["inv001"], "ems": None, "gateway": None}
+            return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
         async def mock_get_evc_devices():
             return []
@@ -1716,9 +2600,16 @@ def _test_run_method(my_predbat):
         call_order = []
 
         # Mock all the async functions called by run()
+        async def mock_get_account():
+            call_order.append("async_get_account")
+            return {"standard_timezone": "Europe/London"}
+
+        async def mock_publish_account(account):
+            call_order.append("publish_account")
+
         async def mock_get_devices():
             call_order.append("async_get_devices")
-            return {"battery": ["inv001"], "ems": None, "gateway": None}
+            return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
 
         async def mock_get_evc_devices():
             call_order.append("async_get_evc_devices")
@@ -1774,6 +2665,8 @@ def _test_run_method(my_predbat):
             call_order.append(f"enable_default_options:{device}")
 
         # Assign all mocks
+        ge_cloud.async_get_account = mock_get_account
+        ge_cloud.publish_account = mock_publish_account
         ge_cloud.async_get_devices = mock_get_devices
         ge_cloud.async_get_evc_devices = mock_get_evc_devices
         ge_cloud.async_get_inverter_status = mock_get_inverter_status
@@ -1801,6 +2694,8 @@ def _test_run_method(my_predbat):
 
         # Verify expected call order for first run
         expected_order = [
+            "async_get_account",
+            "publish_account",
             "async_get_devices",
             "async_get_evc_devices",
             # Device polling (every 60 seconds, also on first)
@@ -2692,6 +3587,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate") == ["number.predbat_gecloud_battery001_battery_discharge_power"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery001_battery_reserve_percent_limit"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
 
         # Verify time controls
         assert ge.config_args.get("charge_start_time") == ["select.predbat_gecloud_battery001_ac_charge_1_start_time"]
@@ -2704,8 +3600,10 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("pause_start_time") == ["select.predbat_gecloud_battery001_pause_battery_start_time"], "pause_start_time should be set"
         assert ge.config_args.get("pause_end_time") == ["select.predbat_gecloud_battery001_pause_battery_end_time"], "pause_end_time should be set"
         assert ge.config_args.get("discharge_target_soc") == ["number.predbat_gecloud_battery001_dc_discharge_1_lower_soc_percent_limit"], "discharge_target_soc should be set"
-        assert ge.config_args.get("charge_rate_percent") == ["number.predbat_gecloud_battery001_inverter_charge_power_percentage"], "charge_rate_percent should be set"
-        assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery001_inverter_discharge_power_percentage"], "discharge_rate_percent should be set"
+        # When both the direct power register and the percentage register exist, the power register
+        # is the control and the percentage must not be configured (it would clamp the power setting).
+        assert ge.config_args.get("charge_rate_percent") is None, "charge_rate_percent should be None when battery_charge_power is present"
+        assert ge.config_args.get("discharge_rate_percent") is None, "discharge_rate_percent should be None when battery_discharge_power is present"
 
         # Test 2: Battery without optional features
         ge.config_args = {}
@@ -2723,9 +3621,9 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate_percent") is None, "discharge_rate_percent should be None"
         assert ge.config_args.get("inverter_mode") is None, "inverter_mode should be None when eco toggle switch is not available"
 
-        # Test 3: Multiple batteries with no battery_meters (default: shared CT — no dedicated meters detected)
-        # When battery_meters is absent or all batteries have empty meters, shared CT is assumed and
-        # grid/load sensors should use only the first battery to avoid double-counting.
+        # Test 3: Multiple batteries with no battery_meters (default: split CT — no duplicate serials detected)
+        # When battery_meters is absent, there are no duplicate serials, so has_shared_ct stays False
+        # and all inverters' grid/load readings are used independently.
         ge.config_args = {}
         ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
 
@@ -2735,14 +3633,13 @@ def _test_async_automatic_config(my_predbat):
 
         assert ge.config_args.get("num_inverters") == 2, "num_inverters should be 2"
         assert ge.config_args.get("inverter_type") == ["GEC", "GEC"], "inverter_type should have 2 entries"
-        # Shared CT: load_today, import_today, export_today use first battery only to avoid double-counting
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should use first battery only (shared CT)"
-        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only (shared CT)"
-        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only (shared CT)"
-        # Shared CT: grid_power and load_power use first battery + zeros
-        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero (shared CT)"
-        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", 0], "load_power should use first battery + zero (shared CT)"
-        # Per-inverter sensors should still use all batteries
+        # Split CT: all batteries used for grid and load sensors
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"], "load_today should use all batteries (split CT)"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries (split CT)"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"], "export_today should use all batteries (split CT)"
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "grid_power should use all batteries (split CT)"
+        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", "sensor.predbat_gecloud_battery002_consumption_power"], "load_power should use all batteries (split CT)"
+        # Per-inverter sensors should also use all batteries
         assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_battery002_solar_total"], "pv_today should use all batteries"
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_battery001_battery_power", "sensor.predbat_gecloud_battery002_battery_power"], "battery_power should use all batteries"
         assert ge.config_args.get("inverter_mode") == ["switch.predbat_gecloud_battery001_enable_eco_mode", "switch.predbat_gecloud_battery002_enable_eco_mode"], "inverter_mode should have 2 eco toggle entries"
@@ -2783,7 +3680,82 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero when meter serial is shared"
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when meter serial is shared"
 
-        # Test 3d: Three-phase alternative names should be auto-selected when default names do not exist
+        # Test 3e: ge_cloud_automatic_shared_ct=True forces shared CT even with no duplicate meter serials
+        ge.config_args = {"ge_cloud_automatic_shared_ct": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [1001], "battery002": [1002]},  # unique serials — would normally be split CT
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", 0], "grid_power should use first battery + zero when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("load_power") == ["sensor.predbat_gecloud_battery001_consumption_power", 0], "load_power should use first battery + zero when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total"], "import_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total"], "export_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total"], "load_today should use first battery only when ge_cloud_automatic_shared_ct overrides"
+
+        # Test 3f: ge_cloud_automatic_split_ct=True forces split CT even with duplicate meter serials
+        ge.config_args = {"ge_cloud_automatic_split_ct": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [9999], "battery002": [9999]},  # duplicate serials — would normally be shared CT
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "grid_power should use all batteries when ge_cloud_automatic_split_ct overrides"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries when ge_cloud_automatic_split_ct overrides"
+        assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_battery001_grid_export_total", "sensor.predbat_gecloud_battery002_grid_export_total"], "export_today should use all batteries when ge_cloud_automatic_split_ct overrides"
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_battery001_consumption_total", "sensor.predbat_gecloud_battery002_consumption_total"], "load_today should use all batteries when ge_cloud_automatic_split_ct overrides"
+
+        # Test 3g: both override flags set — ge_cloud_automatic_split_ct takes priority
+        ge.config_args = {"ge_cloud_automatic_shared_ct": True, "ge_cloud_automatic_split_ct": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}, "battery002": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {
+            "ems": None,
+            "gateway": None,
+            "battery": ["battery001", "battery002"],
+            "battery_meters": {"battery001": [1001], "battery002": [1002]},
+        }
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("grid_power") == ["sensor.predbat_gecloud_battery001_grid_power", "sensor.predbat_gecloud_battery002_grid_power"], "split CT should win when both overrides are set"
+        assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_battery001_grid_import_total", "sensor.predbat_gecloud_battery002_grid_import_total"], "import_today should use all batteries when split CT wins"
+
+        # Test 3h: standalone PV inverter present, ge_cloud_automatic_split_pv unset (default False) — PV inverter excluded
+        ge.config_args = {}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"]}
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total"], "pv_today should exclude standalone PV inverters by default"
+        assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_battery001_solar_power"], "pv_power should exclude standalone PV inverters by default"
+
+        # Test 3i: standalone PV inverter present, ge_cloud_automatic_split_pv=True — PV inverter included
+        ge.config_args = {"ge_cloud_automatic_split_pv": True}
+        ge.settings = {"battery001": {"reg1": {"name": "Enable_Eco_Mode"}}}
+
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"], "pv": ["pv001"]}
+
+        await ge.async_automatic_config(devices)
+
+        assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_battery001_solar_total", "sensor.predbat_gecloud_pv001_solar_total"], "pv_today should include standalone PV inverters when ge_cloud_automatic_split_pv is set"
+        assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_battery001_solar_power", "sensor.predbat_gecloud_pv001_solar_power"], "pv_power should include standalone PV inverters when ge_cloud_automatic_split_pv is set"
+
+        # Test 3j: Three-phase alternative names should be auto-selected when default names do not exist
         ge.config_args = {}
         ge.settings = {
             "battery003": {
@@ -2804,6 +3776,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_rate_percent") == ["number.predbat_gecloud_battery003_discharge_power_rate"]
         assert ge.config_args.get("reserve") == ["number.predbat_gecloud_battery003_battery_reserve_percent"]
         assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery003_ac_charge_1_upper_soc_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
         assert ge.config_args.get("scheduled_charge_enable") == ["switch.predbat_gecloud_battery003_enable_ac_charge"]
         assert ge.config_args.get("scheduled_discharge_enable") == ["switch.predbat_gecloud_battery003_enable_force_discharge"]
         assert ge.config_args.get("inverter_mode") is None, "inverter_mode should be None when eco toggle is not available"
@@ -2878,6 +3851,64 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("battery_power") == ["sensor.predbat_gecloud_ems001_battery_power", 0], "Second inverter should get 0 for battery_power"
         assert ge.config_args.get("pv_power") == ["sensor.predbat_gecloud_ems001_solar_power", 0], "Second inverter should get 0 for pv_power"
 
+        # Test 9: charge_limit_enable entity configuration
+        # Test 9a: battery with Enable_AC_Charge_Upper_Percent_Limit register -> primary switch entity
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"], "charge_limit should use primary register"
+        assert ge.config_args.get("charge_limit_enable") == ["switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit"], "charge_limit_enable should use primary enable switch"
+
+        # Test 9b: battery with Enable_AC_Charge_1_Upper_SOC_Percent_Limit (alternative) -> fallback entity
+        ge.config_args = {}
+        ge.settings = {
+            "battery002": {
+                "reg1": {"name": "AC_Charge_1_Upper_SOC_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_1_Upper_SOC_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery002"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery002_ac_charge_1_upper_soc_percent_limit"], "charge_limit should use alternative register"
+        assert ge.config_args.get("charge_limit_enable") == ["switch.predbat_gecloud_battery002_enable_ac_charge_1_upper_soc_percent_limit"], "charge_limit_enable should use alternative enable switch"
+
+        # Test 9c: multi-battery system where each battery uses the primary enable switch
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            },
+            "battery002": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+                "reg2": {"name": "Enable_AC_Charge_Upper_Percent_Limit"},
+            },
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001", "battery002"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit_enable") == [
+            "switch.predbat_gecloud_battery001_enable_ac_charge_upper_percent_limit",
+            "switch.predbat_gecloud_battery002_enable_ac_charge_upper_percent_limit",
+        ], "charge_limit_enable should have one entry per battery"
+
+        # Test 9d: battery with charge limit register but no enable register -> charge_limit_enable is None
+        ge.config_args = {}
+        ge.settings = {
+            "battery001": {
+                "reg1": {"name": "AC_Charge_Upper_Percent_Limit"},
+            }
+        }
+        devices = {"ems": None, "gateway": None, "battery": ["battery001"]}
+        await ge.async_automatic_config(devices)
+        assert ge.config_args.get("charge_limit") == ["number.predbat_gecloud_battery001_ac_charge_upper_percent_limit"]
+        assert ge.config_args.get("charge_limit_enable") is None, "charge_limit_enable should be None when enable register is absent"
+
         return 0
 
     return run_async(test())
@@ -2929,6 +3960,71 @@ def _test_hybrid_detection(my_predbat):
         return 0
 
     return run_async(test())
+
+
+def _test_enable_default_options_skips_discharge_target(my_predbat):
+    """enable_default_options must not reset the register Predbat drives as discharge_target_soc"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.settings = {"test123": {}, "other456": {}}
+
+        write_calls = []
+
+        async def mock_write(device, key, value):
+            write_calls.append({"device": device, "key": key, "value": value})
+            return {"value": value}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        ge_cloud.async_write_inverter_setting = mock_write
+        ge_cloud.publish_registers = mock_publish
+
+        # Predbat drives the DC discharge 1 lower SoC limit on test123 as the export target
+        ge_cloud.config_args["discharge_target_soc"] = ["number.predbat_gecloud_test123_dc_discharge_1_lower_soc_percent_limit"]
+
+        # The configured export target register must be left alone
+        registers = {100: {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+        if write_calls:
+            print("ERROR: Expected no write to the configured discharge target register, got {}".format(write_calls))
+            return 1
+        if result:
+            print("ERROR: enable_default_options should report no change when only the discharge target matched")
+            return 1
+        if registers[100]["value"] != 50:
+            print("ERROR: Discharge target register value should be untouched, got {}".format(registers[100]["value"]))
+            return 1
+
+        # Other lower SoC registers on the same device are still reset to 4%
+        write_calls.clear()
+        registers = {101: {"name": "Export_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+        if len(write_calls) != 1 or write_calls[0]["value"] != 4:
+            print("ERROR: Expected Export_SOC_Percent_Limit to still be reset to 4, got {}".format(write_calls))
+            return 1
+
+        # The same register on a device Predbat is not driving is still reset to 4%
+        write_calls.clear()
+        registers = {100: {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("other456", registers)
+        if len(write_calls) != 1 or write_calls[0]["value"] != 4:
+            print("ERROR: Expected the register on other456 to still be reset to 4, got {}".format(write_calls))
+            return 1
+
+        # With no discharge target configured (inverter lacks the feature) the reset still applies
+        ge_cloud.config_args["discharge_target_soc"] = None
+        write_calls.clear()
+        registers = {100: {"name": "DC_Discharge_1_Lower_SOC_Percent_Limit", "value": 50, "validation_rules": []}}
+        result = await ge_cloud.enable_default_options("test123", registers)
+        if len(write_calls) != 1 or write_calls[0]["value"] != 4:
+            print("ERROR: Expected the reset to apply when no discharge target is configured, got {}".format(write_calls))
+            return 1
+
+        return 0
+
+    return asyncio.run(test())
 
 
 def _test_enable_default_options(my_predbat):
@@ -3065,7 +4161,24 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when real-time control already enabled, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 9: Write failure should return False
+        # Test 9: EMS present — real-time control must be skipped (not attempted on inverters)
+        write_calls = []
+        ge_cloud.ems_device = "ems001"
+        registers = {105: {"name": "Real_Time_Control", "value": False, "validation_rules": []}}
+        ge_cloud.async_write_inverter_setting = mock_write
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should not enable RTC when EMS device is present")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Should not write RTC when EMS present, got {} calls".format(len(write_calls)))
+            return 1
+
+        ge_cloud.ems_device = None
+
+        # Test 10: Write failure should return False
         write_calls = []
         registers = {100: {"name": "Export_SOC_Percent_Limit", "value": 10, "validation_rules": []}}
 
@@ -3081,7 +4194,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: enable_default_options should return False when write fails")
             return 1
 
-        # Test 10: Multiple settings - should process first match only
+        # Test 11: Multiple settings - should process all matching settings
         write_calls = []
         registers = {100: {"name": "Export_SOC_Percent_Limit", "value": 10, "validation_rules": []}, 102: {"name": "AC_Charge_Upper_Percent_Limit", "value": 80, "validation_rules": []}}
 
@@ -3090,17 +4203,14 @@ def _test_enable_default_options(my_predbat):
         result = await ge_cloud.enable_default_options("test123", registers)
 
         if not result:
-            print("ERROR: enable_default_options should return True after processing first match")
+            print("ERROR: enable_default_options should return True after processing all matches")
             return 1
-        # Should only process the first matching setting (export SOC limit)
-        if len(write_calls) != 1:
-            print("ERROR: Should only process first matching setting, got {} calls".format(len(write_calls)))
-            return 1
-        if write_calls[0]["key"] != 100:
-            print("ERROR: Should process first setting (key 100), got key {}".format(write_calls[0]["key"]))
+        # Should process all matching settings
+        if len(write_calls) != 2:
+            print("ERROR: Should process all matching settings, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 11: AC charge slot 2 start time needs resetting
+        # Test 12: AC charge slot 2 start time needs resetting
         write_calls = []
         registers = {200: {"name": "AC_Charge_2_Start_Time", "value": "05:30", "validation_rules": []}}
         ge_cloud.async_write_inverter_setting = mock_write
@@ -3117,7 +4227,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for AC charge 2 start time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 12: AC charge slot 5 end time needs resetting
+        # Test 13: AC charge slot 5 end time needs resetting
         write_calls = []
         registers = {201: {"name": "AC_Charge_5_End_Time", "value": "08:00", "validation_rules": []}}
 
@@ -3130,7 +4240,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for AC charge 5 end time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 13: DC discharge slot 3 start time needs resetting
+        # Test 14: DC discharge slot 3 start time needs resetting
         write_calls = []
         registers = {202: {"name": "DC_Discharge_3_Start_Time", "value": "14:00", "validation_rules": []}}
 
@@ -3143,7 +4253,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for DC discharge 3 start time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 14: DC discharge slot 10 end time needs resetting
+        # Test 15: DC discharge slot 10 end time needs resetting
         write_calls = []
         registers = {203: {"name": "DC_Discharge_10_End_Time", "value": "22:30", "validation_rules": []}}
 
@@ -3156,7 +4266,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value='00:00' for DC discharge 10 end time, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 15: AC charge slot 2 start time already at 00:00 - should not write
+        # Test 16: AC charge slot 2 start time already at 00:00 - should not write
         write_calls = []
         registers = {200: {"name": "AC_Charge_2_Start_Time", "value": "00:00", "validation_rules": []}}
 
@@ -3169,7 +4279,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when time already 00:00, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 16: AC charge slot 2 start time is None - should not write
+        # Test 17: AC charge slot 2 start time is None - should not write
         write_calls = []
         registers = {200: {"name": "AC_Charge_2_Start_Time", "value": None, "validation_rules": []}}
 
@@ -3182,7 +4292,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write when time is None, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 17: AC charge slot 1 should NOT be reset (slots 2-10 only)
+        # Test 18: AC charge slot 1 should NOT be reset (slots 2-10 only)
         write_calls = []
         registers = {210: {"name": "AC_Charge_1_Start_Time", "value": "05:30", "validation_rules": []}}
 
@@ -3195,7 +4305,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Should not write to AC charge 1 slot, got {} calls".format(len(write_calls)))
             return 1
 
-        # Test 18: Lower SOC percent limit needs fixing
+        # Test 19: Lower SOC percent limit needs fixing
         write_calls = []
         registers = {220: {"name": "Lower_SOC_Percent_Limit", "value": 10, "validation_rules": []}}
         ge_cloud.async_write_inverter_setting = mock_write
@@ -3209,7 +4319,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value=4 for lower SOC limit, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 19: Upper SOC percent limit needs fixing
+        # Test 20: Upper SOC percent limit needs fixing
         write_calls = []
         registers = {221: {"name": "DC_Discharge_Upper_SOC_Percent_Limit", "value": 95, "validation_rules": []}}
 
@@ -3222,7 +4332,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value=100 for upper SOC limit, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 20: Charge Up To Percent needs fixing
+        # Test 21: Charge Up To Percent needs fixing
         write_calls = []
         registers = {222: {"name": "Charge_Up_To_Percent", "value": 80, "validation_rules": []}}
 
@@ -3235,7 +4345,7 @@ def _test_enable_default_options(my_predbat):
             print("ERROR: Expected value=100 for charge up to percent, got {}".format(write_calls[0]["value"]))
             return 1
 
-        # Test 21: Discharge Down To Percent needs fixing
+        # Test 22: Discharge Down To Percent needs fixing
         write_calls = []
         registers = {223: {"name": "Discharge_Down_To_Percent", "value": 15, "validation_rules": []}}
 
@@ -3246,6 +4356,286 @@ def _test_enable_default_options(my_predbat):
             return 1
         if write_calls[0]["value"] != 4:
             print("ERROR: Expected value=4 for discharge down to percent, got {}".format(write_calls[0]["value"]))
+            return 1
+
+        # Test 23: Charge power percentage reset to 100 when the direct power register is present
+        write_calls = []
+        registers = {
+            300: {"name": "Battery_Charge_Power", "value": 3000, "validation_rules": []},
+            301: {"name": "Inverter_Charge_Power_Percentage", "value": 50, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting charge power percentage")
+            return 1
+        if len(write_calls) != 1:
+            print("ERROR: Expected 1 write call for charge power percentage, got {}".format(len(write_calls)))
+            return 1
+        if write_calls[0]["key"] != 301 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected charge power percentage (301) reset to 100, got {}".format(write_calls[0]))
+            return 1
+
+        # Test 24: Charge power percentage NOT touched when there is no direct power register
+        write_calls = []
+        registers = {301: {"name": "Inverter_Charge_Power_Percentage", "value": 50, "validation_rules": []}}
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if result:
+            print("ERROR: enable_default_options should not change charge percentage when power register absent")
+            return 1
+        if len(write_calls) != 0:
+            print("ERROR: Expected 0 write calls when power register absent, got {}".format(len(write_calls)))
+            return 1
+
+        # Test 25: Discharge power percentage reset to 100 when the direct power register is present
+        write_calls = []
+        registers = {
+            302: {"name": "Battery_Discharge_Power", "value": 3000, "validation_rules": []},
+            303: {"name": "Inverter_Discharge_Power_Percentage", "value": 80, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if not result:
+            print("ERROR: enable_default_options should return True when resetting discharge power percentage")
+            return 1
+        if len(write_calls) != 1 or write_calls[0]["key"] != 303 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected discharge power percentage (303) reset to 100, got {}".format(write_calls))
+            return 1
+
+        # Test 26: Alternative three-phase register names (charge_power_rate) are also reset
+        write_calls = []
+        registers = {
+            304: {"name": "Battery_Charge_Power", "value": 3000, "validation_rules": []},
+            305: {"name": "Charge_Power_Rate", "value": 40, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 305 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected charge_power_rate (305) reset to 100, got {}".format(write_calls))
+            return 1
+
+        # Test 27: discharge_power_rate must be treated as discharge only (it contains the
+        # "charge_power_rate" substring) — with only the discharge power register present it should
+        # be reset, and no spurious charge reset should occur.
+        write_calls = []
+        registers = {
+            306: {"name": "Battery_Discharge_Power", "value": 3000, "validation_rules": []},
+            307: {"name": "Discharge_Power_Rate", "value": 40, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 1 or write_calls[0]["key"] != 307 or write_calls[0]["value"] != 100:
+            print("ERROR: Expected discharge_power_rate (307) reset to 100 only, got {}".format(write_calls))
+            return 1
+
+        # Test 28: Percentage already at 100 — no write needed even when power register present
+        write_calls = []
+        registers = {
+            308: {"name": "Battery_Charge_Power", "value": 3000, "validation_rules": []},
+            309: {"name": "Inverter_Charge_Power_Percentage", "value": 100, "validation_rules": []},
+        }
+
+        result = await ge_cloud.enable_default_options("test123", registers)
+
+        if len(write_calls) != 0:
+            print("ERROR: Expected 0 write calls when percentage already 100, got {}".format(len(write_calls)))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _make_run_mocks(ge_cloud, enable_default_calls=None):
+    """Attach minimal async mocks to ge_cloud so run() can execute without real I/O."""
+
+    async def mock_get_account():
+        return {"standard_timezone": "Europe/London"}
+
+    async def mock_publish_account(_account):
+        pass
+
+    async def mock_get_devices():
+        return {"battery": ["inv001"], "ems": None, "gateway": None, "pv": [], "battery_meters": {}}
+
+    async def mock_get_evc_devices():
+        return []
+
+    async def mock_get_inverter_status(_device, _previous):
+        return {}
+
+    async def mock_publish_status(_device, _status):
+        pass
+
+    async def mock_get_inverter_meter(_device, _previous):
+        return {}
+
+    async def mock_publish_meter(_device, _meter):
+        pass
+
+    async def mock_get_device_info(_device, _previous):
+        return {}
+
+    async def mock_publish_info(_device, _info):
+        pass
+
+    async def mock_get_inverter_settings(_device, **_kwargs):
+        return {}
+
+    async def mock_publish_registers(_device, _settings):
+        pass
+
+    async def mock_automatic_config(_devices_dict):
+        pass
+
+    async def mock_enable_default_options(device, _settings):
+        if enable_default_calls is not None:
+            enable_default_calls.append(device)
+
+    ge_cloud.async_get_account = mock_get_account
+    ge_cloud.publish_account = mock_publish_account
+    ge_cloud.async_get_devices = mock_get_devices
+    ge_cloud.async_get_evc_devices = mock_get_evc_devices
+    ge_cloud.async_get_inverter_status = mock_get_inverter_status
+    ge_cloud.publish_status = mock_publish_status
+    ge_cloud.async_get_inverter_meter = mock_get_inverter_meter
+    ge_cloud.publish_meter = mock_publish_meter
+    ge_cloud.async_get_device_info = mock_get_device_info
+    ge_cloud.publish_info = mock_publish_info
+    ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
+    ge_cloud.publish_registers = mock_publish_registers
+    ge_cloud.async_automatic_config = mock_automatic_config
+    ge_cloud.enable_default_options = mock_enable_default_options
+
+
+def _test_run_read_only_skips_reset(my_predbat):
+    """enable_default_options is NOT called when predbat is in read-only mode"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = True
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True")
+            return 1
+
+        if enable_default_calls:
+            print("ERROR: enable_default_options should NOT be called in read-only mode, got calls for: {}".format(enable_default_calls))
+            return 1
+
+        if ge_cloud.default_options_stamp is not None:
+            print("ERROR: default_options_stamp should remain None when skipped due to read-only mode")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_enables_reset_after_read_only(my_predbat):
+    """enable_default_options IS called on the first run after read-only mode is disabled"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = True
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        # First run in read-only mode — reset should be skipped
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True on first run")
+            return 1
+
+        if enable_default_calls:
+            print("ERROR: enable_default_options should NOT be called in read-only mode, got: {}".format(enable_default_calls))
+            return 1
+        if ge_cloud.default_options_stamp is not None:
+            print("ERROR: default_options_stamp should be None after read-only first run")
+            return 1
+
+        # Disable read-only — next 10-minute settings tick should trigger the reset
+        ge_cloud._read_only = False
+        result = await ge_cloud.run(seconds=600, first=False)
+        if not result:
+            print("ERROR: run() should return True on second run")
+            return 1
+
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called once read-only is disabled")
+            return 1
+        if enable_default_calls != ["inv001"]:
+            print("ERROR: Expected enable_default_options called for inv001, got: {}".format(enable_default_calls))
+            return 1
+        if ge_cloud.default_options_stamp is None:
+            print("ERROR: default_options_stamp should be set after reset ran")
+            return 1
+
+        # Verify the reset does not run again on subsequent ticks within 24 hours
+        enable_default_calls.clear()
+        await ge_cloud.run(seconds=1200, first=False)
+        if enable_default_calls:
+            print("ERROR: enable_default_options should not be called again within 24 hours")
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_run_enables_reset_after_24h(my_predbat):
+    """enable_default_options re-runs after 24 hours have elapsed"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.automatic = False
+        ge_cloud._read_only = False
+
+        enable_default_calls = []
+        _make_run_mocks(ge_cloud, enable_default_calls)
+
+        # First run — should call enable_default_options
+        result = await ge_cloud.run(seconds=0, first=True)
+        if not result:
+            print("ERROR: run() should return True on first run")
+            return 1
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called on first run")
+            return 1
+
+        # Subsequent run within 24 hours — should NOT call again
+        enable_default_calls.clear()
+        ge_cloud._now_utc_exact = ge_cloud.default_options_stamp + timedelta(hours=23, minutes=59)
+        await ge_cloud.run(seconds=600, first=False)
+        if enable_default_calls:
+            print("ERROR: enable_default_options should not be called again within 24 hours")
+            return 1
+
+        # Run after 24 hours have elapsed — should call again
+        enable_default_calls.clear()
+        ge_cloud._now_utc_exact = ge_cloud.default_options_stamp + timedelta(hours=24)
+        result = await ge_cloud.run(seconds=1200, first=False)
+        if not result:
+            print("ERROR: run() should return True on 24h run")
+            return 1
+        if not enable_default_calls:
+            print("ERROR: enable_default_options should be called again after 24 hours")
+            return 1
+        if enable_default_calls != ["inv001"]:
+            print("ERROR: Expected enable_default_options called for inv001, got: {}".format(enable_default_calls))
             return 1
 
         return 0
@@ -3734,7 +5124,44 @@ def _test_publish_info_soh(my_predbat):
         return 1
     print("OK case4: empty battery list SOH=1.0")
 
-    # --- Case 5: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
+    # --- Case 5: batteries with missing/None capacity fields are skipped, not counted as zero ---
+    ge_cloud.dashboard_items.clear()
+    info_missing_capacity = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {
+            "batteries": [
+                {"capacity": {"full": 90.0, "design": 100.0}},  # valid
+                {"capacity": {"full": None, "design": 100.0}},  # missing full - skipped
+                {"capacity": {"design": 100.0}},  # missing full key entirely - skipped
+                {"capacity": {"full": 50.0}},  # missing design - skipped
+                {"capacity": {}},  # missing both - skipped
+            ]
+        },
+    }
+    run_async(ge_cloud.publish_info("dev5", info_missing_capacity))
+
+    expected_soh_missing = 90.0 / 100.0  # only the valid battery counts
+    actual_soh_missing = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev5_battery_soh", {}).get("state")
+    if actual_soh_missing is None or abs(actual_soh_missing - expected_soh_missing) > 1e-9:
+        print("ERROR case5: expected soh={} (batteries with missing capacity skipped), got {}".format(expected_soh_missing, actual_soh_missing))
+        return 1
+    print("OK case5: batteries with missing/None capacity skipped, SOH={}".format(actual_soh_missing))
+
+    # --- Case 6: SOH is clamped to 1.0 when reported full capacity exceeds design capacity ---
+    ge_cloud.dashboard_items.clear()
+    info_over_full = {
+        "info": {"battery": {"nominal_capacity": 186, "nominal_voltage": 51.2, "depth_of_discharge": 0.9}, "model": "GIV-HY3.6", "max_charge_rate": 6000},
+        "connections": {"batteries": [{"capacity": {"full": 210.0, "design": 200.0}}]},
+    }
+    run_async(ge_cloud.publish_info("dev6", info_over_full))
+
+    actual_soh_over_full = ge_cloud.dashboard_items.get("sensor.predbat_gecloud_dev6_battery_soh", {}).get("state")
+    if actual_soh_over_full != 1.0:
+        print("ERROR case6: expected soh clamped to 1.0 (full > design), got {}".format(actual_soh_over_full))
+        return 1
+    print("OK case6: SOH clamped to 1.0 when full capacity exceeds design capacity")
+
+    # --- Case 7: battery_scaling config uses battery_dod_soh entity after async_automatic_config ---
     ge_cloud.dashboard_items.clear()
     ge_cloud.config_args = {}
     ge_cloud.settings = {"battery001": {}}
@@ -3746,9 +5173,9 @@ def _test_publish_info_soh(my_predbat):
     run_async(_check_battery_scaling())
     battery_scaling = ge_cloud.config_args.get("battery_scaling", [])
     if not battery_scaling or "battery_dod_soh" not in battery_scaling[0]:
-        print("ERROR case5: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
+        print("ERROR case7: expected battery_scaling to use battery_dod_soh entity, got {}".format(battery_scaling))
         return 1
-    print("OK case5: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
+    print("OK case7: battery_scaling uses battery_dod_soh entity: {}".format(battery_scaling))
 
     return 0
 

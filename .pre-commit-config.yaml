@@ -36,12 +36,14 @@ repos:
   rev: v0.37.0
   hooks:
   - id: markdownlint-fix # Configure in .mdlrc
+    exclude: ^docs/superpowers/ # internal planning artifacts, not published docs
 - repo: https://github.com/streetsidesoftware/cspell-cli
   rev: v8.0.0
   hooks:
   - id: cspell
     additional_dependencies:
     - "@cspell/dict-en-gb"
+    exclude: ^docs/superpowers/ # internal planning artifacts, not published docs
 exclude: |
   ^\.venv/|
   \.backup$

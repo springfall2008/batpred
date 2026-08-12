@@ -9,8 +9,8 @@
 
 Provides both REST and GraphQL API access to Octopus Energy for fetching
 tariff rates, intelligent dispatch schedules, saving sessions, and account
-data. Implements file-based caching with stale-while-revalidate strategy
-for multi-pod deployments.
+data. Delegates caching to the StorageComponent with stale-while-revalidate
+semantics for multi-pod deployments.
 """
 
 import asyncio
@@ -21,12 +21,13 @@ from predbat_metrics import record_api_call
 from const import TIME_FORMAT, TIME_FORMAT_OCTOPUS
 from utils import str2time, minutes_to_time, dp1, dp2, dp4, minute_data
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 import aiohttp
+import hashlib
 import json
 import os
-import yaml
-import json
 import pytz
+from ha import run_async
 
 user_agent_value = "predbat-octopus-energy"
 integration_context_header = "Ha-Integration-Context"
@@ -43,6 +44,9 @@ OCTOPUS_NIGHT_RATE_WINDOWS = {
 }
 
 OCTOPUS_MAX_RETRIES = 5
+# The EV/charge-point catalogue is static reference data, so it is refreshed daily
+CATALOGUE_FRESH_MINUTES = 24 * 60
+CATALOGUE_STALE_MINUTES = 25 * 60
 OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -75,6 +79,51 @@ def parse_date_time(dt_str):
         return datetime.strptime(dt_str, DATE_TIME_STR_FORMAT)
     except (ValueError, TypeError):
         return None
+
+
+CDN_BLOCK_MARKERS = ("cloudfront", "request blocked", "the request could not be satisfied")
+HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
+# A generic "403 Forbidden" page is indistinguishable from a WAF page, so after this many
+# consecutive edge blocks fall back to refreshing the token in case the credential really
+# was revoked. Without this the component could never recover from a misclassification.
+EDGE_BLOCK_REFRESH_AFTER = 5
+
+
+def is_edge_block_body(text):
+    """Return True if a 403 body is positively identifiable as a CDN/WAF error page.
+
+    Kraken reports authentication problems as a JSON GraphQL error body (normally with
+    HTTP 200) or as a 401. A 403 carrying an HTML error page - e.g. CloudFront's
+    "Request blocked" - is edge rate limiting, not a credential problem, so the cached
+    token must be kept rather than discarded and immediately re-minted.
+
+    Two conditions must both hold: the body must not parse as JSON (anything the API
+    itself produces is JSON), and it must look like an HTML document or name a known CDN.
+    Matching on wording alone would misclassify a genuine JSON error that happens to say
+    something like "access denied", which would keep an invalid token forever - the same
+    permanent lockout this check exists to prevent, arrived at from the other direction.
+
+    Detection is deliberately conservative: a 403 we cannot identify as a CDN page keeps
+    the existing "refresh the token and retry" behaviour, which recovers genuinely revoked
+    tokens without needing a restart.
+
+    Args:
+        text: The raw response body.
+
+    Returns:
+        bool: True if the body carries a known CDN/WAF block signature.
+    """
+    if not isinstance(text, str) or not text:
+        return False
+    try:
+        json.loads(text)
+    except (ValueError, TypeError):
+        pass
+    else:
+        # A parseable JSON body came from the API, not from an edge appliance
+        return False
+    stripped = text.lstrip().lower()
+    return stripped.startswith(HTML_DOCUMENT_PREFIXES) or any(marker in stripped for marker in CDN_BLOCK_MARKERS)
 
 
 api_token_query = """mutation {{
@@ -150,21 +199,27 @@ account_query = """query {{
   }}
 }}"""
 
-intelligent_device_query = """query {{
-  electricVehicles {{
+# The vehicle/charge-point catalogue is global reference data - identical for every
+# account and effectively static - so it is queried separately from the per-account
+# device list and cached, rather than being re-downloaded on every device poll.
+intelligent_catalogue_query = """query {
+  electricVehicles {
 		make
-		models {{
+		models {
 			model
 			batterySize
-		}}
-	}}
-	chargePointVariants {{
+		}
+	}
+	chargePointVariants {
 		make
-		models {{
+		models {
 			model
 			powerInKw
-		}}
-	}}
+		}
+	}
+}"""
+
+intelligent_device_query = """query {{
   devices(accountNumber: "{account_id}") {{
 		id
 		provider
@@ -358,12 +413,15 @@ class OctopusAPI(ComponentBase):
         self.account_id = account_id
         self.graphql_token = None
         self.graphql_expiration = None
+        self.consecutive_edge_blocks = 0
         self.account_data = {}
-        self.url_cache = {}
         self.tariffs = {}
         self.saving_sessions = {}
         self.saving_sessions_to_join = []
         self.intelligent_devices = {}
+        self.tariff_fetched_at = None
+        self.device_fetched_at = None
+        self.sensor_updated_at = None
         self.automatic = automatic
         self.commands = []
         self.mpan = None
@@ -373,22 +431,10 @@ class OctopusAPI(ComponentBase):
         self.requests_total = 0
         self.failures_total = 0
 
-        # Shared cache directories for tariffs and URLs (shared across all users)
-        self.cache_path = self.config_root + "/octopus"
-        self.shared_cache_path = self.config_root + "/octopus/shared"
-        self.urls_cache_path = self.shared_cache_path + "/urls"
-
-        for path in [self.cache_path, self.shared_cache_path, self.urls_cache_path]:
-            if not os.path.exists(path):
-                os.makedirs(path, exist_ok=True)
-
-        # User-specific cache file (account_data, intelligent_device, saving_sessions only)
-        self.user_cache_file = self.cache_path + "/octopus_user_{}.yaml".format(self.account_id)
-
         # In-memory cache for product info (keyed by product_code) to avoid repeated API calls
         self._product_info_cache = {}
 
-        self.log("OctopusAPI: Initialised with account ID {}, cache {}, shared {}".format(self.account_id, self.user_cache_file, self.shared_cache_path))
+        self.log("OctopusAPI: Initialised with account ID {}".format(self.account_id))
 
     async def select_event(self, entity_id, value):
         suffix = self.get_entity_suffix(entity_id)
@@ -425,18 +471,20 @@ class OctopusAPI(ComponentBase):
     def is_alive(self):
         return self.api_started and self.account_data
 
+    def _data_age_minutes(self, fetched_at):
+        """Return how many minutes ago fetched_at was, or 9999 if not set."""
+        if fetched_at is None:
+            return 9999
+        return (datetime.now() - fetched_at).total_seconds() / 60
+
     async def run(self, seconds, first):
         """
         Main run loop
         """
         if first:
-            # Load cached data
+            # Load cached data (restores tariff_fetched_at / device_fetched_at timestamps)
             await self.load_octopus_cache()
             self.log("OctopusAPI: Started")
-
-        # Update time every minute
-        now = datetime.now()
-        count_minutes = now.minute + now.hour * 60
 
         # Process any queued commands
         refresh = False
@@ -444,21 +492,44 @@ class OctopusAPI(ComponentBase):
             # Commands processed - will trigger refresh on next cycle
             refresh = True
 
-        if first or (count_minutes % 30) == 0:
-            # 30-minute update for tariff
-            await self.async_get_account(self.account_id)
+        # On first run, use the stored fetch timestamps to decide what is stale so that fast
+        # restarts skip re-fetching data that was already retrieved recently.  None means the
+        # data was never fetched (no cache), so treat as stale.  Sensor data is always pushed
+        # on startup so HA entities are populated immediately.
+
+        tariff_due = self._data_age_minutes(self.tariff_fetched_at) >= 30
+        device_due = refresh or self._data_age_minutes(self.device_fetched_at) >= 10
+        sensor_due = first or refresh or self._data_age_minutes(self.sensor_updated_at) >= 2
+
+        if tariff_due:
+            # 30-minute API refresh for account and tariff discovery
+            if await self.async_get_account(self.account_id):
+                self.tariff_fetched_at = datetime.now()
+
+        if tariff_due or first:
+            # Rebuild tariff structure from account_data (no API call, needed after cache load)
             await self.async_find_tariffs()
 
-        if first or refresh or (count_minutes % 10) == 0:
-            # 10-minute update for intelligent device
-            await self.async_update_intelligent_devices(self.account_id)
-            await self.fetch_tariffs(self.tariffs)
+        if device_due:
+            # 10-minute API refresh for saving sessions
             self.saving_sessions = await self.async_get_flexibility_events(self.account_id)
             self.get_saving_session_data()
+            self.device_fetched_at = datetime.now()
 
-        if first or refresh or (count_minutes % 2) == 0:
-            # 2-minute update for intelligent device sensor
+        if device_due or first:
+            # Download rate data into tariff structure (uses storage cache, needed after cache load)
+            await self.fetch_tariffs(self.tariffs)
+
+        if sensor_due:
+            # 2-minute refresh of intelligent dispatches and the dispatch sensor so new slots are
+            # picked up quickly. Stamp before fetching so the fetch/publish duration can't slip
+            # the cadence past the next run
+            self.sensor_updated_at = datetime.now()
+            await self.async_update_intelligent_devices(self.account_id)
             await self.async_intelligent_update_sensor(self.account_id)
+
+        if tariff_due or device_due:
+            # Don't save cache every 2 minutes, if we lose it then we re-fresh it anyhow
             await self.save_octopus_cache()
 
         if first and self.automatic:
@@ -508,45 +579,12 @@ class OctopusAPI(ComponentBase):
         key = f"{product_code}_{tariff_code}".replace("/", "_").replace("\\", "_")
         return key
 
-    def load_url_from_cache(self, url):
-        """
-        Load cached HTTP response for a URL
-        Returns: cached data or None
-        """
-        import hashlib
-
-        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, "r") as f:
-                    return yaml.safe_load(f)
-            except Exception as e:
-                self.log(f"Warn: OctopusAPI: Failed to load URL cache {url_hash}: {e}")
-        return None
-
-    def save_url_to_cache(self, url, data):
-        """
-        Save HTTP response to cache for a URL
-        No locking needed - each URL is in a separate file
-        """
-        import hashlib
-
-        url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
-        cache_file = f"{self.urls_cache_path}/{url_hash}.yaml"
-        try:
-            with open(cache_file, "w") as f:
-                yaml.dump(data, f)
-        except Exception as e:
-            self.log(f"Warn: OctopusAPI: Failed to save URL cache {url_hash}: {e}")
-
     def decode_kraken_token_expiry(self, token):
         """
         Extract expiration timestamp from Kraken JWT token without verification.
         Returns datetime object if successful, None otherwise.
         """
         import base64
-        import json
 
         if not token:
             return None
@@ -568,34 +606,18 @@ class OctopusAPI(ComponentBase):
             return None
 
     async def load_octopus_cache(self):
-        """
-        Load the octopus cache
-        User-specific data from user file, tariffs/URLs from shared individual files
-        """
-        # Load user-specific data
-        data = {}
-        if os.path.exists(self.user_cache_file):
-            try:
-                with open(self.user_cache_file, "r") as f:
-                    data = yaml.safe_load(f)
-            except Exception as e:
-                self.log("Warn: OctopusAPI: Failed to load cache from {} - {}".format(self.user_cache_file, e))
+        """Load the octopus user cache via the storage component, normalising missing fields."""
+        data = await self.storage.load("octopus_user", "account") if self.storage else None
+        if data:
+            self.account_data = data.get("account_data", {})
+            self.saving_sessions = data.get("saving_sessions", {})
+            self.intelligent_devices = data.get("intelligent_devices", {})
+            self.graphql_token = data.get("kraken_token")
+            self.tariff_fetched_at = data.get("tariff_fetched_at")
+            self.device_fetched_at = data.get("device_fetched_at")
+            self.update_success_timestamp()
 
-            if data:
-                self.account_data = data.get("account_data", {})
-                self.saving_sessions = data.get("saving_sessions", {})
-                self.intelligent_devices = data.get("intelligent_devices", {})
-                self.graphql_token = data.get("kraken_token")
-
-        # Load tariffs from individual shared cache files
-        # Tariffs will be loaded on-demand when needed via load_tariff_from_cache()
         self.tariffs = {}
-
-        # Load URL cache from individual shared files
-        # URL cache will be checked on-demand via load_url_from_cache()
-        self.url_cache = {}
-        if self.tariffs is None:
-            self.tariffs = {}
         if self.account_data is None:
             self.account_data = {}
         if self.saving_sessions is None:
@@ -604,21 +626,17 @@ class OctopusAPI(ComponentBase):
             self.intelligent_devices = {}
 
     async def save_octopus_cache(self):
-        """
-        Save the octopus cache
-        User-specific data to user file, tariffs/URLs to individual shared files
-        """
-        # Save user-specific data only
-        octopus_cache = {}
-        octopus_cache["account_data"] = self.account_data
-        octopus_cache["saving_sessions"] = self.saving_sessions
-        octopus_cache["intelligent_devices"] = self.intelligent_devices
-        octopus_cache["kraken_token"] = self.graphql_token
-        with open(self.user_cache_file, "w") as f:
-            yaml.dump(octopus_cache, f)
-
-        # URL cache entries are saved on-demand via save_url_to_cache()
-        # These allow the re-loading of tariffs so we don't need to save them directly
+        """Save the octopus user cache (account data, tokens, sessions, devices) via the storage component."""
+        octopus_cache = {
+            "account_data": self.account_data,
+            "saving_sessions": self.saving_sessions,
+            "intelligent_devices": self.intelligent_devices,
+            "kraken_token": self.graphql_token,
+            "tariff_fetched_at": self.tariff_fetched_at,
+            "device_fetched_at": self.device_fetched_at,
+        }
+        if self.storage:
+            await self.storage.save("octopus_user", "account", octopus_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=7))
 
     def get_tariff(self, tariff_type):
         if tariff_type in self.tariffs:
@@ -721,7 +739,7 @@ class OctopusAPI(ComponentBase):
         """
         import_tariff = self.tariffs.get("import", {})
         tariffCode = import_tariff.get("tariffCode", "")
-        if "INTELLI-" not in tariffCode:
+        if not self.is_intelligent_go_tariff(tariffCode):
             return
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
@@ -1255,6 +1273,16 @@ class OctopusAPI(ComponentBase):
                     best_rate = rate.get("value_inc_vat", None)
         return best_rate
 
+    @staticmethod
+    def is_intelligent_go_tariff(tariff_code):
+        """
+        Determine whether a tariff code is an Intelligent GO (IOG) tariff.
+        """
+        if not tariff_code:
+            return False
+        else:
+            return ("INTELLI-" in tariff_code) or ("IOG-" in tariff_code)
+
     async def async_get_day_night_rates(self, url, product_code="", tariff_code=""):
         """
         Get day and night rates from Octopus.
@@ -1273,7 +1301,7 @@ class OctopusAPI(ComponentBase):
         self.log("Info: OctopusAPI: Day rate entries: {} night rate entries: {}".format(len(result_day) if result_day else 0, len(result_night) if result_night else 0))
         if result_day and result_night:
             # Select night window based on tariff type
-            if ("INTELLI" in tariff_code) or ("IOG-" in tariff_code):
+            if self.is_intelligent_go_tariff(tariff_code):
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
             elif tariff_code and "GO-" in tariff_code:
                 window = OCTOPUS_NIGHT_RATE_WINDOWS["go"]
@@ -1360,92 +1388,37 @@ class OctopusAPI(ComponentBase):
 
         return mdata
 
-    async def clean_url_cache(self):
-        """
-        Clean the URL cache - now uses individual files in shared cache
-        """
-        now = datetime.now()
-
-        # Clean old cache files from shared URLs directory
-        if os.path.exists(self.urls_cache_path):
-            for filename in os.listdir(self.urls_cache_path):
-                filepath = os.path.join(self.urls_cache_path, filename)
-                if filename.endswith(".yaml"):
-                    try:
-                        with open(filepath, "r") as f:
-                            cache_entry = yaml.safe_load(f)
-                        if cache_entry and "stamp" in cache_entry:
-                            stamp = cache_entry["stamp"]
-                            age = now - stamp
-                            if age.total_seconds() > (24 * 60 * 60):
-                                os.remove(filepath)
-                                self.log(f"OctopusAPI: Cleaned old URL cache file: {filename}")
-                    except Exception as e:
-                        self.log(f"Warn: OctopusAPI: Failed to clean cache file {filename}: {e}")
-
     async def fetch_url_cached(self, url, json_only=False):
         """
-        Fetch a URL from the cache or reload it
-        Uses individual file per URL in shared cache directory
-        Implements stale-while-revalidate to prevent thundering herd
-        If json_only=True, the raw JSON dict is returned without results unwrapping or pagination.
+        Fetch a URL from the shared cache or reload it via the storage component.
+
+        Uses storage.fetch_cached (stale-while-revalidate). With the default
+        single-instance StorageBase the refresh lock is a no-op; a StorageBase
+        subclass that implements a real distributed lock (e.g. a multi-instance
+        backend) ensures only one instance refreshes while others serve stale.
+        If json_only=True, the raw JSON dict is returned without results
+        unwrapping or pagination.
         """
-        import hashlib
-
         url_hash = hashlib.sha256(url.encode()).hexdigest()[:16]
+        if not self.storage:
+            data = await self.async_download_octopus_url(url, json_only=json_only)
+            if not data:
+                self.log("Warn: Unable to download Octopus data from URL {}".format(url))
+            return data or None
 
-        # Check shared file cache first
-        cached_data = self.load_url_from_cache(url)
-        if cached_data and "stamp" in cached_data and "data" in cached_data:
-            stamp = cached_data["stamp"]
-            age = datetime.now() - stamp
+        async def _download():
+            result = await self.async_download_octopus_url(url, json_only=json_only)
+            return result if result else None
 
-            # Fresh cache (< 30 minutes) - return immediately
-            if age.total_seconds() < (30 * 60):
-                return cached_data["data"]
-
-            # Stale cache (30-35 minutes) - serve stale while ONE pod refreshes
-            if age.total_seconds() < (35 * 60):
-                lock_file = f"{self.urls_cache_path}/{url_hash}.lock"
-                try:
-                    # Try to acquire lock atomically (non-blocking)
-                    # cspell:ignore CREAT WRONLY
-                    fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                    try:
-                        # We got the lock! Refresh in background
-                        data = await self.async_download_octopus_url(url, json_only=json_only)
-                        if data:
-                            cache_entry = {"stamp": datetime.now(), "data": data}
-                            self.save_url_to_cache(url, cache_entry)
-                            self.log(f"OctopusAPI: Refreshed stale cache for {url_hash}")
-                    finally:
-                        os.close(fd)
-                        os.remove(lock_file)
-                except FileExistsError:
-                    # Another pod is refreshing, serve stale data
-                    self.log(f"OctopusAPI: Serving stale cache due to file access lock {url_hash}")
-                    pass
-
-                # Serve stale data (either we just refreshed, or another pod is refreshing)
-                return cached_data["data"]
-
-        # Cache completely missing or too stale (>35 min) - must fetch
-        data = await self.async_download_octopus_url(url, json_only=json_only)
-        if data:
-            # Save to shared file cache
-            cache_entry = {"stamp": datetime.now(), "data": data}
-            self.save_url_to_cache(url, cache_entry)
-            return data
-        else:
+        data = await self.storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=30, stale_minutes=35, format="yaml")
+        if not data:
             self.log("Warn: Unable to download Octopus data from URL {}".format(url))
-            return None
+        return data
 
     async def fetch_tariffs(self, tariffs):
         """
         Fetch the tariff data
         """
-        await self.clean_url_cache()
-
         for tariff in sorted(tariffs, key=lambda t: 0 if t == "import" else 1):
             product_code = tariffs[tariff]["productCode"]
             tariff_code = tariffs[tariff]["tariffCode"]
@@ -1470,15 +1443,23 @@ class OctopusAPI(ComponentBase):
                     tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
             else:
                 tariffs[tariff]["data"] = await self.fetch_url_cached(standard_url)
-            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX" in product_code:
-                # INTELLI-FLUX-EXPORT rates are the same as import rates but the product is not on the public REST API
-                # Use the import tariff rates as a fallback
-                import_data = tariffs.get("import", {}).get("data", None)
+            if not tariffs[tariff]["data"] and tariff == "export" and "INTELLI-FLUX-EXPORT" in product_code:
+                # INTELLI-FLUX-EXPORT rates are the same as INTELLI-FLUX-IMPORT rates, but INTELLI-FLUX-EXPORT
+                # is not on the public REST API — fetch the equivalent INTELLI-FLUX-IMPORT tariff instead
+                flux_import_product = product_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
+                flux_import_tariff_code = tariff_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
+                flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
+                import_data = await self.fetch_url_cached(flux_import_url)
                 if import_data:
                     tariffs[tariff]["data"] = import_data
-                    self.log("OctopusAPI: Using import rates as fallback for {} export tariff (INTELLI-FLUX-EXPORT not on REST API)".format(product_code))
+                    self.log("OctopusAPI: Using FLUX-IMPORT ({}) rates as fallback for {} export tariff".format(flux_import_product, product_code))
                 else:
-                    self.log("Warn: OctopusAPI: No import data available yet for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
+                    import_data = tariffs.get("import", {}).get("data", None)
+                    if import_data:
+                        tariffs[tariff]["data"] = import_data
+                        self.log("OctopusAPI: Using current import rates as fallback for {} export tariff (FLUX-IMPORT also unavailable)".format(product_code))
+                    else:
+                        self.log("Warn: OctopusAPI: No import data available for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
             tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             rates = self.get_octopus_rates_direct(tariff)
@@ -1552,6 +1533,12 @@ class OctopusAPI(ComponentBase):
             if data_as_json is not None:
                 return data_as_json
             else:
+                # 401/403 are definitive for this response. aiohttp caches the body, so
+                # re-reading the same response cannot change the outcome - it would only
+                # duplicate log lines and sleep through the backoff for nothing.
+                if response.status in [401, 403]:
+                    self.failures_total += 1
+                    return None
                 if attempt < max_retries - 1:
                     self.log(f"OctopusAPI: Retrying read response for {url} (attempt {attempt + 2} of {max_retries})")
                     await asyncio.sleep(2**attempt)  # Exponential backoff
@@ -1661,14 +1648,37 @@ class OctopusAPI(ComponentBase):
             payload = {"query": query}
             auth_prefix = "" if use_backend else "JWT "
             headers = {"Authorization": f"{auth_prefix}{self.graphql_token}", integration_context_header: request_context}
-            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, headers))
+            # Redact the Authorization header so the JWT token is never written to the log
+            log_headers = {**headers, "Authorization": f"{auth_prefix}<redacted>"}
+            self.log("OctopusAPI: Making GraphQL request to {} payload {} headers {}".format(url, payload, log_headers))
             async with client.post(url, json=payload, headers=headers) as response:
                 # Check for HTTP-level 401/403 (transport-level auth failure) and retry once.
                 # This handles cases where the JWT has been revoked server-side and the server
                 # returns a bare 401/403 status rather than a GraphQL error body — which would
-                # otherwise loop forever without ever refreshing the token.
+                # otherwise loop forever without ever refreshing the token. The one exception is
+                # a 403 carrying a CDN/WAF block page, handled immediately below.
                 if response.status in [401, 403] and _retry_count == 0:
-                    self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
+                    # A CDN/WAF block is rate limiting, not an auth failure. Re-minting a token
+                    # here would be rejected by the same block, leaving the component permanently
+                    # locked out, so keep the cached token and let the caller back off instead.
+                    # Only 403 is treated this way: Kraken reports genuine auth problems as HTTP
+                    # 200 with a GraphQL errorCode, or as a 401, so a 403 carrying a non-JSON
+                    # body comes from the edge rather than the API.
+                    if response.status == 403 and is_edge_block_body(await response.text()):
+                        self.consecutive_edge_blocks += 1
+                        if self.consecutive_edge_blocks <= EDGE_BLOCK_REFRESH_AFTER:
+                            record_api_call("octopus", False, "rate_limit")
+                            if not ignore_errors:
+                                self.log(f"Warn: OctopusAPI: HTTP {response.status} edge/WAF block for graphql query {request_context} - rate limited, keeping cached token")
+                                self.failures_total += 1
+                            return None
+                        # Persistently blocked. The body may be a generic 403 page from a revoked
+                        # credential rather than a WAF, so fall through and refresh the token.
+                        if not ignore_errors:
+                            self.log(f"Warn: OctopusAPI: {self.consecutive_edge_blocks} consecutive edge blocks for {request_context} - refreshing token in case the credential was revoked")
+                        self.consecutive_edge_blocks = 0
+                    if not ignore_errors:
+                        self.log(f"OctopusAPI: HTTP {response.status} for graphql query {request_context}, forcing token refresh and retry")
                     record_api_call("octopus", False, "auth_error")
                     self.graphql_token = None
                     retry_token = await self.async_refresh_token()
@@ -1680,6 +1690,7 @@ class OctopusAPI(ComponentBase):
 
                 # Process response (which reads the text)
                 response_body = await self.async_read_response_retry(response, url, ignore_errors=ignore_errors)
+                self.log("OctopusAPI: GraphQL response for {} (status {}): {}".format(request_context, response.status, response_body))
 
                 # Check for auth errors and retry once
                 if response_body and "errors" in response_body and _retry_count == 0:
@@ -1708,6 +1719,7 @@ class OctopusAPI(ComponentBase):
                     return None
 
                 if response_body and ("data" in response_body):
+                    self.consecutive_edge_blocks = 0
                     self.update_success_timestamp()
                     record_api_call("octopus")
                     return response_body["data"]
@@ -1723,6 +1735,36 @@ class OctopusAPI(ComponentBase):
             record_api_call("octopus", False, "connection_error")
 
         return None
+
+    async def async_get_vehicle_catalogue(self):
+        """
+        Get the global EV / charge-point catalogue, cached across polls and instances.
+
+        The catalogue is static reference data shared by every account, so it is stored
+        under the "octopus" storage module. The SaaS KeyDB backend routes that module to
+        a shared namespace, so a single fetch serves the whole fleet; on a local
+        filesystem backend it simply persists between polls.
+
+        Returns:
+            dict: The catalogue, or an empty dict if it could not be obtained.
+        """
+
+        async def _fetch():
+            """Download the catalogue from the GraphQL API."""
+            return await self.async_graphql_query(intelligent_catalogue_query, "get-vehicle-catalogue", ignore_errors=True)
+
+        if not self.storage:
+            return await _fetch() or {}
+
+        catalogue = await self.storage.fetch_cached(
+            "octopus",
+            "vehicle_catalogue",
+            _fetch,
+            fresh_minutes=CATALOGUE_FRESH_MINUTES,
+            stale_minutes=CATALOGUE_STALE_MINUTES,
+            format="json",
+        )
+        return catalogue or {}
 
     async def async_get_intelligent_devices(self, account_id, device_id):
         """
@@ -1743,8 +1785,9 @@ class OctopusAPI(ComponentBase):
             """
 
             if device_result:
-                chargePointVariants = device_result.get("chargePointVariants", [])
-                electricVehicles = device_result.get("electricVehicles", [])
+                catalogue = await self.async_get_vehicle_catalogue()
+                chargePointVariants = catalogue.get("chargePointVariants", [])
+                electricVehicles = catalogue.get("electricVehicles", [])
                 devices = device_result.get("devices", [])
                 if not devices:
                     return None
@@ -1824,73 +1867,29 @@ class OctopusAPI(ComponentBase):
                                     delta = None
 
                                 dispatch = {"start": start, "end": end, "charge_in_kwh": delta, "source": meta.get("source", dispatch_type), "location": meta.get("location", None)}
-                                keep = True
-                                if start and end:
-                                    start_date_time = parse_date_time(start)
-                                    end_date_time = parse_date_time(end)
-                                    minutes_now = self.minutes_now
-                                    if start_date_time and end_date_time and ((self.now_utc_exact - start_date_time) > timedelta(minutes=4)) and (end_date_time >= self.now_utc_exact):
-                                        # This slot has actually started at least 4 minutes ago, so move it to completed so its cached if withdrawn later
-                                        # Make end be the end of this slot only and scale delta to the relative minutes
-                                        start_minutes = (start_date_time - self.midnight_utc).total_seconds() / 60
-                                        # Only consider now onwards
-                                        start_minutes = max(minutes_now, start_minutes)
-
-                                        # Align start_minutes to 30 minute slot
-                                        start_minutes = (start_minutes // self.plan_interval_minutes) * self.plan_interval_minutes
-
-                                        # Work out end of this slot
-                                        end_minutes = start_minutes + self.plan_interval_minutes
-
-                                        # End minutes to end of this slot only
-                                        if end_date_time > self.now_utc_exact:
-                                            end_minutes = max(minutes_now, end_minutes)
-
-                                        # Round up end minutes to the next slot
-                                        end_minutes = ((end_minutes + self.plan_interval_minutes - 1) // self.plan_interval_minutes) * self.plan_interval_minutes
-
-                                        # Work out slot end time
-                                        completed_start_time = self.midnight_utc + timedelta(minutes=start_minutes)
-                                        completed_end_time = self.midnight_utc + timedelta(minutes=end_minutes)
-                                        total_minutes = (end_date_time - start_date_time).total_seconds() / 60
-                                        elapsed_minutes = (completed_end_time - completed_start_time).total_seconds() / 60
-                                        if total_minutes > 0 and delta is not None:
-                                            adjusted_delta = dp4((delta * elapsed_minutes) / total_minutes)
-                                        else:
-                                            adjusted_delta = delta
-                                        completed_dispatch = {
-                                            "start": completed_start_time.strftime(DATE_TIME_STR_FORMAT),
-                                            "end": completed_end_time.strftime(DATE_TIME_STR_FORMAT),
-                                            "charge_in_kwh": adjusted_delta,
-                                            "source": meta.get("source", dispatch_type),
-                                            "location": meta.get("location", None),
-                                        }
-
-                                        # Check if the dispatch is already in the completed list, if its already there then don't add it again
-                                        found = False
-                                        for cached in completed:
-                                            if cached.get("start") == completed_start_time.strftime(DATE_TIME_STR_FORMAT):
-                                                cached.update(completed_dispatch)
-                                                found = True
-                                                break
-                                        if not found:
-                                            completed.append(completed_dispatch)
-
-                                        # Now adjust the start to be only beyond the adjusted end time and scale delta accordingly
-                                        # Work out minutes between original start and new start
-                                        elapsed_minutes = (completed_end_time - start_date_time).total_seconds() / 60
-                                        # Used elapsed minutes as percentage of total_minutes to scale delta
-                                        if total_minutes > 0 and delta is not None:
-                                            delta = dp4((delta * (total_minutes - elapsed_minutes)) / total_minutes)
-                                        else:
-                                            delta = None
-                                        dispatch["start"] = completed_end_time.strftime(DATE_TIME_STR_FORMAT)
-                                        dispatch["charge_in_kwh"] = delta
-                                        # Check the remainder is not empty
-                                        if completed_end_time >= end_date_time:
-                                            keep = False
-                                if keep:
-                                    planned.append(dispatch)
+                                # Keep planned (flexPlannedDispatches) entries in the planned list only - do NOT promote
+                                # in-progress slots into completed_dispatches (see issue #4114). flexPlannedDispatches is
+                                # Octopus's optimiser schedule and includes plug-independent SMART grid-flex events that
+                                # Octopus routinely withdraws on its next re-plan. Promoting them immortalised provisional
+                                # slots as permanent cheap "completed" slots that never had a matching real dispatch.
+                                # Genuine charging is still cached below via the metered completedDispatches feed
+                                # (location=AT_HOME).
+                                #
+                                # If the slot is already in progress, trim the elapsed portion before appending: advance
+                                # its start to now and scale charge_in_kwh to the remaining time. decode_octopus_slot does
+                                # not trim a started slot when charge_in_kwh > 0, so without this the already-delivered
+                                # energy would be double counted, inflating predicted car SoC/cost for the active window.
+                                start_date_time = parse_date_time(start)
+                                end_date_time = parse_date_time(end)
+                                if start_date_time and end_date_time and start_date_time < self.now_utc_exact < end_date_time:
+                                    total_minutes = (end_date_time - start_date_time).total_seconds() / 60
+                                    remaining_minutes = (end_date_time - self.now_utc_exact).total_seconds() / 60
+                                    if total_minutes > 0:
+                                        if delta is not None:
+                                            delta = dp4(delta * remaining_minutes / total_minutes)
+                                            dispatch["charge_in_kwh"] = delta
+                                        dispatch["start"] = self.now_utc_exact.strftime(DATE_TIME_STR_FORMAT)
+                                planned.append(dispatch)
                             for completedDispatch in completedDispatches:
                                 start = completedDispatch.get("start", None)
                                 end = completedDispatch.get("end", None)
@@ -2059,23 +2058,8 @@ class Octopus:
 
     def download_octopus_free_func(self, url):
         """
-        Download octopus free session data directly from a URL
+        Download octopus free session data directly from a URL, no caching.
         """
-        # Check the cache first
-        now = datetime.now()
-        if url in self.octopus_url_cache:
-            stamp = self.octopus_url_cache[url]["stamp"]
-            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
-            pdata = self.octopus_url_cache[url]["data"]
-            age = now - stamp
-
-            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
-            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
-                self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
-                return pdata
-            elif cached_midnight != self.midnight_utc:
-                self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
-
         try:
             r = requests.get(url)
         except requests.exceptions.ConnectionError:
@@ -2088,18 +2072,67 @@ class Octopus:
             self.record_status("Warn: Error downloading Octopus free session data", debug=url, had_errors=True)
             return None
 
-        # Return new data
-        self.octopus_url_cache[url] = {}
-        self.octopus_url_cache[url]["stamp"] = now
-        self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
-        self.octopus_url_cache[url]["data"] = r.text
         return r.text
+
+    def _load_octopus_url_cache_from_storage(self):
+        """Pre-warm the entire octopus_url_cache (free sessions and rates) from storage on first call after restart."""
+        components = getattr(self, "components", None)
+        storage = components.get_component("storage") if components else None
+        if self.octopus_url_cache_loaded or not storage:
+            return
+        try:
+            self.octopus_url_cache_loaded = True
+            data = run_async(storage.load("octopus_free", "url_cache"))
+            if data:
+                self.octopus_url_cache = data
+                self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(data)))
+        except Exception as e:
+            self.log("Warn: Octopus: Failed to load URL cache from storage: {}".format(e))
+
+    def _save_octopus_url_cache_to_storage(self):
+        """Persist the entire octopus_url_cache (free sessions and rates) to storage so it survives restarts."""
+        components = getattr(self, "components", None)
+        storage = components.get_component("storage") if components else None
+        if not storage:
+            return
+
+        # Prune entries older than 2 days so stale keys (e.g. after a tariff URL change) don't accumulate forever
+        now = datetime.now()
+        stale = [url for url, entry in self.octopus_url_cache.items() if not isinstance(entry, dict) or not entry.get("stamp") or (now - entry["stamp"]) > timedelta(days=2)]
+        for url in stale:
+            del self.octopus_url_cache[url]
+        if stale:
+            self.log("Octopus: Pruned {} stale URL cache entries (older than 2 days)".format(len(stale)))
+
+        try:
+            run_async(storage.save("octopus_free", "url_cache", self.octopus_url_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
+        except Exception as e:
+            self.log("Warn: Octopus: Failed to save URL cache to storage: {}".format(e))
 
     def download_octopus_free(self, url):
         """
         Download octopus free session data.
         If response is JSON, parse as Go API response. Otherwise, use legacy HTML parsing.
+        Caches the parsed sessions list (not the raw response) to avoid retaining large text bodies.
+        On first call after a restart, pre-warms the in-memory cache from storage before checking expiry.
         """
+        # Pre-warm the entire cache from storage once per process lifetime
+        self._load_octopus_url_cache_from_storage()
+
+        # Check the cache first
+        now = datetime.now()
+        if url in self.octopus_url_cache:
+            stamp = self.octopus_url_cache[url]["stamp"]
+            cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
+            age = now - stamp
+
+            # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
+            if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
+                self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
+                return self.octopus_url_cache[url]["data"]
+            elif cached_midnight != self.midnight_utc:
+                self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
+
         free_sessions = []
         pdata = self.download_octopus_free_func(url)
         if not pdata:
@@ -2122,19 +2155,20 @@ class Octopus:
                     predbat_session = {"start": start_local.strftime(TIME_FORMAT), "end": end_local.strftime(TIME_FORMAT), "rate": 0.0}
                     free_sessions.append(predbat_session)
 
-            return free_sessions
-
         except json.JSONDecodeError:
             # Not JSON, use legacy HTML parsing
-            return self.download_octopus_free_legacy(url)
+            free_sessions = self.download_octopus_free_legacy(pdata)
 
-    def download_octopus_free_legacy(self, url):
+        self.octopus_url_cache[url] = {"stamp": now, "midnight_utc": self.midnight_utc, "data": free_sessions}
+        self._save_octopus_url_cache_to_storage()
+        return free_sessions
+
+    def download_octopus_free_legacy(self, pdata):
         """
-        Legacy method: Download and parse HTML directly (fallback only).
+        Legacy method: Parse HTML directly (fallback only).
         Kept for backward compatibility when Go API is unavailable.
         """
         free_sessions = []
-        pdata = self.download_octopus_free_func(url)
         if not pdata:
             return free_sessions
 
@@ -2223,6 +2257,10 @@ class Octopus:
 
         self.log("Octopus: Download Octopus rates from {}".format(url))
 
+        # Pre-warm the entire cache from storage once per process lifetime (shared with free sessions).
+        # Done before any in-memory population so the one-shot storage load cannot clobber freshly cached entries.
+        self._load_octopus_url_cache_from_storage()
+
         # Check the cache first
         now = datetime.now()
         if url in self.octopus_url_cache:
@@ -2258,6 +2296,7 @@ class Octopus:
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
         self.octopus_url_cache[url]["data"] = pdata
+        self._save_octopus_url_cache_to_storage()
         return pdata
 
     def download_octopus_rates_func(self, url):
@@ -2312,13 +2351,64 @@ class Octopus:
             slot = {}
             slot["start"] = slot_start_date.strftime(TIME_FORMAT)
             slot["end"] = slot_end_date.strftime(TIME_FORMAT)
+            slot["source"] = "car_charging_now"
+            slot["kwh"] = self.car_charging_rate[car_n] * 30 / 60  # Scale to 30 minute slot
             octopus_slots.append(slot)
             self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
 
-    def load_free_slot(self, octopus_free_slots, export=False, rate_replicate=None):
+    def octopus_slots_signature(self, octopus_slots):
         """
-        Load octopus free session slot
+        Build a single change-detection signature value for the intelligent dispatch slots.
+
+        Returns an opaque tuple intended only to be compared for equality against another signature -
+        callers should not index into it. Per-car grouping is preserved inside so a slot moving
+        between cars still registers as a change. Timestamps are normalised to the parsed instant so
+        equivalent values in different formats (+0000 vs +00:00 vs Z) do not register as a change;
+        an unparseable value falls back to its raw string (and never raises) so a genuine change is
+        still detected without breaking the update cycle.
+
+        An in-progress dispatch has its start advanced to now and its charge_in_kwh scaled to the
+        remaining time on every component refresh (see async_get_intelligent_devices). Comparing the
+        raw slots would therefore report a change on every cycle throughout an active charging window
+        and force a needless replan each time. For a currently active slot the signature keeps only
+        the stable fields (window end, source, location); genuine changes - new/removed slots, a
+        moved window end, a revised future slot, a future slot becoming active - still alter it.
+        """
+        signature = []
+        for car_slots in octopus_slots:
+            car_signature = []
+            for slot in car_slots:
+                start = slot.get("start")
+                end = slot.get("end")
+                source = slot.get("source")
+                location = slot.get("location")
+                start_dt = self._parse_slot_time(start)
+                end_dt = self._parse_slot_time(end)
+                # Normalise to the parsed instant where possible, else keep the raw string
+                start_key = start_dt if start_dt is not None else start
+                end_key = end_dt if end_dt is not None else end
+                in_progress = start_dt is not None and end_dt is not None and start_dt <= self.now_utc < end_dt
+                if in_progress:
+                    # start / charge_in_kwh drift as time elapses - exclude them so only genuine changes count
+                    car_signature.append(("active", end_key, source, location))
+                else:
+                    car_signature.append((start_key, end_key, slot.get("charge_in_kwh", slot.get("kwh")), source, location))
+            signature.append(tuple(car_signature))
+        return tuple(signature)
+
+    def _parse_slot_time(self, value):
+        """Parse a slot timestamp string into a datetime, returning None if empty or unparseable."""
+        if not value:
+            return None
+        try:
+            return str2time(value)
+        except (ValueError, TypeError):
+            return None
+
+    def load_free_slot(self, octopus_free_slots, rate_dict, export=False, rate_replicate=None):
+        """
+        Load octopus free session slot into rate_dict (in place)
         """
         if rate_replicate is None:
             rate_replicate = {}
@@ -2347,15 +2437,15 @@ class Octopus:
                 self.log("Setting Octopus free session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        self.rate_export[minute] = rate
+                        rate_dict[minute] = rate
                     else:
-                        self.rate_import[minute] = min(rate, self.rate_import[minute])
+                        rate_dict[minute] = min(rate, rate_dict[minute])
                         self.load_scaling_dynamic[minute] = self.load_scaling_free
                     rate_replicate[minute] = "saving"
 
-    def load_saving_slot(self, octopus_saving_slots, export=False, rate_replicate=None):
+    def load_saving_slot(self, octopus_saving_slots, rate_dict, export=False, rate_replicate=None):
         """
-        Load octopus saving session slot
+        Load octopus saving session slot into rate_dict (in place)
         """
         if rate_replicate is None:
             rate_replicate = {}
@@ -2387,15 +2477,11 @@ class Octopus:
             if start_minutes < (self.forecast_minutes + self.minutes_now):
                 self.log("Octopus: Setting Octopus saving session in range {} - {} export {} rate {}".format(self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), export, rate))
                 for minute in range(start_minutes, end_minutes):
-                    if export:
-                        if minute in self.rate_export:
-                            self.rate_export[minute] += rate
-                            rate_replicate[minute] = "saving"
-                    else:
-                        if minute in self.rate_import:
-                            self.rate_import[minute] += rate
+                    if minute in rate_dict:
+                        rate_dict[minute] += rate
+                        rate_replicate[minute] = "saving"
+                        if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
-                            rate_replicate[minute] = "saving"
 
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
@@ -2471,6 +2557,13 @@ class Octopus:
         # Decode the slots
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
+            # Octopus zeros chargeKwh once it calculates the car has hit its target SoC, but the
+            # dispatch window stays open and the charger may still draw power. Preserve active slots
+            # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
+            if kwh == 0 and start_minutes <= self.minutes_now < end_minutes:
+                remaining_minutes = end_minutes - self.minutes_now
+                kwh = remaining_minutes * self.car_charging_rate[car_n] / 60.0
+                start_minutes = self.minutes_now  # align span with the synthesised kwh so downstream rate calculations are consistent
             if kwh > 0:
                 # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
                 for current_slot in slots_decoded:
@@ -2594,7 +2687,11 @@ class Octopus:
                         if octopus_slot_low_rate:
                             assumed_price = self.rate_min_base
                         else:
-                            assumed_price = self.rate_import.get(start_minutes, self.rate_min)
+                            # Use the `rates` working dict, not self.rate_import: fetch now publishes
+                            # rate_import atomically at the end of the rebuild, so self.rate_import holds
+                            # the previous cycle's data here. (On main these were the same object, so this
+                            # is behaviour-preserving there and simply avoids the staleness this PR adds.)
+                            assumed_price = rates.get(start_minutes, self.rate_min)
 
                         if minute in saved_slots:
                             continue  # Already applied a low rate slot to this minute, skip
@@ -2729,10 +2826,36 @@ class Octopus:
 
         return rate_data
 
-    def fetch_octopus_sessions(self):
+    def _saving_event_conflicts_axle(self, start_time, end_time, axle_sessions):
+        """
+        Return True if the saving session [start_time, end_time) overlaps any Axle VPP session
+        """
+        if not axle_sessions or start_time is None or end_time is None:
+            return False
+        for axle_session in axle_sessions:
+            axle_start = axle_session.get("start_time")
+            axle_end = axle_session.get("end_time")
+            if not axle_start or not axle_end:
+                continue
+            try:
+                axle_start = str2time(axle_start)
+                axle_end = str2time(axle_end)
+            except (ValueError, TypeError):
+                continue
+            # Standard half-open interval overlap test
+            if start_time < axle_end and axle_start < end_time:
+                return True
+        return False
+
+    def fetch_octopus_sessions(self, axle_sessions=None):
         """
         Fetch the Octopus saving/free sessions
+
+        Available saving session events that overlap an Axle VPP session are not auto-joined,
+        so Predbat does not commit to two conflicting events for the same period.
         """
+        if axle_sessions is None:
+            axle_sessions = []
 
         # Octopus free session
         octopus_free_slots = []
@@ -2797,6 +2920,11 @@ class Octopus:
 
                 available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
 
+            if available_events and not self.get_arg("octopus_saving_auto_join", True):
+                self.log("Octopus: Saving session auto-join is disabled, not joining available events")
+                # Clear the 2h throttle so re-enabling auto-join can take effect immediately
+                self.octopus_last_joined_try = None
+                available_events = []
             if available_events:
                 # Only try to join every 2 hours to avoid spamming if it fails
                 if not self.octopus_last_joined_try or (self.now_utc - self.octopus_last_joined_try).total_seconds() > 2 * 60 * 60:
@@ -2811,6 +2939,10 @@ class Octopus:
                             saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                         else:
                             saving_rate = saving_rate  # Use default if not specified
+                        # Do not auto-join a saving session that overlaps an Axle VPP session - we cannot honour both for the same period
+                        if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
+                            self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            continue
                         if code:  # Join the new Octopus saving event and send an alert if successfully joined
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
@@ -2876,57 +3008,12 @@ class Octopus:
         return octopus_free_slots, octopus_saving_slots
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for testing"""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Octopus command-line harness, with its own cache directory."""
 
     def __init__(self):
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.now_utc_exact = self.now_utc
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-        self.config_root = "./temp_octopus"
-        self.plan_interval_minutes = 30
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None, indirect=True, attribute=None, combine=False, index=None, domain=None, can_override=False, required_unit=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
+        """Initialise the shared mock with the Octopus cache root."""
+        super().__init__(config_root="./temp_octopus")
 
 
 async def test_fetch_tariffs(product_code, tariff_code):  # pragma: no cover

@@ -106,6 +106,62 @@ def test_storage(my_predbat=None):
         # 12. age() returns None for a missing file
         assert run_async(storage.age("mod", "nonexistent_age")) is None, "age() should return None for missing file"
 
+        # fetch_cached: miss → calls fetch_fn once, stores, returns
+        calls = {"n": 0}
+
+        async def _fetch():
+            calls["n"] += 1
+            return {"v": calls["n"]}
+
+        first = run_async(storage.fetch_cached("fc", "k", _fetch, fresh_minutes=30, stale_minutes=35, format="json"))
+        assert first == {"v": 1}, "fetch_cached miss should fetch: {}".format(first)
+        assert calls["n"] == 1, "fetch_fn should be called exactly once on miss"
+
+        # fetch_cached: fresh hit → does NOT call fetch_fn again
+        second = run_async(storage.fetch_cached("fc", "k", _fetch, fresh_minutes=30, stale_minutes=35, format="json"))
+        assert second == {"v": 1}, "fresh hit should return cached value: {}".format(second)
+        assert calls["n"] == 1, "fetch_fn must not be called on a fresh hit"
+
+        # fetch_cached: with fresh_minutes=0 every existing entry is "stale" → refresh path runs once
+        calls2 = {"n": 0}
+
+        async def _fetch2():
+            calls2["n"] += 1
+            return {"w": calls2["n"]}
+
+        run_async(storage.save("fc2", "k", {"w": 0}, format="json"))
+        out = run_async(storage.fetch_cached("fc2", "k", _fetch2, fresh_minutes=0, stale_minutes=999999, format="json"))
+        assert out == {"w": 1}, "stale path should refresh and return fresh data: {}".format(out)
+        assert calls2["n"] == 1, "stale path should call fetch_fn once"
+
+        # fetch_cached: fetch_fn returning None on a hard miss → returns None, no crash
+        async def _fetch_none():
+            return None
+
+        assert run_async(storage.fetch_cached("fc3", "missing", _fetch_none, format="json")) is None
+
+        # fetch_cached: stale window + fetch_fn returns None → serve cached stale value
+        run_async(storage.save("fc4", "k", {"w": 0}, format="json"))
+
+        async def _fetch_none_stale():
+            return None
+
+        out = run_async(storage.fetch_cached("fc4", "k", _fetch_none_stale, fresh_minutes=0, stale_minutes=999999, format="json"))
+        assert out == {"w": 0}, "stale path with None fetch should return cached stale: {}".format(out)
+
+        # fetch_cached: stale window + fetch_fn RAISES → serve cached stale value, do not propagate
+        run_async(storage.save("fc5", "k", {"w": 7}, format="json"))
+
+        async def _fetch_raise():
+            raise RuntimeError("boom")
+
+        out = run_async(storage.fetch_cached("fc5", "k", _fetch_raise, fresh_minutes=0, stale_minutes=999999, format="json"))
+        assert out == {"w": 7}, "stale path with raising fetch should return cached stale: {}".format(out)
+
+        # fetch_cached: hard miss + fetch_fn RAISES → return None, do not propagate
+        out = run_async(storage.fetch_cached("fc6", "missing", _fetch_raise, fresh_minutes=30, stale_minutes=35, format="json"))
+        assert out is None, "hard miss with raising fetch should return None: {}".format(out)
+
         print("All storage tests passed!")
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

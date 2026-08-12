@@ -14,6 +14,7 @@ management via the GivEnergy Cloud REST API.
 
 import re
 import aiohttp
+import pytz
 from datetime import timedelta, datetime, timezone
 from utils import str2time, dp1, dp2, dp4
 from predbat_metrics import record_api_call
@@ -21,12 +22,14 @@ import asyncio
 import json
 import random
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 
 """
 GE Cloud data download
 """
 
 GE_API_URL = "https://api.givenergy.cloud/v1/"
+GE_API_ACCOUNT = "account"
 GE_API_INVERTER_STATUS = "inverter/{inverter_serial_number}/system-data/latest"
 GE_API_INVERTER_METER = "inverter/{inverter_serial_number}/meter-data/latest"
 GE_API_INVERTER_SETTINGS = "inverter/{inverter_serial_number}/settings"
@@ -46,6 +49,11 @@ GE_API_EVC_SEND_COMMAND = "ev-charger/{uuid}/commands/{command}"
 GE_API_EVC_SESSIONS = "ev-charger/{uuid}/charging-sessions?start_time={start_time}&end_time={end_time}&pageSize=32"
 
 GE_REGISTER_BATTERY_CUTOFF_LIMIT = 75
+
+# How long the cached customer account details stay valid for before they are fetched again
+ACCOUNT_MAX_AGE_MINUTES = 24 * 60
+# How long to wait before retrying a failed account fetch
+ACCOUNT_RETRY_MINUTES = 30
 
 # 0	Current.Export	Instantaneous current flow from EV
 # 1	Current.Import	Instantaneous current flow to EV
@@ -203,6 +211,8 @@ attribute_table = {
     "battery_soh": {"friendly_name": "Battery State of Health", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
     "battery_dod_soh": {"friendly_name": "Battery Depth of Discharge Adjusted for State of Health", "icon": "mdi:battery", "unit_of_measurement": "*", "device_class": "battery"},
     "model": {"friendly_name": "Model", "icon": "mdi:information", "unit_of_measurement": None},
+    "account": {"friendly_name": "GE Cloud Account", "icon": "mdi:account", "unit_of_measurement": None},
+    "timezone": {"friendly_name": "GE Cloud Account Timezone", "icon": "mdi:map-clock", "unit_of_measurement": None},
 }
 
 BASE_TIME = datetime.strptime("00:00", "%H:%M")
@@ -239,6 +249,8 @@ class GECloudDirect(ComponentBase):
         self.evc_data = {}
         self.evc_sessions = {}
         self.api_fatal = False
+        self.api_auth_failed = False
+        self.auth_denied_reported = False
         self.devices_dict = {}
         self.device_list = []
         self.ems_device = None
@@ -246,10 +258,91 @@ class GECloudDirect(ComponentBase):
         self.evc_devices_dict = {}
         self.evc_device_list = []
         self.settings_from_cache = False
+        self.default_options_stamp = None
+
+        # Customer account details, including the timezone the inverter register times are expressed in
+        self.account = {}
+        self.account_timezone = None
+        self.account_timezone_name = None
+        self.account_stamp = None
+        self.account_fetch_stamp = None
 
         # API request metrics for monitoring
         self.requests_total = 0
         self.failures_total = 0
+
+    def set_account_timezone(self, account):
+        """
+        Record the customer timezone taken from the GE Cloud account details.
+
+        The inverter start/end time registers are held in the account timezone, which is not
+        necessarily the timezone Predbat is running in, so it is stored here to translate them.
+        """
+        tz_name = account.get("standard_timezone", None) or account.get("timezone", None)
+        if not tz_name:
+            self.log("GECloud: Warn: No timezone found in account details, using the Predbat timezone for register times")
+            return
+        if tz_name == self.account_timezone_name:
+            return
+
+        try:
+            account_tz = pytz.timezone(tz_name)
+        except pytz.exceptions.UnknownTimeZoneError:
+            self.log("GECloud: Warn: Unknown account timezone {}, using the Predbat timezone for register times".format(tz_name))
+            return
+
+        self.account_timezone = account_tz
+        self.account_timezone_name = tz_name
+        self.log("GECloud: Account timezone is {}, offset from the Predbat timezone is {} minutes".format(tz_name, self.get_timezone_offset_minutes()))
+
+    def get_timezone_offset_minutes(self):
+        """
+        Return how many minutes ahead of the Predbat timezone the customer account timezone is right now.
+
+        Returns 0 when the account timezone is unknown, so times are left as-is.
+        """
+        if self.account_timezone is None or self.local_tz is None:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        account_offset = now.astimezone(self.account_timezone).utcoffset()
+        local_offset = now.astimezone(self.local_tz).utcoffset()
+        if account_offset is None or local_offset is None:
+            return 0
+        return int((account_offset - local_offset).total_seconds() // 60)
+
+    def shift_time_string(self, value, offset_minutes):
+        """
+        Shift a HH:MM or HH:MM:SS register time string by the given number of minutes, wrapping at midnight.
+        """
+        if not offset_minutes or not isinstance(value, str):
+            return value
+
+        parts = value.strip().split(":")
+        if len(parts) < 2:
+            return value
+        try:
+            total = int(parts[0]) * 60 + int(parts[1])
+        except ValueError:
+            return value
+
+        total = (total + offset_minutes) % (24 * 60)
+        shifted = "{:02d}:{:02d}".format(total // 60, total % 60)
+        if len(parts) > 2:
+            shifted += ":" + parts[2]
+        return shifted
+
+    def register_time_to_local(self, value):
+        """
+        Convert a time register value from the customer account timezone into the Predbat timezone.
+        """
+        return self.shift_time_string(value, -self.get_timezone_offset_minutes())
+
+    def local_time_to_register(self, value):
+        """
+        Convert a time from the Predbat timezone into the customer account timezone for writing to a register.
+        """
+        return self.shift_time_string(value, self.get_timezone_offset_minutes())
 
     async def switch_event(self, entity_id, service):
         """
@@ -353,6 +446,8 @@ class GECloudDirect(ComponentBase):
 
                     is_time = mapping.get("time", False)
                     if is_time:
+                        # The register is held in the customer account timezone, the value we are given is in the Predbat timezone
+                        new_value = self.local_time_to_register(new_value)
                         # We actually write as HH:MM
                         new_value = new_value[:5]
 
@@ -388,6 +483,33 @@ class GECloudDirect(ComponentBase):
                 pass
         return max_charge_rate
 
+    async def publish_account(self, account):
+        """
+        Publish the customer account details and the account timezone as sensors.
+
+        The account sensor uses the account name as its state; the timezone sensor uses the timezone name as its state. All remaining values are stored in a 'data' attribute.
+        """
+        if not account:
+            return
+
+        entity_name = f"sensor.{self.prefix}_gecloud".lower()
+
+        account_data = {key: value for key, value in account.items() if key != "name"}
+        attributes = dict(attribute_table.get("account", {}))
+        attributes["data"] = account_data
+        self.dashboard_item(entity_name + "_account", state=account.get("name", "unknown"), attributes=attributes, app="gecloud")
+
+        timezone_name = self.account_timezone_name or account.get("standard_timezone", None) or account.get("timezone", None)
+        timezone_data = {
+            "timezone": account.get("timezone", None),
+            "standard_timezone": account.get("standard_timezone", None),
+            "predbat_timezone": str(self.local_tz) if self.local_tz else None,
+            "offset_minutes": self.get_timezone_offset_minutes(),
+        }
+        attributes = dict(attribute_table.get("timezone", {}))
+        attributes["data"] = timezone_data
+        self.dashboard_item(entity_name + "_timezone", state=timezone_name if timezone_name else "unknown", attributes=attributes, app="gecloud")
+
     async def publish_info(self, device, device_info):
         """
         Publish the device info
@@ -414,10 +536,13 @@ class GECloudDirect(ComponentBase):
         full_capacity = 0
         design_capacity = 0
         for battery in batteries:
-            full_capacity += battery.get("capacity", {}).get("full", 0)
-            design_capacity += battery.get("capacity", {}).get("design", 0)
+            full_this = battery.get("capacity", {}).get("full", None)
+            design_this = battery.get("capacity", {}).get("design", None)
+            if full_this and design_this:
+                full_capacity += full_this
+                design_capacity += design_this
         if full_capacity > 0 and design_capacity > 0:
-            soh = full_capacity / design_capacity
+            soh = min(full_capacity / design_capacity, 1.0)
         self.dashboard_item(entity_name + "_battery_soh", dp4(soh), attributes=attribute_table.get("battery_soh", {}), app="gecloud")
 
         # Device device info
@@ -506,6 +631,14 @@ class GECloudDirect(ComponentBase):
 
         """
 
+        if not status and self.api_auth_failed:
+            # No fresh status because the API denied access (e.g. GivEnergy Premium now required).
+            # Mark the time sensor unavailable so downstream skew detection treats it as "no reading"
+            # instead of misreading a frozen timestamp as inverter clock skew.
+            entity_name = f"sensor.{self.prefix}_gecloud_{device}".lower()
+            self.dashboard_item(entity_name + "_time", state="unavailable", attributes=attribute_table.get("time", {}), app="gecloud")
+            return
+
         for key in status:
             entity_name = f"sensor.{self.prefix}_gecloud_{device}"
             entity_name = entity_name.lower()
@@ -593,10 +726,28 @@ class GECloudDirect(ComponentBase):
                         self.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
     async def enable_default_options(self, device, registers):
+        """Enable default options for the device."""
+        changed = False
+        # When both a direct power register and its percentage equivalent exist, the power register
+        # is used as the rate control, so the percentage register must be left at 100% to avoid it
+        # clamping the power setting.
+        device_ha_names = {regname_to_ha(registers[key].get("name", "")) for key in registers}
+        has_charge_power = "battery_charge_power" in device_ha_names
+        has_discharge_power = "battery_discharge_power" in device_ha_names
+        # Predbat drives the export target register itself (discharge_target_soc, the DC discharge
+        # lower SoC limit) and tracks the minimum reserve SoC there, so leave that one alone rather
+        # than resetting it and fighting adjust_force_export.
+        discharge_target = self.get_arg("discharge_target_soc", default=None, indirect=False)
+        if not isinstance(discharge_target, list):
+            discharge_target = [discharge_target] if discharge_target else []
+        discharge_target = {str(entity).lower() for entity in discharge_target if entity}
         for key in registers:
             reg_name = registers[key].get("name", "")
             value = registers[key].get("value", None)
             ha_name = regname_to_ha(reg_name)
+
+            if "number.{}_gecloud_{}_{}".format(self.prefix, device, ha_name).lower() in discharge_target:
+                continue
 
             if ("export_soc_percent_limit" in ha_name) or ("discharge_soc_percent_limit" in ha_name) or ("lower_soc_percent_limit" in ha_name):
                 if not value or value > 4:
@@ -605,10 +756,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             if ("inverter_max_output_active_power_percent" in ha_name) or ("ac_charge_upper_percent_limit" in ha_name) or ("_upper_soc_percent_limit" in ha_name):
                 if "enable_" in ha_name:
                     continue
@@ -619,10 +769,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             if "charge_up_to_percent" in ha_name:
                 if not value or value < 100:
                     self.log("GECloud: Setting {} to 100% for {}, previous value was {}".format(ha_name, device, value))
@@ -630,10 +779,9 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
             if "discharge_down_to_percent" in ha_name:
                 if not value or value > 4:
                     self.log("GECloud: Setting {} to 4% for {}, previous value was {}".format(ha_name, device, value))
@@ -641,10 +789,32 @@ class GECloudDirect(ComponentBase):
                     if result and ("value" in result):
                         registers[key]["value"] = result["value"]
                         await self.publish_registers(device, self.settings[device], select_key=key)
-                        return True
+                        changed = True
                     else:
                         self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                        return False
+            # Reset the charge/discharge power percentage to 100% when a direct power register is
+            # present, so that the power register (not the percentage) controls the rate. Match
+            # discharge first as "discharge_power_rate" also contains the "charge_power_rate" substring.
+            if ("inverter_discharge_power_percentage" in ha_name) or ("discharge_power_rate" in ha_name):
+                if has_discharge_power and (not value or value < 100):
+                    self.log("GECloud: Setting {} to 100% for {} as direct power register present, previous value was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 100)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        changed = True
+                    else:
+                        self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
+            elif ("inverter_charge_power_percentage" in ha_name) or ("charge_power_rate" in ha_name):
+                if has_charge_power and (not value or value < 100):
+                    self.log("GECloud: Setting {} to 100% for {} as direct power register present, previous value was {}".format(ha_name, device, value))
+                    result = await self.async_write_inverter_setting(device, key, 100)
+                    if result and ("value" in result):
+                        registers[key]["value"] = result["value"]
+                        await self.publish_registers(device, self.settings[device], select_key=key)
+                        changed = True
+                    else:
+                        self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
             # Reset AC charge start and end times to 00:00 to disable
             for charge_id in range(2, 11):
                 if (
@@ -659,25 +829,27 @@ class GECloudDirect(ComponentBase):
                         if result and ("value" in result):
                             registers[key]["value"] = result["value"]
                             await self.publish_registers(device, self.settings[device], select_key=key)
-                            return True
+                            changed = True
                         else:
                             self.log("GECloud: Warn: Failed to set {} for {}".format(ha_name, device))
-                            return False
             if "real_time_control" in ha_name:
+                if self.ems_device:
+                    # RTC is on the EMS, not the individual inverters — skip
+                    continue
                 if value:
                     self.log("GECloud: Real-time control already enabled for {}".format(device))
-                    return True
+                    changed = True
+                    continue
                 else:
                     self.log("GECloud: Enabling real-time control for {} as current value is {}".format(device, value))
                 result = await self.async_write_inverter_setting(device, key, True)
                 if result and ("value" in result):
                     registers[key]["value"] = result["value"]
                     await self.publish_registers(device, self.settings[device], select_key=key)
-                    return True
+                    changed = True
                 else:
                     self.log("GECloud: Warn: Failed to enable real-time control for {}".format(device))
-                    return False
-        return False
+        return changed
 
     async def publish_registers(self, device, registers, select_key=None):
         """
@@ -704,6 +876,8 @@ class GECloudDirect(ComponentBase):
                 if validation_rule.startswith("date_format:H:i"):
                     is_select_time = True
                     options_text = OPTIONS_TIME_FULL
+                    # The register is held in the customer account timezone, publish it in the Predbat timezone
+                    value = self.register_time_to_local(value)
                     if isinstance(value, str) and len(value) == 5:
                         value = value + ":00"
                     attributes["device_class"] = "time"
@@ -782,6 +956,7 @@ class GECloudDirect(ComponentBase):
         batteries = devices["battery"]
         batteries_real = devices["battery"]
         num_inverters = len(batteries)
+        pvs = devices.get("pv", [])
 
         if not devices["ems"] and devices["gateway"] and len(batteries) > 1:
             # Only use gateway as main control if we have multiple batteries
@@ -789,6 +964,8 @@ class GECloudDirect(ComponentBase):
             batteries = [devices["gateway"]]
 
         # Do we have a charge/discharge power percentage setting?
+        has_charge_rate = False
+        has_discharge_rate = False
         has_charge_power_percent = False
         has_discharge_power_percent = False
         has_pause_start_time = False
@@ -799,6 +976,10 @@ class GECloudDirect(ComponentBase):
             for key in registers:
                 reg_name = registers[key].get("name", "")
                 ha_name = regname_to_ha(reg_name)
+                if "battery_charge_power" in ha_name:
+                    has_charge_rate = True
+                if "battery_discharge_power" in ha_name:
+                    has_discharge_rate = True
                 if "inverter_charge_power_percentage" in ha_name or "charge_power_rate" in ha_name:
                     has_charge_power_percent = True
                 if "inverter_discharge_power_percentage" in ha_name or "discharge_power_rate" in ha_name:
@@ -836,7 +1017,11 @@ class GECloudDirect(ComponentBase):
             return entities
 
         self.log("GECloud: Auto-configuring Predbat and not using apps.yaml entries for control")
-        self.log("GECloud: detected features - charge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(has_charge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc))
+        self.log(
+            "GECloud: detected features - charge rate: {}, discharge rate: {}, charge power percent: {}, discharge power percent: {}, pause battery: {}, pause start time: {}, discharge target soc: {}".format(
+                has_charge_rate, has_discharge_rate, has_charge_power_percent, has_discharge_power_percent, has_pause_battery, has_pause_start_time, has_discharge_target_soc
+            )
+        )
 
         self.set_arg("inverter_type", ["GEC" for _ in range(num_inverters)])
         self.set_arg("num_inverters", num_inverters)
@@ -845,12 +1030,10 @@ class GECloudDirect(ComponentBase):
             self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{device}_consumption_total" for device in batteries])
         self.set_arg("import_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_import_total" for device in batteries])
         self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{device}_grid_export_total" for device in batteries])
-        self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in batteries])
         self.set_arg("charge_rate", build_entities("number", ["battery_charge_power"]))
         self.set_arg("battery_rate_max", [f"sensor.{self.prefix}_gecloud_{device}_max_charge_rate" for device in batteries])
         self.set_arg("discharge_rate", build_entities("number", ["battery_discharge_power"]))
         self.set_arg("battery_power", [f"sensor.{self.prefix}_gecloud_{device}_battery_power" for device in batteries])
-        self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in batteries])
         self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{device}_consumption_power" for device in batteries])
         self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{device}_grid_power" for device in batteries])
         self.set_arg("soc_percent", [f"sensor.{self.prefix}_gecloud_{device}_battery_percent" for device in batteries])
@@ -860,6 +1043,7 @@ class GECloudDirect(ComponentBase):
         self.set_arg("charge_start_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_start_time" for device in batteries])
         self.set_arg("charge_end_time", [f"select.{self.prefix}_gecloud_{device}_ac_charge_1_end_time" for device in batteries])
         self.set_arg("charge_limit", build_entities("number", ["ac_charge_upper_percent_limit", "ac_charge_1_upper_soc_percent_limit"]))
+        self.set_arg("charge_limit_enable", build_entities("switch", ["enable_ac_charge_upper_percent_limit", "enable_ac_charge_1_upper_soc_percent_limit"]))
         self.set_arg("discharge_start_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_start_time" for device in batteries])
         self.set_arg("discharge_end_time", [f"select.{self.prefix}_gecloud_{device}_dc_discharge_1_end_time" for device in batteries])
         self.set_arg("scheduled_charge_enable", build_entities("switch", ["ac_charge_enable", "enable_ac_charge"]))
@@ -867,6 +1051,10 @@ class GECloudDirect(ComponentBase):
         self.set_arg("battery_temperature", [f"sensor.{self.prefix}_gecloud_{device}_battery_temperature" for device in batteries])
         self.set_arg("battery_scaling", [f"sensor.{self.prefix}_gecloud_{device}_battery_dod_soh" for device in batteries])
         self.set_arg("inverter_limit", [f"sensor.{self.prefix}_gecloud_{device}_max_inverter_rate" for device in batteries])
+
+        pv_devices = batteries + pvs if self.get_arg("ge_cloud_automatic_split_pv", default=False) else batteries
+        self.set_arg("pv_today", [f"sensor.{self.prefix}_gecloud_{device}_solar_total" for device in pv_devices])
+        self.set_arg("pv_power", [f"sensor.{self.prefix}_gecloud_{device}_solar_power" for device in pv_devices])
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_gecloud_{batteries[0]}_battery_temperature")
@@ -886,11 +1074,16 @@ class GECloudDirect(ComponentBase):
         else:
             self.set_arg("discharge_target_soc", None)
 
-        if has_charge_power_percent or has_discharge_power_percent:
+        # The percentage rate registers only win as the control when the direct power register is
+        # absent. When both a power register and its percentage equivalent exist, the power register
+        # is the primary control and the percentage is left at 100% (reset by enable_default_options).
+        if has_charge_power_percent and not has_charge_rate:
             self.set_arg("charge_rate_percent", build_entities("number", ["inverter_charge_power_percentage", "charge_power_rate"]))
-            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
         else:
             self.set_arg("charge_rate_percent", None)
+        if has_discharge_power_percent and not has_discharge_rate:
+            self.set_arg("discharge_rate_percent", build_entities("number", ["inverter_discharge_power_percentage", "discharge_power_rate"]))
+        else:
             self.set_arg("discharge_rate_percent", None)
 
         self.set_arg("givtcp_rest", None)
@@ -907,11 +1100,20 @@ class GECloudDirect(ComponentBase):
             all_meter_serials = []
             for bat in batteries:
                 all_meter_serials.extend(battery_meters.get(bat, []))
-            no_dedicated_meters = len(all_meter_serials) == 0
             has_duplicate_serials = len(all_meter_serials) != len(set(all_meter_serials))
-            has_shared_ct = no_dedicated_meters or has_duplicate_serials
+            has_shared_ct = False
+            if has_duplicate_serials:
+                has_shared_ct = True
+                reason = "duplicate meter serials"
+            else:
+                reason = "meters are not duplicated"
+            if self.get_arg("ge_cloud_automatic_split_ct", default=False):
+                has_shared_ct = False
+                reason = "split CT override"
+            elif self.get_arg("ge_cloud_automatic_shared_ct", default=False):
+                has_shared_ct = True
+                reason = "shared CT override"
             if has_shared_ct:
-                reason = "no dedicated meters" if no_dedicated_meters else "duplicate meter serials"
                 self.log("GECloud: Multiple inverters sharing a single CT clamp detected ({}) — using first inverter only for grid and load measurements".format(reason))
                 self.set_arg("grid_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_power"] + [0 for _ in range(num_inverters - 1)])
                 self.set_arg("load_power", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_power"] + [0 for _ in range(num_inverters - 1)])
@@ -919,6 +1121,8 @@ class GECloudDirect(ComponentBase):
                 self.set_arg("export_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_grid_export_total"])
                 if not self.get_arg("ge_cloud_load_today_ignore", default=False):
                     self.set_arg("load_today", [f"sensor.{self.prefix}_gecloud_{batteries[0]}_consumption_total"])
+            else:
+                self.log("GECloud: Multiple inverters detected, using all inverters for grid and load measurements ({})".format(reason))
 
         # reconfigure for EMS
         if devices["ems"]:
@@ -952,7 +1156,7 @@ class GECloudDirect(ComponentBase):
         model_name = "Unknown"
         for device_serial in batteries_real:
             device = self.info.get(device_serial, {})
-            info = device.get("info", {})
+            info = device.get("info", {}) or {}
             model = info.get("model", "").lower()
             if model:
                 model_name = info["model"]
@@ -970,6 +1174,9 @@ class GECloudDirect(ComponentBase):
         Start the client
         """
 
+        # The account details change rarely, so they are cached in storage and only re-fetched once a day
+        await self.update_account(first)
+
         if first:
             self.polling_mode = True
             # Get devices using the modified auto-detection (returns dict)
@@ -978,7 +1185,7 @@ class GECloudDirect(ComponentBase):
 
             # Build a list of devices to poll:
             # Use all battery inverter serials and also add the EMS device if it's distinct.
-            self.device_list = self.devices_dict["battery"][:]
+            self.device_list = self.devices_dict["battery"][:] + self.devices_dict["pv"][:]
 
             self.ems_device = None
             if self.devices_dict["ems"]:
@@ -989,11 +1196,11 @@ class GECloudDirect(ComponentBase):
                     self.device_list.append(self.ems_device)
 
             self.gateway_device = None
-            if not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) > 1:
+            if not self.ems_device and self.devices_dict["gateway"] and len(self.devices_dict["battery"]) > 1:
                 self.gateway_device = self.devices_dict["gateway"]
                 self.log("GECloud: Found Gateway device {} and multiple batteries, using only the gateway device".format(self.gateway_device))
-                self.device_list = [self.gateway_device]
-            elif not self.ems_device and self.devices_dict["gateway"] and len(self.device_list) == 1:
+                self.device_list = [self.gateway_device] + self.devices_dict["pv"][:]
+            elif not self.ems_device and self.devices_dict["gateway"] and len(self.devices_dict["battery"]) <= 1:
                 self.log("GECloud: Found Gateway device {} but only one battery, using the battery device for polling".format(self.devices_dict["gateway"]))
 
             self.evc_device_list = []
@@ -1026,13 +1233,33 @@ class GECloudDirect(ComponentBase):
                     self.log("GECloud: No valid settings found in storage cache, will poll")
 
         if first or (seconds % 120 == 0):
+            inverter_auth_denied = False
             for device in self.device_list:
                 self.status[device] = await self.async_get_inverter_status(device, self.status.get(device, {}))
+                # Capture auth state from the core inverter status call (before EVC/other endpoints
+                # below can toggle the shared flag), so the status we surface reflects the inverter
+                # data path that actually drives optimisation.
+                inverter_auth_denied = inverter_auth_denied or self.api_auth_failed
                 await self.publish_status(device, self.status[device])
                 self.meter[device] = await self.async_get_inverter_meter(device, self.meter.get(device, {}))
                 await self.publish_meter(device, self.meter[device])
                 self.info[device] = await self.async_get_device_info(device, self.info.get(device, {}))
                 await self.publish_info(device, self.info[device])
+
+            # Surface a clear, correct status when the GivEnergy cloud API denied access to the core
+            # inverter data, rather than letting stale data be misdiagnosed downstream (e.g. as
+            # inverter clock skew). Scoped to inverter — not EVC — auth failures, and reported only
+            # once per episode (on transition into the denied state) to avoid inflating error_count.
+            if inverter_auth_denied:
+                if not self.auth_denied_reported and getattr(self.base, "record_status", None):
+                    self.base.record_status(
+                        "Warn: GivEnergy cloud API access denied — check your GivEnergy API key. A GivEnergy Premium subscription is now required for API access (since May 2026). PredBat cannot read live inverter data.",
+                        had_errors=True,
+                    )
+                self.auth_denied_reported = True
+            else:
+                self.auth_denied_reported = False
+
             for uuid in self.evc_device_list:
                 self.evc_device[uuid] = await self.async_get_evc_device(uuid, self.evc_device.get(uuid, {}))
                 serial = self.evc_device[uuid].get("serial_number", "unknown")
@@ -1060,6 +1287,11 @@ class GECloudDirect(ComponentBase):
             if first:
                 if self.automatic:
                     await self.async_automatic_config(self.devices_dict)
+
+            now_utc = self.now_utc_exact
+            options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
+            if options_due and self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") != "on":
+                self.default_options_stamp = now_utc
                 for device in self.device_list:
                     await self.enable_default_options(device, self.settings[device])
 
@@ -1403,6 +1635,80 @@ class GECloudDirect(ComponentBase):
                         return inverter
         return previous
 
+    async def load_account_from_storage(self):
+        """
+        Restore the customer account details cached by a previous run so a restart does not have to fetch them again.
+        """
+        if not self.storage:
+            return
+
+        cached_account = await self.storage.load("gecloud", "account")
+        if not isinstance(cached_account, dict) or not cached_account:
+            self.log("GECloud: No valid account details found in storage cache, will fetch")
+            return
+
+        account_age = await self.storage.age("gecloud", "account")
+
+        # Keep the cached details even when stale so that a failed fetch still leaves something usable
+        self.account = cached_account
+        self.set_account_timezone(cached_account)
+
+        if account_age is not None and account_age < ACCOUNT_MAX_AGE_MINUTES:
+            self.account_stamp = self.now_utc_exact - timedelta(minutes=account_age)
+            self.log("GECloud: Restored account details from storage cache (age {:.1f} minutes)".format(account_age))
+        else:
+            self.log("GECloud: Storage cache for the account details is stale (age {}), will re-fetch".format("{:.1f} minutes".format(account_age) if account_age is not None else "unknown"))
+
+    async def update_account(self, first):
+        """
+        Keep the customer account details up to date and published.
+
+        On startup they are restored from storage, and they are only re-fetched from the API once a day.
+        """
+        if first:
+            await self.load_account_from_storage()
+            if self.account:
+                await self.publish_account(self.account)
+
+        now_utc = self.now_utc_exact
+
+        # Nothing to do while the details we hold are still within their lifetime
+        if self.account_stamp is not None and (now_utc - self.account_stamp) < timedelta(minutes=ACCOUNT_MAX_AGE_MINUTES):
+            return
+
+        # A failed fetch retries after a short delay rather than a full day, but not on every 60 second
+        # run() tick, so a sustained API outage does not turn into a poll loop
+        if self.account_fetch_stamp is not None and (now_utc - self.account_fetch_stamp) < timedelta(minutes=ACCOUNT_RETRY_MINUTES):
+            return
+
+        self.account_fetch_stamp = now_utc
+        account = await self.async_get_account()
+        if not account:
+            return
+
+        # Only treat the details as fresh once we actually have them
+        self.account_stamp = now_utc
+        if self.storage:
+            await self.storage.save("gecloud", "account", account, format="json", expiry=None)
+        await self.publish_account(self.account)
+
+    async def async_get_account(self):
+        """
+        Get the customer account details from GE Cloud and record the account timezone.
+
+        {'id': 2, 'name': 'francesca.holmes.285', 'first_name': 'Maisie', 'surname': 'Walker', 'role': 'VIEWER',
+         'email': 'joshua94@martin.com', 'address': '18 Hunt Landing', 'postcode': 'CT6 9AR', 'country': 'UNITED_KINGDOM',
+         'telephone_number': '+44(0)7559 260236', 'timezone': 'GMT', 'standard_timezone': 'Europe/London',
+         'company': None, 'flags': []}
+        """
+        account = await self.async_get_inverter_data_retry(GE_API_ACCOUNT)
+        if not account:
+            return self.account
+
+        self.account = account
+        self.set_account_timezone(account)
+        return account
+
     async def async_get_devices(self):
         """
         Get list of inverters from GE Cloud.
@@ -1447,27 +1753,38 @@ class GECloudDirect(ComponentBase):
         """
 
         device_list = await self.async_get_inverter_data_retry(GE_API_DEVICES)
-        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}}
+        result = {"gateway": None, "ems": None, "battery": [], "battery_meters": {}, "pv": []}
         if device_list is None:
             return result
 
         for device in device_list:
             self.log("GECloud: Found device {}".format(device))
-            inverter = device.get("inverter", {})
+            inverter = device.get("inverter", {}) or {}
             serial = inverter.get("serial", None)
-            # last_updated = inverter.get("last_updated", None)
-            info = inverter.get("info", {})
+            last_updated = inverter.get("last_updated", None)
+            info = inverter.get("info", {}) or {}
             model = info.get("model", "").lower()
             # battery = info.get("battery_type", {})
-            batteries = inverter.get("connections", {}).get("batteries", [])
-            meters = inverter.get("connections", {}).get("meters", [])
+            batteries = inverter.get("connections", {}).get("batteries", []) or []
+            meters = inverter.get("connections", {}).get("meters", []) or []
             meter_serials = [m.get("serial_number") for m in meters if m.get("serial_number") is not None]
             if serial:
                 serial = serial.lower()
+                if last_updated:
+                    try:
+                        updated_dt = datetime.fromisoformat(last_updated.replace("Z", "+00:00"))
+                        age_days = (datetime.now(timezone.utc) - updated_dt).days
+                        if age_days > 5:
+                            self.log("GECloud: Warn: Skipping device {} as last_updated {} is {} days ago (>5), assuming non-functional".format(serial, last_updated, age_days))
+                            continue
+                    except (ValueError, TypeError):
+                        self.log("GECloud: Warn: Could not parse last_updated {} for device {}, skipping age check".format(last_updated, serial))
                 if "plant ems" in model:
                     result["ems"] = serial
                 elif "gateway" in model or "gw2" in model:
                     result["gateway"] = serial
+                elif "giv-pv" in model:
+                    result["pv"].append(serial)
                 elif batteries or info.get("battery"):
                     result["battery"].append(serial)
                     result["battery_meters"][serial] = meter_serials
@@ -1555,6 +1872,7 @@ class GECloudDirect(ComponentBase):
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"GECloud: Warn: Exception during request to {url}: {e}")
             self.failures_total += 1
+            self.api_auth_failed = False
             record_api_call("givenergy", False, "connection_error")
             return None
 
@@ -1563,17 +1881,30 @@ class GECloudDirect(ComponentBase):
             data = data["data"]
         else:
             data = None
+
+        # Only a 401/403 indicates an auth/subscription problem; any other outcome (success, 404/422,
+        # 429, 5xx) clears the flag so a transient failure after an auth failure is not reported as an
+        # ongoing access-denied condition.
+        self.api_auth_failed = status in [401, 403]
+
         if status in [200, 201]:
             if data is None:
                 data = {}
             self.update_success_timestamp()
             record_api_call("givenergy")
             return data
-        elif status in [401, 403, 404, 422]:
-            # Unauthorized
+        elif status in [401, 403]:
+            # Authentication / authorisation failure. As well as an invalid API key this now
+            # covers accounts without an active GivEnergy Premium subscription, which (since
+            # May 2026) is required for cloud API access.
+            self.failures_total += 1
+            self.log("GECloud: Warn: API access denied from {}, response code {} — check your GivEnergy API key; a GivEnergy Premium subscription may now be required for API access".format(endpoint, status))
+            record_api_call("givenergy", False, "auth_error")
+            return {}
+        elif status in [404, 422]:
             self.failures_total += 1
             self.log("GECloud: Warn: Failed to get data from {}, response code {}".format(endpoint, status))
-            record_api_call("givenergy", False, "auth_error")
+            record_api_call("givenergy", False, "client_error")
             return {}
         elif status == 429:
             # Rate limiting so wait up to 30 seconds
@@ -1836,57 +2167,13 @@ class MockHAInterface:  # pragma: no cover
         print(f"Set state external {entity_id} = {state}")
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for testing"""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the GE Cloud command-line harness, with its own cache root and HA interface."""
 
     def __init__(self):
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-        self.config_root = "./temp_gecloud"
-        self.plan_interval_minutes = 30
+        """Initialise the shared mock with the GE Cloud cache root and a mock HA interface."""
+        super().__init__(config_root="./temp_gecloud")
         self.ha_interface = MockHAInterface()
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # pragma: no cover

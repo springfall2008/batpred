@@ -155,6 +155,7 @@ class LoadMLComponent(ComponentBase):
                     self.model_valid = True
                     self.model_status = "active"
                     self.initial_training_done = True
+                    self.last_train_time = self.predictor.training_timestamp
                 else:
                     self.log("ML Component: Loaded model is invalid ({}), will retrain".format(reason))
                     self.model_status = "fallback_" + reason
@@ -404,7 +405,7 @@ class LoadMLComponent(ComponentBase):
                 energy = self.get_from_incrementing(pv_data_cumulative, m, PREDICT_STEP, backwards=True)
                 pv_data[m] = dp4(energy)
 
-            pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
+            pv_forecast_minute, pv_forecast_minute10, _ = self.base.fetch_pv_forecast()
             # Add future PV forecast as per-5-min energy with negative keys (negative = future)
             # key -5 = first future step, -10 = second, etc.
             if pv_forecast_minute:

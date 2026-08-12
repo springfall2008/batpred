@@ -17,7 +17,7 @@ and adjustment curve calculations.
 
 import aiohttp
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils import dp1
 from component_base import ComponentBase
 from predbat_metrics import record_api_call
@@ -49,6 +49,22 @@ class TemperatureAPI(ComponentBase):
     async def switch_event(self, entity_id, service):
         pass
 
+    async def load_temperature_cache(self):
+        """Load temperature forecast from storage, restoring last_updated_timestamp from cache age."""
+        if not self.storage:
+            return
+        data = await self.storage.load("temperature", "forecast")
+        if data is not None:
+            self.temperature_data = data
+            age = await self.storage.age("temperature", "forecast")
+            if age is not None:
+                self.last_updated_timestamp = datetime.now() - timedelta(minutes=age)
+
+    async def save_temperature_cache(self):
+        """Persist temperature forecast to storage."""
+        if self.storage and self.temperature_data is not None:
+            await self.storage.save("temperature", "forecast", self.temperature_data, format="yaml", expiry=None)
+
     async def run(self, seconds, first):
         """
         Main run loop - polls API every hour
@@ -57,14 +73,25 @@ class TemperatureAPI(ComponentBase):
             if not self.temperature_enable:
                 self.update_success_timestamp()
                 return True
-            if first or (seconds % (60 * 60) == 0):
-                # Fetch temperature data every hour
+
+            fetch_due = first or (seconds % (60 * 60) == 0)
+
+            if first:
+                # Restore cached data; skip API fetch if it is less than an hour old
+                await self.load_temperature_cache()
+                if self.last_updated_timestamp is not None:
+                    age_minutes = (datetime.now() - self.last_updated_timestamp).total_seconds() / 60
+                    if age_minutes < 60:
+                        fetch_due = False
+
+            if fetch_due:
                 temperature_data = await self.fetch_temperature_data()
                 if temperature_data is not None:
                     self.temperature_data = temperature_data
                     self.last_updated_timestamp = datetime.now()
                     self.publish_temperature_sensor()
-            if self.temperature_data is not None:
+                    await self.save_temperature_cache()
+            elif self.temperature_data is not None:
                 self.update_success_timestamp()
                 self.publish_temperature_sensor()
         except Exception as e:

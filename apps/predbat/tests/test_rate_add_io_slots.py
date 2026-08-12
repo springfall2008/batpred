@@ -143,6 +143,21 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test6_low_rate_false", my_predbat, slots, False, 12, expected_rates)
 
+    # Test 7: octopus_slot_low_rate=False must derive the assumed price from the `rates` argument, not
+    # self.rate_import. Regression tied to fetch's atomic publish: self.rate_import now holds the
+    # previous cycle's data during the rebuild. Stage a stale self.rate_import (99p) distinct from the
+    # 10p working rates and require the slot to keep the 10p working value.
+    print("\n**** Test 7: octopus_slot_low_rate=False uses rates arg, not self.rate_import ****")
+    saved_rate_import, saved_rate_min = my_predbat.rate_import, my_predbat.rate_min
+    my_predbat.rate_import = {minute: 99.0 for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60))}
+    my_predbat.rate_min = 99.0  # so even the fallback is 99: the only way to see 10 is reading `rates`
+    slot_start = midnight_utc + timedelta(hours=2)
+    slot_end = slot_start + timedelta(minutes=30)
+    slots = [{"start": slot_start.strftime(TIME_FORMAT), "end": slot_end.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    expected_rates = {minute: 10.0 for minute in range(120, 150)}  # from the 10p rates arg, not the 99p stale self.rate_import
+    failed |= run_rate_add_io_slots_test("test7_low_rate_false_uses_rates_arg", my_predbat, slots, False, 12, expected_rates)
+    my_predbat.rate_import, my_predbat.rate_min = saved_rate_import, saved_rate_min
+
     # Test 7: Custom octopus_slot_max value (e.g., 6 slots = 3 hours)
     print("\n**** Test 7: Custom slot max (6 slots) ****")
     slots = []

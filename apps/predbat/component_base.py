@@ -159,6 +159,10 @@ class ComponentBase(ABC):
         """Get the number of errors that have occurred in this component"""
         return self.count_errors
 
+    def is_calculating(self):
+        """Return whether the component is currently performing a long-running calculation."""
+        return False
+
     async def start(self):
         """
         Start the component's main operation loop.
@@ -208,7 +212,12 @@ class ComponentBase(ABC):
                         if not self.api_started:
                             self.api_started = True
                             self.log(f"{self.__class__.__name__}: Started")
-                            first = False  # Clear first flag once started
+                        # Clear first flag once started. This must happen even when a
+                        # component sets api_started itself from a background task (e.g.
+                        # the gateway's MQTT loop): otherwise first stays True forever and
+                        # start() keeps re-running the first=True startup path on backoff,
+                        # never reaching the steady-state housekeeping run().
+                        first = False
                     else:
                         self.count_errors += 1
                         self.non_fatal_error_occurred()

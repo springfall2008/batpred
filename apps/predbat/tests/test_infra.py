@@ -62,8 +62,29 @@ def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None
     return mock_response
 
 
+def _make_mock_context(mock_response):
+    """Wrap a single mock response in an async context manager (as returned by session.get/post)."""
+    mock_context = MagicMock()
+
+    async def aenter(*args, **kwargs):
+        return mock_response
+
+    async def aexit(*args):
+        return None
+
+    mock_context.__aenter__ = aenter
+    mock_context.__aexit__ = aexit
+    return mock_context
+
+
 def create_aiohttp_mock_session(mock_response=None, exception=None):
-    """Helper to create a mock aiohttp ClientSession"""
+    """Helper to create a mock aiohttp ClientSession.
+
+    ``mock_response`` may be a single response (every get/post call returns it) or a
+    list of responses consumed in order across successive get/post calls — useful when
+    the code under test reuses one ``ClientSession`` (or a patched constructor returning
+    the same mock) across a retry loop, e.g. a 401 followed by a successful retry.
+    """
     mock_session = MagicMock()
 
     if exception:
@@ -74,20 +95,16 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
         if mock_response is None:
             mock_response = create_aiohttp_mock_response()
 
-        mock_context = MagicMock()
+        if isinstance(mock_response, list):
+            # Independent iterators for get/post so either (or both) can be driven in sequence.
+            mock_session.get = MagicMock(side_effect=[_make_mock_context(resp) for resp in mock_response])
+            mock_session.post = MagicMock(side_effect=[_make_mock_context(resp) for resp in mock_response])
+        else:
+            mock_context = _make_mock_context(mock_response)
 
-        async def aenter(*args, **kwargs):
-            return mock_response
-
-        async def aexit(*args):
-            return None
-
-        mock_context.__aenter__ = aenter
-        mock_context.__aexit__ = aexit
-
-        # Setup both GET and POST methods
-        mock_session.get = MagicMock(return_value=mock_context)
-        mock_session.post = MagicMock(return_value=mock_context)
+            # Setup both GET and POST methods
+            mock_session.get = MagicMock(return_value=mock_context)
+            mock_session.post = MagicMock(return_value=mock_context)
 
     async def session_aenter(*args):
         return mock_session
@@ -165,10 +182,7 @@ class TestHAInterface:
             return result
         else:
             # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
-            if attribute:
-                return ""
-            else:
-                return default
+            return default
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))
@@ -209,6 +223,12 @@ class TestHAInterface:
                 print("Warn: Service for entity {} not a time".format(entity_id))
             elif entity_id in self.dummy_items:
                 self.dummy_items[entity_id] = kwargs.get("time", None)
+        elif service == "input_datetime/set_datetime":
+            entity_id = kwargs.get("entity_id", None)
+            if not entity_id.startswith("input_datetime."):
+                print("Warn: Service for entity {} not an input_datetime".format(entity_id))
+            elif entity_id in self.dummy_items:
+                self.dummy_items[entity_id] = kwargs.get("time", kwargs.get("datetime", kwargs.get("date", None)))
         return None
 
     def set_state(self, entity_id, state, attributes=None):
@@ -261,6 +281,7 @@ class MockConfigProvider:
             "load_forecast_only": False,
             "days_previous": [7, 14],
             "days_previous_weight": [1.0, 0.5],
+            "days_previous_auto": False,
             "metric_min_improvement": 0.1,
             "metric_min_improvement_export": 0.2,
             "metric_min_improvement_swap": 0.3,
@@ -280,8 +301,11 @@ class MockConfigProvider:
             "notify_devices": ["notify"],
             "pv_scaling": 1.0,
             "pv_metric10_weight": 0.5,
+            "calculate_pv90_plan": False,
+            "pv_metric90_weight": 0.0,
             "load_scaling": 1.0,
             "load_scaling10": 1.0,
+            "load_scaling90": 1.0,
             "charge_scaling10": 1.0,
             "load_scaling_saving": 0.8,
             "load_scaling_free": 0.9,
@@ -603,6 +627,7 @@ def simple_scenario(
     calculate_export_on_pv=True,
     assert_clipped=0,
     pv_ac_limit=0,
+    pv_hours=None,
 ):
     """
     No PV, No Load
@@ -721,11 +746,11 @@ def simple_scenario(
     load10_step = {}
 
     for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv_step[minute] = pv_amount / (60 / 5) if not pv10 else 0
+        # pv_hours limits PV to the first N hours of the forecast, otherwise it runs at pv_amount all day
+        pv_now = 0 if (pv_hours is not None and minute >= pv_hours * 60) else pv_amount
+        pv_step[minute] = pv_now / (60 / 5) if not pv10 else 0
         load_step[minute] = load_amount / (60 / 5) if not pv10 else 0
-
-    for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv10_step[minute] = pv_amount / (60 / 5) if pv10 else 0
+        pv10_step[minute] = pv_now / (60 / 5) if pv10 else 0
         load10_step[minute] = load_amount / (60 / 5) if pv10 else 0
 
     if charge_car:
@@ -735,10 +760,23 @@ def simple_scenario(
         my_predbat.num_cars = 0
         my_predbat.car_charging_slots[0] = []
 
+    # When the C++ prediction kernel is enabled, run kernel-supported scenarios with save=None so
+    # the prediction dispatches to the kernel and the scenario asserts validate the kernel results.
+    # Scenarios relying on save-run-only behaviour (low-power charge, standing charge) keep the
+    # Python engine as those never apply to optimisation scenario runs.
+    kernel_mode = bool(getattr(my_predbat, "prediction_kernel_enable", False))
+    kernel_eligible = kernel_mode and not (my_predbat.set_charge_window and my_predbat.set_charge_low_power) and my_predbat.metric_standing_charge == 0
+    if kernel_eligible and not quiet:
+        print("Scenario {} routed via the C++ prediction kernel".format(name))
+
     if prediction_handle:
         prediction = prediction_handle
     else:
         prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+
+    if kernel_eligible and not getattr(prediction, "kernel_handle", 0):
+        print("ERROR: Scenario {} expected the C++ prediction kernel but it is not available".format(name))
+        return (True, prediction) if return_prediction_handle else True
 
     compute_charge_limit = False
     if charge_limit_best is None:
@@ -787,7 +825,7 @@ def simple_scenario(
             iboost_running,
             iboost_running_solar,
             iboost_running_full,
-        ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=save)
+        ) = prediction.run_prediction(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), save=None if kernel_eligible else save)
         prediction.predict_soc = predict_soc
         prediction.car_charging_soc_next = car_charging_soc_next
         prediction.iboost_next = iboost_next
@@ -832,7 +870,7 @@ def simple_scenario(
             print("ERROR: iBoost running full should be {}".format(assert_iboost_running_full))
         failed = True
 
-    if save != "none":
+    if save != "none" and not kernel_eligible:
         total_clipped = prediction.predict_clipped_best[max(prediction.predict_clipped_best.keys())] if prediction.predict_clipped_best else 0
         if abs(total_clipped - assert_clipped) >= 0.9:
             if not ignore_failed:

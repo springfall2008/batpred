@@ -17,15 +17,34 @@ import copy
 from datetime import datetime, timedelta, UTC
 from predbat_metrics import record_api_call
 from component_base import ComponentBase
+from mock_base import MockBase
+from oauth_mixin import OAuthMixin
 
 
 # API Endpoints
 SOLIS_BASE_URL = "https://www.soliscloud.com:13333"
+# OAuth 2.0 host (Bearer auth). Used when auth_method == "oauth". Reads/control use the same
+# cid/value payload shapes as the HMAC path, but NOT the same routes — this host serves a
+# different namespace, so paths are translated via SOLIS_OAUTH_ENDPOINTS below. (Design #366
+# approach 1 assumed path parity here; that was verified false against the live gateway.)
+SOLIS_OAUTH_BASE_URL = "https://api-oauth2.soliscloud.com"
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
 SOLIS_CONTROL_ENDPOINT = "/v2/api/control"
 SOLIS_INVERTER_LIST_ENDPOINT = "/v1/api/inverterList"
 SOLIS_INVERTER_DETAIL_ENDPOINT = "/v1/api/inverterDetail"
+
+# The OAuth2 gateway serves a different route namespace to the HMAC host: discovery sits under
+# /api/access_data/, register reads and control under /api/control_device/. Verified against the
+# live gateway 2026-07-21. The HMAC paths return an XML <ForbiddenException> on the OAuth host,
+# which _execute_request mistook for an expired token, refreshing and retrying until it gave up.
+SOLIS_OAUTH_ENDPOINTS = {
+    SOLIS_READ_ENDPOINT: "/api/control_device/atRead",
+    SOLIS_READ_BATCH_ENDPOINT: "/api/control_device/atReadBatch",
+    SOLIS_CONTROL_ENDPOINT: "/api/control_device/control",
+    SOLIS_INVERTER_LIST_ENDPOINT: "/api/access_data/inverterList",
+    SOLIS_INVERTER_DETAIL_ENDPOINT: "/api/access_data/inverterDetail",
+}
 
 # Retry configuration
 SOLIS_MAX_RETRY_TIME = 30  # seconds
@@ -256,14 +275,24 @@ class SolisAPIError(Exception):
         super().__init__(final_message)
 
 
-class SolisAPI(ComponentBase):
+class SolisAPI(ComponentBase, OAuthMixin):
     """Solis Cloud API integration component"""
 
-    def initialize(self, api_key, api_secret, inverter_sn=None, automatic=False, base_url=SOLIS_BASE_URL, control_enable=True):
+    def initialize(self, api_key=None, api_secret=None, inverter_sn=None, automatic=False, base_url=SOLIS_BASE_URL, control_enable=True, auth_method=None, access_token=None, token_expires_at=None, token_hash=None):
         """Initialise the Solis API component"""
         self.api_key = api_key
         self.api_secret = api_secret
-        self.base_url = base_url
+        # OAuth (Bearer) vs HMAC api-key auth. In OAuth mode the access_token is held by
+        # the mixin and refreshed via the oauth-refresh edge function (provider "solis").
+        self._init_oauth(auth_method, access_token, token_expires_at, "solis")
+        self.token_hash = token_hash or ""
+        # Require api_key+api_secret unless using OAuth — restores the startup guard lost
+        # when these became optional in components.py, so a misconfigured api-key instance
+        # fails clearly here instead of crashing later on None.encode() in _build_headers.
+        if self.auth_method != "oauth" and (not self.api_key or not self.api_secret):
+            raise SolisAPIError("Solis api_key and api_secret are required when not using OAuth")
+        # OAuth reads/control use the OAuth host; api-key uses the HMAC host (or override).
+        self.base_url = SOLIS_OAUTH_BASE_URL if self.auth_method == "oauth" else base_url
         self.automatic = automatic
         self.session = None
         self.nominal_voltage = 48.0  # Default nominal battery voltage
@@ -325,7 +354,12 @@ class SolisAPI(ComponentBase):
         return dt.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
     def _build_headers(self, endpoint, payload):
-        """Build HTTP headers with HMAC-SHA1 authorization"""
+        """Build HTTP headers — Bearer (OAuth) or HMAC-SHA1 (api-key)"""
+        if self.auth_method == "oauth":
+            return {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json",
+            }
         body = json.dumps(payload)
         payload_digest = self._digest(body)
         content_type = "application/json"
@@ -354,7 +388,22 @@ class SolisAPI(ComponentBase):
 
     async def _execute_request(self, endpoint, payload):
         """Execute HTTP POST request to Solis API"""
+        # OAuth reads/control live in a different route namespace (see SOLIS_OAUTH_ENDPOINTS).
+        # Translate before building the URL; in api-key mode the paths are used unchanged.
+        if self.auth_method == "oauth":
+            endpoint = SOLIS_OAUTH_ENDPOINTS.get(endpoint, endpoint)
         url = f"{self.base_url}{endpoint}"
+        # OAuth: proactively refresh the token before the call (no-op for api-key mode).
+        # If the token can't be obtained (refresh failed / needs reauth), fail fast — the
+        # oauth_failed flag below makes _with_retry abort instead of looping with a bad token.
+        if self.auth_method == "oauth":
+            if not await self.check_and_refresh_oauth_token():
+                raise SolisAPIError("Solis OAuth token unavailable — reconnect required", status_code=401)
+            # check_and_refresh can report success while leaving access_token unset (e.g. refresh
+            # skipped because SUPABASE_* env / instance_id missing). Fail fast rather than sending
+            # an "Authorization: Bearer None" header and burning the retry window.
+            if not self.access_token:
+                raise SolisAPIError("Solis OAuth access_token unavailable — reconnect required", status_code=401)
         headers = self._build_headers(endpoint, payload)
 
         try:
@@ -363,6 +412,9 @@ class SolisAPI(ComponentBase):
                     # Check HTTP status
                     if response.status != 200:
                         error_text = await response.text()
+                        if response.status in (401, 403) and self.auth_method == "oauth":
+                            # Force a token refresh; _with_retry re-issues the request with the new token.
+                            await self.handle_oauth_401()
                         reason = "auth_error" if response.status in (401, 403) else "server_error"
                         record_api_call("solis", False, reason)
                         raise SolisAPIError(f"HTTP error: {error_text}", status_code=response.status)
@@ -405,6 +457,10 @@ class SolisAPI(ComponentBase):
             try:
                 return await operation()
             except SolisAPIError as err:
+                # OAuth permanently failed (needs reauth) — abort immediately rather than
+                # burning the full retry window hitting the API with a known-bad token.
+                if self.oauth_failed:
+                    raise err
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time >= max_retry_time:
                     raise err
@@ -621,6 +677,7 @@ class SolisAPI(ComponentBase):
                 max_discharge_current_amps = float(self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_MAX_DISCHARGE_CURRENT, 60.0))
                 charge_current = max_charge_current_amps
                 discharge_current = max_discharge_current_amps
+                slot1_active = False  # Whether slot 1 has any charge/discharge window configured
 
                 # There appears to be charge current limit on the slots which confused as slot 1 has a higher limit than the others,
                 # but the value isn't accepted, find the lowest slot limit
@@ -640,6 +697,7 @@ class SolisAPI(ComponentBase):
                     if slot == 1:
                         # Predbat only uses slot 1, so it can indicate current here.
                         charge_current = slot_data.get("charge_current", charge_current)
+                        slot1_active = bool(slot_data.get("charge_enable", 0)) or bool(slot_data.get("discharge_enable", 0))
                         discharge_current = slot_data.get("discharge_current", discharge_current)
 
                     # When a slot is disabled, zero out its times so the inverter shows a clean 00:00-00:00
@@ -760,12 +818,23 @@ class SolisAPI(ComponentBase):
                                 success &= result
 
                 # Decide if Solar charges the batter or exports
+                # The inverter only retains the TOU bit on CID 636 when a charge/discharge window is
+                # actually configured on slot 1, so gate the mode choice the same way the V1 branch does
+                # (see the in_charge_slot/in_discharge_slot handling below) to avoid a permanent verify-fail loop.
                 if charge_current == 0:
-                    self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
-                    await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
+                    if slot1_active:
+                        self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority")
+                    else:
+                        self.log(f"Solis API: Charge current is 0A and no active slot for {inverter_sn}, setting storage mode to 'Feed-in priority - No Timed Charge/Discharge'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Feed-in priority - No Timed Charge/Discharge")
                 else:
-                    self.log(f"Solis API: Charge current is {charge_current}A for {inverter_sn}, setting storage mode to 'Self-Use'")
-                    await self.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+                    if slot1_active:
+                        self.log(f"Solis API: Charge current is {charge_current}A for {inverter_sn}, setting storage mode to 'Self-Use'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+                    else:
+                        self.log(f"Solis API: Charge current is {charge_current}A and no active slot for {inverter_sn}, setting storage mode to 'Self-Use - No Timed Charge/Discharge'")
+                        await self.set_storage_mode_if_needed(inverter_sn, "Self-Use - No Timed Charge/Discharge")
 
                 return success
             else:
@@ -2958,57 +3027,6 @@ class SolisAPI(ComponentBase):
             await self.session.close()
             self.session = None
         self.log("Solis API: Component stopped")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base class for testing"""
-
-    def __init__(self):
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
-        return self.args.get(arg, default)
-
-    def set_arg(self, key, value):
-        self.args[key] = value
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_solis_api(key_id, secret):  # pragma: no cover

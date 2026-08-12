@@ -26,12 +26,16 @@ from carbon import CarbonAPI
 from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
+from sigenergy import SigenergyAPI
+from teslemetry import TeslemetryAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from deye import DeyeAPI
+from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
 
@@ -102,6 +106,8 @@ COMPONENT_LIST = {
             "solcast_poll_hours": {"required": False, "config": "solcast_poll_hours", "default": 8},
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
             "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
+            "forecast_solar_open_meteo_backup": {"required": False, "config": "forecast_solar_open_meteo_backup", "default": False},
+            "forecast_solar_open_meteo_first": {"required": False, "config": "forecast_solar_open_meteo_first", "default": False},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
             "pv_forecast_tomorrow": {"required": False, "config": "pv_forecast_tomorrow"},
             "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
@@ -238,6 +244,72 @@ COMPONENT_LIST = {
         },
         "phase": 1,
     },
+    "deye": {
+        "class": DeyeAPI,
+        "name": "DEYE Cloud",
+        "event_filter": "predbat_deye_",
+        "args": {
+            "app_id": {"required": False, "config": "deye_app_id"},
+            "app_secret": {"required": False, "config": "deye_app_secret"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as deye_key;
+            # without this entry it is dropped and DEYE rejects every call as
+            # "auth invalid token".
+            "key": {"required": False, "config": "deye_key"},
+            "username": {"required": False, "config": "deye_username"},
+            "password": {"required": False, "config": "deye_password"},
+            "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
+            "company_id": {"required": False, "config": "deye_company_id"},
+            "auth_method": {"required": False, "default": "app_credentials", "config": "deye_auth_method"},
+            "token_expires_at": {"required": False, "config": "deye_token_expires_at"},
+            "token_hash": {"required": False, "config": "deye_token_hash"},
+            "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "deye_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+            # config/battery reports capacity in Ah, so it needs a pack voltage to become
+            # kWh. Normally derived from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "deye_battery_nominal_voltage"},
+        },
+        # Gate activation on having at least one auth path — app credentials (app_id,
+        # self-hosted add-on) OR an injected SaaS access token (key). Without this the
+        # component would start for every instance since all individual args are
+        # optional to allow either auth mode. Gate on key, not token_hash: the hash is
+        # only a refresh dedup handle, so gating on it starts the component for an
+        # instance that has no usable token and then fails on every API call.
+        "required_or": ["app_id", "key"],
+        "phase": 1,
+    },
+    "enphase": {
+        "class": EnphaseAPI,
+        "name": "Enphase API",
+        "event_filter": "predbat_enphase_",
+        "args": {
+            "username": {
+                "required": True,
+                "config": "enphase_username",
+            },
+            "password": {
+                "required": True,
+                "config": "enphase_password",
+            },
+            "site_id": {
+                "required": False,
+                "config": "enphase_site_id",
+            },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic",
+            },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic_ignore_pv",
+            },
+        },
+        "phase": 1,
+    },
     "kraken": {
         "class": KrakenAPI,
         "name": "Kraken Energy (EDF/E.ON)",
@@ -345,6 +417,41 @@ COMPONENT_LIST = {
         "required_or": ["api_key", "managed_mode"],
         "phase": 1,
     },
+    "sigenergy": {
+        "class": SigenergyAPI,
+        "name": "Sigenergy Cloud API",
+        "event_filter": "predbat_sigenergy_",
+        "args": {
+            "system_id": {"required": True, "config": "sigenergy_system_id"},
+            "app_key": {"required": True, "config": "sigenergy_app_key"},
+            "app_secret": {"required": True, "config": "sigenergy_app_secret"},
+            "base_url": {"required": False, "config": "sigenergy_base_url", "default": "https://openapi-eu.sigencloud.com"},
+            "mqtt_host": {"required": False, "config": "sigenergy_mqtt_host"},
+            "ca_cert": {"required": False, "config": "sigenergy_ca_pem"},
+            "client_cert": {"required": False, "config": "sigenergy_client_pem"},
+            "client_key": {"required": False, "config": "sigenergy_client_key"},
+            "automatic": {"required": False, "config": "sigenergy_automatic", "default": False},
+            "enable_controls": {"required": False, "config": "sigenergy_enable_controls", "default": True},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
+    "teslemetry": {
+        "class": TeslemetryAPI,
+        "name": "Tesla Powerwall (Teslemetry)",
+        "event_filter": "predbat_teslemetry_",
+        "args": {
+            "key": {"required": True, "config": "teslemetry_key"},
+            "site_id": {"required": False, "config": "teslemetry_site_id"},
+            "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
+            "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
+            "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
+            "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
+            "token_hash": {"required": False, "config": "teslemetry_token_hash"},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "solax": {
         "class": SolaxAPI,
         "name": "SolaX Cloud API",
@@ -369,13 +476,22 @@ COMPONENT_LIST = {
         "name": "Solis Cloud API",
         "event_filter": "predbat_solis_",
         "args": {
-            "api_key": {"required": True, "config": "solis_api_key"},
-            "api_secret": {"required": True, "config": "solis_api_secret"},
+            # api_key/api_secret (HMAC) OR auth_method=oauth+access_token must be supplied.
+            "api_key": {"required": False, "config": "solis_api_key"},
+            "api_secret": {"required": False, "config": "solis_api_secret"},
+            "auth_method": {"required": False, "config": "solis_auth_method", "default": "api_key"},
+            "access_token": {"required": False, "config": "solis_access_token"},
+            "token_expires_at": {"required": False, "config": "solis_token_expires_at"},
+            "token_hash": {"required": False, "config": "solis_token_hash"},
             "inverter_sn": {"required": False, "config": "solis_inverter_sn"},
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
         },
+        # Gate activation on having at least one auth path — HMAC (api_key) OR OAuth
+        # (access_token). Without this the component would start for every instance
+        # since all individual args are optional to allow either auth mode.
+        "required_or": ["api_key", "access_token"],
         "phase": 1,
         "can_restart": True,
     },
@@ -389,7 +505,7 @@ COMPONENT_LIST = {
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
         },
-        "phase": 1,
+        "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
     },
 }
@@ -404,6 +520,9 @@ if HAS_GATEWAY:
             "mqtt_host": {"required": True, "config": "gateway_mqtt_host"},
             "mqtt_port": {"required": False, "config": "gateway_mqtt_port", "default": 8883},
             "mqtt_token": {"required": True, "config": "gateway_mqtt_token"},
+            "gateway_inverter_serial": {"required": False, "config": "gateway_inverter_serial", "default": None},
+            "gateway_evc_automatic": {"required": False, "config": "gateway_evc_automatic", "default": False},
+            "gateway_evc_control": {"required": False, "config": "gateway_evc_control", "default": False},
         },
         "phase": 1,
         "can_restart": True,

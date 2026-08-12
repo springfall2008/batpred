@@ -31,6 +31,10 @@ RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
 
 PV10_FRACTION = 0.6               # pv10 = pv * this fraction
+# pv90 = pv * this factor. Deliberately NOT the mirror of PV10_FRACTION (which would be 1.4):
+# solar upside is bounded by clear-sky while the downside is not, so a real p90 sits much closer
+# to the central forecast than the p10 does. 1.25 is in the range Solcast typically produces.
+PV90_FACTOR = 1.25                # pv90 = pv * this factor
 GAUSSIAN_PV_SIGMA_MINUTES = 180   # 3-hour std dev for PV bell curve
 PV_SUNRISE_MINUTE_MIN = 240       # 04:00 earliest sunrise
 PV_SUNRISE_MINUTE_MAX = 480       # 08:00 latest sunrise
@@ -43,19 +47,54 @@ BATTERY_SOC_OPTIONS_KWH = [2.4, 4.8, 7.0, 9.5, 13.5, 20.0]
 PV_PEAK_OPTIONS_KW = [0.0, 1.0, 2.0, 4.0, 6.0, 10.0]
 
 RATE_TYPES = ["single", "dual", "triple", "halfhourly"]
+IMPORT_RATE_TYPES = RATE_TYPES + ["negative_halfhourly"]
 
 # ---------------------------------------------------------------------------
 # Daily profile generators  (return list[float] with exactly 1440 elements)
 # ---------------------------------------------------------------------------
 
 
+def _smooth_rate_profile(control_points, allow_negative=False):
+    """Cosine-interpolate between control points to produce a 1440-minute rate profile.
+
+    Adjacent control points are connected with a smooth S-curve (raised cosine), so the
+    profile ramps gradually between each peak/trough rather than jumping abruptly.
+
+    Args:
+        control_points: list of (minute, rate) pairs covering at least minute 0 and 1439
+        allow_negative: if False, clamp all output values to >= 0
+
+    Returns:
+        list[float] of 1440 values
+    """
+    pts = sorted(control_points, key=lambda x: x[0])
+    profile = []
+    idx = 0
+    n = len(pts)
+    for m in range(MINUTES_PER_DAY):
+        while idx + 1 < n and pts[idx + 1][0] <= m:
+            idx += 1
+        t0, v0 = pts[idx]
+        if idx + 1 >= n:
+            val = v0
+        else:
+            t1, v1 = pts[idx + 1]
+            span = t1 - t0
+            mu = (m - t0) / span if span > 0 else 1.0
+            val = v0 + (v1 - v0) * (1.0 - math.cos(mu * math.pi)) / 2.0
+        if not allow_negative:
+            val = max(0.0, val)
+        profile.append(val)
+    return profile
+
+
 def generate_rates_day(rate_type, params, seed):
     """Generate a single-day (1440-minute) per-minute rate profile in p/kWh.
 
     Args:
-        rate_type: One of "single", "dual", "triple", "halfhourly"
+        rate_type: One of "single", "dual", "triple", "halfhourly", "negative_halfhourly"
         params: dict of rate parameters (see per-type docs below)
-        seed: integer seed for halfhourly random generation
+        seed: integer seed for halfhourly/negative_halfhourly random generation
 
     Returns:
         list[float] of 1440 values
@@ -95,15 +134,21 @@ def generate_rates_day(rate_type, params, seed):
             else:
                 profile[m] = shoulder_rate
 
-    elif rate_type == "halfhourly":
-        # 48 half-hourly slots, randomly priced, each slot is 30 minutes
+    elif rate_type in ("halfhourly", "negative_halfhourly"):
+        # Smooth profile: cosine-interpolate between randomly placed peaks and troughs
+        allow_negative = rate_type == "negative_halfhourly"
         rng = random.Random(seed)
-        base = float(params.get("base_rate", 10.0))
-        spread = float(params.get("spread", 20.0))
-        slots = [max(0.0, base + rng.uniform(-spread / 2, spread / 2)) for _ in range(48)]
-        for m in range(MINUTES_PER_DAY):
-            slot = m // 30
-            profile[m] = slots[slot]
+        base = float(params.get("base_rate", 15.0))
+        low = float(params.get("low_rate", 5.0))
+        high = float(params.get("high_rate", 30.0))
+        num_highs = int(params.get("num_highs", 2))
+        num_lows = int(params.get("num_lows", 2))
+        control_points = [(0, base), (MINUTES_PER_DAY - 1, base)]
+        for _ in range(num_highs):
+            control_points.append((rng.randint(0, MINUTES_PER_DAY - 1), high))
+        for _ in range(num_lows):
+            control_points.append((rng.randint(0, MINUTES_PER_DAY - 1), low))
+        profile = _smooth_rate_profile(control_points, allow_negative)
 
     return profile
 
@@ -228,7 +273,7 @@ def generate_random_scenario(scenario_id, seed):
     sunset_minute = rng.randint(PV_SUNSET_MINUTE_MIN, PV_SUNSET_MINUTE_MAX)
 
     # --- Import rate ---
-    import_rate_type = rng.choice(RATE_TYPES)
+    import_rate_type = rng.choice(IMPORT_RATE_TYPES)
     import_rate_params = _sample_rate_params(rng, import_rate_type, cheap=True)
     import_rate_seed = rng.randint(0, 2**31)
 
@@ -399,25 +444,33 @@ def expand_load_minutes(day_kwh_profile, minutes_now=0, history_days=14):
     return result
 
 
-def expand_pv_forecast(day_kw_profile, forecast_minutes, pv10_fraction=PV10_FRACTION):
-    """Build predbat pv_forecast_minute and pv_forecast_minute10 from a daily profile.
+def expand_pv_forecast(day_kw_profile, forecast_minutes, pv10_fraction=PV10_FRACTION, pv90_factor=PV90_FACTOR):
+    """Build predbat pv_forecast_minute, pv_forecast_minute10 and pv_forecast_minute90 from a daily profile.
+
+    The p90 series matters because without one the PV90 upside scenario falls back to a copy of the p50
+    and becomes inert - identical to nominal apart from load scaling - so a benchmark run against these
+    scenarios could not tell whether PV90 helps or hurts.
 
     Args:
         day_kw_profile: list[float] of 1440 per-minute kW values
         forecast_minutes: how many minutes forward to generate (e.g. 2880 = 48h)
         pv10_fraction: fraction of normal forecast used for the P10 (pessimistic) forecast
+        pv90_factor: multiple of normal forecast used for the P90 (optimistic) forecast
 
     Returns:
-        tuple(dict[int, float], dict[int, float]) = (pv_forecast_minute, pv_forecast_minute10)
+        tuple(dict[int, float], dict[int, float], dict[int, float]) =
+            (pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
     """
     pv_normal = {}
     pv10 = {}
+    pv90 = {}
     for minute in range(0, forecast_minutes + 1):
         idx = minute % MINUTES_PER_DAY
         kw = day_kw_profile[idx]
         pv_normal[minute] = kw / 60.0         # kW -> kWh per minute (predbat format)
         pv10[minute] = kw * pv10_fraction / 60.0
-    return pv_normal, pv10
+        pv90[minute] = kw * pv90_factor / 60.0
+    return pv_normal, pv10, pv90
 
 
 # ---------------------------------------------------------------------------
@@ -475,9 +528,10 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.best_soc_min = 0.0
 
 
-    pv_normal, pv10 = expand_pv_forecast(data["pv_day_kw"], forecast_minutes)
+    pv_normal, pv10, pv90 = expand_pv_forecast(data["pv_day_kw"], forecast_minutes)
     my_predbat.pv_forecast_minute = pv_normal
     my_predbat.pv_forecast_minute10 = pv10
+    my_predbat.pv_forecast_minute90 = pv90
     my_predbat.calculate_second_pass = False
 
     # --- Rebuild PV step dicts via step_data_history ---
@@ -494,6 +548,21 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         cloud_factor=min(my_predbat.metric_cloud_coverage + 0.2, 1.0) if my_predbat.metric_cloud_coverage else None,
         flip=True,
     )
+
+    # --- Rescan the new rates before anything consumes their summaries ---
+    # Replacing rate_import/rate_export above does not update the min/max/average summaries or
+    # rate_min_forward - those only move when rate_scan runs. Without this the whole scenario is
+    # planned against the TEMPLATE's rates: on scenario 10, rate_min_forward stayed at the template's
+    # 18.081 while the scenario's cheapest forward import was 5.54, so battery_value_rate credited
+    # leftover battery at 3.4x its replacement cost and every window charged to 100%. set_rate_thresholds
+    # and rate_scan_window below both read these, so the rescan has to come first.
+    # rate_scan only recomputes rate_min_forward when print is True, so it is called explicitly here
+    # rather than turning the per-scenario logging on.
+    if my_predbat.rate_import:
+        my_predbat.rate_scan(my_predbat.rate_import, print=False)
+        my_predbat.rate_min_forward = my_predbat.rate_min_forward_calc(my_predbat.rate_import)
+    if my_predbat.rate_export:
+        my_predbat.rate_scan_export(my_predbat.rate_export, print=False)
 
     # --- Rebuild rate thresholds and charge/export windows ---
     if my_predbat.rate_import or my_predbat.rate_export:
@@ -609,6 +678,7 @@ def run_scenario(my_predbat, scenario, debug=False):
                 "battery_cycles": round(float(battery_cycle), 4),
                 "carbon_g": round(float(final_carbon_g), 2),
                 "runtime_s": round(t_elapsed, 3),
+                "end_record": int(my_predbat.end_record),
             }
         )
 
@@ -882,6 +952,13 @@ def compare_results(file_a, file_b):
         if ra.get("failed") or rb.get("failed"):
             status = "FAIL"
 
+        # Flag a differing end_record: the metric is measured over end_record, so if it changed
+        # between the two runs the metric diff is comparing different horizons and is not reliable.
+        era = ra.get("end_record")
+        erb = rb.get("end_record")
+        if era is not None and erb is not None and era != erb:
+            status = (status + " " if status else "") + "ER {}->{}".format(era, erb)
+
         ma = ra.get("metric")
         mb = rb.get("metric")
         ca = ra.get("cost")
@@ -1039,7 +1116,19 @@ def _sample_rate_params(rng, rate_type, cheap):
             "peak_end_hhmm": "{}:00".format(peak_end_hour),
         }
 
-    else:  # halfhourly
-        base = round(rng.uniform(10.0, 25.0), 2)
-        spread = round(rng.uniform(10.0, 30.0), 2)
-        return {"base_rate": base, "spread": spread}
+    elif rate_type == "halfhourly":
+        if cheap:
+            base = round(rng.uniform(15.0, 25.0), 2)
+            low = round(rng.uniform(3.0, 12.0), 2)
+            high = round(rng.uniform(30.0, 50.0), 2)
+        else:
+            base = round(rng.uniform(8.0, 18.0), 2)
+            low = round(rng.uniform(2.0, 8.0), 2)
+            high = round(rng.uniform(18.0, 30.0), 2)
+        return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
+
+    else:  # negative_halfhourly — troughs go negative to test plunge-pricing scenarios
+        base = round(rng.uniform(5.0, 15.0), 2)
+        low = round(rng.uniform(-15.0, 0.0), 2)
+        high = round(rng.uniform(25.0, 50.0), 2)
+        return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}

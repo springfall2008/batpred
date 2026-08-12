@@ -22,8 +22,10 @@ Supports two modes:
 
 from datetime import datetime, timedelta, timezone
 import asyncio
+import json
 import aiohttp
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 from utils import str2time, minutes_to_time, TIME_FORMAT
 
@@ -85,40 +87,81 @@ class AxleAPI(ComponentBase):
         elif not self.api_key:
             self.log("Warn: AxleAPI: BYOK mode requires api_key — Axle integration disabled")
 
-    def load_event_history(self):
-        """
-        Load event history from the sensor on startup.
-        Only keep past events (not future ones).
-        """
+    async def load_event_history(self):
+        """Load state from sensor (preferred) or storage (fallback) on startup.
 
-        try:
-            sensor_id = "binary_sensor." + self.prefix + "_axle_event"
-            state = self.get_state_wrapper(sensor_id)
+        Storage survives restarts; the sensor may not exist yet when loading on first run.
+        After loading from either source, publishes the sensor so HA state is current
+        without waiting for the first API fetch.
+        """
+        loaded = False
 
-            if state:
-                attributes = self.get_state_wrapper(sensor_id, attribute="event_history")
-                if attributes and isinstance(attributes, list):
+        if not loaded:
+            # Fallback: load from HA sensor (may be unavailable on fresh restart)
+            try:
+                sensor_id = "binary_sensor." + self.prefix + "_axle_event"
+                event_history = self.get_state_wrapper(sensor_id, attribute="event_history")
+                event_current = self.get_state_wrapper(sensor_id, attribute="event_current")
+                updated_at = self.get_state_wrapper(sensor_id, attribute="updated_at")
+                if isinstance(event_history, list):
                     now = self.now_utc
-                    # Only keep past events (end_time in the past)
-                    for event in attributes:
+                    for event in event_history:
                         if isinstance(event, dict):
                             end_time = event.get("end_time")
                             if end_time:
-                                # Parse if string
                                 if isinstance(end_time, str):
                                     try:
                                         end_time = datetime.fromisoformat(end_time.replace("Z", "+00:00"))
                                     except Exception:
                                         continue
-                                # Only keep if event has ended
                                 if end_time < now:
                                     self.event_history.append(event)
 
-                    self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from sensor history")
-        except Exception as e:
-            self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
+                    if isinstance(event_current, list) and event_current:
+                        self.current_event = event_current[0]
+
+                    if self.event_history or self.current_event.get("start_time"):
+                        loaded = True
+                        self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from sensor history")
+                        if updated_at:
+                            self.updated_at = updated_at
+
+            except Exception as e:
+                self.log(f"Warn: AxleAPI: Failed to load event history: {e}")
+
+        storage = getattr(self, "storage", None)
+        if not loaded and storage:
+            try:
+                data = await storage.load("axle", "event_history")
+                if data and isinstance(data, dict):
+                    # Support both old list format and new dict format
+                    self.event_history = data.get("event_history", [])
+                    self.current_event = data.get("current_event", {})
+                    self.updated_at = data.get("updated_at")
+                    loaded = True
+                    self.log(f"AxleAPI: Loaded {len(self.event_history)} past events from storage (updated_at: {self.updated_at})")
+            except Exception as e:
+                self.log(f"Warn: AxleAPI: Failed to load event history from storage: {e}")
+
+        if loaded:
+            # Publish will happen in run() after loading, to ensure state is up to date immediately on startup without waiting for next fetch
+            self.update_success_timestamp()
 
         self.history_loaded = True
+
+    async def save_event_history(self):
+        """Persist event history, current event, and updated_at to storage so they survive restarts."""
+        storage = getattr(self, "storage", None)
+        if storage:
+            try:
+                data = {
+                    "event_history": self.event_history,
+                    "current_event": self.current_event,
+                    "updated_at": self.updated_at,
+                }
+                await storage.save("axle", "event_history", data, format="yaml", expiry=None)
+            except Exception as e:
+                self.log(f"Warn: AxleAPI: Failed to save event history: {e}")
 
     def cleanup_event_history(self):
         """
@@ -372,7 +415,7 @@ class AxleAPI(ComponentBase):
                         self.call_notify(f"{self.prefix.capitalize()}: {msg}")
 
             self.cleanup_event_history()
-            self.publish_axle_event()
+            await self.save_event_history()
             self.log(f"AxleAPI: Successfully fetched event data - {import_export} event from {start_time} to {end_time}" if start_time else "AxleAPI: No scheduled event")
             self.update_success_timestamp()
 
@@ -409,7 +452,7 @@ class AxleAPI(ComponentBase):
 
         self._process_price_curve(data)
         self.cleanup_event_history()
-        self.publish_axle_event()
+        await self.save_event_history()
         self.update_success_timestamp()
         self.log("AxleAPI: Price curve processed successfully (managed mode)")
 
@@ -545,23 +588,31 @@ class AxleAPI(ComponentBase):
         self.set_arg("axle_session", "binary_sensor." + self.prefix + "_axle_event")
 
     async def run(self, seconds, first):
-        # Load history from sensor on first run
+        """Main run loop — fetch when data is 10+ minutes old, always publish state afterwards.
+
+        Publishing is unconditional so the on/off state keeps reflecting the current time even
+        when fetching is stuck failing (e.g. an expired API key) - otherwise a cached event that
+        has since ended would be reported as active forever.
+        """
         if first:
-            self.load_event_history()
+            await self.load_event_history()
             if self.automatic:
                 await self.automatic_config()
 
-        """
-        Main run loop - poll API every 10 minutes (600 seconds)
-        """
-        if first or (seconds % (10 * 60) == 0):  # Every 10 minutes
+        try:
+            updated_at_dt = str2time(self.updated_at) if self.updated_at else None
+        except (ValueError, TypeError):
+            updated_at_dt = None
+        fetch_due = updated_at_dt is None or (self.now_utc - updated_at_dt) >= timedelta(minutes=10)
+
+        if fetch_due:
             try:
                 await self.fetch_axle_event()
             except Exception as e:
                 self.log(f"Warn: AxleAPI: Exception during fetch: {e}")
                 self.failures_total += 1
-        elif (seconds % 60) == 0:  # Every minute, update state to reflect if event is active or not
-            self.publish_axle_event()
+
+        self.publish_axle_event()
 
         return True
 
@@ -598,9 +649,9 @@ def fetch_axle_sessions(base):
     return axle_events_deduplicated
 
 
-def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
+def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
     """
-    Load Axle VPP session slot
+    Load Axle VPP session slot into rate_dict (in place)
     """
     if rate_replicate is None:
         rate_replicate = {}
@@ -630,11 +681,11 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
                 base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
                     if export:
-                        base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
+                        rate_dict[minute] = rate_dict.get(minute, 0) + pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_saving
                         rate_replicate[minute] = "saving"
                     else:
-                        base.rate_import[minute] = base.rate_import.get(minute, 0) - pence_per_kwh
+                        rate_dict[minute] = rate_dict.get(minute, 0) - pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_free
                         rate_replicate[minute] = "saving"
 
@@ -655,3 +706,51 @@ def fetch_axle_active(base):
 
     state = base.get_state_wrapper(entity_id=entity_id, default="off")
     return str(state).lower() == "on"
+
+
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Axle command-line harness, with its own cache directory."""
+
+    def __init__(self):
+        """Initialise the shared mock with the Axle cache root."""
+        super().__init__(config_root="./temp_axle")
+
+
+async def test_axle_api(api_key, pence_per_kwh):  # pragma: no cover
+    """
+    Test the Axle API using a real BYOK API key and run one fetch cycle.
+    """
+    print(f"Testing Axle API (pence_per_kwh={pence_per_kwh})")
+
+    mock_base = MockBase()
+
+    axle_api = AxleAPI(mock_base, api_key=api_key, pence_per_kwh=pence_per_kwh, automatic=True)
+    await axle_api.run(0, True)
+
+    print("\nCurrent event: {}".format(json.dumps(axle_api.current_event, indent=2, default=str)))
+    print("Event history ({} events):".format(len(axle_api.event_history)))
+    for event in axle_api.event_history:
+        print("  {}".format(json.dumps(event, default=str)))
+    print("Failures: {}".format(axle_api.failures_total))
+
+    await axle_api.final()
+    print("\nTest completed")
+
+
+def main():  # pragma: no cover
+    """
+    Main function for command line execution to test the Axle API.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Test Axle API")
+    parser.add_argument("--api-key", required=True, help="Axle BYOK API key")
+    parser.add_argument("--pence-per-kwh", type=float, default=0.0, help="VPP compensation rate in pence per kWh")
+
+    args = parser.parse_args()
+
+    asyncio.run(test_axle_api(args.api_key, args.pence_per_kwh))
+
+
+if __name__ == "__main__":
+    main()
