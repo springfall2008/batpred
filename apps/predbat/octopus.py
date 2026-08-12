@@ -2949,14 +2949,14 @@ class Octopus:
                             if entity_id_join:
                                 # Join via selector
                                 cmd = "select/select_option, entity_id={}, option={}".format(entity_id_join, code)
-                                result = self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
+                                result = self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code, return_response=True)
                             else:
                                 # Join via octopus event (Bottle Cap Dave)
                                 cmd = "octopus_energy/join_octoplus_saving_session_event, event_code={}, entity_id={}".format(code, entity_id)
-                                result = self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
+                                result = self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id, return_response=True)
                             if result:
                                 if self.get_arg("set_event_notify"):
-                                    msg = "Joined Octopus saving event " + start_time.strftime("%a %d/%m %H:%M") + "-" + end_time.strftime("%H:%M") + ", " + saving_rate + " p/kWh"
+                                    msg = "Joined Octopus saving event " + start_time.strftime("%a %d/%m %H:%M") + "-" + end_time.strftime("%H:%M") + ", " + str(saving_rate) + " p/kWh"
                                     self.call_notify(f"{self.prefix.capitalize()}: {msg}")
                             else:
                                 self.log("Warn: Unable to join Octoplus saving event with command {}, result was {}".format(cmd, result))
