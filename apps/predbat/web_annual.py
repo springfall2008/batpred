@@ -1371,7 +1371,7 @@ class AnnualPage:
             return text
 
         scenarios = annual.get("scenarios", {}) or {}
-        text += "<table class='comparison-table'>\n<tr><th>Option</th><th>Capital</th><th>Saving a year</th><th>Pays back in</th><th>Battery cycles</th></tr>\n"
+        text += "<table class='comparison-table'>\n<tr><th>Option</th><th>Capital</th><th>Saving a year</th><th>Pays back in</th><th>Battery cycles a year</th></tr>\n"
         for key, label in rows:
             row = payback.get(key) or {}
             if row.get("pays_back") and row.get("years") is not None:

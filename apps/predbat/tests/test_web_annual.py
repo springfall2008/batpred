@@ -1489,7 +1489,7 @@ def test_web_annual_results(my_predbat):
         failed = True
 
     print("Test: the battery cycle metric appears in the payback table")
-    if "<th>Battery cycles</th>" not in html:
+    if "<th>Battery cycles a year</th>" not in html:
         print("  ERROR: expected the Battery cycles column header in the rendered HTML, got:\n{}".format(html))
         failed = True
     if "3.00 (+1.00)" not in html:
