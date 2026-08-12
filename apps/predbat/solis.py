@@ -1241,7 +1241,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 battery_soh = float(battery_soh) / 100.0
             except (ValueError, TypeError):
                 battery_soh = None
-            if battery_soh:
+            # A battery_soh of exactly 0 is a documented, valid Solis Cloud API response (not "no
+            # battery") - only a missing/unparseable field should exclude the inverter here.
+            if battery_soh is not None:
                 batteries.append(inverter_sn)
 
         num_inverters = len(batteries)
@@ -1517,7 +1519,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 app="solis"
             )
 
-            # Battery state of health
+            # Battery state of health - published as-is, including a literal 0 (issue #4494): a 0%
+            # reading here can be a flaky/unavailable API response as well as a genuinely unhealthy
+            # battery, and we don't know which, so it's reported honestly rather than guessed at.
+            # Inverter.__init__ is where battery_scaling itself is protected from a 0 or negative
+            # reading (retains the last known-good value rather than collapsing soc_max).
             battery_soh = detail.get("batteryHealthSoh")
             try:
                 battery_soh = float(battery_soh) / 100.0

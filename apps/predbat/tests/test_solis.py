@@ -2668,6 +2668,7 @@ async def test_publish_entities():
         "gridPurchasedTodayEnergy": 8.7,
         "gridPurchasedTodayEnergyStr": "kWh",
         "batteryCapacitySoc": 85,
+        "batteryHealthSoh": 0,  # documented, valid API response (issue #4494) - must not publish as 0% health
         "maxChargePowerW": 5000,
         "eTotal": 9876.5,
         "eTotalStr": "kWh",
@@ -2857,6 +2858,13 @@ async def test_publish_entities():
     pv2_voltage = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage"]
     assert pv2_voltage["state"] == 272.1, f"PV2 voltage should be 272.1, got {pv2_voltage['state']}"
     assert pv2_voltage["attributes"]["unit_of_measurement"] == "V", "PV2 voltage should have V unit"
+
+    # A batteryHealthSoh of 0 is published as-is (0.0) - it's ambiguous (flaky API vs genuinely
+    # unhealthy battery) so it's reported honestly rather than assumed to mean "fully healthy".
+    # It's Inverter.__init__ that protects battery_scaling itself from a 0/negative reading.
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh" in api.dashboard_items, "Battery SOH should be published"
+    battery_soh = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh"]
+    assert battery_soh["state"] == 0.0, f"Battery SOH of 0 should be published as-is (0.0), got {battery_soh['state']}"
 
     print(f"PASSED: publish_entities created {len(api.dashboard_items)} entities correctly")
     return False
@@ -3832,6 +3840,28 @@ async def test_automatic_config():
     assert any("No inverters with batteries found" in msg for msg in api4.log_messages), "Should log warning about no inverters with batteries"
 
     print("PASSED: automatic_config skips inverters without batteries")
+
+    # Test with a battery reporting batteryHealthSoh: 0 - a documented, valid Solis Cloud API
+    # response (issue #4494), not the same as the field being absent. The inverter must still be
+    # configured (not treated as having no battery), otherwise automatic_config aborts entirely
+    # and load_today/charge_start_time etc. are never set.
+    api5 = MockSolisAPI()
+    api5.inverter_sn = ["SN0SOH999"]
+    api5.inverter_details = {"SN0SOH999": {"batteryHealthSoh": 0}}
+
+    set_arg_calls5 = {}
+
+    def mock_set_arg5(key, value):
+        set_arg_calls5[key] = value
+
+    api5.set_arg = mock_set_arg5
+
+    await api5.automatic_config()
+
+    assert set_arg_calls5.get("num_inverters") == 1, f"Expected 1 inverter configured despite batteryHealthSoh 0, got {set_arg_calls5.get('num_inverters')}"
+    assert "load_today" in set_arg_calls5, "load_today should still be configured when batteryHealthSoh is 0"
+
+    print("PASSED: automatic_config still configures an inverter with batteryHealthSoh 0")
 
     return False
 

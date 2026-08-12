@@ -2109,6 +2109,54 @@ def test_input_datetime_charge_window(test_name, ha, inv, dummy_rest, direction,
     return failed
 
 
+def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
+    """
+    Verify Inverter.__init__ guards against a zero or negative battery_scaling read from args
+    rather than letting it propagate into soc_max = nominal_capacity * battery_scaling.
+    A cloud API legitimately reporting 0% battery State of Health (e.g. Solis, issue #4494) must
+    not silently collapse soc_max to zero - and since 0 is ambiguous (could mean a flaky API
+    response or a genuinely unhealthy battery), Predbat must not guess a value either; it should
+    retain the last value that was actually read as valid, falling back to 1.0 only when nothing
+    valid has ever been read.
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    # A prior test in this run may have left givtcp_rest pointing at a dummy REST URL, which
+    # would otherwise make this plain construction attempt (and retry) a real REST read.
+    my_predbat.args["givtcp_rest"] = None
+    if "battery_scaling_last_known" in my_predbat.args:
+        del my_predbat.args["battery_scaling_last_known"]
+
+    # No prior valid reading exists yet - falls back to 1.0
+    for bad_scaling in (0.0, -0.5):
+        my_predbat.args["battery_scaling"] = [bad_scaling]
+        inv = Inverter(my_predbat, 0)
+        if inv.battery_scaling != 1.0:
+            print("ERROR: battery_scaling should fall back to 1.0 when source reads {} and no prior value exists, got {}".format(bad_scaling, inv.battery_scaling))
+            failed = True
+
+    # A valid reading passes through unchanged, and is remembered
+    my_predbat.args["battery_scaling"] = [0.72]
+    inv = Inverter(my_predbat, 0)
+    if inv.battery_scaling != 0.72:
+        print("ERROR: battery_scaling should pass a valid value through unchanged, got {}".format(inv.battery_scaling))
+        failed = True
+
+    # A subsequent invalid reading retains the last known-good value (0.72), not 1.0 - it must
+    # not be assumed the battery is now "fully healthy" just because the reading is unusable
+    for bad_scaling in (0.0, -0.5):
+        my_predbat.args["battery_scaling"] = [bad_scaling]
+        inv = Inverter(my_predbat, 0)
+        if inv.battery_scaling != 0.72:
+            print("ERROR: battery_scaling should retain last known-good value 0.72 when source reads {}, got {}".format(bad_scaling, inv.battery_scaling))
+            failed = True
+
+    del my_predbat.args["battery_scaling"]
+    del my_predbat.args["battery_scaling_last_known"]
+    return failed
+
+
 def test_rest_battery_capacity_fallback(test_name, my_predbat):
     """
     Verify that when V3 REST data omits Battery_Capacity_kWh and battery_nominal_capacity,
@@ -2453,6 +2501,8 @@ def run_inverter_tests(my_predbat_dummy):
     )
     if failed:
         return failed
+
+    failed |= test_battery_scaling_invalid_value_clamped("battery_scaling_invalid_value_clamped", my_predbat)
 
     failed |= test_rest_battery_capacity_fallback("rest_capacity_fallback", my_predbat)
     if failed:
