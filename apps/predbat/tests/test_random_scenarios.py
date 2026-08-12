@@ -27,6 +27,8 @@ from tests.test_infra import reset_inverter
 # ---------------------------------------------------------------------------
 
 MINUTES_PER_DAY = 1440
+CLOCK_SLOT_MINUTES = 30           # plan slot length the clock offset is sampled within
+CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so offsets are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
 
@@ -288,10 +290,19 @@ def generate_random_scenario(scenario_id, seed):
     load_day_kwh = generate_load_day(daily_kwh, load_type, base_kw, morning_peak_kw, evening_peak_kw, morning_peak_minute, evening_peak_minute)
     pv_day_kw = generate_pv_day(peak_kw, peak_hour, sunrise_minute, sunset_minute)
 
+    # --- Clock ---
+    # Drawn last so that re-generating an existing seed leaves every other parameter unchanged.
+    # Offsetting into the slot means the scenario starts part way through a charge/export window,
+    # which is the only way the benchmark exercises partially-elapsed (in-progress) slots.
+    clock_offset_minutes = rng.randrange(0, CLOCK_SLOT_MINUTES, CLOCK_STEP_MINUTES)
+
     return {
         "id": scenario_id,
         "seed": seed,
         "params": {
+            "clock": {
+                "offset_minutes": clock_offset_minutes,
+            },
             "battery": {
                 "soc_max_kwh": soc_max_kwh,
                 "initial_soc_percent": initial_soc_percent,
@@ -509,6 +520,16 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.forecast_minutes = 24 * 60
     my_predbat.forecast_plan_hours = 24
     my_predbat.forecast_days = 1
+
+    # --- Clock: start part way through a plan slot when the scenario asks for it ---
+    # Scenario files written before this existed carry no "clock" entry; those keep the template's
+    # own minutes_now so previously recorded benchmark results stay comparable. The base is rounded
+    # down to the slot boundary first, so applying scenarios in a loop cannot accumulate offsets.
+    clock = params.get("clock")
+    if clock:
+        base_minutes = (my_predbat.minutes_now // CLOCK_SLOT_MINUTES) * CLOCK_SLOT_MINUTES
+        my_predbat.minutes_now = base_minutes + clock.get("offset_minutes", 0)
+        my_predbat.now_utc = my_predbat.midnight_utc + datetime.timedelta(minutes=my_predbat.minutes_now)
 
     # --- Expand time-series from stored daily profiles ---
     minutes_now = my_predbat.minutes_now
