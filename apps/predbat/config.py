@@ -2321,6 +2321,7 @@ APPS_SCHEMA = {
     "solis_base_url": {"type": "string", "empty": False},
     "solis_control_enable": {"type": "boolean"},
     "solis_cloud_pv_load_ignore": {"type": "boolean"},
+    "solis_nominal_voltage": {"type": "float"},
     "solis_auth_method": {"type": "string", "empty": False},
     "solis_access_token": {"type": "string", "empty": False},
     "solis_token_expires_at": {"type": "string", "empty": False},
