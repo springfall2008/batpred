@@ -105,7 +105,7 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
     # Example format Sat 25/01
     date_today_service = datetime.now().strftime("%a %d/%m")
     expected_service = [
-        ["octopus_energy/join_octoplus_saving_session_event", {"event_code": 987654, "entity_id": "event.octopus_energy_a_12345678_octoplus_saving_session_event", 'return_response': True}],
+        ["octopus_energy/join_octoplus_saving_session_event", {"event_code": 987654, "entity_id": "event.octopus_energy_a_12345678_octoplus_saving_session_event", "return_response": True}],
         ["notify/notify", {"message": "Predbat: Joined Octopus saving event {} 18:30-19:30, 50.0 p/kWh".format(date_today_service)}],
     ]
 
