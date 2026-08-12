@@ -5538,7 +5538,7 @@ def test_publish_data_battery_soh(my_predbat):
     assert soh_entity in fox.dashboard_items, f"battery_soh entity not found in {list(fox.dashboard_items.keys())}"
     assert fox.dashboard_items[soh_entity]["state"] == 0.95, f"Expected 0.95, got {fox.dashboard_items[soh_entity]['state']}"
     assert fox.dashboard_items[soh_entity]["attributes"]["unit_of_measurement"] == "*"
-    assert fox.dashboard_items[soh_entity]["attributes"]["device_class"] == "battery"
+    assert "device_class" not in fox.dashboard_items[soh_entity]["attributes"]
     assert fox.dashboard_items[soh_entity]["attributes"]["state_class"] == "measurement"
     assert fox.dashboard_items[soh_entity]["attributes"]["icon"] == "mdi:battery-heart"
 
