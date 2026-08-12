@@ -2702,7 +2702,6 @@ class Plan:
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
-            limit_percent = calc_percent_limit(limit, self.soc_max)
             window_start = max(window["start"], minutes_now)
             window_end = max(window["end"], minutes_now)
             window_length = window_end - window_start
@@ -2726,17 +2725,15 @@ class Plan:
                             soc_max = max(soc_max, predict_soc[minute])
 
                     soc_m1 = predict_soc[predict_minute_end_m1]
-                    soc_min_percent = calc_percent_limit(soc_min, self.soc_max)
 
                     if self.debug_enable:
                         self.log("Examine charge window {} from {} - {} (minute {}) limit {} - min soc {} max soc {} soc_m1 {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max, soc_m1))
 
-                    if (soc_min_percent > (limit_percent + 1)) and (limit != self.reserve):
-                        charge_limit_best[window_n] = 0
-                        window["target"] = 0
-                        if self.debug_enable:
-                            self.log("Clip off charge window {} from {} - {} from limit {} to new limit {} min percent {} limit percent {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], soc_min_percent, limit_percent))
-                    elif soc_max < (limit - charge_step):
+                    # Removing a charge window that never charges is prune_dead_plan_slots' job - it asks the
+                    # model whether the nominal plan changes without the slot, which subsumes the old
+                    # never-reaches-limit and freeze-at-100% removal branches. What is left here narrows the
+                    # limit to what the window can actually achieve, so adjacent windows share a limit and merge.
+                    if soc_max < (limit - charge_step):
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
@@ -2792,41 +2789,17 @@ class Plan:
                     if self.debug_enable:
                         self.log("Examine export window {} from {} - {} (minute {}) limit {} - starting soc {} ending soc {}".format(window_n, window_start, window_end, predict_minute_start, limit, soc_min, soc_max))
 
-                    # Export level adjustments for safety
-                    if limit == 99.0:
-                        if dp1(soc_min) == dp1(self.soc_max) and dp1(soc_max) == dp1(self.soc_max) and window["start"] not in self.manual_freeze_export_times:
-                            # Reserve slot, so set to 100% if we are already at 100% (but not for manual overrides)
-                            window["target"] = 100
-                            export_limits_best[window_n] = 100.0
-                            if self.debug_enable:
-                                self.log("Clip freeze export off as already at 100% - window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
-                    elif dp2(soc_max) <= dp2(self.reserve):
-                        # SoC never rises above reserve anywhere in this window, so there is nothing to export
-                        # regardless of the requested limit. The "clip up" branch below only narrows the limit
-                        # towards what's achievable and can't reach 0 here (limit_soc is 0 for a 0% request,
-                        # and soc_max can never be below that), so a 0%-target window would otherwise survive
-                        # clipping with a limit that is technically "on" but physically a no-op.
-                        window["target"] = 100.0
-                        export_limits_best[window_n] = 100.0
-                        if self.debug_enable:
-                            self.log("Clip off export window {} from {} - {} from limit {} to new limit {} - no SoC above reserve in this window".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
-                    elif dp2(soc_min) == dp2(soc_max) and soc_min > limit_soc and window["start"] not in self.manual_export_times:
-                        # SoC is above the requested limit yet completely flat across the window: the commanded
-                        # export moved no energy in the simulation (e.g. PV already saturates the export limit),
-                        # so this is a phantom export. In the simulation it pinned SoC - the same behaviour as a
-                        # freeze - so convert it to freeze export to keep the executed plan faithful to what was
-                        # scored, while dropping the force-export command that would dump to grid if PV dips
-                        # below the export limit. Falls back to off when freeze is unsupported, and when SoC is
-                        # pinned at 100% the freeze would be pointless, so clip off - the same rule the limit==99
-                        # branch above applies to native freeze windows. If conditions worsen (the PV10 case) a
-                        # genuine export re-appears on a later plan recompute. Manual exports are preserved.
-                        # See #4453 (lone exports on flat rates).
-                        new_limit = 99.0 if (self.set_export_freeze and dp1(soc_min) != dp1(self.soc_max)) else 100.0
-                        window["target"] = new_limit
-                        export_limits_best[window_n] = new_limit
-                        if self.debug_enable:
-                            self.log("Clip phantom export window {} from {} - {} from limit {} to {} - SoC flat at {} above limit, no energy moved".format(window_n, window_start, window_end, limit, new_limit, dp2(soc_min)))
-                    elif soc_min > limit_soc:
+                    # Export level adjustment: narrow the requested limit towards what the simulation says is
+                    # actually achievable, so the target sent to the inverter matches the simulated plan.
+                    #
+                    # Removing a window that achieves nothing is prune_dead_plan_slots' job - it asks the model
+                    # directly (does the nominal plan change without this slot?) instead of inferring it from the
+                    # SoC trace, and subsumes the removal branches that used to live here: freeze-at-100%,
+                    # no-SoC-above-reserve (#4171/#4434), phantom export (#4453/#4487) and target-unreachable.
+                    # The one case it deliberately does not cover is a window covering the current minute, which
+                    # it must not cancel mid-flight (#4402); an in-progress phantom is instead left to be
+                    # re-planned on the next cycle from real inverter state.
+                    if limit != 99.0 and soc_min > limit_soc:
                         # Give it 10 minute margin
                         target_soc = max(limit_soc, soc_min)
                         limit_soc = max(limit_soc, soc_min - 10 * self.battery_rate_max_discharge * self.battery_rate_max_scaling_discharge)
@@ -2834,12 +2807,6 @@ class Plan:
                         export_limits_best[window_n] = calc_percent_limit(limit_soc, self.soc_max) + (limit - int(limit))
                         if limit != export_limits_best[window_n] and self.debug_enable:
                             self.log("Clip up export window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n], window["target"]))
-                    elif soc_max < limit_soc:
-                        # Clip off the window
-                        window["target"] = 100.0
-                        export_limits_best[window_n] = 100.0
-                        if self.debug_enable:
-                            self.log("Clip off export window {} from {} - {} from limit {} to new limit {}".format(window_n, window_start, window_end, limit, export_limits_best[window_n]))
             else:
                 self.log("Warn: Clip export window {} as it's already passed".format(window_n))
                 export_limits_best[window_n] = 100.0
