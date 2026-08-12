@@ -1792,7 +1792,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.dashboard_item(
                 entity_name_sensor + "_" + sn.lower() + "_battery_soh",
                 state=soh_fraction,
-                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "device_class": "battery", "state_class": "measurement", "icon": "mdi:battery-heart"},
+                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "state_class": "measurement", "icon": "mdi:battery-heart"},
                 app="fox",
             )
 
