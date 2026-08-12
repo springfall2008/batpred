@@ -145,7 +145,10 @@ falling to this setting when export is worth nothing. The default is 0.8, so a s
 replacement price, while a system exporting at 80% of its cheapest import rate takes only a 4% reduction.<BR>
 Set it to 1.0 to switch this off entirely and value leftover battery at full replacement cost regardless of your export rate.
 The effect is to make Predbat less willing to buy energy purely to carry it forward, which matters most on tariffs with no export payment at all,
-where energy bought cheaply and then spilled to the grid is a complete loss.
+where energy bought cheaply and then spilled to the grid is a complete loss.<BR>
+The export rate used here is your tariff's own rate looking forward from the end of the plan, not the highest price on offer anywhere in the forecast.
+A saving session paying well above your tariff does not count towards it - a one-off event says nothing about whether your surplus can be sold in general,
+and letting it count would switch the discount off for a whole plan on a system that in fact cannot export at all.
 
 **input_number.metric_self_sufficiency** (_expert mode_) A price in pence per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
 Effectively saying to Predbat to account for imports at a higher price than reality in the calculation and thus selecting plans with less import.

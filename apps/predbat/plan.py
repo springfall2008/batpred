@@ -1597,6 +1597,14 @@ class Plan:
         what the grid would ever charge for it, and floored at the export arbitrage margin and at
         1p/kWh.
 
+        Both the cap and the export recovery ratio read the base tariff (rate_max_base,
+        rate_export_max_forward), captured before saving sessions and overrides are layered on. A
+        session is a one-off event, not evidence about what the tariff charges for a kWh or pays for a
+        surplus one, and letting one set either term values stored energy above what discharging it can
+        realise - which the planner spends as profit by freeze charging every window up to end_record.
+        Both fall back to their whole-horizon equivalents when the base data is absent, so replaying an
+        older debug file behaves as it did before.
+
         Note `rate_export_min` here is not the export rate - it is the export earnings less the
         replacement cost, so it only raises the value when exporting beats re-importing. It can
         never lower it, which is why a zero export rate does not reduce the credit.
@@ -1605,8 +1613,9 @@ class Plan:
         attributes and the savings report, so all three agree on what a stored kWh is worth.
         """
         rate_min_raw = self.rate_min_forward.get(minute, self.rate_min)
+        rate_max = self.rate_max_base or self.rate_max
         rate_min = rate_min_raw / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        rate_min = max(min(rate_min, self.rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
+        rate_min = max(min(rate_min, rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
 
         # Replacement cost assumes the energy can always be redeployed. That holds while surplus can
         # be sold, but if export pays less than it cost to import then anything the house cannot use
@@ -1615,7 +1624,11 @@ class Plan:
         # matches or beats it, down to metric_battery_value_export_scaling when export is worthless.
         # Setting that to 1.0 disables this entirely.
         if rate_min_raw > 0 and self.metric_battery_value_export_scaling < 1.0:
-            recovery = min(max(self.rate_export_max / rate_min_raw, 0.0), 1.0)
+            # Forward-looking like rate_min_raw, so an export price that has already passed stops
+            # counting once it has - a saving session ending in ten minutes says nothing about what
+            # the energy still in the battery can be sold for over the rest of the plan.
+            export_max = self.rate_export_max_forward.get(minute, 0.0) if self.rate_export_max_forward else self.rate_export_max
+            recovery = min(max(export_max / rate_min_raw, 0.0), 1.0)
             rate_min *= self.metric_battery_value_export_scaling + (1.0 - self.metric_battery_value_export_scaling) * recovery
 
         rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
