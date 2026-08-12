@@ -103,6 +103,8 @@ dend
 denorm
 derate
 derating
+desync
+desynced
 devcontainer
 devcontainers
 dexport
@@ -293,11 +295,13 @@ misdetect
 misdetected
 misdetecting
 misdetection
+mispairing
 Mixergy
 mkdocs
 mlugg
 Modbus
 mogons
+monkeypatched
 monokai
 Mosquitto
 mpan
@@ -416,6 +420,7 @@ sapm
 saverestore
 savez
 scalarstring
+scalings
 searr
 securetoken
 Segoe
@@ -503,6 +508,7 @@ twinx
 tzfile
 tzpath
 unconfigured
+undiscounted
 unnormalised
 unparseable
 unsmoothed

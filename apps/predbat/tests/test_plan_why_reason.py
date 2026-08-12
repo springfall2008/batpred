@@ -10,6 +10,7 @@
 
 import re
 import warnings
+from datetime import timedelta
 
 import web_helper
 from prediction import Prediction
@@ -78,18 +79,22 @@ def _codes(row):
 def _render(row, templates):
     """
     Mirror of the client-side renderReasonText() in web_helper.py: fill in each reason
-    entry's template with its params, join with a space. Used here to verify the code/params/
-    template contract produces the expected human-readable text end-to-end, not just that the
-    right code was picked.
+    entry's template with its params, join with a space, prefixing "Then" onto the second half
+    of a demand-before-export split. Used here to verify the code/params/template contract
+    produces the expected human-readable text end-to-end, not just that the right code was picked.
     """
-    parts = []
-    for entry in row.get("reasons", []):
+    reasons = row.get("reasons", [])
+    rendered = []
+    for entry in reasons:
         template = templates.get(entry["code"])
         if not template:
+            rendered.append("")
             continue
         text = re.sub(r"\{(\w+)\}", lambda m: str(entry["params"].get(m.group(1), m.group(0))), template)
-        parts.append(text)
-    return " ".join(parts)
+        rendered.append(text)
+    if len(reasons) == 2 and rendered[0] and rendered[1] and reasons[0]["code"].startswith("demand_before_export_"):
+        rendered[1] = "Then " + rendered[1][0].lower() + rendered[1][1:]
+    return " ".join(part for part in rendered if part)
 
 
 def run_test_plan_why_reason(my_predbat):
@@ -223,10 +228,10 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.export_limits_best = [99]
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
-    if row is None or _codes(row) != ["freeze_export_below_threshold"]:
+    if row is None or _codes(row) != ["freeze_export"]:
         print("ERROR: FrzExp reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif set(row["reasons"][0]["params"]) != {"rate", "threshold"}:
+    elif row["reasons"][0]["params"] != {}:
         print("ERROR: FrzExp params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
     elif "Freezing export" not in _render(row, templates):
@@ -247,6 +252,55 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: manual export rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
     my_predbat.manual_export_times = []
+
+    # --- Test 8b: merged/rowspan export cell shows a rate range, not just the first slot's rate ---
+    print("Test merged export cell reason shows a rate range")
+    span_window = [{"start": minutes_now, "end": minutes_now + 90, "average": 20.0}]
+    my_predbat.export_window_best = span_window
+    my_predbat.export_limits_best = [50.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)  # 90%, well above the 50% target
+    my_predbat.rate_export[minutes_now] = 15.0
+    my_predbat.rate_export[minutes_now + 30] = 25.0
+    my_predbat.rate_export[minutes_now + 60] = 20.0
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["export_high_rate"]:
+        print("ERROR: merged export reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"].get("rate") != "15.00-25.00":
+        print("ERROR: merged export rate range unexpected: {}".format(row["reasons"][0]["params"]))
+        failed = True
+    elif "15.00-25.00" not in _render(row, templates):
+        print("ERROR: merged export rendered text missing the rate range: {}".format(_render(row, templates)))
+        failed = True
+
+    # A single-slot window (no merge) must still show a plain single value, not a spurious range.
+    print("Test single-slot export cell reason still shows a single rate, not a range")
+    my_predbat.export_window_best = window
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or "-" in row["reasons"][0]["params"].get("rate", ""):
+        print("ERROR: single-slot export rate should not be a range: {}".format(row and row["reasons"][0]["params"]))
+        failed = True
+
+    # A minute within the merged span missing from rate_export must fall back to the row's own
+    # known rate, not silently default to 0 (regression: rate_range_text originally defaulted a
+    # missing minute to 0 rather than the fallback_value it was given, which could widen a range
+    # to a spurious "0.00-20.00" - Copilot review finding on PR #4362).
+    print("Test merged export cell falls back to the row's own rate for a missing minute, not 0")
+    my_predbat.export_window_best = span_window
+    my_predbat.rate_export[minutes_now] = 20.0
+    my_predbat.rate_export[minutes_now + 60] = 20.0
+    del my_predbat.rate_export[minutes_now + 30]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or row["reasons"][0]["params"].get("rate") != "20.00":
+        print("ERROR: merged export rate with a missing minute unexpected: {}".format(row and row["reasons"][0]["params"]))
+        failed = True
+    my_predbat.export_window_best = window
+    my_predbat.rate_export[minutes_now] = 5.0
+    my_predbat.rate_export[minutes_now + 30] = 5.0
+    my_predbat.rate_export[minutes_now + 60] = 5.0
 
     # --- Test 9: Demand (no charge or export window active) ---
     print("Test Demand default reason")
@@ -295,8 +349,15 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     else:
         rendered = _render(row, templates)
-        if "Until the export window starts" not in rendered or "Exporting down to" not in rendered:
-            print("ERROR: split slot tooltip should explain both halves, got: {}".format(rendered))
+        expected_split_time = (my_predbat.midnight_utc + timedelta(minutes=minutes_now + 15)).strftime("%H:%M")
+        if "Until {}".format(expected_split_time) not in rendered:
+            print("ERROR: split slot tooltip should state the exact split time, got: {}".format(rendered))
+            failed = True
+        elif "Then exporting down to" not in rendered:
+            print("ERROR: split slot tooltip should join both halves with a lowercase 'Then ', got: {}".format(rendered))
+            failed = True
+        elif "Then," in rendered:
+            print("ERROR: split slot tooltip should not put a comma after 'Then', got: {}".format(rendered))
             failed = True
         # The pre-window wording must not claim nothing is scheduled - the slot does export later
         if "no charging or exporting is scheduled" in rendered:
@@ -409,6 +470,24 @@ def run_test_plan_why_reason(my_predbat):
         print("ERROR: expected renderPlanTable to take reason_templates from the dataset it renders")
         failed = True
 
+    # --- Test 13c: plan table column headers get a hover tooltip explaining what they mean ---
+    print("Test column headers carry a title= explaining what each column means")
+    if "COLUMN_HEADER_HELP" not in renderer_js:
+        print("ERROR: expected a COLUMN_HEADER_HELP lookup for column header tooltips")
+        failed = True
+    if "function th(key, innerHtml" not in renderer_js:
+        print("ERROR: expected a th() helper wiring COLUMN_HEADER_HELP into <th> title= attributes")
+        failed = True
+    # Every column referenced by the header-rendering block must have a corresponding help entry -
+    # a silently missing key would just render no tooltip rather than fail loudly, so check directly.
+    header_start = renderer_js.index("const COLUMN_HEADER_HELP")
+    header_block_end = renderer_js.index("function th(key", header_start)
+    header_help_block = renderer_js[header_start:header_block_end]
+    for key in ["time", "import", "export", "state", "limit", "pv", "load", "clip", "xload", "car", "iboost", "soc", "cost", "total", "co2_rate", "co2_total"]:
+        if "{}:".format(key) not in header_help_block:
+            print("ERROR: COLUMN_HEADER_HELP is missing an entry for '{}'".format(key))
+            failed = True
+
     # --- Test 14: the renderer JS source has no invalid Python escape sequences ---
     # The JS regexes live inside plain (non-raw) triple-quoted Python strings, so a backslash
     # intended for JS must be doubled. A single "\{" raises SyntaxWarning today and becomes a
@@ -423,6 +502,39 @@ def run_test_plan_why_reason(my_predbat):
     if syntax_warnings:
         for item in syntax_warnings:
             print("ERROR: SyntaxWarning in web_helper.py line {}: {}".format(item.lineno, item.message))
+        failed = True
+
+    # --- Test 15: editable rate cells don't double-mark a manual override (batpred#4474) ---
+    # row.{import,export}_rate_adjust_type === 'manual' and renderRateCell()'s own isOverride
+    # check both independently render the same turned-F glyph for the same single override -
+    # visually stacking two identical markers, and since only isOverride gates the Clear link,
+    # the two signals can disagree and leave a marker with no working Clear behind it. The fix
+    # skips the adjust-type marker specifically for 'manual' when editable, leaving isOverride as
+    # the sole source of truth for both the marker and the Clear control in that case.
+    print("Test editable rate cells don't double-render the manual-override marker")
+    for label, adjust_var in (("import", "importAdjustType"), ("export", "exportAdjustType")):
+        rate_field = "{}_rate_adjust_type".format(label)
+        expected = "const {} = (editable && row.{} === 'manual') ? null : row.{};".format(adjust_var, rate_field, rate_field)
+        if expected not in renderer_js:
+            print("ERROR: expected {} to null out a 'manual' adjust type in editable mode (found: {})".format(adjust_var, expected in renderer_js))
+            failed = True
+        # The old unconditional form must be gone, not just superseded - if it's still present
+        # anywhere the double-render bug is still reachable.
+        old_unconditional = "const {} = row.{} ? ` ${{getAdjustSymbol(row.{})}}` : '';".format({"import": "importAdjust", "export": "exportAdjust"}[label], rate_field, rate_field)
+        if old_unconditional in renderer_js:
+            print("ERROR: old unconditional {} form is still present alongside the fix".format({"import": "importAdjust", "export": "exportAdjust"}[label]))
+            failed = True
+
+    # --- Test 16: toggleForceDropdown doesn't throw on a stale/missing dropdown id (#4474 follow-up) ---
+    # Lives in get_plan_css() alongside the rest of the dropdown open/close JS, not
+    # get_plan_renderer_js() (which only covers the table-building functions).
+    print("Test toggleForceDropdown guards against a missing dropdown element")
+    plan_css_full = web_helper.get_plan_css()
+    toggle_start = plan_css_full.index("function toggleForceDropdown(")
+    toggle_end = plan_css_full.index("\n    }", toggle_start)
+    toggle_src = plan_css_full[toggle_start:toggle_end]
+    if "if (!dropdown)" not in toggle_src:
+        print("ERROR: expected toggleForceDropdown to null-guard document.getElementById(id) before using it")
         failed = True
 
     if not failed:

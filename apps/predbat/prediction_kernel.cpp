@@ -26,8 +26,8 @@
 #include <mutex>
 #include <vector>
 
-#define PK_ABI_VERSION 2
-#define PK_PARITY_REVISION 2
+#define PK_ABI_VERSION 3
+#define PK_PARITY_REVISION 4
 #define PK_MAX_CARS 4
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -66,6 +66,8 @@ struct PkContext {
     const double *load;               // load kWh per step (central)
     const double *pv10;               // PV forecast kWh per step (PV10)
     const double *load10;             // load kWh per step (PV10)
+    const double *pv90;               // PV forecast kWh per step (PV90)
+    const double *load90;             // load kWh per step (PV90)
     const double *temp_charge_cap;    // temperature rate cap base (soc_max*adjust/60) per step, charge curve
     const double *temp_discharge_cap; // temperature rate cap base per step, discharge curve
     const int32_t *io_flag;           // io_adjusted flag per step
@@ -156,7 +158,7 @@ struct PkScenario {
 
     int32_t n_charge;
     int32_t n_export;
-    int32_t pv10;
+    int32_t pv_scenario;          // 0 = nominal, 1 = pv10, 2 = pv90
     int32_t end_record;
     int32_t step;
 };
@@ -185,7 +187,7 @@ struct PkResult {
 // Deep-copied context storage so Python-side buffers can be freed after create
 struct ContextStore {
     std::vector<double> rate_import, rate_export, alert_keep;
-    std::vector<double> pv, load, pv10, load10;
+    std::vector<double> pv, load, pv10, load10, pv90, load90;
     std::vector<double> temp_charge_cap, temp_discharge_cap;
     std::vector<int32_t> io_flag;
     std::vector<double> charge_curve, discharge_curve;
@@ -282,6 +284,8 @@ int64_t pk_context_create(const PkContext *in)
     store->load.assign(in->load, in->load + n);
     store->pv10.assign(in->pv10, in->pv10 + n);
     store->load10.assign(in->load10, in->load10 + n);
+    store->pv90.assign(in->pv90, in->pv90 + n);
+    store->load90.assign(in->load90, in->load90 + n);
     store->temp_charge_cap.assign(in->temp_charge_cap, in->temp_charge_cap + n);
     store->temp_discharge_cap.assign(in->temp_discharge_cap, in->temp_discharge_cap + n);
     store->io_flag.assign(in->io_flag, in->io_flag + n);
@@ -303,6 +307,8 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.load = store->load.data();
     store->ctx.pv10 = store->pv10.data();
     store->ctx.load10 = store->load10.data();
+    store->ctx.pv90 = store->pv90.data();
+    store->ctx.load90 = store->load90.data();
     store->ctx.temp_charge_cap = store->temp_charge_cap.data();
     store->ctx.temp_discharge_cap = store->temp_discharge_cap.data();
     store->ctx.io_flag = store->io_flag.data();
@@ -345,7 +351,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
         return 2;
     }
 
-    const bool pv10 = s->pv10 != 0;
+    const int32_t pv_scenario = s->pv_scenario;
+    const bool is_pv10 = pv_scenario == 1;
+    const bool is_pv90 = pv_scenario == 2;
     const int32_t step = s->step;
     const int32_t n_steps = c->n_steps;
     const bool inverter_hybrid = c->inverter_hybrid != 0;
@@ -375,6 +383,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     double final_metric_keep = metric_keep;
     double final_iboost_kwh = iboost_today_kwh;
     double final_carbon_g = carbon_g;
+    double final_import_kwh_battery = import_kwh_battery;
+    double final_import_kwh_house = import_kwh_house;
+    double final_export_kwh = export_kwh;
     double charge_rate_now = c->charge_rate_now;
     double discharge_rate_now = c->discharge_rate_now;
     const bool car_enable = c->num_cars > 0;
@@ -408,11 +419,11 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     const double battery_rate_max_discharge = c->battery_rate_max_discharge;
     const double battery_rate_max_export = c->battery_rate_max_export;
     const double battery_rate_min = c->battery_rate_min;
-    // PV10 de-rating of the charge rate - prediction.py:547-551
-    const double battery_rate_max_scaling = pv10 ? c->battery_rate_max_scaling10 : c->battery_rate_max_scaling;
+    // PV10 de-rating of the charge rate - prediction.py:587-592. PV90 is the upside case, no de-rate.
+    const double battery_rate_max_scaling = is_pv10 ? c->battery_rate_max_scaling10 : c->battery_rate_max_scaling;
     const double battery_rate_max_scaling_discharge = c->battery_rate_max_scaling_discharge;
-    const double *pv_step = pv10 ? c->pv10 : c->pv;
-    const double *load_step = pv10 ? c->load10 : c->load;
+    const double *pv_step = is_pv10 ? c->pv10 : (is_pv90 ? c->pv90 : c->pv);
+    const double *load_step = is_pv10 ? c->load10 : (is_pv90 ? c->load90 : c->load);
 
     // Simulate each forward step - prediction.py:570-1200
     for (int32_t k = 0; k < n_steps; k++) {
@@ -422,7 +433,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
-        if (c->io_flag[k] && pv10 && minute > 30) {
+        if (c->io_flag[k] && is_pv10 && minute > 30) {
             import_rate = c->rate_max; // Assume in worst case that slot goes away and max rate applies
         }
         const double export_rate = c->rate_export[k];
@@ -938,6 +949,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
             final_metric_keep = metric_keep;
             final_iboost_kwh += iboost_amount;
             final_carbon_g = carbon_g;
+            final_import_kwh_battery = import_kwh_battery;
+            final_import_kwh_house = import_kwh_house;
+            final_export_kwh = export_kwh;
 
             // Record soc min - prediction.py:1183-1186
             if (soc < soc_min) {
@@ -948,9 +962,9 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     }
 
     out->final_metric = final_metric;
-    out->import_kwh_battery = import_kwh_battery;
-    out->import_kwh_house = import_kwh_house;
-    out->export_kwh = export_kwh;
+    out->import_kwh_battery = final_import_kwh_battery;
+    out->import_kwh_house = final_import_kwh_house;
+    out->export_kwh = final_export_kwh;
     out->soc_min = soc_min;
     out->final_soc = final_soc;
     out->battery_cycle = final_battery_cycle;

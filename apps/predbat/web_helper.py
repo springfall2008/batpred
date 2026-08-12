@@ -5997,6 +5997,16 @@ def get_plan_css():
     function toggleForceDropdown(id) {
         closeDropdowns();
         var dropdown = document.getElementById(id);
+        if (!dropdown) {
+            // dropdownId is assigned by a counter that increments across the whole table render
+            // and gets baked into the cell's onclick string; if that string is now stale relative
+            // to the current DOM (e.g. after a plan refresh reassigned different ids), this would
+            // otherwise throw here and silently abort the click with no visible effect at all -
+            // indistinguishable from the cell just not responding (batpred#4474 follow-up). Log
+            // instead of throwing so a real cause leaves a trace even without DevTools handy.
+            console.warn("toggleForceDropdown: no element found for id", id);
+            return;
+        }
         if (dropdown.style.display === "block") {
             dropdown.style.display = "none";
         } else {
@@ -6420,34 +6430,63 @@ def get_plan_renderer_js():
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
+            // Short explanations for each plan-table column header, condensed from the full
+            // descriptions in predbat-plan-card.md - keep these brief, a hover tooltip is not
+            // the place for the doc page's colour-coding detail.
+            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
+            const COLUMN_HEADER_HELP = {
+                time: 'Predbat plans in slots (30 minutes by default) aligned to rate change times.',
+                import: `The import rate for this slot, in ${currencyMinor} per kWh. Bold if a charge is planned this slot.`,
+                export: `The export rate for this slot, in ${currencyMinor} per kWh. Bold if a discharge/export is planned this slot.`,
+                state: "What the battery is doing this slot - hover a state cell for the specific reason.",
+                limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
+                pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
+                load: 'Predicted house electricity consumption for this slot, from historical data.',
+                clip: "Solar energy predicted to be lost - the inverter can't handle all the PV generated, or an export limit is set.",
+                xload: 'Extra load added externally via load_forecast settings (e.g. PredAI, PredHeat).',
+                car: 'Predicted car charging energy for this slot.',
+                iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
+                soc: 'Estimated battery state of charge at the start of this slot.',
+                cost: 'Estimated cost (or saving) for this slot.',
+                total: 'Running total cost for today so far, at the start of this slot.',
+                co2_rate: 'Estimated carbon intensity of the grid at the start of this slot.',
+                co2_total: 'Estimated cumulative carbon footprint at the start of this slot.',
+            };
+
+            function th(key, innerHtml, extraAttrs) {
+                const helpText = COLUMN_HEADER_HELP[key];
+                const titleAttr = helpText ? ` title="${escapeAttr(helpText)}"` : '';
+                const attrs = extraAttrs ? ` ${extraAttrs.trim()}` : '';
+                return `<th${attrs}${titleAttr}><b>${innerHtml}</b></th>`;
+            }
+
             // Render header
             html += '<tr>';
-            html += '<th><b>Time</b></th>';
-            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
-            html += showDebug ? `<th><b>Import ${currencyMinor} (w/loss)</b></th>` : `<th><b>Import ${currencyMinor}</b></th>`;
-            html += showDebug ? `<th><b>Export ${currencyMinor} (w/loss)</b></th>` : `<th><b>Export ${currencyMinor}</b></th>`;
-            html += '<th colspan="2"><b>State</b></th>';
-            html += '<th><b>Limit %</b></th>';
-            html += showDebug ? '<th><b>PV kWh (10%)</b></th>' : '<th><b>PV kWh</b></th>';
-            html += showDebug ? '<th><b>Load kWh (10%)</b></th>' : '<th><b>Load kWh</b></th>';
+            html += th('time', 'Time');
+            html += showDebug ? th('import', `Import ${currencyMinor} (w/loss)`) : th('import', `Import ${currencyMinor}`);
+            html += showDebug ? th('export', `Export ${currencyMinor} (w/loss)`) : th('export', `Export ${currencyMinor}`);
+            html += th('state', 'State', ' colspan="2"');
+            html += th('limit', 'Limit %');
+            html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
+            html += showDebug ? th('load', 'Load kWh (10%)') : th('load', 'Load kWh');
             if (showDebug) {
-                html += '<th><b>Clip kWh</b></th>';
+                html += th('clip', 'Clip kWh');
             }
             if (showDebug && jsonData.rows.some(r => r.extra_load !== undefined)) {
-                html += '<th><b>XLoad kWh</b></th>';
+                html += th('xload', 'XLoad kWh');
             }
             if (jsonData.num_cars > 0) {
-                html += '<th><b>Car kWh</b></th>';
+                html += th('car', 'Car kWh');
             }
             if (jsonData.iboost_enable) {
-                html += '<th><b>iBoost kWh</b></th>';
+                html += th('iboost', 'iBoost kWh');
             }
-            html += '<th><b>SoC %</b></th>';
-            html += '<th><b>Cost</b></th>';
-            html += '<th><b>Total</b></th>';
+            html += th('soc', 'SoC %');
+            html += th('cost', 'Cost');
+            html += th('total', 'Total');
             if (jsonData.carbon_enable) {
-                html += '<th><b>CO2 g/kWh</b></th>';
-                html += '<th><b>CO2 kg</b></th>';
+                html += th('co2_rate', 'CO2 g/kWh');
+                html += th('co2_total', 'CO2 kg');
             }
             html += '</tr>';
 
@@ -6464,14 +6503,22 @@ def get_plan_renderer_js():
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
                 }
 
-                // Import rate - formatted bold if in charge window, italic with symbol if estimated
+                // Import rate - formatted bold if in charge window, italic with symbol if estimated.
+                // 'manual' is excluded here when editable: renderRateCell() below already shows its
+                // own override marker (and the only functioning Clear control) for that case, driven
+                // by a separately-computed isOverride check. Baking this marker in too stacks a
+                // second, visually identical glyph from a source the Clear button doesn't know about
+                // - if the two ever disagree, you get a marker with no working Clear behind it
+                // (batpred#4474). Non-'manual' adjust types (offset/future/user/increment/saving)
+                // aren't part of that clickable-override mechanism, so they keep their marker as-is.
                 const importBold = row.state && (row.state === 'Chrg' || row.state === 'HoldChrg' || row.state === 'FrzChrg');
                 let importText = row.import_rate.toFixed(2);
                 if (showDebug && row.import_rate_adjusted !== undefined) {
                     importText += ` (${row.import_rate_adjusted.toFixed(2)})`;
                 }
-                const importAdjust = row.import_rate_adjust_type ? ` ${getAdjustSymbol(row.import_rate_adjust_type)}` : '';
-                if (row.import_rate_adjust_type) {
+                const importAdjustType = (editable && row.import_rate_adjust_type === 'manual') ? null : row.import_rate_adjust_type;
+                const importAdjust = importAdjustType ? ` ${getAdjustSymbol(importAdjustType)}` : '';
+                if (importAdjustType) {
                     importText = `<i>${importText}${importAdjust}</i>`;
                 }
                 if (importBold) {
@@ -6483,13 +6530,15 @@ def get_plan_renderer_js():
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }
 
-                // Export rate - italic with symbol if estimated
+                // Export rate - italic with symbol if estimated (see import rate comment above for
+                // why 'manual' is excluded in editable mode)
                 let exportText = row.export_rate.toFixed(2);
                 if (showDebug && row.export_rate_adjusted !== undefined) {
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
                 }
-                const exportAdjust = row.export_rate_adjust_type ? ` ${getAdjustSymbol(row.export_rate_adjust_type)}` : '';
-                if (row.export_rate_adjust_type) {
+                const exportAdjustType = (editable && row.export_rate_adjust_type === 'manual') ? null : row.export_rate_adjust_type;
+                const exportAdjust = exportAdjustType ? ` ${getAdjustSymbol(exportAdjustType)}` : '';
+                if (exportAdjustType) {
                     exportText = `<i>${exportText}${exportAdjust}</i>`;
                 }
                 if (editable) {
@@ -6739,18 +6788,22 @@ def get_plan_renderer_js():
         if (!reasons || !templates) {
             return '';
         }
-        return reasons
-            .map(function (entry) {
-                const template = templates[entry.code];
-                if (!template) {
-                    return '';
-                }
-                return template.replace(/\\{(\\w+)\\}/g, function (match, key) {
-                    return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
-                });
-            })
-            .filter(Boolean)
-            .join(' ');
+        const rendered = reasons.map(function (entry) {
+            const template = templates[entry.code];
+            if (!template) {
+                return '';
+            }
+            return template.replace(/\\{(\\w+)\\}/g, function (match, key) {
+                return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
+            });
+        });
+        // A split cell's first half is always a demand_before_export_* code paired with the export
+        // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
+        // instead of two disconnected sentences.
+        if (reasons.length === 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+            rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
+        }
+        return rendered.filter(Boolean).join(' ');
     }
 
     // Build the ` title="..."` tooltip attribute for a row's state cell, or '' when the row

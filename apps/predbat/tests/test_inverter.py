@@ -1225,6 +1225,10 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     ha.service_store_enable = True
     if clear:
         ha.service_store = []
+        # Also drop discharge-domain dedup memory so this call is judged fresh rather than
+        # against whatever the previous sub-test happened to send - needed now that several
+        # target_soc values collapse onto the same discharge_stop call (batpred#4464 fix).
+        my_predbat.last_service_hash.pop("discharge", None)
 
     print("**** Running Test: {} ****".format(test_name))
 
@@ -1249,7 +1253,7 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
 
     if repeat:
         pass
-    elif freeze or soc == inv.soc_percent:
+    elif freeze:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
         expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
@@ -1258,6 +1262,8 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
             expected.append(["charge_stop", {"device_id": "DID0"}])
         expected.append(["discharge_start", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     else:
+        # soc >= inv.soc_percent (including exact equality - target reached, nothing left to
+        # discharge, not a deliberate freeze - batpred#4464)
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
         else:
@@ -2697,9 +2703,9 @@ charge_start_service:
     failed |= test_call_adjust_export_immediate("export_immediate1", my_predbat, ha, inv, dummy_items, 100, repeat=True)
     failed |= test_call_adjust_export_immediate("export_immediate3", my_predbat, ha, inv, dummy_items, 0, repeat=False, charge_stop=True)
     failed |= test_call_adjust_export_immediate("export_immediate4", my_predbat, ha, inv, dummy_items, 50)
-    failed |= test_call_adjust_export_immediate("export_immediate5", my_predbat, ha, inv, dummy_items, 49)
+    failed |= test_call_adjust_export_immediate("export_immediate5", my_predbat, ha, inv, dummy_items, 49, clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, repeat=True)
-    failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00")
+    failed |= test_call_adjust_export_immediate("export_immediate6", my_predbat, ha, inv, dummy_items, 49, discharge_start_time="00:00:00", discharge_end_time="09:00:00", clear=True)
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate9", my_predbat, ha, inv, dummy_items, 30.0)

@@ -159,6 +159,7 @@ message GatewayStatus {
   string        wifi_ip    = 11;   // gateway's own LAN IP (net_localIP(), IPv4 or IPv6) — used by cloud gateway-dns
   optional bool ev_control = 12;   // present+true = EV-control mesh leader; absent = single/non-elected
   repeated EvCharger ev_chargers = 13;  // one entry per connected/recent EV charger
+  string wifi_ssid = 14;  // WiFi.SSID() of the currently-connected network, empty if not on WiFi
 }
 
 // Execution plan sent from PredBat cloud to gateway

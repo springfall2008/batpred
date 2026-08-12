@@ -730,6 +730,10 @@ class Fetch:
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
+        self.pv_forecast_minute90 = {}
+        # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
+        # earlier pair of signatures may be held against them
+        self.pv_forecast_minute90_signatures = None
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
@@ -997,6 +1001,9 @@ class Fetch:
             self.rate_scan_export(export_rates, print=False)
             export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False)
             self.rate_export_base = export_rates.copy()
+            # Built here, from the base rates, so the saving session and overrides applied below stay
+            # out of it - battery_value_rate needs the tariff's own export price, not an event price
+            self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
@@ -1060,7 +1067,7 @@ class Fetch:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
 
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
-        self.pv_forecast_minute, self.pv_forecast_minute10 = self.fetch_pv_forecast()
+        self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
 
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
@@ -1292,14 +1299,22 @@ class Fetch:
     def fetch_pv_forecast(self):
         """
         Fetch PV forecast data from one or more sensors
+
+        Returns a tuple of (pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90) - the
+        p50, p10 and p90 minute-indexed forecasts respectively. pv_forecast_minute90 is the real
+        p90 series when the source published one (currently only Solcast), otherwise it is a plain
+        copy of the p50 series - see the design spec for why the p90 upside is never synthesised
+        from the p10 spread.
         """
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
+        pv_forecast_minute90 = {}
 
         # Get data from forecast sensor
         entity_id = "sensor." + self.prefix + "_pv_forecast_raw"
         pv_forecast_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast")
         pv_forecast10_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast10")
+        pv_forecast90_packed_ld = self.get_state_wrapper(entity_id=entity_id, attribute="forecast90")
         relative_time = self.get_state_wrapper(entity_id=entity_id, attribute="relative_time")
         try:
             relative_time = datetime.strptime(relative_time, TIME_FORMAT)
@@ -1310,6 +1325,7 @@ class Fetch:
         # Convert keys to integers and values to floats
         pv_forecast_packed = {}
         pv_forecast10_packed = {}
+        pv_forecast90_packed = {}
 
         if pv_forecast_packed_ld:
             for key, value in pv_forecast_packed_ld.items():
@@ -1327,10 +1343,19 @@ class Fetch:
                 except (ValueError, TypeError):
                     pass
 
+        if pv_forecast90_packed_ld:
+            for key, value in pv_forecast90_packed_ld.items():
+                try:
+                    minute = int(key)
+                    pv_forecast90_packed[minute] = float(value)
+                except (ValueError, TypeError):
+                    pass
+
         # Unpack the forecast data
         max_minute = max(pv_forecast_packed.keys()) if pv_forecast_packed else 0
         last_value = 0
         last_value10 = 0
+        last_value90 = 0
         # The forecast could be for a different time to our relative time, so we need to offset the minutes to align with our midnight_utc.
         # relative_time is the midnight at which the forecast was saved, so stored minute keys are relative to that midnight.
         # We subtract the offset so that stored minute X (= relative_time + X) maps to (relative_time + X - midnight_utc) minutes from today's midnight.
@@ -1339,10 +1364,18 @@ class Fetch:
             target_minute = minute - minute_offset
             last_value = pv_forecast_packed.get(minute, last_value)
             last_value10 = pv_forecast10_packed.get(minute, last_value10)
+            last_value90 = pv_forecast90_packed.get(minute, last_value90)
             pv_forecast_minute[target_minute] = last_value
             pv_forecast_minute10[target_minute] = last_value10
+            pv_forecast_minute90[target_minute] = last_value90
 
-        return pv_forecast_minute, pv_forecast_minute10
+        # No p90 published (older sensor data, or a source that does not produce one) - fall back to
+        # the central forecast. No upside is synthesised; see the design spec for why mirroring the
+        # p10 spread was rejected.
+        if not pv_forecast90_packed:
+            pv_forecast_minute90 = dict(pv_forecast_minute)
+
+        return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
@@ -1916,6 +1949,34 @@ class Fetch:
             self.rate_min_forward = self.rate_min_forward_calc(rates)
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
 
+    def rate_export_max_forward_calc(self, rates):
+        """
+        Work out the highest export rate from each minute forwards
+
+        The export mirror of rate_min_forward_calc. Fed from the base export tariff (see
+        rate_export_base) so a saving session cannot stand in for the tariff's general ability to sell
+        surplus - that question is what the export haircut in battery_value_rate asks, and answering it
+        with a one-off event price makes stored energy look fully recoverable on a system that in fact
+        cannot sell a single kWh.
+        """
+        rate_array = []
+        rate_export_max_forward = {}
+        rate = 0.0
+
+        for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
+            if minute in rates:
+                rate = rates[minute]
+            rate_array.append(rate)
+
+        # Work out the max rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        running_max = rate_array[-1] if rate_array else 0.0
+        for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
+            running_max = max(running_max, rate_array[minute])
+            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
+                rate_export_max_forward[minute] = running_max
+
+        return rate_export_max_forward
+
     def rate_scan_gas(self, rates, print=True):
         """
         Scan the gas rates and work out min/max
@@ -2347,11 +2408,27 @@ class Fetch:
         self.inverter_soc_reset = self.get_arg("inverter_soc_reset")
 
         self.metric_battery_value_scaling = self.get_arg("metric_battery_value_scaling")
+        self.metric_battery_value_export_scaling = self.get_arg("metric_battery_value_export_scaling")
         self.notify_devices = self.get_arg("notify_devices", ["notify"])
         self.pv_scaling = self.get_arg("pv_scaling")
         self.pv_metric10_weight = self.get_arg("pv_metric10_weight")
+        self.calculate_pv90_plan = self.get_arg("calculate_pv90_plan")
+        self.pv_metric90_weight = self.get_arg("pv_metric90_weight")
         self.load_scaling = self.get_arg("load_scaling")
         self.load_scaling10 = self.get_arg("load_scaling10")
+        self.load_scaling90 = self.get_arg("load_scaling90")
+        if not self.calculate_pv90_plan:
+            # calculate_pv90_plan (CHANGE 2) gates the whole feature: pv_metric90_weight's own
+            # CONFIG_ITEMS default is 0.15, not 0.0, so the user sees a non-zero weight in Home
+            # Assistant even while the switch is off. Force the runtime weight back to 0.0 here so
+            # every one of the pre-existing `pv_metric90_weight > 0` gates elsewhere (the pv90 launch
+            # paths in plan.py, and the pv90 term collapsing out of compute_metric) stays inert until
+            # the user explicitly turns the switch on - no separate gating on calculate_pv90_plan is
+            # added anywhere else, this is the single choke point.
+            if self.pv_metric90_weight:
+                self.log("Warn: calculate_pv90_plan is Off so forcing pv_metric90_weight from {} to 0.0 - turn on switch.predbat_calculate_pv90_plan (expert mode) to enable the PV90 upside scenario".format(self.pv_metric90_weight))
+            self.pv_metric90_weight = 0.0
+
         self.charge_scaling10 = self.get_arg("charge_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.load_scaling_free = self.get_arg("load_scaling_free")
@@ -2567,6 +2644,27 @@ class Fetch:
         self.car_charging_energy = {}
         if "car_charging_energy" in self.args:
             self.car_charging_energy = self.minute_data_import_export(self.max_days_previous, now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
+            if self.car_charging_hold and not self.car_charging_energy:
+                # car_charging_energy is configured (an entity is set) but resolved to nothing at
+                # all - most likely the entity no longer exists (e.g. removed upstream, see #4458),
+                # though it can also happen for a recorder-excluded entity or a fresh install with
+                # no history yet, which aren't necessarily broken and can persist indefinitely.
+                # minute_data_import_export() already logs a benign "Unable to fetch history"
+                # warning per entity with no had_errors flag, so this degrades to the
+                # car_charging_threshold heuristic below completely silently otherwise. Log the
+                # loud warning only once per incident (not every cycle - see PR review on #4469)
+                # so a persistent-but-intentional setup doesn't get spammed every 5 minutes; the
+                # status sensor still reflects the degraded state every cycle via record_status.
+                if not self.car_charging_energy_warned:
+                    self.log(
+                        "Warn: car_charging_hold is enabled and car_charging_energy is configured ({}) but no data could be loaded for it - falling back to the car_charging_threshold heuristic instead of precise car energy subtraction. Check the entity still exists.".format(
+                            self.get_arg("car_charging_energy", indirect=False)
+                        )
+                    )
+                    self.car_charging_energy_warned = True
+                self.record_status("Warn: car_charging_energy entity has no data, falling back to car_charging_threshold heuristic", had_errors=True)
+            else:
+                self.car_charging_energy_warned = False
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy
