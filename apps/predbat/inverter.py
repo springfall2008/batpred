@@ -3398,6 +3398,12 @@ class Inverter:
 
         for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
+            # GivTCP's runAll status is a separately-cached snapshot, refreshed on its own polling
+            # cycle rather than synchronously with this POST - reading it back immediately can catch
+            # data from before GivTCP has applied and exposed the write, reporting a spurious failure
+            # even though the write itself succeeded (#4421). A short settle delay gives that cache
+            # a chance to catch up before we check it.
+            self.sleep(1)
             self.rest_data = self.rest_runAll(self.rest_data)
             # GivTCP reports the raw registers as strings, so coerce before comparing or a
             # successful write reads back as '4' and never matches the int target

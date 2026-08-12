@@ -1759,6 +1759,73 @@ def test_discharge_target_read_back(test_name, ha, inv, dummy_rest):
     return failed
 
 
+def test_discharge_target_settle_delay(test_name, ha, inv, dummy_rest):
+    """
+    Regression test for issue #4421: spurious "REST failed to setExportTarget got 0" warnings
+    even though GivTCP's own log confirms the write succeeded.
+
+    GivTCP's runAll status is a separately-cached snapshot, refreshed on its own polling cycle
+    rather than synchronously with the setDischargeTarget POST. Reading it back immediately can
+    therefore catch data from before GivTCP has applied and exposed the write. rest_setDischargeTarget
+    must settle briefly (self.sleep) between the POST and each readback, on every attempt - not just
+    between retries - giving GivTCP's cache a chance to catch up before it's checked.
+
+    Simulates exactly that race: the first queued runAll response is still the stale pre-write value
+    (as if GivTCP's cache hadn't caught up yet), the second is the real post-write value. The write
+    must still be recognised as a success once the cache catches up, and a sleep must have happened
+    before each of the two readbacks, not only between them.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+    saved_sleep = inv.sleep
+
+    sleep_calls = []
+
+    def counting_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    inv.sleep = counting_sleep
+
+    try:
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.rest_data = {"Control": {"Mode": "Timed Export"}, "raw": {"invertor": {"discharge_target_soc_1": "0"}}}
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+        # First readback: still the stale pre-write value (GivTCP's cache hasn't caught up yet).
+        stale = copy.deepcopy(inv.rest_data)
+        dummy_rest.queue_rest_data(stale)
+        # Second readback: the real post-write value.
+        settled = copy.deepcopy(inv.rest_data)
+        settled["raw"]["invertor"]["discharge_target_soc_1"] = "20"
+        dummy_rest.queue_rest_data(settled)
+        dummy_rest.get_commands()
+
+        if not inv.rest_setDischargeTarget(20):
+            print("ERROR: {}: write should be recognised as successful once the stale cache catches up".format(test_name))
+            failed = True
+
+        commands = dummy_rest.get_commands()
+        if len(commands) != 2:
+            print("ERROR: {}: export target should be POSTed once per attempt (2 attempts needed here), got {} writes".format(test_name, len(commands)))
+            failed = True
+
+        if len(sleep_calls) < 2:
+            print("ERROR: {}: expected a settle sleep before each of the 2 readbacks, got {} sleep call(s)".format(test_name, len(sleep_calls)))
+            failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+
+    return failed
+
+
 def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     """
     Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
@@ -2886,6 +2953,12 @@ charge_start_service:
 
     # Regression test for issue #4404: export target read back must cope with string and missing values
     failed |= test_discharge_target_read_back("discharge_target_read_back", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4421: settle before each readback so a slow-to-update GivTCP cache
+    # isn't misread as a failed write
+    failed |= test_discharge_target_settle_delay("discharge_target_settle_delay", ha, inv, dummy_rest)
     if failed:
         return failed
 
