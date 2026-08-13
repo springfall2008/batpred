@@ -20,7 +20,9 @@ build_kernel.sh; if that fails the test is skipped with a loud notice, unless
 PREDBAT_KERNEL_REQUIRED=1 is set (CI) in which case it fails.
 """
 
+import array
 import copy
+import ctypes
 import gc
 import os
 import random
@@ -392,7 +394,15 @@ def run_marshalling_tests():
     print("**** Running kernel marshalling tests ****")
     failed = False
 
-    for name, builder, values in (("double_array", prediction_kernel.double_array, [0.0, -1.5, 3.25, 1e6]), ("int32_array", prediction_kernel.int32_array, [0, -7, 42, 100000])):
+    # The typecode chosen for the backing array must match the ctypes element exactly. from_buffer
+    # only checks the buffer is large enough, so a wider backing type is accepted and then read as
+    # interleaved garbage - a silent corruption rather than an exception.
+    for name, typecode, ctype in (("DOUBLE_TYPECODE", prediction_kernel.DOUBLE_TYPECODE, ctypes.c_double), ("INT32_TYPECODE", prediction_kernel.INT32_TYPECODE, ctypes.c_int32)):
+        if typecode is not None and array.array(typecode).itemsize != ctypes.sizeof(ctype):
+            print("ERROR: {} is '{}' with itemsize {} but the ctypes element is {} bytes".format(name, typecode, array.array(typecode).itemsize, ctypes.sizeof(ctype)))
+            failed = True
+
+    for name, builder, values, typecode in (("double_array", prediction_kernel.double_array, [0.0, -1.5, 3.25, 1e6], prediction_kernel.DOUBLE_TYPECODE), ("int32_array", prediction_kernel.int32_array, [0, -7, 42, 100000], prediction_kernel.INT32_TYPECODE)):
         # Build from a temporary so the source list/array is unreferenced by the time it is read
         buffer = builder(list(values))
         gc.collect()
@@ -400,14 +410,18 @@ def run_marshalling_tests():
         if got != values:
             print("ERROR: {} round trip expected {} but got {}".format(name, values, got))
             failed = True
-        if buffer._objects is None:
+        # Only the from_buffer path holds a view that needs its backing kept alive; the fallback
+        # copies the values, so it has nothing to retain and is safe without _objects. Truthiness
+        # rather than "is not None": an empty _objects would mean nothing is retained, which is just
+        # as unsafe as the attribute being absent.
+        if typecode is not None and not getattr(buffer, "_objects", None):
             print("ERROR: {} did not retain its backing buffer - the kernel could read freed memory".format(name))
             failed = True
 
-    empty = prediction_kernel.int32_array([])
-    if len(empty) != 0:
-        print("ERROR: int32_array([]) should be empty, got length {}".format(len(empty)))
-        failed = True
+        empty = builder([])
+        if len(empty) != 0:
+            print("ERROR: {}([]) should be empty, got length {}".format(name, len(empty)))
+            failed = True
 
     if not failed:
         print("PASS")

@@ -234,6 +234,7 @@ invname
 isinstance
 isoformat
 isort
+itemsize
 itemtype
 ivtime
 jedlix
@@ -507,6 +508,8 @@ treforsiphone
 treforsouthwell
 tunables
 twinx
+typecode
+typecodes
 tzfile
 tzpath
 unconfigured
