@@ -1256,50 +1256,50 @@ class SolisAPI(ComponentBase, OAuthMixin):
         devices = [sn.lower() for sn in batteries]
 
         # Configure base Predbat settings
-        self.set_arg("inverter_type", ["SolisCloud" for _ in range(num_inverters)])
-        self.set_arg("num_inverters", num_inverters)
+        self.set_arg_auto("inverter_type", ["SolisCloud" for _ in range(num_inverters)])
+        self.set_arg_auto("num_inverters", num_inverters)
 
         # Battery and inverter entities
-        self.set_arg("soc_percent", [f"sensor.{self.prefix}_solis_{device}_battery_soc" for device in devices])
-        self.set_arg("battery_scaling", [f"sensor.{self.prefix}_solis_{device}_battery_soh" for device in devices])
-        self.set_arg("battery_power", [f"sensor.{self.prefix}_solis_{device}_battery_power" for device in devices])
-        self.set_arg("battery_power_invert", [f"True" for device in devices])
-        self.set_arg("grid_power", [f"sensor.{self.prefix}_solis_{device}_grid_power" for device in devices])
-        self.set_arg("battery_voltage", [f"sensor.{self.prefix}_solis_{device}_battery_voltage" for device in devices])
+        self.set_arg_auto("soc_percent", [f"sensor.{self.prefix}_solis_{device}_battery_soc" for device in devices])
+        self.set_arg_auto("battery_scaling", [f"sensor.{self.prefix}_solis_{device}_battery_soh" for device in devices])
+        self.set_arg_auto("battery_power", [f"sensor.{self.prefix}_solis_{device}_battery_power" for device in devices])
+        self.set_arg_auto("battery_power_invert", [f"True" for device in devices])
+        self.set_arg_auto("grid_power", [f"sensor.{self.prefix}_solis_{device}_grid_power" for device in devices])
+        self.set_arg_auto("battery_voltage", [f"sensor.{self.prefix}_solis_{device}_battery_voltage" for device in devices])
         # self.set_arg("battery_temperature", [f"sensor.{self.prefix}_solis_{device}_battery_temperature" for device in devices])
 
         # if solis_cloud_pv_load_ignore is set to true, override Solis cloud sensors and use load/pv_today/power entries defined in apps.yaml
         if not self.get_arg("solis_cloud_pv_load_ignore", default=False):
-            self.set_arg("load_today", [f"sensor.{self.prefix}_solis_{device}_total_load_energy" for device in devices])
-            self.set_arg("pv_today", [f"sensor.{self.prefix}_solis_{device}_pv_energy_total" for device in devices])
-            self.set_arg("load_power", [f"sensor.{self.prefix}_solis_{device}_load_power" for device in devices])
-            self.set_arg("pv_power", [f"sensor.{self.prefix}_solis_{device}_pv_power" for device in devices])
-        self.set_arg("import_today", [f"sensor.{self.prefix}_solis_{device}_today_import_energy" for device in devices])
-        self.set_arg("export_today", [f"sensor.{self.prefix}_solis_{device}_today_export_energy" for device in devices])
+            self.set_arg_auto("load_today", [f"sensor.{self.prefix}_solis_{device}_total_load_energy" for device in devices])
+            self.set_arg_auto("pv_today", [f"sensor.{self.prefix}_solis_{device}_pv_energy_total" for device in devices])
+            self.set_arg_auto("load_power", [f"sensor.{self.prefix}_solis_{device}_load_power" for device in devices])
+            self.set_arg_auto("pv_power", [f"sensor.{self.prefix}_solis_{device}_pv_power" for device in devices])
+        self.set_arg_auto("import_today", [f"sensor.{self.prefix}_solis_{device}_today_import_energy" for device in devices])
+        self.set_arg_auto("export_today", [f"sensor.{self.prefix}_solis_{device}_today_export_energy" for device in devices])
 
         # Battery capacity and limits from cached details
         # XXX: This is currently broken, user must set manually in apps.yaml
         # self.set_arg("soc_max", [f"sensor.{self.prefix}_solis_{device}_battery_capacity" for device in devices])
 
         # Reserve and limits
-        self.set_arg("reserve", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
-        self.set_arg("battery_min_soc", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
+        self.set_arg_auto("reserve", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
+        self.set_arg_auto("battery_min_soc", [f"number.{self.prefix}_solis_{device}_over_discharge_soc" for device in devices])
 
         # Charge/discharge controls - using slot 1 for Predbat primary control
-        self.set_arg("charge_start_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_start_time" for device in devices])
-        self.set_arg("charge_end_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_end_time" for device in devices])  # Same selector, parsed
-        self.set_arg("charge_limit", [f"number.{self.prefix}_solis_{device}_charge_slot1_soc" for device in devices])
-        self.set_arg("charge_rate", [f"number.{self.prefix}_solis_{device}_charge_slot1_power" for device in devices])
-        self.set_arg("scheduled_charge_enable", [f"switch.{self.prefix}_solis_{device}_charge_slot1_enable" for device in devices])
+        self.set_arg_auto("charge_start_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_start_time" for device in devices])
+        self.set_arg_auto("charge_end_time", [f"select.{self.prefix}_solis_{device}_charge_slot1_end_time" for device in devices])  # Same selector, parsed
+        self.set_arg_auto("charge_limit", [f"number.{self.prefix}_solis_{device}_charge_slot1_soc" for device in devices])
+        self.set_arg_auto("charge_rate", [f"number.{self.prefix}_solis_{device}_charge_slot1_power" for device in devices])
+        self.set_arg_auto("scheduled_charge_enable", [f"switch.{self.prefix}_solis_{device}_charge_slot1_enable" for device in devices])
 
-        self.set_arg("discharge_start_time", [f"select.{self.prefix}_solis_{device}_discharge_slot1_start_time" for device in devices])
-        self.set_arg("discharge_end_time", [f"select.{self.prefix}_solis_{device}_discharge_slot1_end_time" for device in devices])
-        self.set_arg("discharge_target_soc", [f"number.{self.prefix}_solis_{device}_discharge_slot1_soc" for device in devices])
-        self.set_arg("discharge_rate", [f"number.{self.prefix}_solis_{device}_discharge_slot1_power" for device in devices])
-        self.set_arg("scheduled_discharge_enable", [f"switch.{self.prefix}_solis_{device}_discharge_slot1_enable" for device in devices])
-        self.set_arg("battery_rate_max", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices])
-        self.set_arg("inverter_limit", [f"sensor.{self.prefix}_solis_{device}_inverter_size" for device in devices])
-        self.set_arg("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
+        self.set_arg_auto("discharge_start_time", [f"select.{self.prefix}_solis_{device}_discharge_slot1_start_time" for device in devices])
+        self.set_arg_auto("discharge_end_time", [f"select.{self.prefix}_solis_{device}_discharge_slot1_end_time" for device in devices])
+        self.set_arg_auto("discharge_target_soc", [f"number.{self.prefix}_solis_{device}_discharge_slot1_soc" for device in devices])
+        self.set_arg_auto("discharge_rate", [f"number.{self.prefix}_solis_{device}_discharge_slot1_power" for device in devices])
+        self.set_arg_auto("scheduled_discharge_enable", [f"switch.{self.prefix}_solis_{device}_discharge_slot1_enable" for device in devices])
+        self.set_arg_auto("battery_rate_max", [f"number.{self.prefix}_solis_{device}_max_charge_power" for device in devices])
+        self.set_arg_auto("inverter_limit", [f"sensor.{self.prefix}_solis_{device}_inverter_size" for device in devices])
+        self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
         self.log("Solis API: Automatic configuration complete")
 

@@ -1071,6 +1071,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data())
         failed |= asyncio.run(test_fetch_entity_data_power_clamping())
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
+        failed |= asyncio.run(test_set_arg_auto_warns_once_on_apps_yaml_override())
         failed |= asyncio.run(test_automatic_config())
         failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
         failed |= asyncio.run(test_inverter_sn_filter_exact_match())
@@ -3694,6 +3695,51 @@ async def test_set_storage_mode_if_needed_all_modes():
         assert len(api.read_and_write_cid_calls) == 0, f"Should not write when {mode_name} already set"
 
     print("PASSED: Multiple mode transitions handled correctly")
+    return False
+
+
+async def test_set_arg_auto_warns_once_on_apps_yaml_override():
+    """
+    Test ComponentBase.set_arg_auto() (issue #4494 follow-up, PR #4500 review): when
+    automatic_config() binds a key to an auto-discovered entity, and the user had already set
+    that key explicitly in apps.yaml, auto-discovery must still win (unchanged behaviour) but a
+    one-time note should be logged so the override isn't silently invisible.
+    """
+    print("\n=== Test: set_arg_auto warns once on apps.yaml override ===")
+
+    api = MockSolisAPI()
+    set_arg_calls = {}
+
+    def mock_set_arg(key, value):
+        set_arg_calls[key] = value
+
+    api.set_arg = mock_set_arg
+    api.base.args_from_apps_yaml = {"battery_scaling": [1.0], "num_inverters": 1}
+    api.base.apps_yaml_override_warned = set()
+
+    # User's apps.yaml value differs from what auto-discovery wants to set - warn once, but
+    # still apply the auto-discovered value (existing precedence is unchanged)
+    api.set_arg_auto("battery_scaling", ["sensor.predbat_solis_abc123_battery_soh"])
+    assert set_arg_calls.get("battery_scaling") == ["sensor.predbat_solis_abc123_battery_soh"], "Auto-discovered value should still win"
+    assert any("apps.yaml sets 'battery_scaling: [1.0]'" in msg for msg in api.log_messages), "Should warn once about the apps.yaml override"
+    warn_count = sum(1 for msg in api.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Should warn exactly once, got {warn_count}"
+
+    # Calling again for the same key (e.g. next automatic_config() run) must not repeat the warning
+    api.set_arg_auto("battery_scaling", ["sensor.predbat_solis_abc123_battery_soh"])
+    warn_count = sum(1 for msg in api.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Warning should not repeat, got {warn_count}"
+
+    # apps.yaml value happens to already equal the auto-discovered value - nothing was actually
+    # overridden, so no warning
+    api.set_arg_auto("num_inverters", 1)
+    assert not any("num_inverters" in msg for msg in api.log_messages), "Should not warn when nothing was actually overridden"
+
+    # Key never set in apps.yaml at all - no warning
+    api.set_arg_auto("grid_power", ["sensor.predbat_solis_abc123_grid_power"])
+    assert not any("grid_power" in msg for msg in api.log_messages), "Should not warn for a key the user never configured"
+
+    print("PASSED: set_arg_auto warns once on a genuine apps.yaml override and stays silent otherwise")
     return False
 
 
