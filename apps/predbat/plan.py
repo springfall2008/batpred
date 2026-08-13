@@ -2884,8 +2884,9 @@ class Plan:
         """
         record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.export_window_best), 1)
-        self.log("Tweak plan optimisation started")
         selected = self.plan_metric_now(end_record)
+        curr = self.currency_symbols[1]
+        self.log("Tweak plan optimisation started metric {}{}, cost {}{}".format(dp2(selected[0]), curr, dp2(selected[1]), curr))
         count = 0
         window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
         for key in window_sorted:
@@ -2934,7 +2935,11 @@ class Plan:
                 break
 
         best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = selected
-        self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
+        self.log(
+            "Tweak optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh, changed {} window(s)".format(
+                dp2(best_metric), curr, dp2(best_cost), curr, dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import), count
+            )
+        )
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False, prediction=None):
