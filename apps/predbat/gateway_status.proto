@@ -6,6 +6,7 @@ package predbat;
 // Schema version: 1
 // This is the canonical contract for ESP32 gateway → cloud MQTT status payloads.
 // Proto3 zero-value omission means unpopulated future fields cost nothing on the wire.
+//
 
 // Mirrors InverterType enum in types.h (values must match 1:1 for safe casting)
 enum InverterType {
