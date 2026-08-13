@@ -303,10 +303,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Nominal *pack* voltage (e.g. cell count x nominal cell voltage), used for the capacity
         # calculation only - deliberately distinct from the live measured voltage used for
         # power/current conversions, since the two are not the same value on an HV battery
-        # (see issue #4493 discussion). No safe way to derive this from the API, so it must
         # be supplied via apps.yaml (solis_nominal_voltage) if capacity is to be accurate.
-        self.nominal_pack_voltage = float(nominal_voltage) if nominal_voltage else None
-        self.capacity_voltage_warned = set()  # {inverter_sn} already warned about an estimated capacity
+        try:
+            configured_pack_v = float(nominal_voltage) if nominal_voltage is not None else None
+        except (TypeError, ValueError):
+            configured_pack_v = None
+        if configured_pack_v is not None and configured_pack_v <= 0:
+            self.log(f"Warn: Solis API: solis_nominal_voltage must be > 0, got {configured_pack_v}; ignoring")
+            configured_pack_v = None
+        self.nominal_pack_voltage = configured_pack_v
         self.control_enable = control_enable
 
         # Handle inverter SN configuration - can be None, a single string, or a list of strings
