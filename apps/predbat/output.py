@@ -2588,6 +2588,20 @@ class Output:
             load_value_pred += forecast_value_pred
             load_value_pred_raw += forecast_value_pred
 
+            # For FUTURE minutes only, apply load_scaling so the published predicted/adjusted
+            # curves (and their today_remaining attribute) match step_data_history() (fetch.py),
+            # which the plan itself uses to build load_minutes_step as
+            # (value + load_extra) * scale_fixed, where scale_fixed includes load_scaling.
+            # Minutes already elapsed today are deliberately left unscaled: load_total_pred_now
+            # below feeds the actual-vs-predicted divergence ratio, which compares actual
+            # consumption against the RAW model, not a load_scaling-corrected one. Previously
+            # load_scaling was never applied here at all, so with load_scaling != 1.0 the
+            # today_remaining attribute diverged from the plan's own remaining-load total by
+            # exactly that factor (issue #4496).
+            if minute >= minutes_now:
+                load_value_pred *= self.load_scaling
+                load_value_pred_raw *= self.load_scaling
+
             # Track (but no longer exclude) periods where import exceeds raw load, assumed to
             # include deliberate battery charging (overnight for example). The house's own load
             # during that minute was still genuinely consumed regardless of how much extra was
