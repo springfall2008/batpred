@@ -27,11 +27,11 @@ import sys
 import weakref
 
 from const import PREDICT_STEP
-from utils import remove_intersecting_windows, get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 3
-KERNEL_PARITY_REVISION = 4
+KERNEL_PARITY_REVISION = 5
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = 4
@@ -466,8 +466,9 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     if not lib:
         return None
 
-    # Remove intersecting windows, mirroring the Python engine - prediction.py:492-493
-    charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
+    # The kernel clips intersecting windows itself (clip_intersecting_charge_windows in
+    # prediction_kernel.cpp), mirroring what the Python engine does before simulating. Doing it in
+    # Python here cost more per simulation than the simulation, so the raw windows are handed over.
 
     n_steps = pred.forecast_minutes // PREDICT_STEP
     scenario = PkScenario()

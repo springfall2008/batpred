@@ -29,6 +29,7 @@ import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
+from utils import remove_intersecting_windows
 from tests.test_infra import reset_inverter, reset_rates
 from tests.test_model import run_model_tests
 
@@ -687,6 +688,119 @@ def run_random_sweep_tests(my_predbat, count=150):
     return failed
 
 
+def make_intersecting_windows(rng, minutes_now, forecast_minutes):
+    """Build a charge/export layout that deliberately exercises window clipping.
+
+    The generic sweep places a handful of windows at random, so an export window landing strictly
+    inside a charge window - the split case, and the subtlest part of the clipping - almost never
+    comes up. Here export windows are positioned relative to the charge windows on purpose: covering
+    them entirely, overlapping either end, sitting inside them, and touching exactly at a boundary.
+    Short windows and short remnants are included because the 5 minute minimum only applies to
+    remnants clipping itself created, never to a window that was left alone.
+    """
+    charge_window = []
+    minute = minutes_now
+    for _ in range(rng.randint(1, 5)):
+        length = rng.choice([5, 10, 30, 60, 120, 240])
+        end = min(minute + length, minutes_now + forecast_minutes)
+        if end <= minute:
+            break
+        charge_window.append({"start": minute, "end": end, "average": round(rng.uniform(0, 40), 2)})
+        minute = end + rng.choice([0, 0, 5, 30])
+        if minute >= minutes_now + forecast_minutes:
+            break
+
+    export_window = []
+    for window in charge_window:
+        mode = rng.choice(["inside", "inside", "overlap_start", "overlap_end", "cover", "touch_start", "touch_end", "clear", "tiny_remnant"])
+        start, end = window["start"], window["end"]
+        span = end - start
+        if mode == "inside" and span >= 20:
+            dstart = start + rng.randrange(5, max(span - 10, 6), 5)
+            dend = min(dstart + rng.choice([5, 10, 30]), end - 1)
+            if dend <= dstart:
+                continue
+        elif mode == "overlap_start":
+            dstart, dend = max(start - rng.choice([5, 30]), minutes_now), start + max(span // 3, 5)
+        elif mode == "overlap_end":
+            dstart, dend = end - max(span // 3, 5), end + rng.choice([5, 30])
+        elif mode == "cover":
+            dstart, dend = start, end
+        elif mode == "touch_start":
+            dstart, dend = max(start - 30, minutes_now), start
+        elif mode == "touch_end":
+            dstart, dend = end, end + 30
+        elif mode == "tiny_remnant" and span >= 10:
+            # Leave only a couple of minutes at the end, below the 5 minute minimum
+            dstart, dend = start, end - rng.choice([1, 2, 3])
+        else:
+            dstart, dend = end + 60, end + 90
+        dstart = max(min(dstart, minutes_now + forecast_minutes), minutes_now)
+        dend = max(min(dend, minutes_now + forecast_minutes), dstart)
+        if dend > dstart:
+            export_window.append({"start": dstart, "end": dend, "average": round(rng.uniform(0, 40), 2)})
+
+    export_window.sort(key=lambda w: w["start"])
+    return charge_window, export_window
+
+
+def run_clipping_parity_tests(my_predbat, count=250):
+    """Compare both engines on layouts built to exercise window clipping, returns True on failure.
+
+    The kernel clips intersecting charge windows itself (clip_intersecting_charge_windows in
+    prediction_kernel.cpp) rather than having Python do it first, so this is the sweep that pins
+    those two implementations together.
+    """
+    failed = False
+    split_layouts = 0
+    for seed in range(count):
+        rng = random.Random(500000 + seed)
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+        apply_random_scenario(my_predbat, rng)
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng=rng)
+
+        charge_window, export_window = make_intersecting_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes)
+        charge_limit = [rng.choice([0.0, my_predbat.reserve, my_predbat.soc_max, round(rng.uniform(0, my_predbat.soc_max), 2)]) for _ in charge_window]
+        export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(0, 100), 1)]) for _ in export_window]
+        end_record = rng.choice([my_predbat.forecast_minutes, my_predbat.forecast_minutes - 30])
+
+        # Count the layouts that actually split a charge window, so a generator that stopped
+        # producing them would show up rather than silently weakening this sweep
+        clipped_limits, clipped_windows = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
+        if len(clipped_windows) > len(charge_window):
+            split_layouts += 1
+
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10):
+            failed |= dual_run(
+                "clip_{}_s{}".format(seed, pv_scenario),
+                my_predbat,
+                pv_step,
+                pv10_step,
+                load_step,
+                load10_step,
+                charge_limit,
+                charge_window,
+                export_window,
+                export_limits,
+                pv_scenario,
+                end_record,
+            )
+            if failed:
+                print("Clipping sweep failed at seed {} scenario {}".format(seed, pv_scenario))
+                print("   charge {} limits {}".format([(w["start"], w["end"]) for w in charge_window], charge_limit))
+                print("   export {} limits {}".format([(w["start"], w["end"]) for w in export_window], export_limits))
+                break
+        if failed:
+            break
+    print("Clipping sweep ran {} layouts, {} of which split a charge window".format(count, split_layouts))
+    if split_layouts == 0:
+        print("ERROR: clipping sweep generated no window splits - the sweep is not exercising the split path")
+        failed = True
+    return failed
+
+
 def kernel_available():
     """Ensure the kernel library is built and loaded, returns (available, required_failure)"""
     if not ensure_kernel_built():
@@ -729,6 +843,8 @@ def run_kernel_parity_tests(my_predbat):
         failed = run_edge_case_tests(my_predbat)
         if not failed:
             failed |= run_random_sweep_tests(my_predbat)
+        if not failed:
+            failed |= run_clipping_parity_tests(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
 
