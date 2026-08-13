@@ -2844,8 +2844,13 @@ class Plan:
         be merged, which is only sound when the limit had no influence on the simulated charge. The achieved SoC
         can land just under the limit even when the limit never clamped it (e.g. charge loss/rounding), and can dip
         a hair below its own peak for the same reason, so both tests need a margin of one charge step to tell a real effect from rounding.
+
+        The clip-up is skipped entirely while grid charging is disabled. It runs after the window optimiser, so
+        raising a hold to a full limit there quietly reintroduces exactly what allow_grid_charge_window excluded -
+        the plan then reads as a charge, and execute has to recognise and downgrade it on every cycle.
         """
         charge_step = self.battery_rate_max_charge * self.battery_rate_max_scaling * step
+        allow_clip_up = self.battery_charging_from_grid
         for window_n in range(min(record_charge_windows, len(charge_window_best))):
             window = charge_window_best[window_n]
             limit = charge_limit_best[window_n]
@@ -2880,18 +2885,18 @@ class Plan:
                     # model whether the nominal plan changes without the slot, which subsumes the old
                     # never-reaches-limit and freeze-at-100% removal branches. What is left here narrows the
                     # limit to what the window can actually achieve, so adjacent windows share a limit and merge.
-                    if soc_max < (limit - charge_step):
+                    if allow_clip_up and soc_max < (limit - charge_step):
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
-                    elif (soc_max > (soc_m1 + charge_step)) and soc_max == limit:
+                    elif allow_clip_up and (soc_max > (soc_m1 + charge_step)) and soc_max == limit:
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
                         if self.debug_enable:
                             self.log("Clip up charge window {} from {} - {} from limit {} to new limit {} target set to {}".format(window_n, window_start, window_end, limit, charge_limit_best[window_n], window["target"]))
-                    elif limit == self.reserve and (dp1(soc_min) == dp1(self.soc_max)) and (dp1(soc_max) == dp1(self.soc_max)):
+                    elif allow_clip_up and limit == self.reserve and (dp1(soc_min) == dp1(self.soc_max)) and (dp1(soc_max) == dp1(self.soc_max)):
                         # Reserve slot, so set to 100% if we are already at 100%
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max

@@ -27,6 +27,7 @@ def run_clip_charge_slots_tests(my_predbat):
     failed |= test_clip_margin_scales_with_charge_rate(my_predbat)
     failed |= test_clip_margin_scales_with_step(my_predbat)
     failed |= test_freeze_charge_to_charge_at_100_soc(my_predbat)
+    failed |= test_clip_up_skipped_without_grid_charging(my_predbat)
     failed |= test_freeze_charge_kept_below_100_soc(my_predbat)
     failed |= test_normal_window_unchanged(my_predbat)
     failed |= test_multiple_windows_mixed(my_predbat)
@@ -359,6 +360,51 @@ def test_clip_margin_scales_with_step(my_predbat):
         print("ERROR: Expected target unchanged at 6.0 but got {}".format(result_windows[0]["target"]))
         failed = True
 
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_clip_up_skipped_without_grid_charging(my_predbat):
+    """With grid charging disabled a hold must stay a hold rather than being clipped up to a full charge.
+
+    clip_charge_slots runs after the window optimiser, so a clip-up here reintroduces exactly the charge
+    that allow_grid_charge_window excluded. The plan then reads as a charge and execute has to recognise
+    and downgrade it on every cycle.
+    """
+    print("**** test_clip_up_skipped_without_grid_charging ****")
+    failed = False
+    setup(my_predbat)
+    saved = my_predbat.battery_charging_from_grid
+
+    minutes_now = 720
+    predict_soc = make_predict_soc(minutes_now, my_predbat.soc_max, 60)
+
+    # Baseline: with grid charging allowed the freeze is clipped up, which is the long-standing behaviour
+    my_predbat.battery_charging_from_grid = True
+    _, limits_on = my_predbat.clip_charge_slots(minutes_now, predict_soc, [make_window(720, 750)], [my_predbat.reserve], 1, 5)
+    if limits_on[0] != my_predbat.soc_max:
+        print("ERROR: with grid charging on the freeze should clip up to {} but got {}".format(my_predbat.soc_max, limits_on[0]))
+        failed = True
+
+    # With it off the hold survives untouched
+    my_predbat.battery_charging_from_grid = False
+    windows_off, limits_off = my_predbat.clip_charge_slots(minutes_now, predict_soc, [make_window(720, 750)], [my_predbat.reserve], 1, 5)
+    if limits_off[0] != my_predbat.reserve:
+        print("ERROR: with grid charging off the freeze should stay at the reserve {} but got {}".format(my_predbat.reserve, limits_off[0]))
+        failed = True
+    if windows_off[0]["target"] > my_predbat.reserve:
+        print("ERROR: with grid charging off the window target should not exceed the reserve, got {}".format(windows_off[0]["target"]))
+        failed = True
+
+    # The other clip-up branch: a limit the charge never reached must also be left alone
+    low_soc = make_predict_soc(minutes_now, 2.0, 60)
+    _, limits_low = my_predbat.clip_charge_slots(minutes_now, low_soc, [make_window(720, 750)], [8.0], 1, 5)
+    if limits_low[0] == my_predbat.soc_max:
+        print("ERROR: with grid charging off an unreached limit should not be clipped up to soc_max")
+        failed = True
+
+    my_predbat.battery_charging_from_grid = saved
     if not failed:
         print("PASS")
     return failed
