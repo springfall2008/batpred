@@ -2676,6 +2676,7 @@ class Plan:
         eps = 0.02
         record_limit = self.end_record + self.minutes_now
         baseline = None
+        start_metric = None
         pruned = 0
         trials = 0
         for typ, windows, limits, off_value in (("export", self.export_window_best, self.export_limits_best, 100.0), ("charge", self.charge_window_best, self.charge_limit_best, 0)):
@@ -2690,6 +2691,7 @@ class Plan:
                     continue
                 if baseline is None:
                     baseline = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
+                    start_metric = baseline
                 limits[window_n] = off_value
                 trial = self.run_prediction_metric(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, nominal_only=True)[0]
                 trials += 1
@@ -2701,7 +2703,17 @@ class Plan:
                 else:
                     limits[window_n] = limit
         if pruned:
-            self.log("Pruned {} dead plan slot(s) in {} trial(s)".format(pruned, trials))
+            # The trials run on the nominal scenario only, so report the full metric and cost of the
+            # pruned plan rather than the nominal figure the trials compared on
+            metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh, export_kwh = self.run_prediction_metric(
+                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+            )
+            curr = self.currency_symbols[1]
+            self.log(
+                "Pruned {} dead plan slot(s) in {} trial(s), nominal metric {}{} -> {}{}, plan now metric {}{}, cost {}{}, cycle {}kWh, import {}kWh".format(
+                    pruned, trials, dp2(start_metric), curr, dp2(baseline), curr, dp2(metric), curr, dp2(cost), curr, dp2(battery_cycle), dp2(import_kwh)
+                )
+            )
         return pruned
 
     def clip_charge_slots(self, minutes_now, predict_soc, charge_window_best, charge_limit_best, record_charge_windows, step):
@@ -2872,8 +2884,9 @@ class Plan:
         """
         record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.export_window_best), 1)
-        self.log("Tweak plan optimisation started")
         selected = self.plan_metric_now(end_record)
+        curr = self.currency_symbols[1]
+        self.log("Tweak plan optimisation started metric {}{}, cost {}{}".format(dp2(selected[0]), curr, dp2(selected[1]), curr))
         count = 0
         window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
         for key in window_sorted:
@@ -2922,7 +2935,11 @@ class Plan:
                 break
 
         best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = selected
-        self.log("Tweak optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(dp2(best_metric), dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
+        self.log(
+            "Tweak optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh, changed {} window(s)".format(
+                dp2(best_metric), curr, dp2(best_cost), curr, dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import), count
+            )
+        )
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False, prediction=None):
@@ -3663,7 +3680,7 @@ class Plan:
                             continue
 
                         if self.calculate_best_charge and (window_start not in self.manual_all_times):
-                            if not printed_set:
+                            if not printed_set and self.debug_enable:
                                 self.log(
                                     "Optimise price set {}{}, pass {}, price {}{}, start_at_low {}, best_price_charge {}{}, best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
                                         price_key,
@@ -3790,7 +3807,7 @@ class Plan:
                             continue
 
                         if self.allow_this_export_window(window_n):
-                            if not printed_set:
+                            if not printed_set and self.debug_enable:
                                 self.log(
                                     "Optimise price set {}{}, pass {}, price {}{}, start_at_low {}, best_price_export {}{}, level {}{}, best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
                                         price_key,
@@ -3883,8 +3900,9 @@ class Plan:
                                             dp2(best_import),
                                         )
                                     )
-            # Log set of charge and export windows
-            if self.calculate_best_charge:
+            # Log set of charge and export windows - the full window list is long and repeats after
+            # every pass, so it is debug only
+            if self.calculate_best_charge and self.debug_enable:
                 self.log(
                     "Best charge windows best_metric {}{}, best_cost {}{}, best_carbon {}kg, best_import {}kWh, metric_keep {}kWh, end_record {}, windows {}".format(
                         dp2(best_metric),
@@ -3899,7 +3917,7 @@ class Plan:
                     )
                 )
 
-            if self.calculate_best_export:
+            if self.calculate_best_export and self.debug_enable:
                 self.log(
                     "Best export windows best_metric {}{}, best_cost {}{}, best_carbon {}kg, best_import {}kWh, metric_keep {}kWh, end_record {}, windows {}".format(
                         dp2(best_metric),
@@ -3926,6 +3944,7 @@ class Plan:
         """
         Select the charge and export price levels and create the high level plan
         """
+        curr = self.currency_symbols[1]
         record_charge_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(self.end_record + self.minutes_now, self.export_window_best), 1)
 
@@ -3990,7 +4009,6 @@ class Plan:
                 region_size = int(16 * 60)
                 min_region_size = int(120)
                 while region_size >= min_region_size:
-                    self.log(">> Region optimisation pass width {}".format(region_size))
                     # step_size = int(max(region_size / 2, min_region_size))
                     step_size = region_size
                     fast_mode = not (region_size == min_region_size)
@@ -4049,6 +4067,7 @@ class Plan:
                         if self.end_record + self.minutes_now - region - region_size < 0:
                             break
 
+                    self.log(">> Region optimisation pass width {} gives best_metric {}{}, best_cost {}{}, best_cycle {}kWh, best_import {}kWh".format(region_size, dp2(best_metric), curr, dp2(best_cost), curr, dp2(best_cycle), dp2(best_import)))
                     self.plan_write_debug(debug_mode, "plan_levels_{}.html".format(region_size), self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
                     region_size = int(region_size / 2)
 
@@ -4061,7 +4080,6 @@ class Plan:
 
         self.log("Optimise levels pass ended at {}, duration {:.1f} seconds tried {} combinations".format(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time())), time.time() - start_time, len(tried_list)))
 
-        curr = self.currency_symbols[1]
         self.log(
             "Set best_price_charge_level {}{}, best_price_export_level {}{}, best_price_charge {}{}, best_cost_export {}{}, best_metric {}{}, best_keep {}kWh, best_cycle {}kWh, best_carbon {}kg, best_import {}kWh".format(
                 dp2(best_price_charge_level), curr, dp2(best_price_export_level), curr, dp2(best_price_charge), curr, dp2(best_price_export), curr, dp2(best_metric), curr, dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)
