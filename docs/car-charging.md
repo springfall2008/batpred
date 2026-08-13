@@ -290,7 +290,8 @@ When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is aut
 
 When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger attached, the charger's live state is reported to Predbat over the gateway's MQTT telemetry and exposed as Home Assistant entities.
 
-Entities are named after the charger, using the last 6 characters of its OCPP charge point id (lower-cased) — for example a charge point id ending `3XB749` gives `sensor.predbat_gateway_ev_3xb749_power`. The id is used whether one charger or several are attached, so a charger keeps the same entity ids for its whole life. Below, `<id>` stands for that suffix; a charger that has not yet reported an id falls back to a bare `ev`.
+Entities are named after the charger, using the last 6 characters of its OCPP charge point id (lower-cased) — for example a charge point id ending `3XB749` gives `sensor.predbat_gateway_ev_3xb749_power`. 
+The id is used whether one charger or several are attached, so a charger keeps the same entity ids for its whole life. Below, `<id>` stands for that suffix; a charger that has not yet reported an id falls back to a bare `ev`.
 
 - `binary_sensor.predbat_gateway_ev_<id>_connected` - a charge point is connected
 - `sensor.predbat_gateway_ev_<id>_status` - OCPP status (e.g. `Available`, `Charging`)
@@ -308,7 +309,8 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
   gateway_evc_automatic: true
 ```
 
-When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
+When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. 
+The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 
