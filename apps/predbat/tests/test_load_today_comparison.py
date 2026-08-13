@@ -310,6 +310,99 @@ def _test_load_scaling_applied_to_predicted(my_predbat, failed):
     return failed
 
 
+def _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat, failed):
+    """
+    Follow-up regression test for issue #4496: the fix in _test_load_scaling_applied_to_predicted
+    only applied the flat self.load_scaling, but step_data_history() (fetch.py) also applies
+    self.load_scaling_dynamic (per-minute - saving-session/free-electricity-event scaling, and
+    any per-window override from rates_import_override/the manual API) and self.manual_load_adjust
+    (additive, per-minute). Confirmed against a real user report (gcoan) where a 1.5x
+    load_scaling_dynamic override for a 2-hour "power up" event wasn't reflected in
+    today_remaining at all even after the first fix landed.
+    """
+    print("  test: load_scaling_dynamic and manual_load_adjust are applied to the predicted (today_remaining) load curve")
+
+    saved = {
+        "car_charging_hold": my_predbat.car_charging_hold,
+        "car_charging_energy": my_predbat.car_charging_energy,
+        "iboost_energy_subtract": my_predbat.iboost_energy_subtract,
+        "iboost_energy_today": my_predbat.iboost_energy_today,
+        "base_load": my_predbat.base_load,
+        "load_forecast_only": my_predbat.load_forecast_only,
+        "days_previous": my_predbat.days_previous,
+        "days_previous_weight": my_predbat.days_previous_weight,
+        "load_minutes_age": my_predbat.load_minutes_age,
+        "load_scaling": my_predbat.load_scaling,
+        "load_scaling_dynamic": my_predbat.load_scaling_dynamic,
+        "manual_load_adjust": my_predbat.manual_load_adjust,
+        "now_utc": my_predbat.now_utc,
+        "midnight_utc": my_predbat.midnight_utc,
+        "minutes_now": my_predbat.minutes_now,
+    }
+
+    try:
+        my_predbat.car_charging_hold = False
+        my_predbat.car_charging_energy = None
+        my_predbat.iboost_energy_subtract = False
+        my_predbat.iboost_energy_today = None
+        my_predbat.base_load = 0.0
+        my_predbat.load_forecast_only = False
+        my_predbat.days_previous = [1]
+        my_predbat.days_previous_weight = [1.0]
+        my_predbat.load_minutes_age = 1
+        my_predbat.load_scaling = 1.0
+
+        midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        minutes_now = 780  # 13:00, well clear of the day boundary
+        my_predbat.midnight_utc = midnight_utc
+        my_predbat.now_utc = midnight_utc + timedelta(minutes=minutes_now)
+        my_predbat.minutes_now = minutes_now
+
+        load_minutes = build_cumulative(0.02, 3000)  # 0.02 kWh/min -> 0.1 kWh per 5-min bucket
+        load_forecast = {}
+        import_minutes = build_cumulative(0.0, 3000)
+
+        # Baseline: no dynamic scaling, no manual adjustment
+        my_predbat.load_scaling_dynamic = {}
+        my_predbat.manual_load_adjust = {}
+        my_predbat.load_today_comparison(load_minutes, load_forecast, {}, import_minutes, minutes_now=minutes_now, step=5, save=True)
+        baseline_remaining = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]["today_remaining"]
+
+        # load_scaling_dynamic applied uniformly across every future minute at 2.0x - the whole
+        # remaining-today total should double, exactly like the flat load_scaling test does
+        my_predbat.load_scaling_dynamic = {minute: 2.0 for minute in range(minutes_now, 24 * 60, 5)}
+        my_predbat.load_today_comparison(load_minutes, load_forecast, {}, import_minutes, minutes_now=minutes_now, step=5, save=True)
+        dynamic_scaled_remaining = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]["today_remaining"]
+
+        expected_dynamic = round(baseline_remaining * 2.0, 2)
+        if abs(dynamic_scaled_remaining - expected_dynamic) > 0.02:
+            print("  ERROR: today_remaining with load_scaling_dynamic=2.0 across the day should be ~{} (2x baseline {}), got {}".format(expected_dynamic, baseline_remaining, dynamic_scaled_remaining))
+            failed = True
+        else:
+            print("  PASS: today_remaining scales with load_scaling_dynamic ({} -> {} at 2x)".format(baseline_remaining, dynamic_scaled_remaining))
+
+        # manual_load_adjust applied additively at a single future minute
+        my_predbat.load_scaling_dynamic = {}
+        manual_adjust_minute = minutes_now + 60
+        manual_adjust_kwh = 6.0
+        my_predbat.manual_load_adjust = {manual_adjust_minute: manual_adjust_kwh}
+        my_predbat.load_today_comparison(load_minutes, load_forecast, {}, import_minutes, minutes_now=minutes_now, step=5, save=True)
+        manual_adjusted_remaining = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]["today_remaining"]
+
+        expected_delta = manual_adjust_kwh * 5 / float(my_predbat.plan_interval_minutes)
+        expected_manual = round(baseline_remaining + expected_delta, 2)
+        if abs(manual_adjusted_remaining - expected_manual) > 0.02:
+            print("  ERROR: today_remaining with a manual_load_adjust of {}kWh at minute {} should be ~{} (baseline {} + {:.2f}), got {}".format(manual_adjust_kwh, manual_adjust_minute, expected_manual, baseline_remaining, expected_delta, manual_adjusted_remaining))
+            failed = True
+        else:
+            print("  PASS: today_remaining reflects manual_load_adjust ({} -> {}, +{:.2f}kWh)".format(baseline_remaining, manual_adjusted_remaining, expected_delta))
+    finally:
+        for key, value in saved.items():
+            setattr(my_predbat, key, value)
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -320,7 +413,8 @@ def test_load_today_comparison(my_predbat):
     Unit tests for load_today_comparison() covering the None-guard fix
     for dp2() calls when filtered_today() returns None, the
     import-exceeds-load regression (batpred#4154, #2537), and the
-    load_scaling-not-applied regression (#4496).
+    load_scaling/load_scaling_dynamic/manual_load_adjust-not-applied
+    regression (#4496).
     """
     failed = False
     print("**** Running load_today_comparison tests ****")
@@ -328,5 +422,6 @@ def test_load_today_comparison(my_predbat):
     failed = _test_none_guard_no_crash(my_predbat, failed)
     failed = _test_import_exceeding_load_still_counted(my_predbat, failed) or failed
     failed = _test_load_scaling_applied_to_predicted(my_predbat, failed) or failed
+    failed = _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat, failed) or failed
 
     return failed
