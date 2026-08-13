@@ -27,7 +27,7 @@
 #include <vector>
 
 #define PK_ABI_VERSION 3
-#define PK_PARITY_REVISION 4
+#define PK_PARITY_REVISION 5
 #define PK_MAX_CARS 4
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -234,6 +234,92 @@ inline double rate_curve(double soc_key, double rate_setting, double rate_max, d
 // Build per-step window membership, mirroring Prediction.find_charge_window_optimised():
 // dict keyed by absolute minute stepping 5 from each window start, last window wins,
 // looked up at minute_absolute = minutes_now + k*5 (so misaligned windows never match).
+// Mirrors remove_intersecting_windows() in utils.py, which the Python engine applies before
+// simulating. Charge windows that collide with an enabled export window are trimmed, and a window
+// with an export landing inside it is split in two. Two rules are easy to get wrong and are pinned
+// by tests: a window that was never clipped survives whatever its length, while a remnant clipping
+// itself created is dropped below 5 minutes; and windows that merely touch at a boundary overlap
+// arithmetically but remove nothing, so they must not count as clipped.
+//
+// PARITY: any change here must be mirrored in utils.remove_intersecting_windows and vice versa.
+static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit, int32_t n_export, const int32_t *export_start,
+                                             const int32_t *export_end, const double *export_limits)
+{
+    // Enabled export windows only - the sole candidates for clipping anything - in start order
+    std::vector<std::pair<int32_t, int32_t>> export_active;
+    export_active.reserve(n_export);
+    for (int32_t n = 0; n < n_export; n++) {
+        if (export_limits[n] < 100.0) {
+            export_active.emplace_back(export_start[n], export_end[n]);
+        }
+    }
+    std::sort(export_active.begin(), export_active.end());
+
+    out_start.clear();
+    out_end.clear();
+    out_limit.clear();
+    out_start.reserve(n_charge);
+    out_end.reserve(n_charge);
+    out_limit.reserve(n_charge);
+
+    if (export_active.empty()) {
+        for (int32_t n = 0; n < n_charge; n++) {
+            out_start.push_back(charge_start[n]);
+            out_end.push_back(charge_end[n]);
+            out_limit.push_back(charge_limit[n]);
+        }
+        return;
+    }
+
+    for (int32_t n = 0; n < n_charge; n++) {
+        int32_t start = charge_start[n];
+        int32_t end = charge_end[n];
+        const double limit = charge_limit[n];
+
+        if (!(limit > 0.0)) {
+            // A disabled charge window can never be clipped
+            out_start.push_back(start);
+            out_end.push_back(end);
+            out_limit.push_back(limit);
+            continue;
+        }
+
+        bool clipped = false;
+        for (const auto &dw : export_active) {
+            const int32_t dstart = dw.first;
+            const int32_t dend = dw.second;
+            if ((dstart < end) && (dend >= start)) {
+                if (dstart <= start) {
+                    if (start != dend) {
+                        start = dend;
+                        clipped = true;
+                    }
+                } else if (dend >= end) {
+                    if (end != dstart) {
+                        end = dstart;
+                        clipped = true;
+                    }
+                } else {
+                    // Two segments - emit the head now, carry on clipping the tail
+                    if ((dstart - start) >= 5) {
+                        out_start.push_back(start);
+                        out_end.push_back(dstart);
+                        out_limit.push_back(limit);
+                    }
+                    start = dend;
+                    clipped = true;
+                }
+            }
+        }
+
+        if (!clipped || ((end - start) >= 5)) {
+            out_start.push_back(start);
+            out_end.push_back(end);
+            out_limit.push_back(limit);
+        }
+    }
+}
+
 void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, const int32_t *starts, const int32_t *ends, const double *limits, bool is_export, int32_t minutes_now, int32_t n_steps)
 {
     member.assign(n_steps, -1);
@@ -360,7 +446,15 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
 
     // Window membership - prediction.py:494-495 / find_charge_window_optimised
     std::vector<int32_t> charge_window_optimised, export_window_optimised;
-    build_window_membership(charge_window_optimised, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, false, c->minutes_now, n_steps);
+
+    // The caller hands over the raw charge windows; clipping them against the export windows used to
+    // be done in Python on every simulation, which cost more than the simulation itself
+    std::vector<int32_t> clipped_start, clipped_end;
+    std::vector<double> clipped_limit;
+    clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits);
+    const int32_t n_charge_clipped = static_cast<int32_t>(clipped_start.size());
+
+    build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), false, c->minutes_now, n_steps);
     build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, s->export_limits, true, c->minutes_now, n_steps);
 
     // Initial state - prediction.py:435-490
@@ -461,7 +555,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
         // Find charge limit - prediction.py:609-620
         double charge_limit_n = 0;
         if (charge_window_active) {
-            charge_limit_n = s->charge_limit[charge_window_n];
+            charge_limit_n = clipped_limit[charge_window_n];
             if (c->set_charge_freeze && (calc_percent_limit(charge_limit_n, soc_max) == reserve_percent)) {
                 // Charge freeze via reserve
                 charge_limit_n = std::max(soc, reserve);
