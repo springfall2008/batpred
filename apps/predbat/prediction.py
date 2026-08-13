@@ -19,6 +19,8 @@ plans and select the one with the lowest cost metric.
 
 from datetime import timedelta
 from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT
+from operator import itemgetter
+
 from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
@@ -90,6 +92,11 @@ def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybri
         total_inverted = total_inverted + pv_ac / inverter_loss
 
     return total_inverted
+
+
+# Pulls (start, end) from a window dict; used to build the prediction cache key without a Python
+# level loop over every window
+window_bounds = itemgetter("start", "end")
 
 
 class Prediction:
@@ -409,24 +416,34 @@ class Prediction:
         KERNEL_PARITY_REVISION (prediction_kernel.py) and PK_PARITY_REVISION (prediction_kernel.cpp)
         must both be bumped, and the kernel_parity test must pass (cd coverage && ./run_all --test kernel_parity).
         """
-        window_hash = 0
-        for window in charge_window:
-            window_hash ^= hash(window["start"]) ^ hash(window["end"])
-        for window in export_window:
-            window_hash ^= hash(window["start"]) ^ hash(window["end"])
-
-        sim_hash = hash(tuple(charge_limit)) ^ window_hash ^ hash(tuple(export_limits)) ^ hash(pv_scenario) ^ hash(end_record) ^ hash(step)
-
-        if not save and cache and sim_hash in self.prediction_cache:
-            # Return cached result
-            return self.prediction_cache[sim_hash]
+        # The cache key is only wanted when the cache is actually in play - a saving run always
+        # simulates - so it is not computed otherwise. Building it as one tuple hash keeps the
+        # per-window hashing in C rather than looping in Python, which matters because this runs on
+        # every simulation with a few hundred windows.
+        sim_hash = None
+        if cache and not save:
+            sim_hash = hash(
+                (
+                    tuple(charge_limit),
+                    tuple(map(window_bounds, charge_window)),
+                    tuple(export_limits),
+                    tuple(map(window_bounds, export_window)),
+                    pv_scenario,
+                    end_record,
+                    step,
+                )
+            )
+            cached_result = self.prediction_cache.get(sim_hash)
+            if cached_result is not None:
+                # Return cached result
+                return cached_result
 
         # Try the C++ prediction kernel first; unsupported scenarios fall through to the Python engine.
         # The kernel understands all three pv_scenario values (see PkScenario.pv_scenario, ABI 3).
         if kernel_supported(self, save, step):
             kernel_result = run_prediction_kernel(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache)
             if kernel_result is not None:
-                if not save and cache:
+                if sim_hash is not None:
                     # Store in cache without the SoC/car data to save memory, mirroring the Python engine
                     self.prediction_cache[sim_hash] = kernel_result[:11] + ([], []) + kernel_result[13:]
                 return kernel_result
@@ -1301,7 +1318,7 @@ class Prediction:
             self.import_kwh_time = import_kwh_time
             self.export_kwh_time = export_kwh_time
 
-        if not save and cache:
+        if sim_hash is not None:
             self.prediction_cache[sim_hash] = (
                 round(final_metric, 4),
                 round(final_import_kwh_battery, 4),
