@@ -992,7 +992,22 @@ def calc_percent_limit(charge_limit, soc_max):
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows
+
+    This runs on every simulation (see Prediction.run_prediction and run_prediction_kernel), so the
+    scan is restricted to the pairs that can actually clip: only export windows that are enabled
+    (limit < 100) can clip anything, and only charge windows that are enabled (limit > 0) can be
+    clipped. Both were previously tested inside the inner loop, so a plan carrying hundreds of
+    disabled windows - the normal case during optimisation - scanned every pair to do nothing. The
+    clipping behaviour itself is unchanged; see run_intersect_window_tests, which compares this
+    against a naive reference implementation over randomised window layouts.
     """
+    # Enabled export windows only - the sole candidates for clipping anything
+    export_active = [(export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_limit_best[n] < 100.0]
+    if not export_active:
+        # Rebuild the windows rather than passing the caller's dicts back, so the returned windows
+        # carry exactly the same keys (and are as freshly owned) as on the clipping path below
+        return list(charge_limit_best), [{"start": w["start"], "end": w["end"], "average": w["average"]} for w in charge_window_best]
+
     clip_again = True
 
     # For each charge window
@@ -1008,15 +1023,17 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
             limit = charge_limit_best[window_n]
             clipped = False
 
-            # For each discharge window
-            for dwindow_n in range(len(export_limit_best)):
-                dwindow = export_window_best[dwindow_n]
-                dlimit = export_limit_best[dwindow_n]
-                dstart = dwindow["start"]
-                dend = dwindow["end"]
+            if limit <= 0.0:
+                # A disabled charge window can never be clipped; rebuild it exactly as the clipping
+                # path below would have done, so the returned dicts are equivalent either way
+                new_window_best.append({"start": start, "end": end, "average": average})
+                new_limit_best.append(limit)
+                continue
 
-                # Overlapping window with enabled discharge?
-                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
+            # For each enabled discharge window
+            for dstart, dend in export_active:
+                # Overlapping window?
+                if (dstart < end) and (dend >= start):
                     if dstart <= start:
                         if start != dend:
                             start = dend

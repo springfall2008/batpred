@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 # fmt on
+import random
+
 from utils import remove_intersecting_windows
 from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
@@ -59,17 +61,167 @@ def run_window_sort_test(name, my_predbat, charge_window_best, export_window_bes
     return failed
 
 
+def reference_remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
+    """Deliberately naive reference: clip each charge window against every enabled export window.
+
+    Kept as a plain O(charge x export) scan with no early exits so it can be compared against the
+    optimised implementation on randomised inputs - if the two ever disagree, the optimisation
+    changed behaviour rather than just skipping work.
+    """
+    windows = []
+    limits = []
+    for limit, window in zip(charge_limit_best, charge_window_best):
+        segments = [(window["start"], window["end"])]
+        if limit > 0.0:
+            for dlimit, dwindow in zip(export_limit_best, export_window_best):
+                if dlimit >= 100.0:
+                    continue
+                dstart, dend = dwindow["start"], dwindow["end"]
+                new_segments = []
+                for start, end in segments:
+                    if dstart >= end or dend < start:
+                        new_segments.append((start, end))
+                        continue
+                    if dstart > start:
+                        new_segments.append((start, min(dstart, end)))
+                    if dend < end:
+                        new_segments.append((max(dend, start), end))
+                segments = new_segments
+        for start, end in segments:
+            if (end - start) >= 5:
+                windows.append({"start": start, "end": end, "average": window["average"]})
+                limits.append(limit)
+    return limits, windows
+
+
+def _intersect_case(name, charge_limit_best, charge_window_best, export_limit_best, export_window_best, expect_windows, expect_limits):
+    """Run one remove_intersecting_windows case and compare against expected windows/limits"""
+    failed = False
+    new_limit_best, new_window_best = remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best)
+    got = [(w["start"], w["end"]) for w in new_window_best]
+    if got != expect_windows:
+        print("ERROR: {} expected windows {} but got {}".format(name, expect_windows, got))
+        failed = True
+    if list(new_limit_best) != list(expect_limits):
+        print("ERROR: {} expected limits {} but got {}".format(name, expect_limits, list(new_limit_best)))
+        failed = True
+    return failed
+
+
 def run_intersect_window_tests(my_predbat):
+    """Characterisation tests for remove_intersecting_windows.
+
+    This is a hot path - it runs on every simulation - so it needs enough coverage to be optimised
+    against. The randomised equivalence check at the end is the real guard: it compares the shipped
+    implementation against a naive reference over many random window layouts.
+    """
     print("**** Running intersect window tests ****")
     failed = False
-    charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
-    export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 30, "average": 10}]
-    charge_limit_best = [4]
-    export_limit_best = [2]
-    new_limit_best, new_window_best = remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best)
-    if len(new_window_best) != 0:
-        print("ERROR: Expected no windows but got {}".format(new_window_best))
-        failed = True
+    now = my_predbat.minutes_now
+
+    # A fully-covered charge window disappears
+    failed |= _intersect_case(
+        "fully covered",
+        [4],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [2],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [],
+        [],
+    )
+
+    # A disabled charge window (limit 0) is passed through untouched even when an export overlaps it
+    failed |= _intersect_case(
+        "disabled charge untouched",
+        [0],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [2],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [(now, now + 30)],
+        [0],
+    )
+
+    # A disabled export window (limit 100) never clips
+    failed |= _intersect_case(
+        "disabled export does not clip",
+        [4],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [100.0],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [(now, now + 30)],
+        [4],
+    )
+
+    # Export overlapping the start moves the charge window start forward
+    failed |= _intersect_case(
+        "clip start",
+        [4],
+        [{"start": now, "end": now + 60, "average": 10}],
+        [2],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [(now + 30, now + 60)],
+        [4],
+    )
+
+    # Export overlapping the end pulls the charge window end back
+    failed |= _intersect_case(
+        "clip end",
+        [4],
+        [{"start": now, "end": now + 60, "average": 10}],
+        [2],
+        [{"start": now + 30, "end": now + 60, "average": 10}],
+        [(now, now + 30)],
+        [4],
+    )
+
+    # Export in the middle splits the charge window into two
+    failed |= _intersect_case(
+        "split in two",
+        [4],
+        [{"start": now, "end": now + 90, "average": 10}],
+        [2],
+        [{"start": now + 30, "end": now + 60, "average": 10}],
+        [(now, now + 30), (now + 60, now + 90)],
+        [4, 4],
+    )
+
+    # Randomised equivalence against the naive reference
+    rng = random.Random(1234)
+    for case in range(200):
+        n_charge = rng.randint(0, 6)
+        n_export = rng.randint(0, 6)
+        charge_windows = []
+        charge_limits = []
+        minute = now
+        for _ in range(n_charge):
+            length = rng.choice([5, 10, 30, 60, 90])
+            charge_windows.append({"start": minute, "end": minute + length, "average": 10})
+            charge_limits.append(rng.choice([0, 0, 4.0, 8.0]))
+            minute += length + rng.choice([0, 5, 30])
+        export_windows = []
+        export_limits = []
+        minute = now
+        for _ in range(n_export):
+            length = rng.choice([5, 10, 30, 60])
+            export_windows.append({"start": minute, "end": minute + length, "average": 10})
+            export_limits.append(rng.choice([100.0, 100.0, 99.0, 0.0, 50.0]))
+            minute += length + rng.choice([0, 5, 30])
+
+        got_limits, got_windows = remove_intersecting_windows([x for x in charge_limits], [dict(w) for w in charge_windows], export_limits, export_windows)
+        exp_limits, exp_windows = reference_remove_intersecting_windows(charge_limits, charge_windows, export_limits, export_windows)
+        got_pairs = [(w["start"], w["end"], limit) for w, limit in zip(got_windows, got_limits)]
+        exp_pairs = [(w["start"], w["end"], limit) for w, limit in zip(exp_windows, exp_limits)]
+        if got_pairs != exp_pairs:
+            print("ERROR: randomised case {} disagrees with reference".format(case))
+            print("   charge {} limits {}".format(charge_windows, charge_limits))
+            print("   export {} limits {}".format(export_windows, export_limits))
+            print("   got      {}".format(got_pairs))
+            print("   expected {}".format(exp_pairs))
+            failed = True
+            break
+
+    if not failed:
+        print("PASS")
     return failed
 
 
