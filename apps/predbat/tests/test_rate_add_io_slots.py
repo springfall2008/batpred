@@ -430,6 +430,40 @@ def run_rate_add_io_slots_tests(my_predbat):
     my_predbat.car_charging_slots[0] = []  # Car charging plan says nothing is needed at all
     expected_rates_23 = {minute: 4.0 for minute in range(120, 150)}
     failed |= run_rate_add_io_slots_test("test23_fixed_window_unaffected", my_predbat, slots_23, True, 12, expected_rates_23)
+
+    # Test 24 (#4483 review follow-up): a rejected future slot must actively restore
+    # rates[minute] to rate_max_base, not just skip adding a new low rate. For a genuine Octopus
+    # Intelligent tariff, fetch_octopus_rates() can receive the dispatch-discounted rate directly
+    # before rate_add_io_slots() ever runs (rate_replicate() only gap-fills minutes with no real
+    # fetched value, so it never touches this one) - simulate that by pre-seeding the rejected
+    # slot's minutes with a low rate and self.io_adjusted, then confirm rejection restores both.
+    print("\n**** Test 24: Rejected slot restores an already-discounted fetched rate ****")
+    my_predbat.car_charging_slots[0] = []  # Car charging plan says nothing is needed at all
+
+    slot_start_24 = midnight_utc + timedelta(hours=14)  # future, out-of-window, car doesn't need it
+    slot_end_24 = slot_start_24 + timedelta(minutes=30)
+    slots_24 = [{"start": slot_start_24.strftime(TIME_FORMAT), "end": slot_end_24.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    slot_start_minute_24 = int((slot_start_24 - midnight_utc).total_seconds() / 60)
+
+    rates_24 = {}
+    for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60)):
+        rates_24[minute] = 10.0
+    saved_io_adjusted = dict(my_predbat.io_adjusted)
+    for minute in range(slot_start_minute_24, slot_start_minute_24 + 30):
+        rates_24[minute] = 3.99  # already-discounted, as if fetched directly for a real dispatch
+        my_predbat.io_adjusted[minute] = True  # minute_data() marks every minute in the block
+
+    result_rates_24 = my_predbat.rate_add_io_slots(0, rates_24, slots_24)
+
+    for minute in range(slot_start_minute_24, slot_start_minute_24 + 30):
+        if result_rates_24.get(minute) != my_predbat.rate_max_base:
+            print("ERROR: Minute {} should be restored to rate_max_base {} but got {}".format(minute, my_predbat.rate_max_base, result_rates_24.get(minute)))
+            failed = True
+        if minute in my_predbat.io_adjusted:
+            print("ERROR: Minute {} should have been cleared from io_adjusted, still present".format(minute))
+            failed = True
+
+    my_predbat.io_adjusted = saved_io_adjusted
     my_predbat.octopus_intelligent_limit_future_slots = False  # Restore default for any subsequent tests
 
     my_predbat.car_charging_slots[0] = saved_car_charging_slots

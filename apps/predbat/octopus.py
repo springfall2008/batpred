@@ -3140,10 +3140,27 @@ class Octopus:
                                 rates[minute] = assumed_price
                             else:
                                 assumed_price = self.rate_max_base
+                                # A rejected slot (not needed, or the daily cap already reached)
+                                # must actively restore the ordinary out-of-window rate, not just
+                                # skip adding a new low one. For a genuine Octopus Intelligent
+                                # tariff, fetch_octopus_rates() can already receive the
+                                # dispatch-discounted rate directly (rate_replicate() only
+                                # gap-fills minutes with no real fetched value, so it never
+                                # touches this one) - leaving rates[minute] alone here would keep
+                                # that low rate live even though this slot was just rejected.
+                                rates[minute] = self.rate_max_base
+                                self.io_adjusted.pop(minute, None)
                         else:
-                            # For minutes within a 30-min slot, only apply if the slot was added
+                            # For minutes within a 30-min slot, only apply if the slot was added,
+                            # otherwise restore - matching the slot-start decision above.
+                            # minute_data() (utils.py) sets self.io_adjusted for every minute in
+                            # an adjusted block, not just its first, so the whole block must be
+                            # cleared here too, not just slot_start.
                             if slot_start in slots_added_set:
                                 rates[minute] = assumed_price
+                            else:
+                                rates[minute] = self.rate_max_base
+                                self.io_adjusted.pop(minute, None)
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
