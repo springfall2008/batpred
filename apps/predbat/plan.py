@@ -86,6 +86,51 @@ class Plan:
     runs to minimise the overall cost metric.
     """
 
+    def update_best_soc_max_morning_cover(self, load_minutes_step, pv_forecast_minute_step):
+        """
+        Dynamically cap best_soc_max to cover load from the charge window end until PV exceeds load.
+        """
+        if getattr(self, "best_soc_max_mode", None) != "morning_cover":
+            return
+
+        morning_deficit = 0.0
+        morning_end = None
+        cover_start = 0
+        active_charge_window = self.in_charge_window(self.charge_window_best, self.minutes_now)
+        if active_charge_window >= 0:
+            cover_start = max(0, self.charge_window_best[active_charge_window]["end"] - self.minutes_now)
+        elif self.charge_window_best:
+            future_charge_windows = [window for window in self.charge_window_best if window["start"] >= self.minutes_now]
+            if future_charge_windows:
+                first_charge_window = min(future_charge_windows, key=lambda window: window["start"])
+                cover_start = max(0, first_charge_window["end"] - self.minutes_now)
+
+        horizon = min(self.forecast_minutes, 24 * 60)
+        for minute in range(cover_start, horizon, PREDICT_STEP):
+            load_step = load_minutes_step.get(minute, 0.0)
+            pv_step = pv_forecast_minute_step.get(minute, 0.0)
+            if pv_step > load_step and pv_step > 0:
+                morning_end = minute
+                break
+            if load_step > pv_step:
+                morning_deficit += load_step - pv_step
+
+        if morning_end is not None:
+            dynamic_best_soc_max = min(self.soc_max, self.reserve + (morning_deficit / max(self.battery_loss_discharge, 0.01)))
+            self.best_soc_max = dp2(dynamic_best_soc_max)
+            self.log(
+                "Dynamic best_soc_max morning_cover: reserve {}kWh + deficit {}kWh from {} until {} = {}kWh".format(
+                    dp2(self.reserve),
+                    dp2(morning_deficit),
+                    self.time_abs_str(self.minutes_now + cover_start),
+                    self.time_abs_str(self.minutes_now + morning_end),
+                    self.best_soc_max,
+                )
+            )
+        else:
+            self.best_soc_max = 0.0
+            self.log("Dynamic best_soc_max morning_cover: no PV>load point found in forecast horizon, leaving uncapped")
+
     def dynamic_load(self):
         """
         Adjust load prediction based on current load
@@ -1306,6 +1351,8 @@ class Plan:
         self.pv_forecast_minute_step = pv_forecast_minute_step
         self.pv_forecast_minute10_step = pv_forecast_minute10_step
         self.pv_forecast_minute90_step = pv_forecast_minute90_step
+
+        self.update_best_soc_max_morning_cover(load_minutes_step, pv_forecast_minute_step)
 
         # Yesterday data
         if recompute and self.calculate_savings and publish:
