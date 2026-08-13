@@ -3980,7 +3980,7 @@ class Plan:
                 if region_end >= minutes_now and region_end > region_start:
                     regions.append((region_start, region_end))
                 # Reached the start of the record
-                if region_end_max - region - region_size < 0:
+                if region_end_max - region - region_size <= 0:
                     break
             region_passes.append((region_size, regions))
             region_size = int(region_size / 2)
