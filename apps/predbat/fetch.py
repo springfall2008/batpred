@@ -2366,7 +2366,16 @@ class Fetch:
         self.load_forecast_history = self.get_arg("days_previous_auto", True)
         if self.load_forecast_history:
             window_days = min(max(self.days_previous) if self.days_previous else 7, LOAD_FORECAST_HISTORY_MAX_DAYS)
-            self.log("days_previous_auto enabled - using weighted-bucket historical load forecast over up to {} days".format(window_days))
+            # Config-time log only - describes what's enabled, not what happened this cycle. This
+            # runs unconditionally every cycle regardless of whether the weighted-bucket forecast
+            # actually gets used: Load ML (or any other source that sets load_forecast_only) takes
+            # precedence and skips it entirely (fetch_sensor_data(), guarded by
+            # "not self.load_forecast_only"). The "using weighted-bucket..." wording previously
+            # here read as if it was happening every cycle regardless, which is what actually gets
+            # logged only when the forecast is genuinely used (fetch_sensor_data()'s own "Using
+            # weighted-bucket historical load forecast over N days" line) - confusing on a Load ML
+            # setup where this fallback is rarely/never actually invoked (#4496 follow-up).
+            self.log("days_previous_auto enabled - will fall back to a weighted-bucket historical load forecast over up to {} days if no other load forecast source takes precedence".format(window_days))
             self.max_days_previous = window_days + 1
         elif self.holiday_days_left > 0:
             self.days_previous = [1]
