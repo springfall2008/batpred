@@ -72,6 +72,7 @@ def reference_remove_intersecting_windows(charge_limit_best, charge_window_best,
     limits = []
     for limit, window in zip(charge_limit_best, charge_window_best):
         segments = [(window["start"], window["end"])]
+        clipped = False
         if limit > 0.0:
             for dlimit, dwindow in zip(export_limit_best, export_window_best):
                 if dlimit >= 100.0:
@@ -82,13 +83,21 @@ def reference_remove_intersecting_windows(charge_limit_best, charge_window_best,
                     if dstart >= end or dend < start:
                         new_segments.append((start, end))
                         continue
+                    pieces = []
                     if dstart > start:
-                        new_segments.append((start, min(dstart, end)))
+                        pieces.append((start, min(dstart, end)))
                     if dend < end:
-                        new_segments.append((max(dend, start), end))
+                        pieces.append((max(dend, start), end))
+                    # Windows that merely touch at a boundary overlap arithmetically but remove
+                    # nothing, and must not count as clipped or the 5 minute rule would discard them
+                    if pieces != [(start, end)]:
+                        clipped = True
+                    new_segments.extend(pieces)
                 segments = new_segments
         for start, end in segments:
-            if (end - start) >= 5:
+            # A window that was never clipped passes through whatever its length; the 5 minute
+            # minimum only discards the remnants clipping itself created
+            if not clipped or (end - start) >= 5:
                 windows.append({"start": start, "end": end, "average": window["average"]})
                 limits.append(limit)
     return limits, windows
@@ -185,27 +194,122 @@ def run_intersect_window_tests(my_predbat):
         [4, 4],
     )
 
-    # Randomised equivalence against the naive reference
+    # Two exports inside one charge window produce three segments - this is the path that used to
+    # need a second pass over the whole window list
+    failed |= _intersect_case(
+        "two splits in one window",
+        [4],
+        [{"start": now, "end": now + 120, "average": 10}],
+        [2, 2],
+        [{"start": now + 20, "end": now + 40, "average": 10}, {"start": now + 60, "end": now + 80, "average": 10}],
+        [(now, now + 20), (now + 40, now + 60), (now + 80, now + 120)],
+        [4, 4, 4],
+    )
+
+    # Overlapping export windows collapse into one clipped region
+    failed |= _intersect_case(
+        "overlapping exports",
+        [4],
+        [{"start": now, "end": now + 120, "average": 10}],
+        [2, 2],
+        [{"start": now + 20, "end": now + 60, "average": 10}, {"start": now + 40, "end": now + 80, "average": 10}],
+        [(now, now + 20), (now + 80, now + 120)],
+        [4, 4],
+    )
+
+    # A head segment shorter than 5 minutes is dropped rather than emitted
+    failed |= _intersect_case(
+        "short head segment dropped",
+        [4],
+        [{"start": now, "end": now + 60, "average": 10}],
+        [2],
+        [{"start": now + 2, "end": now + 30, "average": 10}],
+        [(now + 30, now + 60)],
+        [4],
+    )
+
+    # A clipped remainder shorter than 5 minutes is dropped
+    failed |= _intersect_case(
+        "short remainder dropped",
+        [4],
+        [{"start": now, "end": now + 32, "average": 10}],
+        [2],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [],
+        [],
+    )
+
+    # An unclipped window shorter than 5 minutes is still kept
+    failed |= _intersect_case(
+        "short unclipped window kept",
+        [4],
+        [{"start": now, "end": now + 2, "average": 10}],
+        [2],
+        [{"start": now + 60, "end": now + 90, "average": 10}],
+        [(now, now + 2)],
+        [4],
+    )
+
+    # Windows that merely touch at the boundary do not clip
+    failed |= _intersect_case(
+        "touching boundaries do not clip",
+        [4],
+        [{"start": now + 30, "end": now + 60, "average": 10}],
+        [2],
+        [{"start": now, "end": now + 30, "average": 10}],
+        [(now + 30, now + 60)],
+        [4],
+    )
+
+    # Export windows presented out of order must give the same answer as sorted ones
+    failed |= _intersect_case(
+        "unsorted export windows",
+        [4],
+        [{"start": now, "end": now + 120, "average": 10}],
+        [2, 2],
+        [{"start": now + 60, "end": now + 80, "average": 10}, {"start": now + 20, "end": now + 40, "average": 10}],
+        [(now, now + 20), (now + 40, now + 60), (now + 80, now + 120)],
+        [4, 4, 4],
+    )
+
+    # Several charge windows, only some intersecting - the others must pass through untouched
+    failed |= _intersect_case(
+        "mixed windows",
+        [4, 0, 8],
+        [{"start": now, "end": now + 60, "average": 10}, {"start": now + 60, "end": now + 120, "average": 10}, {"start": now + 120, "end": now + 180, "average": 10}],
+        [2],
+        [{"start": now + 30, "end": now + 90, "average": 10}],
+        [(now, now + 30), (now + 60, now + 120), (now + 120, now + 180)],
+        [4, 0, 8],
+    )
+
+    # Randomised equivalence against the naive reference. Generates short (sub-5-minute) windows,
+    # zero-length gaps and overlapping export windows, since those drive the segment-length rules and
+    # the clipping order. Export windows are sorted, which is the invariant callers provide and which
+    # the single-pass clipping relies on.
     rng = random.Random(1234)
-    for case in range(200):
-        n_charge = rng.randint(0, 6)
-        n_export = rng.randint(0, 6)
+    for case in range(1000):
+        n_charge = rng.randint(0, 8)
+        n_export = rng.randint(0, 8)
         charge_windows = []
         charge_limits = []
         minute = now
         for _ in range(n_charge):
-            length = rng.choice([5, 10, 30, 60, 90])
+            length = rng.choice([1, 2, 5, 5, 10, 30, 60, 90, 120])
             charge_windows.append({"start": minute, "end": minute + length, "average": 10})
-            charge_limits.append(rng.choice([0, 0, 4.0, 8.0]))
-            minute += length + rng.choice([0, 5, 30])
+            charge_limits.append(rng.choice([0, 0, 0.0, 2.0, 4.0, 8.0]))
+            minute += length + rng.choice([0, 0, 1, 5, 30])
         export_windows = []
         export_limits = []
-        minute = now
+        minute = now + rng.choice([0, 5, 10])
         for _ in range(n_export):
-            length = rng.choice([5, 10, 30, 60])
+            length = rng.choice([1, 2, 5, 10, 30, 60])
             export_windows.append({"start": minute, "end": minute + length, "average": 10})
-            export_limits.append(rng.choice([100.0, 100.0, 99.0, 0.0, 50.0]))
-            minute += length + rng.choice([0, 5, 30])
+            export_limits.append(rng.choice([100.0, 100.0, 99.0, 0.0, 50.0, 4.0]))
+            minute += length + rng.choice([-5, 0, 0, 5, 30])
+        order = sorted(range(len(export_windows)), key=lambda i: export_windows[i]["start"])
+        export_windows = [export_windows[i] for i in order]
+        export_limits = [export_limits[i] for i in order]
 
         got_limits, got_windows = remove_intersecting_windows([x for x in charge_limits], [dict(w) for w in charge_windows], export_limits, export_windows)
         exp_limits, exp_windows = reference_remove_intersecting_windows(charge_limits, charge_windows, export_limits, export_windows)
