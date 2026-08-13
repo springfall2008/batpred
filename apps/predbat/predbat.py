@@ -1603,6 +1603,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         Setup the app, called once each time the app starts
         """
+        # Snapshot of apps.yaml exactly as the user wrote it, before Predbat's own defaulting
+        # (auto_config/load_user_config) or any component's automatic_config() touches self.args -
+        # lets ComponentBase.set_arg_auto() tell "user explicitly configured this" apart from
+        # "Predbat defaulted it" or "another component already overwrote it" (issue #4494 follow-up).
+        self.args_from_apps_yaml = copy.deepcopy(self.args)
+        self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
         self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
