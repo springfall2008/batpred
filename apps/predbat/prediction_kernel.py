@@ -20,6 +20,7 @@ PK_PARITY_REVISION in the .cpp must both be bumped so a stale binary is
 rejected at load time rather than producing divergent results.
 """
 
+import array
 import ctypes
 import os
 import platform
@@ -27,11 +28,11 @@ import sys
 import weakref
 
 from const import PREDICT_STEP
-from utils import remove_intersecting_windows, get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
+from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 3
-KERNEL_PARITY_REVISION = 4
+KERNEL_PARITY_REVISION = 5
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = 4
@@ -260,14 +261,48 @@ def load_kernel(log=None):
     return KERNEL_LIB
 
 
+def select_array_typecode(candidates, ctype):
+    """Pick an array.array typecode whose itemsize matches ctype exactly, or None if none does.
+
+    array.array's integer typecodes are C types, so their widths are platform-defined - 'i' is a C
+    int, which is 32 bit everywhere predbat runs but is not guaranteed to be. Getting this wrong is
+    not a loud failure: from_buffer only checks the buffer is big enough, so a wider backing type is
+    accepted and the kernel silently reads interleaved garbage. Matching the size up front, and
+    falling back to the slower construction when nothing matches, keeps that impossible.
+    """
+    size = ctypes.sizeof(ctype)
+    for typecode in candidates:
+        if array.array(typecode).itemsize == size:
+            return typecode
+    return None
+
+
+DOUBLE_TYPECODE = select_array_typecode(("d", "f"), ctypes.c_double)
+INT32_TYPECODE = select_array_typecode(("i", "l", "h"), ctypes.c_int32)
+
+
 def double_array(values):
-    """Create a ctypes double array from a Python list"""
-    return (ctypes.c_double * len(values))(*values)
+    """Create a ctypes double array from a Python list.
+
+    Built via array.array rather than (ctypes.c_double * n)(*values): the latter unpacks the list as
+    positional arguments and is several times slower, which matters because these are rebuilt on
+    every simulation. from_buffer returns a view over the array.array, and ctypes keeps the backing
+    object alive through the view's _objects, so the buffer cannot be collected while the kernel is
+    using it. Each pool worker is a separate process (multiprocessing with fork), so no buffer is
+    ever shared between workers.
+    """
+    if DOUBLE_TYPECODE is None:
+        return (ctypes.c_double * len(values))(*values)
+    backing = array.array(DOUBLE_TYPECODE, values)
+    return (ctypes.c_double * len(backing)).from_buffer(backing)
 
 
 def int32_array(values):
-    """Create a ctypes int32 array from a Python list"""
-    return (ctypes.c_int32 * len(values))(*values)
+    """Create a ctypes int32 array from a Python list - see double_array for why array.array is used"""
+    if INT32_TYPECODE is None:
+        return (ctypes.c_int32 * len(values))(*values)
+    backing = array.array(INT32_TYPECODE, values)
+    return (ctypes.c_int32 * len(backing)).from_buffer(backing)
 
 
 def kernel_context_free(handle):
@@ -466,8 +501,9 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     if not lib:
         return None
 
-    # Remove intersecting windows, mirroring the Python engine - prediction.py:492-493
-    charge_limit, charge_window = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
+    # The kernel clips intersecting windows itself (clip_intersecting_charge_windows in
+    # prediction_kernel.cpp), mirroring what the Python engine does before simulating. Doing it in
+    # Python here cost more per simulation than the simulation, so the raw windows are handed over.
 
     n_steps = pred.forecast_minutes // PREDICT_STEP
     scenario = PkScenario()

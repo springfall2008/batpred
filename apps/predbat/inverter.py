@@ -154,6 +154,18 @@ class Inverter:
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+        if not self.battery_scaling or self.battery_scaling <= 0:
+            # A parsed value of exactly 0 (or negative) isn't safe to interpret either way - it could
+            # be a flaky/unavailable API response (e.g. Solis Cloud API returning batteryHealthSoh: 0
+            # during an outage) or a genuinely unhealthy battery, and asserting either "fully healthy"
+            # (1.0) or "no capacity" (0) would be guessing. Retain the last value that was actually
+            # read as valid, rather than inventing one; only fall back to 1.0 if nothing valid has
+            # ever been read for this inverter.
+            last_known = self.base.get_arg("battery_scaling_last_known", default=1.0, index=self.id)
+            self.log("Warn: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(self.id, self.battery_scaling, last_known))
+            self.battery_scaling = last_known
+        else:
+            self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
 
         self.reserve_max = 100

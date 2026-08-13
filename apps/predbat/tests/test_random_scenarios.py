@@ -27,6 +27,7 @@ from tests.test_infra import reset_inverter
 # ---------------------------------------------------------------------------
 
 MINUTES_PER_DAY = 1440
+CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so start times are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
 
@@ -288,10 +289,21 @@ def generate_random_scenario(scenario_id, seed):
     load_day_kwh = generate_load_day(daily_kwh, load_type, base_kw, morning_peak_kw, evening_peak_kw, morning_peak_minute, evening_peak_minute)
     pv_day_kw = generate_pv_day(peak_kw, peak_hour, sunrise_minute, sunset_minute)
 
+    # --- Clock ---
+    # Drawn last so that re-generating an existing seed leaves every other parameter unchanged.
+    # A random minute-of-day (on predbat's 5 minute run cadence) means scenarios start at every point
+    # of the tariff and solar day - overnight cheap windows, the evening peak, mid-generation - and
+    # land part way through a plan slot, which is the only way partially-elapsed (in-progress) slots
+    # get exercised.
+    clock_minutes_now = rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
+
     return {
         "id": scenario_id,
         "seed": seed,
         "params": {
+            "clock": {
+                "minutes_now": clock_minutes_now,
+            },
             "battery": {
                 "soc_max_kwh": soc_max_kwh,
                 "initial_soc_percent": initial_soc_percent,
@@ -444,7 +456,7 @@ def expand_load_minutes(day_kwh_profile, minutes_now=0, history_days=14):
     return result
 
 
-def expand_pv_forecast(day_kw_profile, forecast_minutes, pv10_fraction=PV10_FRACTION, pv90_factor=PV90_FACTOR):
+def expand_pv_forecast(day_kw_profile, forecast_minutes, minutes_now=0, pv10_fraction=PV10_FRACTION, pv90_factor=PV90_FACTOR):
     """Build predbat pv_forecast_minute, pv_forecast_minute10 and pv_forecast_minute90 from a daily profile.
 
     The p90 series matters because without one the PV90 upside scenario falls back to a copy of the p50
@@ -453,7 +465,10 @@ def expand_pv_forecast(day_kw_profile, forecast_minutes, pv10_fraction=PV10_FRAC
 
     Args:
         day_kw_profile: list[float] of 1440 per-minute kW values
-        forecast_minutes: how many minutes forward to generate (e.g. 2880 = 48h)
+        forecast_minutes: how many minutes forward from now to cover (e.g. 2880 = 48h)
+        minutes_now: current minute-of-day. The series is keyed by absolute minutes from midnight
+            because step_data_history reads forward data at (minute + minutes_now), so it has to run
+            to minutes_now + forecast_minutes or the tail of the horizon silently has no PV.
         pv10_fraction: fraction of normal forecast used for the P10 (pessimistic) forecast
         pv90_factor: multiple of normal forecast used for the P90 (optimistic) forecast
 
@@ -464,7 +479,7 @@ def expand_pv_forecast(day_kw_profile, forecast_minutes, pv10_fraction=PV10_FRAC
     pv_normal = {}
     pv10 = {}
     pv90 = {}
-    for minute in range(0, forecast_minutes + 1):
+    for minute in range(0, minutes_now + forecast_minutes + 1):
         idx = minute % MINUTES_PER_DAY
         kw = day_kw_profile[idx]
         pv_normal[minute] = kw / 60.0         # kW -> kWh per minute (predbat format)
@@ -510,6 +525,15 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.forecast_plan_hours = 24
     my_predbat.forecast_days = 1
 
+    # --- Clock: each scenario has its own time of day ---
+    # Scenario files written before this existed carry no "clock" entry; those keep the template's
+    # own minutes_now so previously recorded benchmark results stay comparable. The value is absolute
+    # (minutes from midnight), so applying scenarios in a loop cannot accumulate.
+    clock = params.get("clock")
+    if clock and "minutes_now" in clock:
+        my_predbat.minutes_now = clock["minutes_now"]
+        my_predbat.now_utc = my_predbat.midnight_utc + datetime.timedelta(minutes=my_predbat.minutes_now)
+
     # --- Expand time-series from stored daily profiles ---
     minutes_now = my_predbat.minutes_now
     forecast_minutes = my_predbat.forecast_minutes
@@ -528,7 +552,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.best_soc_min = 0.0
 
 
-    pv_normal, pv10, pv90 = expand_pv_forecast(data["pv_day_kw"], forecast_minutes)
+    pv_normal, pv10, pv90 = expand_pv_forecast(data["pv_day_kw"], forecast_minutes, minutes_now=minutes_now)
     my_predbat.pv_forecast_minute = pv_normal
     my_predbat.pv_forecast_minute10 = pv10
     my_predbat.pv_forecast_minute90 = pv90

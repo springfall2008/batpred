@@ -225,6 +225,91 @@ def _test_import_exceeding_load_still_counted(my_predbat, failed):
     return failed
 
 
+def _test_load_scaling_applied_to_predicted(my_predbat, failed):
+    """
+    Regression test for issue #4496: the predicted load curve (which drives the
+    today_remaining attribute on load_energy_predicted/load_energy_adjusted) must apply
+    self.load_scaling, matching step_data_history() (fetch.py) - which builds the plan's own
+    load_minutes_step as (value + load_extra) * scale_fixed, where scale_fixed includes
+    load_scaling. Previously load_scaling was never applied in load_today_comparison, so with
+    load_scaling != 1.0 the today_remaining attribute diverged from the plan's own remaining
+    load total by exactly that factor. Confirmed against a real user report: their
+    load_scaling of 1.05 produced a sensor value ~5.7% below the plan's own total, matching
+    this factor almost exactly.
+    """
+    print("  test: load_scaling is applied to the predicted (today_remaining) load curve")
+
+    saved = {
+        "car_charging_hold": my_predbat.car_charging_hold,
+        "car_charging_energy": my_predbat.car_charging_energy,
+        "iboost_energy_subtract": my_predbat.iboost_energy_subtract,
+        "iboost_energy_today": my_predbat.iboost_energy_today,
+        "base_load": my_predbat.base_load,
+        "load_forecast_only": my_predbat.load_forecast_only,
+        "days_previous": my_predbat.days_previous,
+        "days_previous_weight": my_predbat.days_previous_weight,
+        "load_minutes_age": my_predbat.load_minutes_age,
+        "load_scaling": my_predbat.load_scaling,
+        "now_utc": my_predbat.now_utc,
+        "midnight_utc": my_predbat.midnight_utc,
+        "minutes_now": my_predbat.minutes_now,
+    }
+
+    try:
+        my_predbat.car_charging_hold = False
+        my_predbat.car_charging_energy = None
+        my_predbat.iboost_energy_subtract = False
+        my_predbat.iboost_energy_today = None
+        my_predbat.base_load = 0.0
+        my_predbat.load_forecast_only = False
+        my_predbat.days_previous = [1]
+        my_predbat.days_previous_weight = [1.0]
+        my_predbat.load_minutes_age = 1
+
+        midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        minutes_now = 780  # 13:00, well clear of the day boundary
+        my_predbat.midnight_utc = midnight_utc
+        my_predbat.now_utc = midnight_utc + timedelta(minutes=minutes_now)
+        my_predbat.minutes_now = minutes_now
+
+        load_minutes = build_cumulative(0.02, 3000)  # 0.02 kWh/min -> 0.1 kWh per 5-min bucket
+        load_forecast = {}
+        import_minutes = build_cumulative(0.0, 3000)
+
+        my_predbat.load_scaling = 1.0
+        my_predbat.load_today_comparison(load_minutes, load_forecast, {}, import_minutes, minutes_now=minutes_now, step=5, save=True)
+        baseline_predicted = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]["today_remaining"]
+        baseline_adjusted = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_adjusted"]["attributes"]["today_remaining"]
+
+        my_predbat.load_scaling = 1.5
+        my_predbat.load_today_comparison(load_minutes, load_forecast, {}, import_minutes, minutes_now=minutes_now, step=5, save=True)
+        scaled_predicted = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]["today_remaining"]
+        scaled_adjusted = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_adjusted"]["attributes"]["today_remaining"]
+
+        if baseline_predicted <= 0 or baseline_adjusted <= 0:
+            print("  ERROR: baseline today_remaining should be positive for this to be a meaningful test, got predicted={} adjusted={}".format(baseline_predicted, baseline_adjusted))
+            failed = True
+        else:
+            # Each sensor is checked against its own baseline - load_energy_adjusted applies its
+            # own in-day-adjustment factor on top, so its baseline can legitimately differ from
+            # load_energy_predicted's, but both must independently scale by load_scaling.
+            expected_predicted = round(baseline_predicted * 1.5, 2)
+            expected_adjusted = round(baseline_adjusted * 1.5, 2)
+            if abs(scaled_predicted - expected_predicted) > 0.02:
+                print("  ERROR: load_energy_predicted today_remaining with load_scaling=1.5 should be ~{} (1.5x baseline {}), got {}".format(expected_predicted, baseline_predicted, scaled_predicted))
+                failed = True
+            if abs(scaled_adjusted - expected_adjusted) > 0.02:
+                print("  ERROR: load_energy_adjusted today_remaining with load_scaling=1.5 should be ~{} (1.5x baseline {}), got {}".format(expected_adjusted, baseline_adjusted, scaled_adjusted))
+                failed = True
+            if not failed:
+                print("  PASS: today_remaining scales with load_scaling on both sensors (predicted {} -> {}, adjusted {} -> {} at 1.5x)".format(baseline_predicted, scaled_predicted, baseline_adjusted, scaled_adjusted))
+    finally:
+        for key, value in saved.items():
+            setattr(my_predbat, key, value)
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -233,13 +318,15 @@ def _test_import_exceeding_load_still_counted(my_predbat, failed):
 def test_load_today_comparison(my_predbat):
     """
     Unit tests for load_today_comparison() covering the None-guard fix
-    for dp2() calls when filtered_today() returns None, and the
-    import-exceeds-load regression (batpred#4154, #2537).
+    for dp2() calls when filtered_today() returns None, the
+    import-exceeds-load regression (batpred#4154, #2537), and the
+    load_scaling-not-applied regression (#4496).
     """
     failed = False
     print("**** Running load_today_comparison tests ****")
 
     failed = _test_none_guard_no_crash(my_predbat, failed)
     failed = _test_import_exceeding_load_still_counted(my_predbat, failed) or failed
+    failed = _test_load_scaling_applied_to_predicted(my_predbat, failed) or failed
 
     return failed
