@@ -2565,19 +2565,40 @@ class Octopus:
                 kwh = remaining_minutes * self.car_charging_rate[car_n] / 60.0
                 start_minutes = self.minutes_now  # align span with the synthesised kwh so downstream rate calculations are consistent
             if kwh > 0:
-                # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap
+                # Don't add overlapping slots, bug in Octopus API means that sometimes slots overlap.
+                # Subtract every already-decoded slot's span from this slot's remaining segments -
+                # a slot can be trimmed at the start, trimmed at the end, removed entirely (it's
+                # fully covered by an existing slot), or - the case that was previously missing
+                # here (issue #4497) - it can fully CONTAIN an existing slot, which must split it
+                # into up to two remaining segments rather than just trimming one edge, or the
+                # whole future remainder silently disappears. This matters because fetch.py merges
+                # the HA Octopus Energy integration's completed_dispatches ahead of
+                # planned_dispatches: a short completed historical interval commonly sits inside a
+                # much longer still-active planned interval.
+                original_span = end_minutes - start_minutes
+                segments = [(start_minutes, end_minutes)]
                 for current_slot in slots_decoded:
                     current_start, current_end, current_kwh, current_source, current_location = current_slot
-                    if (start_minutes < current_end) and (end_minutes > current_start):
-                        if start_minutes < current_start:
-                            end_minutes = current_start
-                        elif end_minutes > current_end:
-                            start_minutes = current_end
+                    remaining = []
+                    for seg_start, seg_end in segments:
+                        if seg_start < current_end and seg_end > current_start:
+                            if seg_start < current_start:
+                                remaining.append((seg_start, current_start))
+                            if seg_end > current_end:
+                                remaining.append((current_end, seg_end))
                         else:
-                            start_minutes = end_minutes  # Remove slot
-                # Only add the slot if it has a non-zero duration
-                if start_minutes != end_minutes:
-                    slots_decoded.append((start_minutes, end_minutes, kwh, source, location))
+                            remaining.append((seg_start, seg_end))
+                    segments = remaining
+                # A single remaining segment (the common case: no overlap, or the previously-existing
+                # single-edge-trim behaviour) keeps its original full kwh unchanged. Only when the
+                # slot was actually split into multiple pieces is kwh scaled by each piece's share of
+                # the original span, so a genuine split never duplicates energy across the pieces.
+                split = len(segments) > 1
+                for seg_start, seg_end in segments:
+                    if seg_start == seg_end:
+                        continue
+                    seg_kwh = kwh * (seg_end - seg_start) / original_span if (split and original_span > 0) else kwh
+                    slots_decoded.append((seg_start, seg_end, seg_kwh, source, location))
 
         # Sort slots by start time
         slots_sorted = sorted(slots_decoded, key=lambda x: x[0])
