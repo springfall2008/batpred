@@ -21,6 +21,7 @@ PREDBAT_KERNEL_REQUIRED=1 is set (CI) in which case it fails.
 """
 
 import copy
+import gc
 import os
 import random
 import subprocess
@@ -377,6 +378,39 @@ def dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charg
     prediction.prediction_kernel_enable = True
     dispatch_result = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False)
     failed |= compare_results(name + "_dispatch", kernel_result, dispatch_result)
+    return failed
+
+
+def run_marshalling_tests():
+    """Check the ctypes buffer helpers, returns True on failure.
+
+    double_array/int32_array build their buffers with from_buffer, which returns a view over an
+    array.array rather than a copy. If ctypes did not keep the backing object alive the kernel would
+    read freed memory - silently, and only sometimes - so that guarantee is asserted here rather than
+    assumed, along with the values surviving the round trip.
+    """
+    print("**** Running kernel marshalling tests ****")
+    failed = False
+
+    for name, builder, values in (("double_array", prediction_kernel.double_array, [0.0, -1.5, 3.25, 1e6]), ("int32_array", prediction_kernel.int32_array, [0, -7, 42, 100000])):
+        # Build from a temporary so the source list/array is unreferenced by the time it is read
+        buffer = builder(list(values))
+        gc.collect()
+        got = [buffer[i] for i in range(len(values))]
+        if got != values:
+            print("ERROR: {} round trip expected {} but got {}".format(name, values, got))
+            failed = True
+        if buffer._objects is None:
+            print("ERROR: {} did not retain its backing buffer - the kernel could read freed memory".format(name))
+            failed = True
+
+    empty = prediction_kernel.int32_array([])
+    if len(empty) != 0:
+        print("ERROR: int32_array([]) should be empty, got length {}".format(len(empty)))
+        failed = True
+
+    if not failed:
+        print("PASS")
     return failed
 
 
@@ -840,7 +874,8 @@ def run_kernel_parity_tests(my_predbat):
 
     state = snapshot_scenario_state(my_predbat)
     try:
-        failed = run_edge_case_tests(my_predbat)
+        failed = run_marshalling_tests()
+        failed |= run_edge_case_tests(my_predbat)
         if not failed:
             failed |= run_random_sweep_tests(my_predbat)
         if not failed:

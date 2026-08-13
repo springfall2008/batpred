@@ -20,6 +20,7 @@ PK_PARITY_REVISION in the .cpp must both be bumped so a stale binary is
 rejected at load time rather than producing divergent results.
 """
 
+import array
 import ctypes
 import os
 import platform
@@ -261,13 +262,23 @@ def load_kernel(log=None):
 
 
 def double_array(values):
-    """Create a ctypes double array from a Python list"""
-    return (ctypes.c_double * len(values))(*values)
+    """Create a ctypes double array from a Python list.
+
+    Built via array.array rather than (ctypes.c_double * n)(*values): the latter unpacks the list as
+    positional arguments and is several times slower, which matters because these are rebuilt on
+    every simulation. from_buffer returns a view over the array.array, and ctypes keeps the backing
+    object alive through the view's _objects, so the buffer cannot be collected while the kernel is
+    using it. Each pool worker is a separate process (multiprocessing with fork), so no buffer is
+    ever shared between workers.
+    """
+    backing = array.array("d", values)
+    return (ctypes.c_double * len(backing)).from_buffer(backing)
 
 
 def int32_array(values):
-    """Create a ctypes int32 array from a Python list"""
-    return (ctypes.c_int32 * len(values))(*values)
+    """Create a ctypes int32 array from a Python list - see double_array for why array.array is used"""
+    backing = array.array("i", values)
+    return (ctypes.c_int32 * len(backing)).from_buffer(backing)
 
 
 def kernel_context_free(handle):
