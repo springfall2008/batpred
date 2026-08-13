@@ -316,7 +316,7 @@ def _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat
     only applied the flat self.load_scaling, but step_data_history() (fetch.py) also applies
     self.load_scaling_dynamic (per-minute - saving-session/free-electricity-event scaling, and
     any per-window override from rates_import_override/the manual API) and self.manual_load_adjust
-    (additive, per-minute). Confirmed against a real user report (gcoan) where a 1.5x
+    (additive, per-minute). Confirmed against a real follow-up user report where a 1.5x
     load_scaling_dynamic override for a 2-hour "power up" event wasn't reflected in
     today_remaining at all even after the first fix landed.
     """

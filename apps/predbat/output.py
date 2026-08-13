@@ -2598,7 +2598,7 @@ class Output:
             # free-electricity-event scaling as well as any per-window override from
             # rates_import_override/the manual API (e.g. a "power up" event) - a first pass at
             # this fix (#4506) only applied the flat load_scaling and missed both of these,
-            # confirmed against a real report (issue #4496, gcoan) where a 1.5x
+            # confirmed against a real follow-up report on issue #4496 where a 1.5x
             # load_scaling_dynamic override for a 2-hour power-up event wasn't reflected in
             # today_remaining at all.
             #
