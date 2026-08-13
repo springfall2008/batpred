@@ -528,20 +528,25 @@ class Execute:
 
             # iBoost running?
             boostHolding = False
-            if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
-                if inverter.inv_has_timed_pause:
-                    if resetPause:
-                        inverter.adjust_pause_mode(pause_discharge=True)
-                        resetPause = False
-                else:
-                    if resetDischarge:
-                        inverter.adjust_discharge_rate(0)
-                        resetDischarge = False
-                    if self.set_reserve_enable:
-                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
-                        resetReserve = False
-                boostHolding = True
-                self.log("Disabling battery discharge whilst iBoost is running")
+            if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full:
+                # Only pause discharge on this inverter (and count it as holding for the freeze-immediate
+                # logic below) if the fleet isn't already Charging/Exporting - pausing would conflict with
+                # that. But record the status annotation regardless, otherwise a genuinely-holding inverter's
+                # "Hold for iBoost" info is silently dropped whenever another inverter is Charging/Exporting.
+                if status not in ["Exporting", "Charging"]:
+                    if inverter.inv_has_timed_pause:
+                        if resetPause:
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
+                    else:
+                        if resetDischarge:
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
+                        if self.set_reserve_enable:
+                            inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                            resetReserve = False
+                    boostHolding = True
+                    self.log("Disabling battery discharge whilst iBoost is running")
                 if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
                     if status == "Demand":
                         status = "Hold for iBoost"
