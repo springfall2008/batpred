@@ -6,6 +6,7 @@ package predbat;
 // Schema version: 1
 // This is the canonical contract for ESP32 gateway → cloud MQTT status payloads.
 // Proto3 zero-value omission means unpopulated future fields cost nothing on the wire.
+//
 
 // Mirrors InverterType enum in types.h (values must match 1:1 for safe casting)
 enum InverterType {
@@ -160,6 +161,16 @@ message GatewayStatus {
   optional bool ev_control = 12;   // present+true = EV-control mesh leader; absent = single/non-elected
   repeated EvCharger ev_chargers = 13;  // one entry per connected/recent EV charger
   string wifi_ssid = 14;  // WiFi.SSID() of the currently-connected network, empty if not on WiFi
+
+  // Internal-DRAM health. free_heap_bytes (9) is ESP.getFreeHeap(), which can include
+  // PSRAM and so cannot predict the failures that actually matter: WiFi/lwIP/TLS/AsyncTCP
+  // and every task stack need byte-addressable INTERNAL DRAM specifically. A silent :80 bind failure that
+  // cost a customer two days of EV charging was invisible in field 9 but obvious in
+  // heap_internal_largest — AsyncServer::begin() needs one contiguous PCB allocation.
+  // Report all three so the fleet can be alerted on before a hub loses a service.
+  uint32 heap_internal_free     = 15;  // heap_caps_get_free_size(INTERNAL | 8BIT)
+  uint32 heap_internal_largest  = 16;  // largest contiguous block — the leading indicator
+  uint32 heap_internal_min_free = 17;  // low-water mark since boot
 }
 
 // Execution plan sent from PredBat cloud to gateway
