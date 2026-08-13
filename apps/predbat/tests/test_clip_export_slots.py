@@ -15,17 +15,12 @@ def run_clip_export_slots_tests(my_predbat):
     Tests for clip_export_slots method
     """
     failed = False
-    failed |= test_freeze_export_clipped_at_100_soc(my_predbat)
-    failed |= test_freeze_export_manual_preserved_at_100_soc(my_predbat)
+    failed |= test_freeze_export_left_alone_at_100_soc(my_predbat)
     failed |= test_freeze_export_kept_when_soc_below_max(my_predbat)
-    failed |= test_normal_export_clipped_off_when_soc_below_limit(my_predbat)
+    failed |= test_normal_export_left_alone_when_soc_below_limit(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_above_limit(my_predbat)
-    failed |= test_normal_export_clipped_off_when_soc_never_above_reserve(my_predbat)
     failed |= test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_predbat)
-    failed |= test_normal_export_clipped_to_freeze_when_soc_flat_above_limit(my_predbat)
-    failed |= test_normal_export_clipped_off_when_soc_flat_at_full(my_predbat)
-    failed |= test_normal_export_clipped_off_when_soc_flat_and_freeze_unsupported(my_predbat)
-    failed |= test_manual_export_preserved_when_soc_flat_above_limit(my_predbat)
+    failed |= test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat)
     failed |= test_disabled_window_ignored(my_predbat)
     failed |= test_passed_window_clipped(my_predbat)
     failed |= test_multiple_windows_mixed(my_predbat)
@@ -64,9 +59,10 @@ def setup(my_predbat):
     my_predbat.manual_export_times = []
 
 
-def test_freeze_export_clipped_at_100_soc(my_predbat):
-    """Freeze export (limit=99) should be clipped to 100 when SoC is at soc_max throughout the window"""
-    print("**** test_freeze_export_clipped_at_100_soc ****")
+def test_freeze_export_left_alone_at_100_soc(my_predbat):
+    """Clipping no longer removes a freeze export that sits at 100% SoC - deciding a slot achieves
+    nothing is prune_dead_plan_slots' job now, so clipping must leave the limit untouched"""
+    print("**** test_freeze_export_left_alone_at_100_soc ****")
     failed = False
     setup(my_predbat)
 
@@ -77,40 +73,8 @@ def test_freeze_export_clipped_at_100_soc(my_predbat):
 
     result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
 
-    if result_limits[0] != 100.0:
-        print("ERROR: Expected limit 100.0 but got {}".format(result_limits[0]))
-        failed = True
-    if result_windows[0]["target"] != 100:
-        print("ERROR: Expected target 100 but got {}".format(result_windows[0]["target"]))
-        failed = True
-
-    if not failed:
-        print("PASS")
-    return failed
-
-
-def test_freeze_export_manual_preserved_at_100_soc(my_predbat):
-    """Manual freeze export (limit=99) should NOT be clipped even when SoC is at soc_max (bug fix for #3657)"""
-    print("**** test_freeze_export_manual_preserved_at_100_soc ****")
-    failed = False
-    setup(my_predbat)
-
-    minutes_now = 720
-    window_start = 720
-    windows = [make_window(window_start, 750)]
-    limits = [99.0]
-    predict_soc = make_predict_soc(minutes_now, my_predbat.soc_max, 60)
-
-    # Mark this window as a manual freeze export
-    my_predbat.manual_freeze_export_times = [window_start]
-
-    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
-
     if result_limits[0] != 99.0:
-        print("ERROR: Manual freeze export was clipped! Expected limit 99.0 but got {}".format(result_limits[0]))
-        failed = True
-    if result_windows[0]["target"] != 99.0:
-        print("ERROR: Manual freeze export target changed! Expected 99.0 but got {}".format(result_windows[0]["target"]))
+        print("ERROR: Freeze export was modified by clipping, expected 99.0 but got {}".format(result_limits[0]))
         failed = True
 
     if not failed:
@@ -141,25 +105,23 @@ def test_freeze_export_kept_when_soc_below_max(my_predbat):
     return failed
 
 
-def test_normal_export_clipped_off_when_soc_below_limit(my_predbat):
-    """Normal export window should be clipped off (set to 100) when soc_max < limit_soc"""
-    print("**** test_normal_export_clipped_off_when_soc_below_limit ****")
+def test_normal_export_left_alone_when_soc_below_limit(my_predbat):
+    """A window whose SoC never reaches its export target is no longer clipped off here - removal is
+    prune_dead_plan_slots' job. Clipping only narrows limits towards what is achievable, and there is
+    nothing to narrow when the battery is below the target."""
+    print("**** test_normal_export_left_alone_when_soc_below_limit ****")
     failed = False
     setup(my_predbat)
 
     minutes_now = 720
     windows = [make_window(720, 750)]
-    limits = [50.0]  # Export at 50%
-    # SoC well below the 50% export limit (limit_soc = 10 * 50/100 = 5.0, soc_max in window = 2.0)
-    predict_soc = make_predict_soc(minutes_now, 2.0, 60)
+    limits = [50.0]  # Export at 50% (limit_soc = 5.0)
+    predict_soc = make_predict_soc(minutes_now, 2.0, 60)  # SoC well below the target
 
     result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
 
-    if result_limits[0] != 100.0:
-        print("ERROR: Expected export clipped off (100.0) but got {}".format(result_limits[0]))
-        failed = True
-    if result_windows[0]["target"] != 100.0:
-        print("ERROR: Expected target 100.0 but got {}".format(result_windows[0]["target"]))
+    if result_limits[0] != 50.0:
+        print("ERROR: Export limit was modified by clipping, expected 50.0 but got {}".format(result_limits[0]))
         failed = True
 
     if not failed:
@@ -184,34 +146,6 @@ def test_normal_export_clipped_up_when_soc_above_limit(my_predbat):
     # Should be clipped up - limit should be higher than original 20.0
     if result_limits[0] <= 20.0:
         print("ERROR: Expected export limit to be clipped up from 20.0 but got {}".format(result_limits[0]))
-        failed = True
-
-    if not failed:
-        print("PASS")
-    return failed
-
-
-def test_normal_export_clipped_off_when_soc_never_above_reserve(my_predbat):
-    """A window whose SoC never rises above reserve has nothing exportable and should be clipped off,
-    even when the requested limit is 0% (drain to empty) - regression test for #4171"""
-    print("**** test_normal_export_clipped_off_when_soc_never_above_reserve ****")
-    failed = False
-    setup(my_predbat)
-    my_predbat.reserve = 0.5
-
-    minutes_now = 720
-    windows = [make_window(720, 750)]
-    limits = [0.0]  # Export to 0% (drain to empty)
-    # SoC flat at reserve throughout the window - nothing above reserve to export
-    predict_soc = make_predict_soc(minutes_now, 0.5, 60)
-
-    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
-
-    if result_limits[0] != 100.0:
-        print("ERROR: Expected export clipped off (100.0) but got {}".format(result_limits[0]))
-        failed = True
-    if result_windows[0]["target"] != 100.0:
-        print("ERROR: Expected target 100.0 but got {}".format(result_windows[0]["target"]))
         failed = True
 
     if not failed:
@@ -244,111 +178,25 @@ def test_normal_export_clipped_up_when_soc_above_reserve_with_zero_limit(my_pred
     return failed
 
 
-def test_normal_export_clipped_to_freeze_when_soc_flat_above_limit(my_predbat):
-    """A forced export window whose predicted SoC stays flat above the requested limit moved no energy in
-    the simulation (e.g. PV already saturates the export limit) - a phantom export. In the simulation the
-    window pinned SoC (blocking charge like a freeze does), so convert it to freeze export (99) to keep
-    the executed plan faithful to what was scored, while removing the force-export command that would
-    dump to grid if PV dips - regression test for the lone-export artifact in #4453.
-    If conditions later worsen (the PV10 case), a genuine export re-appears on a subsequent plan."""
-    print("**** test_normal_export_clipped_to_freeze_when_soc_flat_above_limit ****")
+def test_normal_export_clipped_up_when_soc_flat_above_limit(my_predbat):
+    """A phantom-shaped window (SoC flat, above the requested limit) now only has its limit narrowed by
+    clipping - removing it is prune_dead_plan_slots' job, which asks the model rather than the SoC trace"""
+    print("**** test_normal_export_clipped_up_when_soc_flat_above_limit ****")
     failed = False
     setup(my_predbat)
-    my_predbat.set_export_freeze = True
 
     minutes_now = 720
     windows = [make_window(720, 750)]
-    limits = [50.0]  # Export to 50% (limit_soc = 5.0)
-    # SoC flat at 8.0 for the whole window: the commanded drain to 5.0 never happened
-    predict_soc = make_predict_soc(minutes_now, 8.0, 60)
+    limits = [50.0]  # limit_soc = 5.0
+    predict_soc = make_predict_soc(minutes_now, 8.0, 60)  # flat, above the target
 
     result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
 
-    if result_limits[0] != 99.0:
-        print("ERROR: Expected phantom export converted to freeze (99.0) but got {}".format(result_limits[0]))
+    if result_limits[0] in (99.0, 100.0):
+        print("ERROR: Clipping removed/converted the window instead of narrowing it, got {}".format(result_limits[0]))
         failed = True
-    if result_windows[0]["target"] != 99.0:
-        print("ERROR: Expected target 99.0 but got {}".format(result_windows[0]["target"]))
-        failed = True
-
-    if not failed:
-        print("PASS")
-    return failed
-
-
-def test_normal_export_clipped_off_when_soc_flat_at_full(my_predbat):
-    """A phantom export whose flat SoC is at soc_max must be clipped off (100), not converted to freeze:
-    the native freeze rule clips a 99 window off when SoC is pinned at 100%, and the conversion must not
-    produce a freeze window that rule would have removed (review finding on #4487)"""
-    print("**** test_normal_export_clipped_off_when_soc_flat_at_full ****")
-    failed = False
-    setup(my_predbat)
-    my_predbat.set_export_freeze = True
-
-    minutes_now = 720
-    windows = [make_window(720, 750)]
-    limits = [50.0]
-    # SoC pinned at full for the whole window: the drain never happened AND a freeze would be pointless
-    predict_soc = make_predict_soc(minutes_now, my_predbat.soc_max, 60)
-
-    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
-
-    if result_limits[0] != 100.0:
-        print("ERROR: Expected phantom export at full SoC clipped off (100.0) but got {}".format(result_limits[0]))
-        failed = True
-    if result_windows[0]["target"] != 100.0:
-        print("ERROR: Expected target 100.0 but got {}".format(result_windows[0]["target"]))
-        failed = True
-
-    if not failed:
-        print("PASS")
-    return failed
-
-
-def test_normal_export_clipped_off_when_soc_flat_and_freeze_unsupported(my_predbat):
-    """The phantom-export conversion falls back to off (100) when set_export_freeze is disabled, since a
-    freeze window cannot be executed on such systems"""
-    print("**** test_normal_export_clipped_off_when_soc_flat_and_freeze_unsupported ****")
-    failed = False
-    setup(my_predbat)
-    my_predbat.set_export_freeze = False
-
-    minutes_now = 720
-    windows = [make_window(720, 750)]
-    limits = [50.0]
-    predict_soc = make_predict_soc(minutes_now, 8.0, 60)
-
-    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
-
-    if result_limits[0] != 100.0:
-        print("ERROR: Expected phantom export clipped off (100.0) without freeze support but got {}".format(result_limits[0]))
-        failed = True
-
-    if not failed:
-        print("PASS")
-    return failed
-
-
-def test_manual_export_preserved_when_soc_flat_above_limit(my_predbat):
-    """A manually forced export window must not be clipped off by the phantom-export prune even when the
-    simulation shows no energy moving - the user asked for it explicitly"""
-    print("**** test_manual_export_preserved_when_soc_flat_above_limit ****")
-    failed = False
-    setup(my_predbat)
-
-    minutes_now = 720
-    window_start = 720
-    windows = [make_window(window_start, 750)]
-    limits = [50.0]
-    predict_soc = make_predict_soc(minutes_now, 8.0, 60)
-
-    # Mark this window as a manual export
-    my_predbat.manual_export_times = [window_start]
-
-    result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 1, 5)
-
-    if result_limits[0] == 100.0:
-        print("ERROR: Manual export was clipped off by the phantom-export prune")
+    if result_limits[0] <= 50.0:
+        print("ERROR: Expected the limit to be clipped up from 50.0, got {}".format(result_limits[0]))
         failed = True
 
     if not failed:
@@ -411,9 +259,9 @@ def test_multiple_windows_mixed(my_predbat):
 
     minutes_now = 720
     windows = [
-        make_window(720, 750),  # Window 0: freeze export at 100% SoC (should be clipped)
-        make_window(750, 780),  # Window 1: manual freeze export at 100% SoC (should be preserved)
-        make_window(780, 810),  # Window 2: normal export (should remain)
+        make_window(720, 750),  # Window 0: freeze export at 100% SoC (left alone)
+        make_window(750, 780),  # Window 1: manual freeze export at 100% SoC (left alone)
+        make_window(780, 810),  # Window 2: normal export (limit clipped up)
     ]
     limits = [99.0, 99.0, 50.0]
 
@@ -427,12 +275,12 @@ def test_multiple_windows_mixed(my_predbat):
 
     result_windows, result_limits = my_predbat.clip_export_slots(minutes_now, predict_soc, windows, limits, 3, 5)
 
-    # Window 0: auto freeze export at 100% SoC -> clipped to 100
-    if result_limits[0] != 100.0:
-        print("ERROR: Window 0 (auto freeze at 100% SoC) expected 100.0 but got {}".format(result_limits[0]))
+    # Window 0: freeze export is never modified by clipping now
+    if result_limits[0] != 99.0:
+        print("ERROR: Window 0 (freeze at 100% SoC) expected 99.0 but got {}".format(result_limits[0]))
         failed = True
 
-    # Window 1: manual freeze export at 100% SoC -> preserved at 99
+    # Window 1: manual freeze export likewise untouched
     if result_limits[1] != 99.0:
         print("ERROR: Window 1 (manual freeze at 100% SoC) expected 99.0 but got {}".format(result_limits[1]))
         failed = True
