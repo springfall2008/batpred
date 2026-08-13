@@ -606,6 +606,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
         self.calculate_savings_max_charge_slots = 1
+        self.calculate_regions = True
+        self.calculate_regions_portfolio = True
         self.inverter_data_last_fetch = None
         self.octopus_url_cache_loaded = False
         self.github_url_cache_loaded = False

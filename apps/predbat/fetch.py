@@ -2558,6 +2558,7 @@ class Fetch:
         self.prediction_kernel_enable = self.get_arg("prediction_kernel_enable", True)
         self.calculate_inday_adjustment = self.get_arg("calculate_inday_adjustment")
         self.calculate_regions = True
+        self.calculate_regions_portfolio = True
         self.calculate_import_low_export = self.get_arg("calculate_import_low_export")
         self.calculate_export_high_import = self.get_arg("calculate_export_high_import")
 

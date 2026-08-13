@@ -48,6 +48,7 @@ from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
 from tests.test_component_health_status import test_component_health_status
 from tests.test_optimise_levels import run_optimise_levels_tests
+from tests.test_region_portfolio import run_region_portfolio_tests
 from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
@@ -475,6 +476,7 @@ def main():
         ("compare", test_compare, "Compare tariff engine tests (hardware overrides, bleed isolation)", False),
         ("gateway", run_gateway_tests, "GatewayMQTT component tests (protobuf, plan serialization, commands, telemetry)", False),
         ("optimise_levels", run_optimise_levels_tests, "Optimise levels tests", False),
+        ("region_portfolio", run_region_portfolio_tests, "Region tiling geometry and portfolio branch selection tests", False),
         ("trim_export", run_trim_export_tests, "Export trim ordering (buffer from cheapest slot) tests", False),
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
