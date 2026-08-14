@@ -389,11 +389,12 @@ Predbat outputs the following best results under the PV 10% scenario for the for
 The following sensors are used in the in-day adjustment chart - see [creating the Predbat charts](creating-charts.md) and [in-day load adjustment](customisation.md#battery-margins-and-metrics-options):
 
 - predbat.load_energy_actual - Total kWh of house load to end of plan, energy up to 'now' taken from today's actual energy, energy after 'now' from Predbat's prediction.
-Attributes of this actual/predicted energy in 5-minute slots from midnight today to the end of the plan for charting
-- predbat.load_energy_adjusted - Total kWh of predicted house load to end of the plan, adjusted based on variance of today's actual load
+`results` attributes of this actual/predicted energy in 5-minute slots from midnight today to the end of the plan for charting
+- predbat.load_energy_adjusted - Total kWh of predicted house load to end of today, adjusted based on variance of today's actual load
 to the predicted load (based on historical data), dampened according to input_number.predbat_metric_inday_adjust_damping.
-Attributes contain the 5-minute slot forecasts to the end of the plan for charting
-- predbat.load_energy_predicted - Total predicted kWh of house load to end of plan, attributes of predicted load in 5-minute slots from midnight today to the end of the plan for charting
+`results` attribute contain the 5-minute slot forecasts to the end of the plan for charting, `today` attribute contains the total predicted today (same as the entity state), `today_so_far` the cumulative actual load energy consumed so far today, and `today_remaining` the remaining load energy predicted for today.
+- predbat.load_energy_predicted - Total predicted kWh of house load to end of today, `results` attribute of predicted load in 5-minute slots from midnight today to the end of the plan for charting and `today`, `today_so_far` and `today_remaining` that are similar to predbat.load_energy_adjusted.<BR>
+**NB:** If you are using the [LoadML](load-ml.md) engine for your load prediction instead of days_previous, then be aware that the entity value and attributes of predbat.load_energy_predicted are not populated correctly. Use predbat.load_energy_adjusted instead until this is fixed.
 - predbat.load_inday_adjustment - the % in-day adjustment factor used to adjust Predbat's predicted load by the actual load today.
 After midnight when insufficient data is available, this blends yesterday's final adjustment factor with today's developing factor:
     - **0-3 hours**: Uses 100% of yesterday's adjustment factor
