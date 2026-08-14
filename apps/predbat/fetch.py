@@ -2434,8 +2434,6 @@ class Fetch:
             # paths in plan.py, and the pv90 term collapsing out of compute_metric) stays inert until
             # the user explicitly turns the switch on - no separate gating on calculate_pv90_plan is
             # added anywhere else, this is the single choke point.
-            if self.pv_metric90_weight:
-                self.log("Warn: calculate_pv90_plan is Off so forcing pv_metric90_weight from {} to 0.0 - turn on switch.predbat_calculate_pv90_plan (expert mode) to enable the PV90 upside scenario".format(self.pv_metric90_weight))
             self.pv_metric90_weight = 0.0
 
         self.charge_scaling10 = self.get_arg("charge_scaling10")
