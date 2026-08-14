@@ -1882,6 +1882,51 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
     return failed
 
 
+def test_discharge_target_read_prefers_control(test_name, ha, inv):
+    """
+    Regression test for issue #4517: a discharge target write kept firing every cycle even when
+    unchanged, because the caller that decides whether to write at all (adjust_force_export) read
+    only raw.invertor.discharge_target_soc_1 - the same slow, self_run-poll-refreshed field #4492
+    moved away from as the primary signal inside rest_setDischargeTarget() itself. On hardware where
+    that field never catches up, the caller saw a permanent mismatch and re-wrote on every cycle.
+
+    rest_readDischargeTarget() is the fix: a shared helper both the caller and (potentially)
+    rest_setDischargeTarget() can use, checking Control.Discharge_Target_SOC_1 (GivTCP's synchronous
+    write-time signal) first and falling back to raw.invertor only if Control doesn't have it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+
+    try:
+        # Control has the real, current value - stale raw must not override it (the core of #4517:
+        # the old caller ignored Control entirely and would have seen "0", not "20", here).
+        inv.rest_data = {"Control": {"Discharge_Target_SOC_1": "20"}, "raw": {"invertor": {"discharge_target_soc_1": "0"}}}
+        result = inv.rest_readDischargeTarget()
+        if result != 20:
+            print("ERROR: {}: expected Control's value 20, got {}".format(test_name, result))
+            failed = True
+
+        # Control missing the key entirely - falls back to raw.
+        inv.rest_data = {"Control": {}, "raw": {"invertor": {"discharge_target_soc_1": "15"}}}
+        result = inv.rest_readDischargeTarget()
+        if result != 15:
+            print("ERROR: {}: expected raw fallback value 15, got {}".format(test_name, result))
+            failed = True
+
+        # Neither present - no crash, just None (matches "No current discharge target to read" path).
+        inv.rest_data = {"Control": {}, "raw": {"invertor": {}}}
+        result = inv.rest_readDischargeTarget()
+        if result is not None:
+            print("ERROR: {}: expected None when neither field is present, got {}".format(test_name, result))
+            failed = True
+    finally:
+        inv.rest_data = saved_rest_data
+
+    return failed
+
+
 def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     """
     Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
@@ -3071,6 +3116,12 @@ charge_start_service:
     # Regression test for issue #4421 (follow-up): trust Control.Discharge_Target_SOC_1, GivTCP's
     # synchronous write-time signal, ahead of the much slower raw.invertor background-poll fallback
     failed |= test_discharge_target_control_signal("discharge_target_control_signal", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4517: the caller deciding whether to write at all must also prefer
+    # Control.Discharge_Target_SOC_1 over the slow raw.invertor fallback, or it re-writes every cycle
+    failed |= test_discharge_target_read_prefers_control("discharge_target_read_prefers_control", ha, inv)
     if failed:
         return failed
 

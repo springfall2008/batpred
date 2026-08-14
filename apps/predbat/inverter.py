@@ -2511,19 +2511,13 @@ class Inverter:
         if force_export:
             target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
-                if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
-                    current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
-                    try:
-                        current = float(current)
-                    except (ValueError, TypeError) as e:
-                        current = None
-
-                    if current is None:
-                        self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
-                    elif current != target_soc:
-                        self.rest_setDischargeTarget(target_soc)
-                    else:
-                        self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
+                current = self.rest_readDischargeTarget()
+                if current is None:
+                    self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
+                elif current != target_soc:
+                    self.rest_setDischargeTarget(target_soc)
+                else:
+                    self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
@@ -3398,6 +3392,30 @@ class Inverter:
         self.base.log("Warn: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
         self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
         return False
+
+    def rest_readDischargeTarget(self):
+        """
+        Read GivTCP's currently applied discharge target percent, or None if it can't be read.
+
+        Mirrors rest_setDischargeTarget()'s own preference order: Control.Discharge_Target_SOC_1 is
+        GivTCP's synchronous write-time signal, updated the moment a write is accepted, so it's
+        checked first. raw.invertor.discharge_target_soc_1 is a fallback for GivTCP setups where
+        Control doesn't expose the key - but on its own it's unreliable as a "did this actually
+        change" signal, since it only refreshes on GivTCP's separate background self_run poll cycle,
+        not synchronously with any write. A caller that reads raw.invertor alone to decide whether a
+        write is even needed can end up re-writing every cycle on hardware where that field never
+        catches up (#4421, #4517).
+        """
+        try:
+            result = int(float(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None)))
+        except (ValueError, TypeError):
+            result = None
+        if result is None:
+            try:
+                result = int(float(self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None)))
+            except (ValueError, TypeError):
+                result = None
+        return result
 
     def rest_setDischargeTarget(self, target):
         """
