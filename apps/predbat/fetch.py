@@ -1402,6 +1402,7 @@ class Fetch:
 
                 completed = []
                 planned = []
+                started = []
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -1415,9 +1416,21 @@ class Fetch:
                     try:
                         completed = self.get_state_wrapper(entity_id=entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="completedDispatches")
                         planned = self.get_state_wrapper(entity_id=entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="plannedDispatches")
+                        # Not merged into octopus_slots or used for any rate/plan decision yet - read
+                        # only for the #4516 Stage 1 diagnostic timeline log below, to observe whether
+                        # this is a trustworthy earlier-than-completed confirmation signal before
+                        # building any gating logic on it (Stage 2, deferred).
+                        started = self.get_state_wrapper(entity_id=entity_id, attribute="started_dispatches") or self.get_state_wrapper(entity_id=entity_id, attribute="startedDispatches")
                     except (ValueError, TypeError):
                         self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_slot may not be set correctly in apps.yaml".format(entity_id, car_n))
                         self.record_status(message="Error: octopus_intelligent_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
+
+                # #4516 Stage 1: diagnostic dispatch-timeline log, once per 30-minute boundary so
+                # log volume stays sane (dispatch decisions are 30-min-granular anyway). Purely
+                # observational - see build_dispatch_timeline()'s docstring.
+                if self.minutes_now % 30 == 0:
+                    timeline = self.build_dispatch_timeline(car_n, completed, started, planned)
+                    self.log("Octopus: Dispatch timeline car {} @ {} [-4h..+24h]: {}".format(car_n, self.time_abs_str(self.minutes_now), timeline))
 
                 # Completed and planned slots - merge from all cars
                 if completed:

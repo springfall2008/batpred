@@ -2983,6 +2983,44 @@ class Octopus:
         if OctopusAPI.has_six_hour_cap(tariff_code):
             return OCTOPUS_SLOT_MAX_CAPPED
         return OCTOPUS_SLOT_MAX_DEFAULT
+    def build_dispatch_timeline(self, car_n, completed, started, planned, window_before_hours=4, window_after_hours=24, step=30):
+        """
+        Build a fixed-width, one-character-per-block dispatch status string for the diagnostic
+        timeline log (#4516 Stage 1 - not yet used for any rate/plan decision, purely observational).
+
+        Each character covers `step` minutes, offset from now, spanning
+        [-window_before_hours, +window_after_hours). '.' = nothing known, 'P' = planned
+        (provisional), 'S' = started, 'C' = completed. Where lists disagree on the same block, the
+        most-confirmed status wins (completed > started > planned) - reflects Octopus's own view
+        having moved on, not a genuine simultaneous claim.
+
+        Stacking consecutive lines (one per 30-minute boundary) in a monospace log viewer reveals
+        dispatch lifecycle as diagonal stripes: a specific dispatch drifts one column per line as
+        `now` advances, so a rescinded slot shows as a stripe that stops before reaching the `now`
+        column, while a genuinely-delivered one runs through into 'C'.
+        """
+        total_before = window_before_hours * 60
+        total_after = window_after_hours * 60
+        num_blocks = (total_before + total_after) // step
+        status = ["."] * num_blocks
+
+        def mark(slots, char):
+            for slot in slots or []:
+                start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_offset = start_minutes - self.minutes_now
+                end_offset = end_minutes - self.minutes_now
+                block_start = max(0, (start_offset + total_before) // step)
+                block_end = min(num_blocks, -(-(end_offset + total_before) // step))  # ceil division
+                for block in range(int(block_start), int(block_end)):
+                    status[block] = char
+
+        mark(planned, "P")
+        mark(started, "S")
+        mark(completed, "C")
+
+        return "".join(status)
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
