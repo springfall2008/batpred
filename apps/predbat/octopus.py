@@ -2752,24 +2752,46 @@ class Octopus:
                         # never affected since it's guaranteed cheap by the tariff itself.
                         needed = (not limit_future_slots) or (slot_start <= current_block) or (slot_start in expected_blocks) or self.minute_in_iog_fixed_window(slot_start)
 
+                        # Whether this dispatch entry actually delivers charge to the car. A
+                        # zero-kWh entry (e.g. a plug-independent SMART grid-flex event - #4483
+                        # review follow-up) is a real tariff discount Octopus is offering, but it
+                        # isn't a car-charging dispatch: by default it doesn't compete for the
+                        # octopus_slot_max budget (which models Octopus's own ~6-hour
+                        # car-dispatch-per-day limit), and the #4482 "does the car still need
+                        # this" question above doesn't apply either - there's no car draw to need.
+                        # octopus_slot_count_zero_kwh restores the old behaviour of counting every
+                        # dispatch entry, zero-kWh or not, toward the cap like any other.
+                        zero_kwh_exempt = (kwh <= 0) and not self.octopus_slot_count_zero_kwh
+
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
-                            if needed and slots_per_day[day_offset] < octopus_slot_max:
+                            if zero_kwh_exempt:
+                                slots_added_set.add(slot_start)
+                                rates[minute] = assumed_price
+                            elif needed and slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
                                 rates[minute] = assumed_price
                             else:
                                 assumed_price = self.rate_max_base
-                                # A rejected slot (not needed, or the daily cap already reached)
-                                # must actively restore the ordinary out-of-window rate, not just
-                                # skip adding a new low one. For a genuine Octopus Intelligent
-                                # tariff, fetch_octopus_rates() can already receive the
+                                # A slot rejected because the car doesn't need it (#4482,
+                                # needed=False) must actively restore the ordinary out-of-window
+                                # rate, not just skip adding a new low one. For a genuine Octopus
+                                # Intelligent tariff, fetch_octopus_rates() can already receive the
                                 # dispatch-discounted rate directly (rate_replicate() only
                                 # gap-fills minutes with no real fetched value, so it never
                                 # touches this one) - leaving rates[minute] alone here would keep
                                 # that low rate live even though this slot was just rejected.
-                                rates[minute] = self.rate_max_base
-                                self.io_adjusted.pop(minute, None)
+                                #
+                                # A slot rejected purely because octopus_slot_max was already
+                                # reached (needed is still True here) is left untouched, exactly as
+                                # before this PR (#4483 review follow-up, Speshman): it may still
+                                # be a genuine live dispatch/tariff event Predbat is simply
+                                # choosing not to count against its own budget, not one Octopus is
+                                # known to have rescinded, so overwriting it would be wrong.
+                                if not needed:
+                                    rates[minute] = self.rate_max_base
+                                    self.io_adjusted.pop(minute, None)
                         else:
                             # For minutes within a 30-min slot, only apply if the slot was added,
                             # otherwise restore - matching the slot-start decision above.
@@ -2778,14 +2800,14 @@ class Octopus:
                             # cleared here too, not just slot_start.
                             if slot_start in slots_added_set:
                                 rates[minute] = assumed_price
-                            else:
+                            elif not needed:
                                 rates[minute] = self.rate_max_base
                                 self.io_adjusted.pop(minute, None)
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
-                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}, needed {}".format(
-                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate, needed
+                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}, needed {}, zero_kwh_exempt {}".format(
+                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate, needed, zero_kwh_exempt
                                 )
                             )
 

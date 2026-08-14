@@ -484,6 +484,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
         self.octopus_intelligent_limit_future_slots = False
+        self.octopus_slot_count_zero_kwh = False
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
         self.ge_url_cache = {}

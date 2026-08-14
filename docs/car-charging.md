@@ -349,6 +349,10 @@ By itself, Predbat will still assume all Octopus charging slots are low rates ev
 While this switch is On, a *future* out-of-window dispatch slot only counts as low rate for the house battery if it's still within what **car_charging_slots** shows the car genuinely needs (derived from its real remaining SoC requirement) - a slot the car has already fully used or a currently-active/completed dispatch is unaffected regardless, and the fixed 23:30-05:30 window is never affected either, since it's guaranteed cheap by the tariff itself.
 It defaults Off, and does nothing at all unless **octopus_intelligent_consider_full** is also On (Predbat logs a warning at startup if you enable this without that) - since it's `consider_full` that actually caps `car_charging_slots` at the car's real remaining need in the first place.
 
+- The switch **switch.predbat_octopus_slot_count_zero_kwh** (*expert mode*) (default value is Off) controls whether zero-kWh Intelligent dispatch entries (for example a plug-independent SMART grid-flex event that Octopus schedules but that delivers no energy to your car) count towards the **octopus_slot_max** daily cap.
+By default (Off) they don't: a zero-kWh entry is still treated as a genuine low rate, but since no car charging actually happens in it, it neither spends nor is blocked by the cap that's meant to model Octopus's own limit on car-dispatch slots per day.
+Turn this On to restore the previous behaviour, where every Intelligent dispatch entry counts towards the cap regardless of whether your car drew any energy from it.
+
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
