@@ -29,7 +29,7 @@ GATED_ITEMS = ["calculate_second_pass", "calculate_pv90_plan"]
 
 
 def test_performance_tweaks_item(my_predbat):
-    """performance_tweaks must exist as an ungated switch defaulting to Off."""
+    """performance_tweaks must exist as a switch defaulting to Off, with no enable gate of its own."""
     failed = False
     by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
     item = by_name.get("performance_tweaks")

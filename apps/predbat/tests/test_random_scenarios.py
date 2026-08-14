@@ -556,7 +556,12 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.pv_forecast_minute = pv_normal
     my_predbat.pv_forecast_minute10 = pv10
     my_predbat.pv_forecast_minute90 = pv90
-    my_predbat.calculate_second_pass = False
+
+    # Follow the shipped default rather than pinning a literal, so the benchmark measures the planning
+    # path users actually run. Read the CONFIG_ITEMS default rather than get_arg so this stays independent
+    # of whatever the template debug dump happened to capture - the point of pinning it here at all is that
+    # every scenario is planned the same way regardless of which template it was run against.
+    my_predbat.calculate_second_pass = my_predbat.config_index["calculate_second_pass"]["default"]
 
     # --- Rebuild PV step dicts via step_data_history ---
     my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(
