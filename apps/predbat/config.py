@@ -45,6 +45,12 @@ CONFIG_ITEMS = [
         "default": False,
     },
     {
+        "name": "performance_tweaks",
+        "friendly_name": "Performance Tweaks",
+        "type": "switch",
+        "default": False,
+    },
+    {
         "name": "active",
         "friendly_name": "Predbat Active",
         "type": "switch",
@@ -810,14 +816,15 @@ CONFIG_ITEMS = [
         "name": "calculate_second_pass",
         "friendly_name": "Calculate full second pass (slower)",
         "type": "switch",
-        "enable": "expert_mode",
-        "default": False,
+        "enable": "performance_tweaks",
+        "default": True,
     },
     {
         "name": "calculate_pv90_plan",
         "friendly_name": "Calculate PV90 upside plan",
         "type": "switch",
-        "default": False,
+        "enable": "performance_tweaks",
+        "default": True,
     },
     {
         "name": "calculate_import_low_export",

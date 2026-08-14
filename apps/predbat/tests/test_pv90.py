@@ -57,11 +57,13 @@ def test_pv90_config_items(my_predbat):
 
 
 def test_pv90_calculate_pv90_plan_config_item(my_predbat):
-    """calculate_pv90_plan must exist as a switch defaulting to Off, and must NOT be expert-gated.
+    """calculate_pv90_plan must exist as a switch defaulting to On, gated behind performance_tweaks.
 
-    It is deliberately visible without expert mode so the community can test the PV90 scenario. The
-    two tuning knobs (pv_metric90_weight, load_scaling90) stay expert-gated, so everyone who turns
-    the switch on runs the same 0.15/0.7 values and their feedback is comparable.
+    The PV90 scenario is on for everyone by default. It costs planning time, so the switch lives behind
+    performance_tweaks alongside the other fast-path options: a user on slow hardware turns that toggle on
+    to reveal it and can then switch PV90 off. While the toggle is off the item is disabled, get_arg falls
+    through to this default, and the feature stays on. The two tuning knobs (pv_metric90_weight,
+    load_scaling90) remain expert-gated, so everyone running PV90 runs the same 0.15/0.7 values.
     """
     failed = False
     by_name = {item["name"]: item for item in my_predbat.CONFIG_ITEMS}
@@ -72,11 +74,11 @@ def test_pv90_calculate_pv90_plan_config_item(my_predbat):
     if item.get("type") != "switch":
         print("ERROR: config item calculate_pv90_plan type is {}, expected switch".format(item.get("type")))
         failed = True
-    if item.get("enable") is not None:
-        print("ERROR: config item calculate_pv90_plan enable is {}, expected no gating - it must be visible without expert mode".format(item.get("enable")))
+    if item.get("enable") != "performance_tweaks":
+        print("ERROR: config item calculate_pv90_plan enable is {}, expected performance_tweaks".format(item.get("enable")))
         failed = True
-    if item.get("default") is not False:
-        print("ERROR: config item calculate_pv90_plan default is {}, expected False".format(item.get("default")))
+    if item.get("default") is not True:
+        print("ERROR: config item calculate_pv90_plan default is {}, expected True".format(item.get("default")))
         failed = True
     return failed
 
@@ -94,7 +96,7 @@ def test_pv90_config_read(my_predbat):
     switch left at its real default (Off), fetch_config_options' own override (CHANGE 2) would force
     pv_metric90_weight back to 0.0 regardless of whether get_arg("pv_metric90_weight") ever ran, making the
     sentinel check for that attribute vacuous. That switch-off override behaviour is covered separately by
-    test_pv90_switch_default_off_forces_weight_zero below; this test isolates "does the read happen" from it.
+    test_pv90_switch_off_forces_weight_zero below; this test isolates "does the read happen" from it.
 
     The whole instance dict is snapshotted first and restored afterwards, so this test cannot leak state - such as
     the sentinel itself, the config_index overrides, or any of the many other attributes fetch_config_options()
@@ -124,35 +126,76 @@ def test_pv90_config_read(my_predbat):
     return failed
 
 
-def test_pv90_switch_default_off_forces_weight_zero(my_predbat):
-    """calculate_pv90_plan defaults to Off, so fetch_config_options must leave pv_metric90_weight at 0.0 even
-    though the CONFIG_ITEMS default for pv_metric90_weight is 0.15 (CHANGE 2's whole point: the user sees 0.15
-    in Home Assistant, but the feature stays inert until the switch is turned on).
+def test_pv90_switch_off_forces_weight_zero(my_predbat):
+    """Turning calculate_pv90_plan Off must leave pv_metric90_weight at 0.0 even though its own CONFIG_ITEMS
+    default is 0.15 (CHANGE 2's whole point: the user still sees 0.15 in Home Assistant, but the feature goes
+    inert once the switch is off).
 
-    Uses the same isolated snapshot/restore-the-whole-__dict__ technique as test_pv90_config_read, but with no
-    config overrides applied at all - this exercises the real, undisturbed CONFIG_ITEMS defaults for both
-    calculate_pv90_plan and pv_metric90_weight, not a hand-set value.
+    The switch now defaults to On behind performance_tweaks, so the Off case has to be forced rather than
+    read from the ambient defaults. Uses the same isolated snapshot/restore-the-whole-__dict__ technique as
+    test_pv90_config_read.
     """
     failed = False
     saved_state = my_predbat.__dict__.copy()
+    saved_switch = my_predbat.config_index["calculate_pv90_plan"].get("value")
+    saved_perf = my_predbat.config_index["performance_tweaks"].get("value")
     try:
+        # Reveal the switch, then turn it off - what a user on slow hardware does
+        my_predbat.config_index["performance_tweaks"]["value"] = True
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = False
         my_predbat.fetch_config_options()
         if my_predbat.calculate_pv90_plan is not False:
-            print("ERROR: calculate_pv90_plan is {} with no config override, expected the CONFIG_ITEMS default False".format(my_predbat.calculate_pv90_plan))
+            print("ERROR: calculate_pv90_plan is {} after being switched off, expected False".format(my_predbat.calculate_pv90_plan))
             failed = True
         if my_predbat.pv_metric90_weight != 0.0:
             print("ERROR: pv_metric90_weight is {} with calculate_pv90_plan Off, expected the override to force 0.0 despite the CONFIG_ITEMS default of 0.15".format(my_predbat.pv_metric90_weight))
             failed = True
     finally:
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = saved_switch
+        my_predbat.config_index["performance_tweaks"]["value"] = saved_perf
         my_predbat.__dict__.clear()
         my_predbat.__dict__.update(saved_state)
+    return failed
+
+
+def test_pv90_hidden_switch_defaults_on(my_predbat):
+    """With performance_tweaks Off the calculate_pv90_plan item is disabled, and a disabled item resolves
+    through get_arg to its CONFIG_ITEMS default - which is now True. That is the whole mechanism behind the
+    toggle: the feature is on for everybody without the switch being visible, and only a user who reveals it
+    can turn it off.
+
+    Note this beats apps.yaml as well: get_ha_config substitutes the default for a disabled item rather than
+    returning None, so get_arg never reaches its self.args lookup. A hidden item is therefore pinned to its
+    default for everyone, which is exactly what makes the toggle a reliable on-switch - but it also means a
+    user cannot hold the feature off from apps.yaml without revealing the toggle.
+    """
+    failed = False
+    saved_perf = my_predbat.config_index["performance_tweaks"].get("value")
+    try:
+        my_predbat.config_index["performance_tweaks"]["value"] = False
+        item = my_predbat.config_index["calculate_pv90_plan"]
+        if my_predbat.user_config_item_enabled(item):
+            print("ERROR: calculate_pv90_plan is enabled with performance_tweaks off, expected it to be hidden")
+            failed = True
+        value, default = my_predbat.get_ha_config("calculate_pv90_plan", None)
+        if default is not True:
+            print("ERROR: hidden calculate_pv90_plan falls back to {}, expected the CONFIG_ITEMS default True".format(default))
+            failed = True
+        if value is not True:
+            print("ERROR: hidden calculate_pv90_plan resolves to {}, expected True so the feature stays on".format(value))
+            failed = True
+        if my_predbat.get_arg("calculate_pv90_plan") is not True:
+            print("ERROR: get_arg returned {} for a hidden calculate_pv90_plan, expected True even with apps.yaml holding it off".format(my_predbat.get_arg("calculate_pv90_plan")))
+            failed = True
+    finally:
+        my_predbat.config_index["performance_tweaks"]["value"] = saved_perf
     return failed
 
 
 def test_pv90_switch_on_weight_reads_configured_value(my_predbat):
     """With calculate_pv90_plan forced On, fetch_config_options must let pv_metric90_weight through as the real
     CONFIG_ITEMS default of 0.15, unmolested by CHANGE 2's switch-off override - the mirror image of
-    test_pv90_switch_default_off_forces_weight_zero above.
+    test_pv90_switch_off_forces_weight_zero above.
 
     calculate_pv90_plan itself is not expert-gated, but pv_metric90_weight is, so expert_mode is forced on
     alongside it via config_index directly - the same technique test_pv90_config_read uses - or
@@ -949,19 +992,21 @@ def test_pv90_weight_nonzero_runs_simulation(my_predbat):
 
 
 def test_pv90_switch_off_skips_all_launch_paths(my_predbat):
-    """With calculate_pv90_plan at its default Off, no pv90 prediction may be launched through any of the four
-    launch paths test_pv90_weight_zero_skips_simulation counts (that test hand-sets pv_metric90_weight=0.0
-    directly). This test instead relies on the ambient state left behind by the shared instance's own setup -
-    calculate_pv90_plan Off, pv_metric90_weight forced to 0.0 by CHANGE 2's override - asserting those
-    preconditions explicitly rather than assuming them, so a regression that broke the switch-to-weight
-    override wiring would be caught here even if pv_metric90_weight were never set by hand anywhere else.
+    """With calculate_pv90_plan switched Off, no pv90 prediction may be launched through any of the four launch
+    paths test_pv90_weight_zero_skips_simulation counts (that test hand-sets pv_metric90_weight=0.0 directly).
+
+    The switch defaults On now, so the Off state is produced the way the product produces it - by switching it
+    off and letting fetch_config_options' override drive pv_metric90_weight to 0.0 - rather than by setting the
+    weight by hand. A regression that broke the switch-to-weight wiring is still caught here.
     """
-    if my_predbat.calculate_pv90_plan is not False:
-        print("ERROR: precondition failed - calculate_pv90_plan is {}, expected False".format(my_predbat.calculate_pv90_plan))
-        return True
-    if my_predbat.pv_metric90_weight != 0.0:
-        print("ERROR: precondition failed - pv_metric90_weight is {}, expected 0.0".format(my_predbat.pv_metric90_weight))
-        return True
+    saved_switch = my_predbat.config_index["calculate_pv90_plan"].get("value")
+    saved_perf = my_predbat.config_index["performance_tweaks"].get("value")
+    saved_pv90 = my_predbat.calculate_pv90_plan
+    saved_weight = my_predbat.pv_metric90_weight
+    my_predbat.config_index["performance_tweaks"]["value"] = True
+    my_predbat.config_index["calculate_pv90_plan"]["value"] = False
+    my_predbat.calculate_pv90_plan = False
+    my_predbat.pv_metric90_weight = 0.0
 
     failed = False
     calls = {"charge": 0, "charge_min_max": 0, "export": 0, "single": 0}
@@ -1007,9 +1052,13 @@ def test_pv90_switch_off_skips_all_launch_paths(my_predbat):
         my_predbat.launch_run_prediction_export = original_export
         my_predbat.launch_run_prediction_single = original_single
         _restore_calculate_plan_with_real_windows(my_predbat, snapshot)
+        my_predbat.config_index["calculate_pv90_plan"]["value"] = saved_switch
+        my_predbat.config_index["performance_tweaks"]["value"] = saved_perf
+        my_predbat.calculate_pv90_plan = saved_pv90
+        my_predbat.pv_metric90_weight = saved_weight
     for path, count in calls.items():
         if count != 0:
-            print("ERROR: {} pv90 predictions were launched via {} with calculate_pv90_plan Off (ambient default state)".format(count, path))
+            print("ERROR: {} pv90 predictions were launched via {} with calculate_pv90_plan switched Off".format(count, path))
             failed = True
     return failed
 
@@ -1290,7 +1339,8 @@ def run_pv90_tests(my_predbat):
     failed |= test_pv90_config_items(my_predbat)
     failed |= test_pv90_calculate_pv90_plan_config_item(my_predbat)
     failed |= test_pv90_config_read(my_predbat)
-    failed |= test_pv90_switch_default_off_forces_weight_zero(my_predbat)
+    failed |= test_pv90_switch_off_forces_weight_zero(my_predbat)
+    failed |= test_pv90_hidden_switch_defaults_on(my_predbat)
     failed |= test_pv90_switch_on_weight_reads_configured_value(my_predbat)
     failed |= test_pv90_forecast_fallback_to_p50(my_predbat)
     failed |= test_pv90_forecast_uses_published_p90(my_predbat)

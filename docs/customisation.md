@@ -77,6 +77,22 @@ Predbat has a toggle switch called **switch.predbat_expert_mode** which is set t
 A lot of Predbat's more advanced configuration options will not be available unless expert mode is turned On.
 It's recommended for new users to start without expert mode and then maybe turn it on later once you become more confident with the tool.
 
+## Performance tweaks mode
+
+Predbat has a second toggle switch called **switch.predbat_performance_tweaks** which is also Off by default.
+
+Behind it sit the options that trade planning time for plan quality. They are all turned **On** by default, so out of the box Predbat
+produces the best plan it can - you only need this toggle if your machine struggles to keep up. Turning it On reveals the switches so
+you can turn individual features Off and buy back CPU time.
+
+While the toggle is Off each hidden option runs at its default, so there is nothing to configure and nothing to go wrong. Note that a
+hidden option is pinned to its default and cannot be overridden from `apps.yaml` - turn this toggle On if you need to hold one of them Off.
+
+Currently behind this toggle:
+
+- **switch.predbat_calculate_second_pass** - the full second-pass optimisation
+- **switch.predbat_calculate_pv90_plan** - the PV90% upside scenario
+
 ## Performance related
 
 Predbat controls the inverter every 5 minutes it runs, and by default, updates and recalculates the plan every 10 minutes.
@@ -85,7 +101,7 @@ This can however use a lot of CPU power especially on more complex tariffs like 
 You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (default 10 minutes) to reduce the frequency of replanning while keeping the inverter control in the fixed 5-minute slots.
 E.g. a value of 10 or 15 minutes should also give good results.
 
-If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
+If you have performance problems turn On **switch.predbat_performance_tweaks** and then turn Off **switch.predbat_calculate_second_pass**, as it's quite CPU intensive. It is On by default because it does improve the plan; the cost is planning time, which grows with the length of your plan.
 
 You can turn on **switch.predbat_combine_charge_slots** and **switch.predbat_combine_export_slots** (_expert mode_) to speed up planning.
 Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
@@ -220,10 +236,10 @@ A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scen
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
 A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.g. 30 for "30%") - Predbat will clamp it back into range and log a warning, but the resulting plan is likely to look very wrong in the meantime.
 
-**switch.predbat_calculate_pv90_plan** When turned On, enables the PV90% upside scenario described below - it is Off by default, and the
-PV90% scenario is not simulated at all while it is Off (no extra planning time is spent on it), regardless of what `pv_metric90_weight` is set to.
-This switch is deliberately available without expert mode, as the PV90% scenario is new and we would like feedback on it from as many systems as possible.
-The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone who turns the switch on is running the same
+**switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the PV90% upside scenario described below - it is **On by default**.
+Turn it Off (after turning on **switch.predbat_performance_tweaks** to reveal it) and the PV90% scenario is not simulated at all, saving that
+planning time, regardless of what `pv_metric90_weight` is set to.
+The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario is using the same
 values and their results are comparable.
 
 **input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 90% PV scenario in calculating solar generation.
@@ -231,10 +247,10 @@ It is the upside mirror of `pv_metric10_weight` above: where the PV10% scenario 
 (the 90% PV forecast) combined with a lower household load (see `load_scaling90` above).
 Predbat blends the three simulated futures into one metric, so a value of 0.1 assumes that 1 in every 10 times we will get the Solcast 90% scenario.
 
-**The default is 0.15, but the feature is inert until `switch.predbat_calculate_pv90_plan` above is turned On** - while the switch is Off, Predbat forces the
-running weight to 0.0 regardless of this setting, so no PV90% simulation is run and the plan is exactly as it would be without this setting. Only turn the
-switch on if you specifically want Predbat to give weight to the possibility of a better-than-forecast day; doing so will make Predbat somewhat less willing
-to charge from the grid, since it now prices in a chance of more free solar than the central forecast predicts.
+**The default is 0.15 and `switch.predbat_calculate_pv90_plan` above is On by default, so this weight is live.** Turning that switch Off forces the
+running weight to 0.0 regardless of this setting, so no PV90% simulation is run and the plan is exactly as it would be without this setting. Giving weight to
+the possibility of a better-than-forecast day makes Predbat somewhat less willing to charge from the grid, since it now prices in a chance of more free solar
+than the central forecast predicts.
 If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are scaled back proportionally so the central scenario is never given a negative weighting.
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
@@ -295,9 +311,9 @@ This prevents Predbat from planning unnecessary forced exports during sunny peri
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
 
-**switch.predbat_calculate_second_pass** (_expert mode_) When turned On causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
+**switch.predbat_calculate_second_pass** (_performance tweaks_) When turned On (the default) causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
 
-Note: This feature is quite slow so may need a higher-performance machine so is turned Off by default.
+Note: This feature is quite slow, so turn On **switch.predbat_performance_tweaks** and switch it Off if your machine is struggling.
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs in which you want to force export late.
 
