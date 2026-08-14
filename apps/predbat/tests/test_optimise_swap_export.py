@@ -81,9 +81,7 @@ def setup_swap_export(
     my_predbat.export_window_best = export_window_best
     my_predbat.export_limits_best = list(export_limits_best)
 
-    best_metric, _, best_cost, _, _, _, _, _ = my_predbat.run_prediction_metric(
-        my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record
-    )
+    best_metric, _, best_cost, _, _, _, _, _ = my_predbat.run_prediction_metric(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record)
     return best_metric, best_cost
 
 
@@ -95,7 +93,18 @@ def _record_pass_order(my_predbat):
     across the whole test run, so leaving the stubs in place would break every later test.
     """
     order = []
-    stubbed = ("optimise_levels_pass", "optimise_detailed_pass", "optimise_full_second_pass", "tweak_plan", "optimise_solar", "optimise_swap_export", "optimise_swap_charge", "optimise_charge_windows_reset", "optimise_charge_windows_manual", "plan_write_debug")
+    stubbed = (
+        "optimise_levels_pass",
+        "optimise_detailed_pass",
+        "optimise_full_second_pass",
+        "tweak_plan",
+        "optimise_solar",
+        "optimise_swap_export",
+        "optimise_swap_charge",
+        "optimise_charge_windows_reset",
+        "optimise_charge_windows_manual",
+        "plan_write_debug",
+    )
     saved = {name: my_predbat.__dict__.get(name, None) for name in stubbed}
 
     def restore():
