@@ -194,6 +194,54 @@ def run_load_octopus_slots_tests(my_predbat):
     slot_future_zero = [{"start": future_start.strftime(TIME_FORMAT), "end": future_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
     failed |= run_load_octopus_slot_test("zero_kwh_future", my_predbat, slot_future_zero, [], False, 0.0, 0.0, 1.0)
 
+    # --- containment overlap: completed dispatch inside a longer planned dispatch (#4497) ---
+    # The HA Octopus Energy integration's completed_dispatches are merged ahead of
+    # planned_dispatches (fetch.py). A short completed historical interval sitting inside a much
+    # longer still-active planned interval must not truncate away the planned interval's future
+    # remainder - the overlap dedup previously only ever trimmed one edge of a slot, never split
+    # it around a fully-contained earlier slot.
+    print("**** Checking containment overlap (completed dispatch inside planned dispatch) ****")
+    saved_minutes_now = my_predbat.minutes_now
+    containment_now = midnight_utc + timedelta(hours=10, minutes=37)
+    my_predbat.minutes_now = int((containment_now - midnight_utc).total_seconds() / 60)
+
+    containment_slots = [
+        # completed_dispatches (merged first, per fetch.py)
+        {"start": (midnight_utc + timedelta(hours=8)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=8, minutes=30)).strftime(TIME_FORMAT), "charge_in_kwh": 5.45, "source": "null", "location": "AT_HOME"},
+        {"start": (midnight_utc + timedelta(hours=8, minutes=30)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=9)).strftime(TIME_FORMAT), "charge_in_kwh": 5.66, "source": "null", "location": "AT_HOME"},
+        # planned_dispatches (merged second) - the first one fully contains both completed slots above
+        {"start": (midnight_utc + timedelta(hours=7, minutes=59)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=16)).strftime(TIME_FORMAT), "charge_in_kwh": 40.0, "source": "SMART", "location": "AT_HOME"},
+        {"start": (midnight_utc + timedelta(hours=17, minutes=30)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=18)).strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "SMART", "location": "AT_HOME"},
+    ]
+
+    my_predbat.car_charging_soc[0] = 0.0
+    my_predbat.car_charging_limit[0] = 0.0
+    my_predbat.car_charging_loss = 1.0
+    result = my_predbat.load_octopus_slots(0, containment_slots, False)
+
+    # The 09:00-16:00 (540-960) future remainder of the contained planned dispatch must survive
+    if not result or result[0]["end"] != 960:
+        print("ERROR: Future remainder of contained planned dispatch was lost - expected the earliest surviving slot to end at 960 (16:00), got {}\nSlots: {}".format(result[0]["end"] if result else None, result))
+        failed = True
+    else:
+        # kwh for that remainder is the 40.0kWh original scaled by its 420-of-481-minute share
+        # (479-960 minus the 480-540 carved out by the two completed slots) - must not have been
+        # lost (the reported bug) nor duplicated across the split pieces
+        expected_kwh = 40.0 * (960 - 540) / (960 - 479)
+        if abs(result[0]["kwh"] - expected_kwh) > 0.01:
+            print("ERROR: Future remainder kwh should be {:.2f}, got {}\nSlots: {}".format(expected_kwh, result[0]["kwh"], result))
+            failed = True
+
+    # The second planned dispatch (17:30-18:00), which never overlapped anything, is untouched
+    if len(result) < 2 or result[1]["start"] != 1050 or result[1]["end"] != 1080 or result[1]["kwh"] != 2.5:
+        print("ERROR: Non-overlapping planned dispatch should be unchanged (1050-1080, 2.5kWh), got {}\nSlots: {}".format(result[1] if len(result) > 1 else None, result))
+        failed = True
+
+    my_predbat.minutes_now = saved_minutes_now
+
+    if failed:
+        return failed
+
     print("**** Checking car_charge_slot_kwh ****")
     my_predbat.car_charging_slots[0] = expected_slots5
     my_predbat.num_cars = 1

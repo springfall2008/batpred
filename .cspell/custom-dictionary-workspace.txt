@@ -442,6 +442,10 @@ sigencloud
 sigenergy
 sigenstor
 Slee
+slugified
+slugifies
+slugify
+slugifying
 snakeviz
 socb
 socketloop

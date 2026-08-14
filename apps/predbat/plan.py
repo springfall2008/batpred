@@ -4126,10 +4126,6 @@ class Plan:
             record_export_windows,
             debug_mode=debug_mode,
         )
-        # Swaps
-        self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
-        self.plan_write_debug(debug_mode, "plan_swap_final.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-
         # Second pass optimisation
         if self.calculate_second_pass:
             # Full second pass (slower)
@@ -4144,8 +4140,14 @@ class Plan:
         if self.export_more_solar:
             best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.optimise_solar(best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import, record_export_windows, debug_mode=debug_mode)
 
-        # Charge swap runs last, once all other passes have settled, so a strictly-improving pairwise
-        # charge move is not subsequently undone by a non-monotonic pass (tweak/second/solar).
+        # Swaps run once all other passes have settled. The export swap can only defer an export that
+        # already exists when it runs, and tweak/second/solar all turn exports on - tweak_plan only walks
+        # the first few windows of the plan, so the exports it adds are always at the front, exactly the
+        # ones the swap exists to push back. Running the swap before them left those pinned in place
+        # (#4478). The charge swap follows for the mirror-image reason: a strictly-improving pairwise
+        # charge move must not be subsequently undone by a non-monotonic pass.
+        self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
+        self.plan_write_debug(debug_mode, "plan_swap_final.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
         self.optimise_swap_charge(record_charge_windows, debug_mode=debug_mode)
 
         self.plan_write_debug(debug_mode, "plan_raw.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)

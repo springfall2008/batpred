@@ -2588,19 +2588,34 @@ class Output:
             load_value_pred += forecast_value_pred
             load_value_pred_raw += forecast_value_pred
 
-            # For FUTURE minutes only, apply load_scaling so the published predicted/adjusted
-            # curves (and their today_remaining attribute) match step_data_history() (fetch.py),
-            # which the plan itself uses to build load_minutes_step as
-            # (value + load_extra) * scale_fixed, where scale_fixed includes load_scaling.
-            # Minutes already elapsed today are deliberately left unscaled: load_total_pred_now
+            # For FUTURE minutes only, apply load_scaling, load_scaling_dynamic, and
+            # manual_load_adjust so the published predicted/adjusted curves (and their
+            # today_remaining attribute) match step_data_history() (fetch.py), which the plan
+            # itself uses to build load_minutes_step as
+            # (value + load_extra) * scaling_dynamic * scale_fixed, where load_extra includes
+            # manual_load_adjust, scaling_dynamic is load_scaling_dynamic, and scale_fixed
+            # includes the flat load_scaling. load_scaling_dynamic carries saving-session/
+            # free-electricity-event scaling as well as any per-window override from
+            # rates_import_override/the manual API (e.g. a "power up" event) - a first pass at
+            # this fix (#4506) only applied the flat load_scaling and missed both of these,
+            # confirmed against a real follow-up report on issue #4496 where a 1.5x
+            # load_scaling_dynamic override for a 2-hour power-up event wasn't reflected in
+            # today_remaining at all.
+            #
+            # Minutes already elapsed today are deliberately left untouched: load_total_pred_now
             # below feeds the actual-vs-predicted divergence ratio, which compares actual
-            # consumption against the RAW model, not a load_scaling-corrected one. Previously
-            # load_scaling was never applied here at all, so with load_scaling != 1.0 the
-            # today_remaining attribute diverged from the plan's own remaining-load total by
-            # exactly that factor (issue #4496).
+            # consumption against the raw model, not an adjusted one.
             if minute >= minutes_now:
-                load_value_pred *= self.load_scaling
-                load_value_pred_raw *= self.load_scaling
+                manual_adjust = 0.0
+                if self.manual_load_adjust:
+                    manual_adjust = self.manual_load_adjust.get(minute, 0) * step / float(self.plan_interval_minutes)
+                    manual_adjust = max(manual_adjust, -load_value_pred)
+                load_value_pred += manual_adjust
+                load_value_pred_raw += manual_adjust
+
+                scaling_dynamic = self.load_scaling_dynamic.get(minute, 1.0) if self.load_scaling_dynamic else 1.0
+                load_value_pred *= self.load_scaling * scaling_dynamic
+                load_value_pred_raw *= self.load_scaling * scaling_dynamic
 
             # Track (but no longer exclude) periods where import exceeds raw load, assumed to
             # include deliberate battery charging (overnight for example). The house's own load
