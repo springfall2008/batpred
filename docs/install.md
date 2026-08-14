@@ -19,6 +19,10 @@ There are plenty of "Home Assistant basics" tutorials on YouTube, but here are a
 
 If you get stuck, please read the [FAQs](faq.md) and if necessary raise a [GitHub ticket](https://github.com/springfall2008/batpred/issues) for support.
 
+## Home Assistant Pre-requisites
+
+Ensure that the computer (or VM) that is running your Home Assistant has sufficient memory. Predbat (and in particular LoadML if you are using it) can be quite resource intensive and its recommended that your HA computer has at least 3Gb of memory allocated. If Predbat doesn't have sufficient memory then it can crash with few diagnostics.
+
 ## Inverter Control install
 
 You will need to install an integration to communicate with and control your inverter. Predbat was originally written for GivEnergy inverters controlled by the GivTCP app but has been extended for other inverter types.
@@ -243,7 +247,7 @@ For a house with two differently oriented roof aspects, add a second entry to th
 Install the Solcast integration (<https://github.com/BJReplay/ha-solcast-solar>), create a free [Solcast account](https://solcast.com/),
 configure details of your solar arrays, and request an API key that you enter into the Solcast integration in Home Assistant.
 
-Make sure that the configuration option 'Enable forecast half-hourly detail attributes' is turned on as predbat requires the half-hourly detailed solar forecast to populate the predbat plan.
+Make sure that the configuration option 'Enable forecast half-hourly detail attributes' is turned on as Predbat requires the half-hourly detailed solar forecast to populate the Predbat plan.
 By default the Solcast integration only provides hourly forecasts and Predbat will take each hourly PV forecast and treat it as a half-hour value - doubling your solar generation forecast!
 
 Predbat is configured in `apps.yaml` to automatically discover the Solcast forecast entities created by the Solcast integration in Home Assistant.
@@ -473,7 +477,7 @@ The Predbat code that runs is the same and the configuration is exactly the same
 6. Briefly start the new Predbat app so that it creates the addon_config folder and the template `apps.yaml` file:
     - Go to Settings/Apps
     - Click on the Predbat app
-    - Click START, wait a minute for the app to initialise itself, then click STOP. A predbat status warning that you have a template `apps.yaml` file is normal and can be ignored
+    - Click START, wait a minute for the app to initialise itself, then click STOP. A Predbat status warning that you have a template `apps.yaml` file is normal and can be ignored
 
 7. Open your file editor and open your existing `apps.yaml` file:
     - If you are using the old 'combined AppDaemon/Predbat app installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,

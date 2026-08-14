@@ -352,7 +352,7 @@ To make sure Predbat calculates 15-minute pricing correctly, add `plan_interval_
 Full code for CZ energy spot rate template:
 <https://gist.github.com/ziat007/9c33453d5fa24b037d764dc40786f977>
 
-(flat clamped sell price sensor is used to trick predbat when invertor is set to block export during negative pricing)
+(flat clamped sell price sensor is used to trick Predbat when invertor is set to block export during negative pricing)
 
 ### Frank Energie Export rates with export fee
 
@@ -603,7 +603,7 @@ NB: The postcode must be formatted as just the outward code (e.g. 'SW1') or a fu
 
 This direct connection will also set **sensor.predbat_carbon** with the current carbon data.
 
-By enabling **switch.predbat_carbon_enable** you can view Carbon Intensity [in the predbat plan](predbat-plan-card.md).
+By enabling **switch.predbat_carbon_enable** you can view Carbon Intensity [in the Predbat plan](predbat-plan-card.md).
 
 Predbat can also [optimise your grid charging based on the Carbon footprint](customisation.md#battery-margins-and-metrics-options) by setting **input_number.predbat_carbon_metric**.
 

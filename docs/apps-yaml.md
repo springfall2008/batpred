@@ -34,7 +34,7 @@ and it's very easy to end up with an incorrectly formatted file that will cause 
 
 The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured but as a brief introduction:
 
-At the start of the `apps.yaml` file is the predbat module definition:
+At the start of the `apps.yaml` file is the Predbat module definition:
 
 ```yaml
 pred_bat:
@@ -106,7 +106,7 @@ sets the configuration item **battery_temperature_history** to the Home Assistan
 
 note the list items appear on separate lines beneath the configuration item name, with each entry being indented by two spaces, a dash, a space and then the configuration value.
 
-- Entries where the predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
+- Entries where the Predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
 
 ```yaml
   dno_region: "A"
@@ -2065,7 +2065,7 @@ or an edit being made to `apps.yaml`), then Predbat will automatically calculate
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 
-The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
+The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if Predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
 If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg) explains how the curve works and shows how Predbat automatically creates it.

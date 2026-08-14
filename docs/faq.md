@@ -388,7 +388,7 @@ In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / clic
 - Finally, check how often your inverter integration is polling your inverter for new data. For [GivTCP the Self Run Loop Timer](apps-yaml.md#rest-interface-inverter-control)
 is recommended to be set to a value of between 20 and 60 seconds.
 
-If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/predbat isn’t getting the same time from the inverter as it is expecting.
+If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/Predbat isn’t getting the same time from the inverter as it is expecting.
 Either GivTCP has lost communications with the inverter or the inverter has stopped talking to the world.
 
 If you look at the Logbook in Home Assistant you should see a steady stream of entities changing in HA.
