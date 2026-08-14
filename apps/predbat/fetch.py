@@ -2846,6 +2846,7 @@ class Fetch:
                 "Warn: octopus_intelligent_limit_future_slots is On but octopus_intelligent_consider_full is Off - has no effect",
                 had_errors=True,
             )
+        self.octopus_slot_count_zero_kwh = self.get_arg("octopus_slot_count_zero_kwh")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0

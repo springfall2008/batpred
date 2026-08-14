@@ -468,6 +468,137 @@ def run_rate_add_io_slots_tests(my_predbat):
 
     my_predbat.car_charging_slots[0] = saved_car_charging_slots
 
+    # Test 25 (#4483 review follow-up, Speshman): a slot rejected purely because octopus_slot_max
+    # was already reached (needed stays True throughout - this happens even with
+    # octopus_intelligent_limit_future_slots Off, since the daily cap is a pre-existing, unrelated
+    # mechanism) must NOT destructively restore rates[minute] - that active restore is reserved
+    # for the needed=False case (#4482) above, where Predbat has positive reason to believe
+    # Octopus has rescinded the slot. A cap-rejected slot may still be a genuine live
+    # dispatch/tariff event; Predbat is only choosing not to count it against its own budget.
+    print("\n**** Test 25: Cap-only rejection leaves an already-discounted fetched rate alone ****")
+    my_predbat.octopus_intelligent_limit_future_slots = False  # feature off - needed is always True regardless
+
+    slot_start_25a = midnight_utc + timedelta(hours=1)  # 01:00-01:30, consumes the only cap slot for the day
+    slot_end_25a = slot_start_25a + timedelta(minutes=30)
+    slot_start_25b = slot_end_25a  # 01:30-02:00, rejected purely because the cap is already spent
+    slot_end_25b = slot_start_25b + timedelta(minutes=30)
+    slots_25 = [
+        {"start": slot_start_25a.strftime(TIME_FORMAT), "end": slot_end_25a.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+        {"start": slot_start_25b.strftime(TIME_FORMAT), "end": slot_end_25b.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+    ]
+    slot_start_minute_25a = int((slot_start_25a - midnight_utc).total_seconds() / 60)
+    slot_start_minute_25b = int((slot_start_25b - midnight_utc).total_seconds() / 60)
+
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = 1
+    rates_25 = {}
+    for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60)):
+        rates_25[minute] = 10.0
+    saved_io_adjusted_25 = dict(my_predbat.io_adjusted)
+    for minute in range(slot_start_minute_25b, slot_start_minute_25b + 30):
+        rates_25[minute] = 3.99  # already-discounted, as if fetched directly for a real dispatch
+        my_predbat.io_adjusted[minute] = True  # minute_data() marks every minute in the block
+
+    result_rates_25 = my_predbat.rate_add_io_slots(0, rates_25, slots_25)
+
+    for minute in range(slot_start_minute_25a, slot_start_minute_25a + 30):
+        if result_rates_25.get(minute) != my_predbat.rate_min_base:
+            print("ERROR: Minute {} (first, within cap) should be the low rate {} but got {}".format(minute, my_predbat.rate_min_base, result_rates_25.get(minute)))
+            failed = True
+    for minute in range(slot_start_minute_25b, slot_start_minute_25b + 30):
+        if result_rates_25.get(minute) != 3.99:
+            print("ERROR: Minute {} (second, cap-only rejection) should be left at the already-discounted 3.99, got {}".format(minute, result_rates_25.get(minute)))
+            failed = True
+        if minute not in my_predbat.io_adjusted:
+            print("ERROR: Minute {} should still be marked io_adjusted (cap-only rejection), was cleared".format(minute))
+            failed = True
+
+    my_predbat.io_adjusted = saved_io_adjusted_25
+
+    # Test 26 (#4483 review follow-up, Speshman): the same cap-only-rejection preservation
+    # applies to a slot inside the guaranteed 23:30-05:30 fixed window too - it's still just a
+    # cap-driven rejection (needed stays True via the fixed-window clause), not a needed=False
+    # rescission, so the destructive restore must not fire there either.
+    print("\n**** Test 26: Cap-only rejection inside the fixed window also leaves the rate alone ****")
+    my_predbat.octopus_intelligent_limit_future_slots = True  # needed forced True here via the fixed window, not the "off" shortcut
+    my_predbat.car_charging_slots[0] = []  # car charging plan says nothing is needed - irrelevant, fixed window forces needed=True anyway
+
+    slot_start_26a = midnight_utc + timedelta(hours=1)  # 01:00-01:30, inside 23:30-05:30, consumes the only cap slot
+    slot_end_26a = slot_start_26a + timedelta(minutes=30)
+    slot_start_26b = slot_end_26a  # 01:30-02:00, also inside the fixed window, rejected purely by the cap
+    slot_end_26b = slot_start_26b + timedelta(minutes=30)
+    slots_26 = [
+        {"start": slot_start_26a.strftime(TIME_FORMAT), "end": slot_end_26a.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+        {"start": slot_start_26b.strftime(TIME_FORMAT), "end": slot_end_26b.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+    ]
+    slot_start_minute_26b = int((slot_start_26b - midnight_utc).total_seconds() / 60)
+
+    rates_26 = {}
+    for minute in range(-96 * 60, max(my_predbat.forecast_minutes, 3 * 24 * 60)):
+        rates_26[minute] = 10.0
+    saved_io_adjusted_26 = dict(my_predbat.io_adjusted)
+    for minute in range(slot_start_minute_26b, slot_start_minute_26b + 30):
+        rates_26[minute] = 3.99
+        my_predbat.io_adjusted[minute] = True
+
+    result_rates_26 = my_predbat.rate_add_io_slots(0, rates_26, slots_26)
+
+    for minute in range(slot_start_minute_26b, slot_start_minute_26b + 30):
+        if result_rates_26.get(minute) != 3.99:
+            print("ERROR: Minute {} (fixed-window, cap-only rejection) should be left at 3.99, got {}".format(minute, result_rates_26.get(minute)))
+            failed = True
+        if minute not in my_predbat.io_adjusted:
+            print("ERROR: Minute {} (fixed-window) should still be marked io_adjusted, was cleared".format(minute))
+            failed = True
+
+    my_predbat.io_adjusted = saved_io_adjusted_26
+    my_predbat.octopus_intelligent_limit_future_slots = False
+    my_predbat.car_charging_slots[0] = saved_car_charging_slots
+
+    # Tests 27-29 (#4483 review follow-up): octopus_slot_count_zero_kwh - a zero-kWh dispatch
+    # entry (e.g. a plug-independent SMART grid-flex event that delivers no energy to the car)
+    # is a real tariff discount, but not a car-charging dispatch. By default it's exempt from
+    # both the #4482 "does the car still need this" check and the octopus_slot_max cap.
+
+    print("\n**** Test 27: Zero-kWh slot gets the low rate even when the car doesn't need it ****")
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    my_predbat.car_charging_slots[0] = []  # car doesn't need anything - would normally reject a future out-of-window slot
+    slot_start_27 = midnight_utc + timedelta(hours=14)  # future, out-of-window
+    slot_end_27 = slot_start_27 + timedelta(minutes=30)
+    slots_27 = [{"start": slot_start_27.strftime(TIME_FORMAT), "end": slot_end_27.strftime(TIME_FORMAT), "charge_in_kwh": 0.0, "source": "SMART", "location": ""}]
+    slot_start_minute_27 = int((slot_start_27 - midnight_utc).total_seconds() / 60)
+    expected_rates_27 = {minute: 4.0 for minute in range(slot_start_minute_27, slot_start_minute_27 + 30)}
+    failed |= run_rate_add_io_slots_test("test27_zero_kwh_exempt_by_default", my_predbat, slots_27, True, 12, expected_rates_27)
+
+    print("\n**** Test 28: Zero-kWh slot does not consume octopus_slot_max budget ****")
+    my_predbat.octopus_intelligent_limit_future_slots = False
+    slot_start_28a = midnight_utc + timedelta(hours=1)  # zero-kWh, first
+    slot_end_28a = slot_start_28a + timedelta(minutes=30)
+    slot_start_28b = slot_end_28a  # genuine, kwh>0, second - must still fit under cap=1
+    slot_end_28b = slot_start_28b + timedelta(minutes=30)
+    slots_28 = [
+        {"start": slot_start_28a.strftime(TIME_FORMAT), "end": slot_end_28a.strftime(TIME_FORMAT), "charge_in_kwh": 0.0, "source": "SMART", "location": ""},
+        {"start": slot_start_28b.strftime(TIME_FORMAT), "end": slot_end_28b.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"},
+    ]
+    slot_start_minute_28a = int((slot_start_28a - midnight_utc).total_seconds() / 60)
+    expected_rates_28 = {minute: 4.0 for minute in range(slot_start_minute_28a, slot_start_minute_28a + 60)}  # both slots cheap
+    failed |= run_rate_add_io_slots_test("test28_zero_kwh_does_not_spend_cap", my_predbat, slots_28, True, 1, expected_rates_28)
+
+    print("\n**** Test 29: Switch on makes zero-kWh slots count like any other ****")
+    my_predbat.octopus_slot_count_zero_kwh = True
+    my_predbat.octopus_intelligent_limit_future_slots = True
+    my_predbat.car_charging_slots[0] = []  # car doesn't need anything
+    slot_start_29 = midnight_utc + timedelta(hours=14)  # future, out-of-window, zero-kWh
+    slot_end_29 = slot_start_29 + timedelta(minutes=30)
+    slots_29 = [{"start": slot_start_29.strftime(TIME_FORMAT), "end": slot_end_29.strftime(TIME_FORMAT), "charge_in_kwh": 0.0, "source": "SMART", "location": ""}]
+    slot_start_minute_29 = int((slot_start_29 - midnight_utc).total_seconds() / 60)
+    expected_rates_29 = {minute: 10.0 for minute in range(slot_start_minute_29, slot_start_minute_29 + 30)}  # rejected, not needed, and now counted
+    failed |= run_rate_add_io_slots_test("test29_switch_on_zero_kwh_subject_to_needed_gate", my_predbat, slots_29, True, 12, expected_rates_29)
+    my_predbat.octopus_slot_count_zero_kwh = False  # restore default
+
+    my_predbat.octopus_intelligent_limit_future_slots = False  # Restore default for any subsequent tests
+    my_predbat.car_charging_slots[0] = saved_car_charging_slots
+
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes
 

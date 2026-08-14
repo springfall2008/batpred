@@ -911,6 +911,13 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "octopus_slot_count_zero_kwh",
+        "friendly_name": "Count zero-kWh Intelligent dispatch slots towards the daily octopus_slot_max cap",
+        "type": "switch",
+        "default": False,
+        "enable": "expert_mode",
+    },
+    {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",
