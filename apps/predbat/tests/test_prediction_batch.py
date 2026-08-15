@@ -10,16 +10,19 @@
 """Tests for the batched prediction fan-out.
 
 launch_run_prediction_* no longer runs anything: it queues a job on the Prediction and returns a
-handle whose first get() flushes the whole batch through one pk_run_batch call. These tests pin the
-two things that makes conditional - that a queued job returns exactly what the direct
-thread_run_prediction_* path returns, and that a job the kernel cannot take still runs.
+handle whose first get() flushes the whole batch through one pk_run_batch call. These tests pin what
+that deferral relies on: that a trial owns its inputs rather than sharing the caller's, that a queued
+job returns exactly what the direct thread_run_prediction_* path returns for every job shape and step,
+that nothing runs before the first get() and one get() drains the batch, that cache hits and
+intra-batch duplicates never reach the kernel while min/max jobs are never cached at all, and that
+every job the kernel will not take still runs on the engine the direct path would have used.
 """
 
 
 import random
 
 import prediction_batch
-from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
+from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
 from prediction import Prediction
 from prediction_kernel import create_kernel_context
 from tests.test_kernel_parity import apply_random_scenario, kernel_available, make_step_data, make_windows, restore_scenario_state, snapshot_scenario_state
@@ -127,6 +130,14 @@ def test_queued_matches_direct(my_predbat):
             lambda: prediction.thread_run_prediction_export(5.0, export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
             lambda: prediction.queue_run_prediction_export(5.0, export_window[1]["start"] + 15, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record),
         ),
+        # The levels optimiser runs single predictions at a coarse "fast mode" step (plan_interval_minutes,
+        # 30 by default), which is the only caller that passes a step other than PREDICT_STEP. It reaches
+        # both the cache key and the job, so it needs its own case
+        (
+            "single_coarse_step",
+            lambda: prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, 30),
+            lambda: prediction.queue_run_prediction_single(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, 30),
+        ),
     ]
 
     for name, direct_call, queue_call in cases:
@@ -141,7 +152,7 @@ def test_queued_matches_direct(my_predbat):
             failed = True
 
     if not failed:
-        print("Queued predictions match the direct path for all five shapes")
+        print("Queued predictions match the direct path for all {} shapes".format(len(cases)))
     return failed
 
 
@@ -217,11 +228,72 @@ def test_batch_cache_and_dedup(my_predbat):
         if again != results[0]:
             print("ERROR: cached result {} differs from the computed one {}".format(again, results[0]))
             failed = True
+
+        # A min/max job must never be cached. The SoC range is not part of a cached result, so a hit
+        # would answer (0.0, 0.0), collapse the caller's SoC pruning envelope and silently drop
+        # candidate SoCs from the search. Checked twice: through the public entry point, and by
+        # asking enqueue_prediction for a cached range job directly - the second is what pins the
+        # guard as structural rather than a property of the one call site that passes cache=False.
+        prediction.prediction_cache = {}
+        for _ in range(2):
+            prediction.queue_run_prediction_charge_min_max(4.0, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record).get()
+        if prediction.prediction_cache:
+            print("ERROR: a queued min/max job populated the prediction cache: {}".format(len(prediction.prediction_cache)))
+            failed = True
+
+        range_handle = prediction.enqueue_prediction(list(charge_limit), charge_window, export_window, list(export_limits), PV_SCENARIO_NOMINAL, end_record, PREDICT_STEP, True, want_range=True, range_window=charge_window[1])
+        if range_handle.job.sim_hash is not None:
+            print("ERROR: a range job was given a cache key despite never being cacheable")
+            failed = True
+        range_handle.get()
+        if prediction.prediction_cache:
+            print("ERROR: a range job enqueued with cache=True populated the prediction cache: {}".format(len(prediction.prediction_cache)))
+            failed = True
     finally:
         prediction_batch.run_prediction_kernel_batch = real_batch
 
     if not failed:
         print("Batch cache/dedup tests passed")
+    return failed
+
+
+def test_queued_range_window_in_the_past(my_predbat):
+    """A range window that started before minutes_now must give the direct path's answer, returns True on failure.
+
+    make_windows only ever emits windows starting at or after minutes_now, so the max(..., 0) clamp on
+    the range start step and the negative end step of a wholly-past window are otherwise never
+    executed. Both matter: the kernel derives the range from those two step numbers while a fallback
+    derives it from scan_soc_range, and the two have to agree exactly.
+    """
+    print("**** Running past range window tests ****")
+    failed = False
+    prediction, charge_window, export_window, charge_limit, export_limits = make_batch_prediction(my_predbat)
+    end_record = my_predbat.forecast_minutes
+    minutes_now = my_predbat.minutes_now
+    window = charge_window[1]
+
+    cases = [
+        # Straddles minutes_now: the start step clamps to 0, the end step is positive
+        ("straddling", {"start": minutes_now - 120, "end": window["end"], "average": window["average"]}),
+        # Wholly behind minutes_now: both steps are negative, so no step is ever in range
+        ("wholly past", {"start": minutes_now - 240, "end": minutes_now - 60, "average": window["average"]}),
+        # Ends exactly at minutes_now, the boundary between the two cases above
+        ("ends at now", {"start": minutes_now - 180, "end": minutes_now, "average": window["average"]}),
+    ]
+
+    for name, past_window in cases:
+        trial_window = list(charge_window)
+        trial_window[1] = past_window
+        prediction.prediction_cache = {}
+        queued = prediction.queue_run_prediction_charge_min_max(3.0, 1, charge_limit, trial_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record).get()
+        prediction.prediction_cache = {}
+        direct = prediction.thread_run_prediction_charge_min_max(3.0, 1, charge_limit, trial_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record)
+        if queued != direct:
+            print("ERROR: {} range window queued {} != direct {}".format(name, queued, direct))
+            failed = True
+
+    if not failed:
+        print("Past range window tests passed for all three shapes")
     return failed
 
 
@@ -265,15 +337,31 @@ def test_batch_fallbacks(my_predbat):
         finally:
             prediction_batch.run_prediction_kernel_batch = real_batch
 
-    # 2. Debug runs must not reach the kernel from the batch when the direct path would not take it
+    # 2. Debug runs must not reach the kernel from the batch when the direct path would not take it.
+    # This has to assert the mechanism, not the value: the two engines agree to ~1e-6 and every field
+    # is rounded to 4dp, so the tuples match whether or not the kernel_supported() gate exists. The
+    # gate is load-bearing because a debug run needs predict_soc_best and friends populated for the
+    # debug HTML, and reset_kernel_run_state clears exactly those.
+    calls = []
+
+    def spy_batch(pred, jobs, n_threads):
+        """Record that the kernel batch was reached at all, then run it for real"""
+        calls.append(len(jobs))
+        return real_batch(pred, jobs, n_threads)
+
     prediction.debug_enable = True
+    prediction_batch.run_prediction_kernel_batch = spy_batch
     try:
         prediction.prediction_cache = {}
         got = prediction.queue_run_prediction_charge_min_max(3.0, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record).get()
+        if calls:
+            print("ERROR: a debug run reached the kernel batch: {}".format(calls))
+            failed = True
         if got != expected_python:
             print("ERROR: debug_enable fallback returned {} expected {}".format(got, expected_python))
             failed = True
     finally:
+        prediction_batch.run_prediction_kernel_batch = real_batch
         prediction.debug_enable = False
 
     # 3. Kernel genuinely unavailable for this Prediction
@@ -301,6 +389,7 @@ def run_prediction_batch_tests(my_predbat):
     state = snapshot_scenario_state(my_predbat)
     try:
         failed |= test_queued_matches_direct(my_predbat)
+        failed |= test_queued_range_window_in_the_past(my_predbat)
         failed |= test_batch_is_lazy(my_predbat)
         failed |= test_batch_cache_and_dedup(my_predbat)
         failed |= test_batch_fallbacks(my_predbat)

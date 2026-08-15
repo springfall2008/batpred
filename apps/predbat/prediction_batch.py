@@ -87,7 +87,11 @@ class PredictionBatch:
 
     def enqueue_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache, want_range=False, range_window=None):
         """Queue one prediction and return a handle to its eventual result"""
-        sim_hash = prediction_cache_key(charge_limit, charge_window, export_limits, export_window, pv_scenario, end_record, step) if cache else None
+        # A range job is never cached, and that is structural rather than the caller's choice: the
+        # SoC range is not part of a cached result, so a hit would answer with (0.0, 0.0) and silently
+        # collapse the caller's SoC pruning envelope. Callers pass cache=False today; ignoring cache
+        # outright for a range job means a future caller cannot reintroduce that bug.
+        sim_hash = prediction_cache_key(charge_limit, charge_window, export_limits, export_window, pv_scenario, end_record, step) if cache and not want_range else None
 
         # The kernel tracks the SoC range itself over a step range, so a min/max job does not have to
         # ship an 8928-entry SoC buffer. A negative start step means "no range asked for", which the
