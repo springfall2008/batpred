@@ -286,6 +286,10 @@ This will remove the need for a DNS lookup of the IP address every time Predbat 
 
 If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as you have CPUs in your system.
 
+Predbat batches each group of simulations into a single call to the C++ prediction kernel, which then
+spreads them across this many threads. Results do not depend on the thread count - the same plan is
+produced at any setting - so this only trades CPU for planning time.
+
 Valid values are:
 
 - 'auto' - Use the same number of threads as your CPU count

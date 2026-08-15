@@ -20,6 +20,7 @@ the plan that minimises the overall cost metric.
 import copy
 import traceback
 from datetime import datetime, timedelta
+from multiprocessing import cpu_count
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
 
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
@@ -1304,8 +1305,15 @@ class Plan:
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
-        # Serial for now - Task 5 wires this to the threads config
-        self.prediction.batch_threads = 1
+        # The kernel spreads one batched fan-out across threads with the GIL released for the whole
+        # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
+        # threads and then degraded below serial (perf/threadpool-prototype).
+        threads = self.get_arg("threads", "auto")
+        if threads == "auto":
+            self.prediction.batch_threads = cpu_count()
+        else:
+            self.prediction.batch_threads = max(int(threads), 1)
+        self.log("Prediction batch using {} kernel thread(s)".format(self.prediction.batch_threads))
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
 

@@ -377,6 +377,39 @@ def test_batch_fallbacks(my_predbat):
     return failed
 
 
+def test_batch_threads_do_not_change_results(my_predbat):
+    """A threaded flush must return exactly what a serial one does, returns True on failure.
+
+    pk_run_batch is pinned bit-identical across thread counts at the C level (kernel_parity), so this
+    is really checking the Python side: that results are matched back to their own job regardless of
+    how the kernel split the work.
+    """
+    print("**** Running batch threading tests ****")
+    failed = False
+    prediction, charge_window, export_window, charge_limit, export_limits = make_batch_prediction(my_predbat)
+    end_record = my_predbat.forecast_minutes
+    socs = [round(my_predbat.soc_max * fraction, 2) for fraction in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)]
+
+    reference = None
+    for n_threads in (1, 2, 8):
+        prediction.batch_threads = n_threads
+        prediction.prediction_cache = {}
+        handles = [prediction.queue_run_prediction_charge(soc, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record) for soc in socs]
+        results = [handle.get() for handle in handles]
+        if reference is None:
+            reference = results
+        elif results != reference:
+            for index, (got, want) in enumerate(zip(results, reference)):
+                if got != want:
+                    print("ERROR: job {} at {} threads returned {} expected {}".format(index, n_threads, got, want))
+            failed = True
+    prediction.batch_threads = 1
+
+    if not failed:
+        print("Batch threading tests passed - identical results at 1, 2 and 8 threads")
+    return failed
+
+
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
     failed = test_export_trial_does_not_mutate_caller_window(my_predbat)
@@ -393,6 +426,7 @@ def run_prediction_batch_tests(my_predbat):
         failed |= test_batch_is_lazy(my_predbat)
         failed |= test_batch_cache_and_dedup(my_predbat)
         failed |= test_batch_fallbacks(my_predbat)
+        failed |= test_batch_threads_do_not_change_results(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
         my_predbat.prediction_kernel_enable = False
