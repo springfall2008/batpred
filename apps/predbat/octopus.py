@@ -2975,7 +2975,7 @@ class Octopus:
                                 # Join via octopus event (Bottle Cap Dave)
                                 cmd = "octopus_energy/join_octoplus_saving_session_event, event_code={}, entity_id={}".format(code, entity_id)
                                 # result = self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id, return_response=True)
-                                # 
+                                #
                                 # at present bottle cap dave integration doesn't return a response from the saving session so can't check it succeeds
                                 # see https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/issues/1823
                                 # so for now dummy a positive response
