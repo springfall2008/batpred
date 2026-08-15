@@ -17,9 +17,9 @@ equal value is always preferred.
 
 The pass can only defer exports that exist when it runs, so these tests also pin its position in
 optimise_all_windows: it has to run after every pass that can turn an export on, otherwise the
-exports those passes add are never considered for deferral (#4478). tweak_plan in particular only
-walks the first few windows of the plan, so it can only ever add exports at the front - exactly the
-ones this pass exists to push back.
+exports those passes add are never considered for deferral (#4478). The budgeted plan pass in particular
+only reaches the near-term windows, so it can only ever add exports at the front - exactly the ones this
+pass exists to push back.
 """
 
 from tests.test_infra import reset_rates, reset_inverter, update_rates_export
@@ -96,8 +96,7 @@ def _record_pass_order(my_predbat):
     stubbed = (
         "optimise_levels_pass",
         "optimise_detailed_pass",
-        "optimise_full_second_pass",
-        "tweak_plan",
+        "optimise_plan_pass",
         "optimise_solar",
         "optimise_swap_export",
         "optimise_swap_charge",
@@ -131,8 +130,7 @@ def _record_pass_order(my_predbat):
 
     my_predbat.optimise_levels_pass = stub("levels", zeros12)
     my_predbat.optimise_detailed_pass = stub("detailed", zeros8)
-    my_predbat.optimise_full_second_pass = stub("second_pass", zeros8)
-    my_predbat.tweak_plan = stub("tweak", zeros6)
+    my_predbat.optimise_plan_pass = stub("plan_pass", zeros6)
     my_predbat.optimise_solar = stub("solar", zeros6)
     my_predbat.optimise_swap_export = stub("swap_export", None)
     my_predbat.optimise_swap_charge = stub("swap_charge", None)
@@ -197,7 +195,7 @@ def run_optimise_swap_export_tests(my_predbat):
 
     # ---------------------------------------------------------------------------------------------
     # Ordering regression (#4478): the export swap must run after every pass that can enable an
-    # export, otherwise the exports tweak_plan / the second pass / optimise_solar add are never
+    # export, otherwise the exports the plan pass / optimise_solar add are never
     # considered for deferral and stay pinned at the front of the plan.
     # ---------------------------------------------------------------------------------------------
     for second_pass in (False, True):
@@ -213,7 +211,7 @@ def run_optimise_swap_export_tests(my_predbat):
         finally:
             restore()
 
-        adding_pass = "second_pass" if second_pass else "tweak"
+        adding_pass = "plan_pass"
         if "swap_export" not in order:
             print("ERROR: optimise_swap_export was not called at all, order {}".format(order))
             failed = True

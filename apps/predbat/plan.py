@@ -22,11 +22,17 @@ import traceback
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
-from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
+
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
+from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export
 from prediction_kernel import kernel_status_summary
 from predbat_metrics import metrics
 import time
+
+# How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
+# windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
+# picks up value further out at a proportional cost in planning time.
+PLAN_PASS_WINDOW_BUDGET = 8
 
 
 def slots_around(target_slots, slot_lengths):
@@ -2874,19 +2880,30 @@ class Plan:
         for window_n in range(len(self.charge_limit_best)):
             self.charge_window_best[window_n]["target"] = self.charge_limit_best[window_n]
 
-    def tweak_plan(self, end_record):
-        """
-        Tweak existing plan only
+    def optimise_plan_pass(self, end_record, budget=0, debug_mode=False):
+        """Re-optimise each charge and export window of the settled plan, in time order.
 
-        The metric is measured from the plan we were handed rather than taken from the caller: optimise_swap_export
-        runs immediately before this and mutates the plan without its return value being used, so the caller's
-        metric is already stale. Each window change below is then only kept when it improves on that baseline.
+        This is the pass that runs after the levels and detailed passes have chosen the plan's shape.
+        Each window is re-optimised against the whole plan and the change is kept only when it improves
+        on the plan we were handed, so the pass is monotonic.
+
+        budget caps how many windows are visited; 0 visits every window in the record. The cheap default
+        exists because the near-term windows are the ones about to be executed, but the cap is what makes
+        the fast path miss value further out - see calculate_second_pass, which runs unbudgeted.
+
+        The metric is measured from the plan in hand rather than accepted from the caller, so it cannot
+        be handed a stale one - passes ahead of this can mutate the plan without their return value being
+        threaded through, and the swap passes that follow re-baseline for the same reason.
+
+        Each export window's start is reset to start_orig before it is re-optimised. Without that reset a
+        window trimmed by an earlier pass can only ever be trimmed further, so the pass cannot recover a
+        window it narrowed on a plan that has since changed underneath it.
         """
         record_charge_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.charge_window_best), 1)
         record_export_windows = max(self.max_charge_windows(end_record + self.minutes_now, self.export_window_best), 1)
         selected = self.plan_metric_now(end_record)
         curr = self.currency_symbols[1]
-        self.log("Tweak plan optimisation started metric {}{}, cost {}{}".format(dp2(selected[0]), curr, dp2(selected[1]), curr))
+        self.log("Plan pass optimisation started metric {}{}, cost {}{}, budget {}".format(dp2(selected[0]), curr, dp2(selected[1]), curr, budget if budget else "unlimited"))
         count = 0
         window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
         for key in window_sorted:
@@ -2930,16 +2947,20 @@ class Plan:
                 self.export_window_best[window_n]["start"] = best_start
                 candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
                 selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot)
+            if (count % 16) == 0 and self.debug_enable:
+                log_metric, log_cost, log_keep, log_cycle, log_carbon, log_import = selected
+                self.log("Plan pass type {} window {} metric {} metric_keep {} carbon {} import {} cost {}".format(typ, window_n, log_metric, dp2(log_keep), dp0(log_carbon), dp2(log_import), dp2(log_cost)))
             count += 1
-            if count >= 8:
+            if budget and count >= budget:
                 break
 
         best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = selected
         self.log(
-            "Tweak optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh, changed {} window(s)".format(
+            "Plan pass optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh, visited {} window(s)".format(
                 dp2(best_metric), curr, dp2(best_cost), curr, dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import), count
             )
         )
+        self.plan_write_debug(debug_mode, "plan_pass.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, end_record)
         return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
     def plan_write_debug(self, debug_mode, name, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, end_record, test=False, prediction=None):
@@ -3502,66 +3523,6 @@ class Plan:
                 return False
             return True
         return False
-
-    def optimise_full_second_pass(self, best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=False):
-        """
-        Second pass optimisation of the charge and export windows
-        """
-        self.log("Second pass optimisation started")
-
-        # Baseline the plan we were handed, for the same reason as tweak_plan: optimise_swap_export has already
-        # mutated it since the caller's metric was measured.
-        selected = self.plan_metric_now(self.end_record)
-
-        count = 0
-        window_sorted, window_index = self.sort_window_by_time_combined(self.charge_window_best[:record_charge_windows], self.export_window_best[:record_export_windows])
-        for key in window_sorted:
-            typ = window_index[key]["type"]
-            window_n = window_index[key]["id"]
-            if typ == "c":
-                if self.allow_this_charge_window(window_n):
-                    snapshot = self.plan_window_snapshot(typ, window_n)
-                    best_soc, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = self.optimise_charge_limit(
-                        window_n,
-                        record_charge_windows,
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        end_record=self.end_record,
-                    )
-                    self.charge_limit_best[window_n] = best_soc
-                    candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
-                    selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot)
-            elif typ == "d":
-                if self.allow_this_export_window(window_n):
-                    snapshot = self.plan_window_snapshot(typ, window_n)
-                    best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = self.optimise_export(
-                        window_n,
-                        record_export_windows,
-                        self.charge_limit_best,
-                        self.charge_window_best,
-                        self.export_window_best,
-                        self.export_limits_best,
-                        end_record=self.end_record,
-                    )
-                    self.export_limits_best[window_n] = best_soc
-                    self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                    self.export_window_best[window_n]["start"] = best_start
-                    candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
-                    selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot)
-            if (count % 16) == 0:
-                log_metric, log_cost, log_keep, log_cycle, log_carbon, log_import = selected
-                self.log("Final optimisation type {} window {} metric {} metric_keep {} best_carbon {} best_import {} cost {}".format(typ, window_n, log_metric, dp2(log_keep), dp0(log_carbon), dp2(log_import), dp2(log_cost)))
-            count += 1
-
-        # best_battery_value and best_soc_min stay as the caller passed them in, as they did before this pass
-        # measured its own metric
-        best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = selected
-        self.log("Second pass optimisation finished metric {} cost {} metric_keep {} cycle {} carbon {} import {}".format(best_metric, dp2(best_cost), dp2(best_keep), dp2(best_cycle), dp0(best_carbon), dp2(best_import)))
-
-        self.plan_write_debug(debug_mode, "plan_pass2.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
-        return best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value
 
     def optimise_detailed_pass(
         self,
@@ -4126,26 +4087,20 @@ class Plan:
             record_export_windows,
             debug_mode=debug_mode,
         )
-        # Second pass optimisation
-        if self.calculate_second_pass:
-            # Full second pass (slower)
-            best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value = self.optimise_full_second_pass(
-                best_metric, best_cost, best_keep, best_soc_min, best_cycle, best_carbon, best_import, best_battery_value, record_charge_windows, record_export_windows, debug_mode=debug_mode
-            )
-        else:
-            # Tweak plan (faster)
-            best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.tweak_plan(self.end_record)
+        # Re-optimise each window of the settled plan. calculate_second_pass lifts the window budget so
+        # every window in the record is revisited rather than just the near-term ones (slower).
+        best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.optimise_plan_pass(self.end_record, budget=0 if self.calculate_second_pass else PLAN_PASS_WINDOW_BUDGET, debug_mode=debug_mode)
 
         # Export more solar - enable freeze export on idle solar windows if it doesn't cost too much
         if self.export_more_solar:
             best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import = self.optimise_solar(best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import, record_export_windows, debug_mode=debug_mode)
 
         # Swaps run once all other passes have settled. The export swap can only defer an export that
-        # already exists when it runs, and tweak/second/solar all turn exports on - tweak_plan only walks
-        # the first few windows of the plan, so the exports it adds are always at the front, exactly the
-        # ones the swap exists to push back. Running the swap before them left those pinned in place
-        # (#4478). The charge swap follows for the mirror-image reason: a strictly-improving pairwise
-        # charge move must not be subsequently undone by a non-monotonic pass.
+        # already exists when it runs, and the plan pass and solar pass both turn exports on - on the
+        # budgeted plan pass the windows it reaches are the near-term ones, so the exports it adds are at
+        # the front, exactly the ones the swap exists to push back. Running the swap before them left
+        # those pinned in place (#4478). The charge swap follows for the mirror-image reason: a
+        # strictly-improving pairwise charge move must not be subsequently undone by a non-monotonic pass.
         self.optimise_swap_export(record_charge_windows, record_export_windows, debug_mode=debug_mode)
         self.plan_write_debug(debug_mode, "plan_swap_final.html", self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
         self.optimise_swap_charge(record_charge_windows, debug_mode=debug_mode)

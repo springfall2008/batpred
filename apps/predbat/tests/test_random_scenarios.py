@@ -21,6 +21,7 @@ import traceback
 import yaml
 
 from tests.test_infra import reset_inverter
+from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -556,7 +557,12 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.pv_forecast_minute = pv_normal
     my_predbat.pv_forecast_minute10 = pv10
     my_predbat.pv_forecast_minute90 = pv90
-    my_predbat.calculate_second_pass = False
+
+    # Follow the shipped default rather than pinning a literal, so the benchmark measures the planning
+    # path users actually run. Read the CONFIG_ITEMS default rather than get_arg so this stays independent
+    # of whatever the template debug dump happened to capture - the point of pinning it here at all is that
+    # every scenario is planned the same way regardless of which template it was run against.
+    my_predbat.calculate_second_pass = my_predbat.config_index["calculate_second_pass"]["default"]
 
     # --- Rebuild PV step dicts via step_data_history ---
     my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(
@@ -631,6 +637,8 @@ def run_scenario(my_predbat, scenario, debug=False):
         "seed": seed,
         "metric": None,
         "cost": None,
+        "cost_pv10": None,
+        "cost_pv90": None,
         "import_kwh_battery": None,
         "import_kwh_house": None,
         "export_kwh": None,
@@ -657,7 +665,7 @@ def run_scenario(my_predbat, scenario, debug=False):
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
-            False,
+            PV_SCENARIO_NOMINAL,
             end_record=my_predbat.end_record,
             save="best",
         )
@@ -668,9 +676,22 @@ def run_scenario(my_predbat, scenario, debug=False):
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
-            True,
+            PV_SCENARIO_PV10,
             end_record=my_predbat.end_record,
         )
+
+        # PV90 prediction (optimistic solar, lighter load). Scoring the plan in each future is what makes a
+        # hedging feature measurable at all: a plan that weights PV90 spends money the central forecast says
+        # is wasted, so scoring only the nominal future marks it down no matter how well it does on the day
+        # it was hedging for.
+        cost90 = my_predbat.run_prediction(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            PV_SCENARIO_PV90,
+            end_record=my_predbat.end_record,
+        )[0]
 
         # Combined metric: cost + battery value adjustment + pv10 weighting + carbon + self-sufficiency + cycle cost
         metric, _ = my_predbat.compute_metric(
@@ -694,6 +715,8 @@ def run_scenario(my_predbat, scenario, debug=False):
             {
                 "metric": round(float(metric), 4),
                 "cost": round(float(cost), 4),
+                "cost_pv10": round(float(cost10), 4),
+                "cost_pv90": round(float(cost90), 4),
                 "import_kwh_battery": round(float(import_kwh_battery), 4),
                 "import_kwh_house": round(float(import_kwh_house), 4),
                 "export_kwh": round(float(export_kwh), 4),
@@ -967,6 +990,9 @@ def compare_results(file_a, file_b):
     metric_diffs = []
     cost_diffs = []
     runtime_diffs = []
+    # Cost in each simulated future. Result files written before these were recorded simply contribute
+    # nothing here, so old baselines stay comparable on the columns they do carry.
+    future_diffs = {"cost_pv10": [], "cost": [], "cost_pv90": []}
 
     for sid in common_ids:
         ra = results_a[sid]
@@ -1021,6 +1047,12 @@ def compare_results(file_a, file_b):
         if ta is not None and tb is not None:
             runtime_diffs.append(tb - ta)
 
+        for key, diffs in future_diffs.items():
+            fa = ra.get(key)
+            fb = rb.get(key)
+            if fa is not None and fb is not None:
+                diffs.append(fb - fa)
+
         print("{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>8}".format(
             sid, ma_str, mb_str, met_diff_str, ca_str, cb_str, cost_diff_str, ta_str, tb_str, status
         ))
@@ -1051,6 +1083,24 @@ def compare_results(file_a, file_b):
         print("  Average diff : {:+.4f}".format(avg_cost))
         print("  Min diff     : {:+.4f}".format(min(cost_diffs)))
         print("  Max diff     : {:+.4f}".format(max(cost_diffs)))
+
+    # The same plan scored in each of the three simulated futures. A change that helps only when the sun
+    # shows up - PV90 weighting is the obvious one - is invisible in the nominal column and shows here.
+    labels = {"cost_pv10": "PV10 (cloudy, heavier load)", "cost": "nominal", "cost_pv90": "PV90 (sunny, lighter load)"}
+    if any(future_diffs.values()):
+        print("")
+        print("Cost by simulated future (- = B cheaper in that future):")
+        print("  {:<30} {:>10} {:>10} {:>10} {:>8} {:>8} {:>10}".format("future", "avg", "min", "max", "better", "worse", "unchanged"))
+        for key in ("cost_pv10", "cost", "cost_pv90"):
+            diffs = future_diffs[key]
+            if not diffs:
+                print("  {:<30} {:>10}".format(labels[key], "n/a"))
+                continue
+            better = sum(1 for d in diffs if d < -0.01)
+            worse = sum(1 for d in diffs if d > 0.01)
+            print("  {:<30} {:>+10.4f} {:>+10.4f} {:>+10.4f} {:>8} {:>8} {:>10}".format(
+                labels[key], sum(diffs) / len(diffs), min(diffs), max(diffs), better, worse, len(diffs) - better - worse
+            ))
 
     if runtime_diffs:
         avg_rt_a = sum(ra.get("runtime_s") or 0 for ra in results_a.values() if ra.get("runtime_s") is not None) / max(1, sum(1 for ra in results_a.values() if ra.get("runtime_s") is not None))
