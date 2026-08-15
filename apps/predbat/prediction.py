@@ -355,11 +355,15 @@ class Prediction:
             max_soc,
         )
 
-    def thread_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+    def _prepare_export(self, this_export_limit, start, window_n, export_window, export_limits, all_n):
+        """Build the trial export limits and window list - shared by thread_run_prediction_export and the batch path.
+
+        The trial start is applied to a private copy of the window rather than written into the
+        caller's list: with a process pool each worker mutated its own unpickled copy, but a batched
+        fan-out shares one list across every job in the batch, so an in-place write would corrupt the
+        other trials of the same window. Only ["end"] is ever read back by the caller
+        (optimise_export), so nothing depends on the write being visible.
         """
-        Run prediction in a thread
-        """
-        # Store try value into the window
         export_limits = export_limits.copy()
 
         if all_n:
@@ -370,7 +374,16 @@ class Prediction:
             # Adjust start
             window = export_window[window_n]
             start = min(start, window["end"] - 5)
-            export_window[window_n]["start"] = start
+            export_window = list(export_window)
+            export_window[window_n] = dict(window, start=start)
+
+        return export_window, export_limits
+
+    def thread_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """
+        Run prediction in a thread
+        """
+        export_window, export_limits = self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n)
 
         (
             metricmid,
