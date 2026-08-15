@@ -406,6 +406,8 @@ class MockConfigProvider:
             # Car charging config for each car (postfix _0, _1, etc.)
             "car_charging_rate_0": 7400,
             "car_charging_rate_1": 7400,
+            "car_charging_rate_2": 7400,
+            "car_charging_rate_3": 7400,
             "car_charging_battery_size_0": 100.0,
             "car_charging_battery_size_1": 100.0,
             "car_charging_limit_0": 100.0,

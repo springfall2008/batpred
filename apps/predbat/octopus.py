@@ -1094,10 +1094,15 @@ class OctopusAPI(ComponentBase):
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
         devices = self.get_intelligent_devices()
         if devices:
+            # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
+            # account) aren't actively charging, so exclude them from the entity lists and from
+            # the num_cars count below - otherwise a stale suspended device can silently push
+            # num_cars past what Predbat actually supports (see fetch_config_options' clamp).
+            active_devices = {device_id: device for device_id, device in devices.items() if not device.get("suspended")}
             slot_list = []
             ready_list = []
             limit_list = []
-            for device_id in devices:
+            for device_id in active_devices:
                 index_suffix = self.device_id_to_index_suffix(device_id)
                 slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
                 ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
@@ -1105,10 +1110,10 @@ class OctopusAPI(ComponentBase):
             self.set_arg("octopus_intelligent_slot", slot_list)
             self.set_arg("octopus_ready_time", ready_list)
             self.set_arg("octopus_charge_limit", limit_list)
-            # Increase number of cars if we have more devices than the current limit to ensure all devices can be configured
+            # Increase number of cars if we have more active devices than the current limit to ensure all devices can be configured
             num_cars = self.get_arg("num_cars", 0)
-            if num_cars < len(devices):
-                self.set_arg("num_cars", len(devices))
+            if num_cars < len(active_devices):
+                self.set_arg("num_cars", len(active_devices))
 
     async def async_get_saving_sessions(self, account_id):
         """

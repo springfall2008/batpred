@@ -27,7 +27,7 @@ import platform
 import sys
 import weakref
 
-from const import PREDICT_STEP
+from const import PREDICT_STEP, PREDBAT_MAX_CARS
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
@@ -35,7 +35,7 @@ KERNEL_ABI_VERSION = 3
 KERNEL_PARITY_REVISION = 5
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
-KERNEL_MAX_CARS = 4
+KERNEL_MAX_CARS = PREDBAT_MAX_CARS
 
 # Module-level loader state, inherited by forked worker processes
 KERNEL_LIB = None
