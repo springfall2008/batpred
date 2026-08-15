@@ -51,6 +51,7 @@ byok
 cadata
 calib
 Cantarell
+CDLL
 cdn
 Cerbo
 cexxxx
@@ -77,6 +78,7 @@ corruptplans
 cprofile
 creds
 crosscharge
+ctypes
 customauthorizer
 customisation
 Customise
@@ -491,6 +493,7 @@ temperation
 Teslemetry
 testname
 thirdparty
+threadpool
 timea
 timeb
 timec
@@ -522,6 +525,8 @@ unconfigured
 undiscounted
 unnormalised
 unparseable
+unpickled
+unpushed
 unsmoothed
 unstaged
 urlsafe

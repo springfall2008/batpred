@@ -23,7 +23,7 @@ three PV futures, `kernel_parity` green, full suite green including slow tests (
 
 Measured on `cases/random_scenarios.yaml` scenario 0 (the benchmark scenario), `threads=0`:
 
-```
+```text
 calculate_plan   2418.4 ms  ->  1758.5 ms     -27%
   C++ pk_run     1056.5 ms  ->   380.5 ms
   Python         1361.9 ms  ->  1378.0 ms     unchanged, as expected
@@ -71,7 +71,7 @@ to change at all** — only what `launch_*` returns and when the work actually h
 
 Batch sizes this produces (scenario 0, from the profile):
 
-```
+```text
 launch_run_prediction_charge          10,698
 launch_run_prediction_export           5,436
 launch_run_prediction_single           4,752
@@ -79,6 +79,7 @@ launch_run_prediction_charge_min_max   3,294
                                       ------
                                       24,180 launches, ~19,209 reaching the kernel
 ```
+
 `optimise_charge_limit_price_threads` fans out ~1176 at a time (392 candidates x 3 PV scenarios),
 `optimise_charge_limit` ~900, `optimise_export` ~628. Those are the batches.
 
@@ -140,10 +141,12 @@ A per-job `status` is returned precisely so one malformed scenario cannot discar
 1. **`thread_run_prediction_export` used to mutate the caller's window dict** (`export_window[n]["start"] = start`).
    That was only safe because each pool worker mutated its own unpickled copy. Any shared-memory
    parallelism needs it local. The fix is on branch `perf/threadpool-prototype`:
+
    ```python
    export_window = list(export_window)
    export_window[window_n] = dict(window, start=start)
    ```
+
    Only `["end"]` is ever read back by `optimise_export`, so nothing depends on the write being
    visible. **Port this across.**
 
