@@ -1331,13 +1331,6 @@ class Fetch:
         if self.import_today:
             self.cost_today_sofar, self.carbon_today_sofar = self.today_cost(self.import_today, self.export_today, self.car_charging_energy, self.load_minutes, save=save)
 
-        # Work out car plan? Runs after the PV forecast so car_charging_solar can place slots on
-        # predicted sunshine - fetch_pv_forecast_and_dawn() above has already populated it, so this
-        # only has to sit below that call rather than fetch again. Nothing between here and the old
-        # position of this block uses the car plan.
-        self.fetch_sensor_data_car_planning()
-        # Publish the car plan
-        self.publish_car_plan()
 
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
@@ -1368,6 +1361,15 @@ class Fetch:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
         else:
             self.load_inday_adjustment = 1.0
+
+        # Work out car plan? Runs after the PV forecast so car_charging_solar can place slots on predicted
+        # sunshine, and after the load forecast is finished - the modal filter above rewrites load_minutes,
+        # the history forecast adds to load_forecast, and load_inday_adjustment is only computed here, all
+        # three of which feed the house load that solar surplus is measured against. Nothing between the
+        # PV forecast and this point uses the car plan.
+        self.fetch_sensor_data_car_planning()
+        # Publish the car plan
+        self.publish_car_plan()
 
         force_replan = False
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
