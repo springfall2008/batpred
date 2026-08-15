@@ -1491,11 +1491,10 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
-            # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity.
-            # The device/detail 'capacity' field is an integer that truncates fractional kW ratings (e.g. a 10.5kW
-            # KH10.5 inverter reports capacity=10), so allow up to just under the next whole kW above it.
+            # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
+            # (inverter_capacity is already corrected for half-kW deviceTypes by capacity_watts())
             if inverter_capacity:
-                self.fdpwr_max[deviceSN] = min(inverter_capacity + 999.0, self.fdpwr_max[deviceSN])
+                self.fdpwr_max[deviceSN] = min(inverter_capacity, self.fdpwr_max[deviceSN])
 
             # Min SOC On grid can change as Predbat writes reserve so this must be the real min
             self.fdsoc_min[deviceSN] = result.get("properties", {}).get("fdsoc", {}).get("range", {}).get("min", 10)

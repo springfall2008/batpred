@@ -2216,15 +2216,16 @@ def test_api_get_scheduler(my_predbat):
     return False
 
 
-def test_api_get_scheduler_half_kw_capacity_tolerance(my_predbat):
+def test_api_get_scheduler_half_kw_capacity(my_predbat):
     """
     Test get_scheduler doesn't clamp fdpwr_max below a genuine half-kW rating.
 
     Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter reports
     capacity=10 even though the scheduler API correctly reports a 10500W fdpwr max. The clamp
-    should tolerate up to just under the next whole kW instead of truncating the real rating.
+    uses capacity_watts(), which corrects the half-kW deviceType before capping, so it should
+    still clamp to the true 10500W rather than the truncated 10000W.
     """
-    print("  - test_api_get_scheduler_half_kw_capacity_tolerance")
+    print("  - test_api_get_scheduler_half_kw_capacity")
 
     fox = MockFoxAPIWithRequests()
     deviceSN = "TEST123456"
@@ -2252,8 +2253,8 @@ def test_api_get_scheduler_half_kw_capacity_tolerance(my_predbat):
 
 def test_api_get_scheduler_still_clamps_bogus_fdpwr(my_predbat):
     """
-    Test get_scheduler still clamps a genuinely bogus fdpwr max that exceeds even the
-    next whole kW above the reported capacity.
+    Test get_scheduler still clamps a genuinely bogus fdpwr max that exceeds the
+    device's rated capacity.
     """
     print("  - test_api_get_scheduler_still_clamps_bogus_fdpwr")
 
@@ -2276,7 +2277,7 @@ def test_api_get_scheduler_still_clamps_bogus_fdpwr(my_predbat):
 
     asyncio.run(fox.get_scheduler(deviceSN))
 
-    assert fox.fdpwr_max[deviceSN] == 8999
+    assert fox.fdpwr_max[deviceSN] == 8000
 
     return False
 
@@ -6922,7 +6923,7 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_battery_charging_time(my_predbat)
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
-        failed |= test_api_get_scheduler_half_kw_capacity_tolerance(my_predbat)
+        failed |= test_api_get_scheduler_half_kw_capacity(my_predbat)
         failed |= test_api_get_scheduler_still_clamps_bogus_fdpwr(my_predbat)
         failed |= test_api_get_scheduler_v2_evo(my_predbat)
         failed |= test_api_get_scheduler_v2_uses_real_properties(my_predbat)
