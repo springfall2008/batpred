@@ -53,8 +53,13 @@ def resolve_multi_inverter_status(status_per_inverter, current_status):
 
     Falls through to ``current_status`` unchanged when no inverter reached a core charge/export state
     at all (pure Demand, Read-Only, Calibration, or a Hold-for-car/iBoost annotation with nothing else
-    going on) - those cases are already correct and untouched by this resolution.
+    going on) - those cases are already correct and untouched by this resolution. Calibration always
+    wins outright even if ``status_per_inverter`` holds a stale core state from an inverter processed
+    before the one that entered calibration mode, since calibration force-overrides every inverter's
+    controls and that must not be hidden behind a leftover Charging/Exporting label.
     """
+    if current_status == "Calibration":
+        return current_status
     states_present = set(status_per_inverter.values())
     charge_states_present = states_present & CHARGE_SIDE_STATES
     export_states_present = states_present & EXPORT_SIDE_STATES
@@ -529,10 +534,9 @@ class Execute:
             # iBoost running?
             boostHolding = False
             if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full:
-                # Only pause discharge on this inverter (and count it as holding for the freeze-immediate
-                # logic below) if the fleet isn't already Charging/Exporting - pausing would conflict with
-                # that. But record the status annotation regardless, otherwise a genuinely-holding inverter's
-                # "Hold for iBoost" info is silently dropped whenever another inverter is Charging/Exporting.
+                # Only pause discharge on this inverter, and only annotate the status as held for
+                # iBoost, if the fleet isn't already Charging/Exporting - pausing would conflict with
+                # that, and the annotation must stay coupled to whether a hold actually happened here.
                 if status not in ["Exporting", "Charging"]:
                     if inverter.inv_has_timed_pause:
                         if resetPause:
@@ -547,11 +551,11 @@ class Execute:
                             resetReserve = False
                     boostHolding = True
                     self.log("Disabling battery discharge whilst iBoost is running")
-                if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
-                    if status == "Demand":
-                        status = "Hold for iBoost"
-                    else:
-                        status_hold_iboost = ", Hold for iBoost"
+                    if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
+                        if status == "Demand":
+                            status = "Hold for iBoost"
+                        else:
+                            status_hold_iboost = ", Hold for iBoost"
 
             # Reset charge/discharge rate
             if resetPause:

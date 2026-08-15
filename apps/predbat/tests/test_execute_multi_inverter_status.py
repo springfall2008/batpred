@@ -92,4 +92,10 @@ def test_multi_inverter_status(my_predbat):
         print("  ERROR: expected 'Calibration' preserved with no per-inverter core states recorded, got {!r}".format(result))
         failed = True
 
+    print("Test: Calibration is preserved even when an earlier-processed inverter left a stale core state behind")
+    result = resolve_multi_inverter_status({0: "Charging"}, "Calibration")
+    if result != "Calibration":
+        print("  ERROR: expected 'Calibration' to override a stale core state left by an earlier inverter, got {!r}".format(result))
+        failed = True
+
     return failed

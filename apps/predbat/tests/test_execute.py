@@ -642,6 +642,26 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Inverter is actively Charging, not merely holding - the discharge-hold action is correctly
+    # skipped (status is in ["Exporting", "Charging"]), so no pause/reserve change happens. The
+    # "Hold for iBoost" annotation must not be appended either, since nothing was actually held for
+    # iBoost this cycle - it should stay coupled to whether the hold action fired, not fire regardless.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_iboost_no_hold_text",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Charging",
+        assert_pause_discharge=False,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+    )
+    if failed:
+        return failed
+
     my_predbat.iboost_prevent_discharge = False
     failed |= run_execute_test(my_predbat, "no_charge_iboost2", set_charge_window=True, set_export_window=True)
     my_predbat.iboost_running_full = False
@@ -1797,6 +1817,7 @@ def run_execute_tests(my_predbat):
         soc_kw=1,
         assert_pause_discharge_array=[False, True],
         assert_status="Charging",
+        assert_status_extra=" target Charging 5%-10% / Freeze charging 15%",
         assert_reserve_array=[0, 0],
         assert_soc_target_array=[10, 100],
         assert_immediate_soc_target_array=[10, 15],
