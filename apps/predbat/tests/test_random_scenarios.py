@@ -999,6 +999,9 @@ def _save_results(results, results_file, scenarios_file, template_yaml):
     }
     with open(results_file, "w") as f:
         json.dump(output, f, indent=2)
+        # Trailing newline so the checked-in baseline does not trip the end-of-file hook every time it is
+        # regenerated - that is what produced the stray pre-commit.ci fixup commits on earlier branches.
+        f.write("\n")
     passed = sum(1 for r in results if not r["failed"])
     failed = len(results) - passed
     print("Wrote {} result(s) to {} ({} passed, {} failed)".format(len(results), results_file, passed, failed))
