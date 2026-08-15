@@ -2527,7 +2527,19 @@ class Inverter:
                 if current is None:
                     self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
                 elif current != target_soc:
-                    self.rest_setDischargeTarget(target_soc)
+                    # Without Enable_Charge_Target on, the inverter ignores a written discharge
+                    # target - GivTCP still reports the write as successful, but it never sticks, so
+                    # this repeats every cycle indefinitely (#4517). adjust_battery_target() already
+                    # enables this before writing a charge target; mirror that here. No-ops if
+                    # already enabled.
+                    # Unconfirmed whether every rest_v3 inverter actually has this register - if
+                    # enabling itself fails, don't also attempt a discharge-target write we already
+                    # know is doomed. That keeps a genuinely unsupported inverter retrying one REST
+                    # endpoint each cycle instead of two.
+                    if self.rest_enableChargeTarget(True):
+                        self.rest_setDischargeTarget(target_soc)
+                    else:
+                        self.log("Inverter {} Unable to enable charge target, discharge target not written".format(self.id))
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:

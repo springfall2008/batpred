@@ -344,6 +344,10 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     inv.rest_data["Control"] = {}
     inv.rest_data["Control"]["Enable_Discharge_Schedule"] = prev_force_export
     inv.rest_data["Control"]["Mode"] = prev_mode
+    # Already enabled, matching a normal working inverter - keeps this helper's assertions about the
+    # discharge target/slot/mode writes focused on those, rather than also exercising the
+    # enableChargeTarget guard (#4517 follow-up), which has its own dedicated test.
+    inv.rest_data["Control"]["Enable_Charge_Target"] = "enable"
     inv.rest_data["Timeslots"] = {}
     inv.rest_data["Timeslots"]["Discharge_start_time_slot_1"] = prev_start
     inv.rest_data["Timeslots"]["Discharge_end_time_slot_1"] = prev_end
@@ -1927,6 +1931,138 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
     return failed
 
 
+def test_discharge_target_enables_before_write(test_name, ha, inv, dummy_rest):
+    """
+    Regression test for issue #4517 (follow-up): on some inverters (confirmed against a real
+    reporter's REST_Response.txt - AC-coupled, GivTCP reports Control.Enable_Charge_Target as
+    "disable" and Control.Discharge_Target_SOC_1 is entirely absent), a written discharge target
+    never sticks while Enable_Charge_Target stays off - GivTCP's own log still reports each write as
+    a success, but it doesn't take, so adjust_force_export sees a permanent mismatch and rewrites
+    every cycle indefinitely.
+
+    adjust_battery_target() already calls rest_enableChargeTarget(True) before writing a charge
+    target for exactly this reason (the register is documented to be ignored otherwise) - this
+    mirrors that same call for the discharge target write. Not confirmed to be the true root cause
+    on real hardware yet (correlational, from one working and one broken sample), but low-risk: it's
+    a no-op wherever Enable_Charge_Target is already on, which is the common case exercised by every
+    other discharge-target test in this file.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+
+    try:
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.reserve_percent = 20
+
+        start_time = "03:33:00"
+        end_time = "04:44:00"
+        ts = datetime.strptime(start_time, "%H:%M:%S")
+        te = datetime.strptime(end_time, "%H:%M:%S")
+
+        # Mirrors a reporter's real REST_Response.txt: Enable_Charge_Target off, no
+        # Discharge_Target_SOC_1 key in Control at all, raw.invertor reporting a plausible but wrong
+        # value (so rest_readDischargeTarget's fallback doesn't return None and skip the write).
+        # Timeslots/Enable_Discharge_Schedule/Mode already match the new values so only the discharge
+        # target write itself is exercised - the slot/mode writes have their own dedicated tests.
+        inv.rest_data = {
+            "Control": {"Mode": "Timed Export", "Enable_Discharge_Schedule": "on", "Enable_Charge_Target": "disable"},
+            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
+            "raw": {"invertor": {"discharge_target_soc_1": "4"}},
+        }
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+
+        # First queued response: consumed by rest_enableChargeTarget's own readback, showing GivTCP
+        # accepted the enable.
+        enabled = copy.deepcopy(inv.rest_data)
+        enabled["Control"]["Enable_Charge_Target"] = "enable"
+        dummy_rest.queue_rest_data(enabled)
+
+        # Second queued response: consumed by rest_setDischargeTarget's readback, now that the
+        # register is enabled the write finally sticks.
+        settled = copy.deepcopy(enabled)
+        settled["Control"]["Discharge_Target_SOC_1"] = "20"
+        dummy_rest.queue_rest_data(settled)
+
+        inv.adjust_force_export(True, ts, te)
+
+        commands = dummy_rest.get_commands()
+        expect_commands = [
+            ["dummy/enableChargeTarget", {"state": "enable"}],
+            ["dummy/setDischargeTarget", {"dischargeToPercent": 20, "slot": 1}],
+        ]
+        if json.dumps(commands[:2]) != json.dumps(expect_commands):
+            print("ERROR: {}: expected enableChargeTarget before setDischargeTarget, got {}".format(test_name, commands))
+            failed = True
+    finally:
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+
+    return failed
+
+
+def test_discharge_target_skips_write_when_enable_fails(test_name, ha, inv, dummy_rest):
+    """
+    Regression test for issue #4517 (follow-up): if Enable_Charge_Target can't be turned on at all -
+    e.g. a genuinely unsupported register on this inverter, not just left off - don't also attempt a
+    discharge-target write we already know is doomed. Without this, a genuinely unsupported inverter
+    would retry *two* REST endpoints every cycle (enableChargeTarget then setDischargeTarget) instead
+    of the one it retried before this fix, which would make the write-storm this fix exists to
+    reduce worse, not better, for exactly the inverters it can't help.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+
+    try:
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.reserve_percent = 20
+
+        start_time = "03:33:00"
+        end_time = "04:44:00"
+        ts = datetime.strptime(start_time, "%H:%M:%S")
+        te = datetime.strptime(end_time, "%H:%M:%S")
+
+        inv.rest_data = {
+            "Control": {"Mode": "Timed Export", "Enable_Discharge_Schedule": "on", "Enable_Charge_Target": "disable"},
+            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
+            "raw": {"invertor": {"discharge_target_soc_1": "4"}},
+        }
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+        # Enable_Charge_Target never flips to "enable" on any readback - simulates a register the
+        # inverter genuinely doesn't support, so rest_enableChargeTarget exhausts its retries and
+        # returns False.
+
+        inv.adjust_force_export(True, ts, te)
+
+        commands = dummy_rest.get_commands()
+        set_discharge_target_commands = [c for c in commands if c[0] == "dummy/setDischargeTarget"]
+        if set_discharge_target_commands:
+            print("ERROR: {}: setDischargeTarget should not be attempted when enabling fails, got {}".format(test_name, commands))
+            failed = True
+        enable_charge_target_commands = [c for c in commands if c[0] == "dummy/enableChargeTarget"]
+        if not enable_charge_target_commands:
+            print("ERROR: {}: expected at least one enableChargeTarget attempt, got {}".format(test_name, commands))
+            failed = True
+    finally:
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+
+    return failed
+
+
 def test_discharge_target_read_prefers_control(test_name, ha, inv):
     """
     Regression test for issue #4517: a discharge target write kept firing every cycle even when
@@ -3170,6 +3306,18 @@ charge_start_service:
     # Regression test for issue #4421 (follow-up): trust Control.Discharge_Target_SOC_1, GivTCP's
     # synchronous write-time signal, ahead of the much slower raw.invertor background-poll fallback
     failed |= test_discharge_target_control_signal("discharge_target_control_signal", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4517 (follow-up): enable Enable_Charge_Target before writing a
+    # discharge target, mirroring adjust_battery_target()'s existing precedent for the charge side
+    failed |= test_discharge_target_enables_before_write("discharge_target_enables_before_write", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4517 (follow-up): if enabling itself fails, skip the discharge
+    # target write rather than retrying two doomed REST endpoints instead of one
+    failed |= test_discharge_target_skips_write_when_enable_fails("discharge_target_skips_write_when_enable_fails", ha, inv, dummy_rest)
     if failed:
         return failed
 
