@@ -1250,13 +1250,20 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     out->iboost_running_solar = iboost_running_solar;
     out->iboost_running_full = iboost_running_full;
     if (soc_range_min_out) {
-        // Mirrors the two clamping lines that follow the scan in
-        // thread_run_prediction_charge_min_max, so an empty range collapses to a single value
-        // rather than leaving min above max
-        const double clamped_max = soc_range_max > soc_range_min ? soc_range_max : soc_range_min;
-        const double clamped_min = soc_range_min < clamped_max ? soc_range_min : clamped_max;
-        *soc_range_min_out = clamped_min;
-        *soc_range_max_out = clamped_max;
+        if (want_soc_range) {
+            // Mirrors the two clamping lines that follow the scan in
+            // thread_run_prediction_charge_min_max, so an empty range collapses to a single value
+            // rather than leaving min above max
+            const double clamped_max = soc_range_max > soc_range_min ? soc_range_max : soc_range_min;
+            const double clamped_min = soc_range_min < clamped_max ? soc_range_min : clamped_max;
+            *soc_range_min_out = clamped_min;
+            *soc_range_max_out = clamped_max;
+        } else {
+            // No range asked for. Python's all_n path skips the scan AND the clamping, returning
+            // (soc_max, 0) untouched, so clamping here would hand back (soc_max, soc_max) instead.
+            *soc_range_min_out = c->soc_max;
+            *soc_range_max_out = 0.0;
+        }
     }
     return 0;
 }
