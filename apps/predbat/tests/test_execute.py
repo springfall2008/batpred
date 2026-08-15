@@ -196,7 +196,11 @@ def run_execute_test(
     assert_reserve=0,
     assert_soc_target=100,
     assert_soc_target_array=None,
+    assert_immediate_charge_soc_target_array=None,
+    assert_immediate_discharge_soc_target_array=None,
+    assert_is_charging=None,
     in_calibration=False,
+    in_calibration_array=None,
     set_discharge_during_charge=True,
     assert_immediate_soc_target=None,
     assert_immediate_soc_target_array=None,
@@ -265,7 +269,7 @@ def run_execute_test(
             inverter.soc_kw = soc_kw / total_inverters
         inverter.soc_max = soc_max / total_inverters
         inverter.soc_percent = calc_percent_limit(inverter.soc_kw, inverter.soc_max)
-        inverter.in_calibration = in_calibration
+        inverter.in_calibration = in_calibration_array[inverter.id] if in_calibration_array else in_calibration
         inverter.battery_rate_max_charge = my_predbat.battery_rate_max_charge / total_inverters
         inverter.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc / total_inverters
         inverter.battery_rate_max_discharge = my_predbat.battery_rate_max_discharge / total_inverters
@@ -380,13 +384,16 @@ def run_execute_test(
         if assert_immediate_soc_target_array:
             assert_immediate_soc_target = assert_immediate_soc_target_array[inverter.id]
 
-        assert_soc_target_force = (
-            assert_immediate_soc_target
-            if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
-            else 0
-        )
-        if not set_charge_window:
-            assert_soc_target_force = -1
+        if assert_immediate_charge_soc_target_array:
+            assert_soc_target_force = assert_immediate_charge_soc_target_array[inverter.id]
+        else:
+            assert_soc_target_force = (
+                assert_immediate_soc_target
+                if assert_status in ["Charging", "Charging, Hold for car", "Hold charging", "Freeze charging", "Hold charging, Hold for iBoost", "Hold charging, Hold for car", "Freeze charging, Hold for iBoost", "Hold for car", "Hold for iBoost"]
+                else 0
+            )
+            if not set_charge_window:
+                assert_soc_target_force = -1
         if inverter.immediate_charge_soc_target != assert_soc_target_force:
             print("ERROR: Inverter {} Immediate charge SOC target should be {} got {}".format(inverter.id, assert_soc_target_force, inverter.immediate_charge_soc_target))
             failed = True
@@ -397,9 +404,12 @@ def run_execute_test(
         elif assert_status in ["Freeze charging"] and inverter.immediate_charge_soc_freeze != True:
             print("ERROR: Inverter {} Immediate charge SOC freeze should be True got {}".format(inverter.id, inverter.immediate_charge_soc_freeze))
             failed = True
-        assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 100
-        if not set_export_window:
-            assert_soc_target_force_dis = -1
+        if assert_immediate_discharge_soc_target_array:
+            assert_soc_target_force_dis = assert_immediate_discharge_soc_target_array[inverter.id]
+        else:
+            assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 100
+            if not set_export_window:
+                assert_soc_target_force_dis = -1
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
             print("ERROR: Inverter {} Immediate export SOC target should be {} got {}".format(inverter.id, assert_soc_target_force_dis, inverter.immediate_discharge_soc_target))
             failed = True
@@ -409,7 +419,7 @@ def run_execute_test(
 
     # Validate isCharging binary sensor state: must be True for any charging status (Freeze charging, Hold charging, Charging variants)
     charging_statuses = ["Charging", "Freeze charging", "Hold charging"]
-    expected_is_charging = any(s in assert_status for s in charging_statuses)
+    expected_is_charging = assert_is_charging if assert_is_charging is not None else any(s in assert_status for s in charging_statuses)
     if my_predbat.isCharging != expected_is_charging:
         print("ERROR: isCharging should be {} for status '{}' got {}".format(expected_is_charging, assert_status, my_predbat.isCharging))
         failed = True
@@ -1553,6 +1563,35 @@ def run_execute_tests(my_predbat):
     my_predbat.inverters = inverters
 
     failed |= run_execute_test(my_predbat, "calibration", in_calibration=True, assert_status="Calibration", assert_charge_time_enable=False, assert_reserve=0, assert_soc_target=100)
+
+    # Regression for PR #4466: inverter 0 genuinely charges and reaches "Charging" (populating
+    # status_per_inverter[0]) before inverter 1 - processed second - enters calibration mode and
+    # breaks out of the loop. The headline status must stay "Calibration", not resolve back to the
+    # stale "Charging" state inverter 0 left behind in status_per_inverter.
+    # The per-inverter asserts below capture the real half-processed state the break leaves behind:
+    # inverter 0 keeps the charge window/immediate targets it was already given, inverter 1 never
+    # reached those calls, and isCharging stays True from inverter 0 (pre-existing behaviour, since
+    # the calibration branch breaks without resetting it).
+    failed |= run_execute_test(
+        my_predbat,
+        "calibration_after_charging_inverter",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        in_calibration_array=[False, True],
+        assert_charge_time_enable_array=[True, False],
+        assert_status="Calibration",
+        assert_reserve=0,
+        assert_soc_target=100,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        assert_immediate_charge_soc_target_array=[100, -1],
+        assert_immediate_discharge_soc_target_array=[100, -1],
+        assert_is_charging=True,
+    )
+    if failed:
+        return failed
     failed |= run_execute_test(my_predbat, "no_charge3", set_charge_window=True, set_export_window=True)
     failed |= run_execute_test(my_predbat, "charge_read_only", charge_window_best=charge_window_best, charge_limit_best=charge_limit_best, set_charge_window=True, set_export_window=True, read_only=True, assert_status="Read-Only", reserve=0)
     failed |= run_execute_test(
