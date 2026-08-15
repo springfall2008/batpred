@@ -905,9 +905,10 @@ CONFIG_ITEMS = [
     },
     {
         "name": "trust_future_dynamic_iog_slots",
-        "friendly_name": "Trust future dynamic (daytime) Intelligent dispatch slots as cheap for the house battery",
-        "type": "switch",
-        "default": False,
+        "friendly_name": "When to trust a dynamic (daytime) Intelligent dispatch slot as cheap for the house battery",
+        "type": "select",
+        "options": ["none", "completed", "started"],
+        "default": "none",
         "enable": "expert_mode",
     },
     {
