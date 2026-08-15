@@ -8,9 +8,10 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 # fmt on
+import copy
 import random
 
-from utils import remove_intersecting_windows
+from utils import clone_windows, remove_intersecting_windows
 from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
 
@@ -385,5 +386,59 @@ def run_window_sort_tests(my_predbat):
     export_window_best.append({"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate * 3})
     failed |= run_window_sort_test("single_charge_discharge3", my_predbat, charge_window_best, export_window_best, expected=["d_0_50.0", "df_0_50.0", "c_1_20.0", "cf_1_20.0", "d_1_15.0", "df_1_15.0", "c_0_10.0", "cf_0_10.0"])
     failed |= run_window_sort_test("single_charge_discharge3_c1", my_predbat, charge_window_best, export_window_best, expected=["df_0_50.0", "d_0_49.0", "c_1_21.0", "cf_1_20.0", "df_1_15.0", "d_1_14.0", "c_0_11.0", "cf_0_10.0"], metric_battery_cycle=1.0)
+
+    return failed
+
+
+def run_clone_windows_tests(my_predbat):
+    """Tests for clone_windows, the shallow-copy replacement for copy.deepcopy on window lists.
+
+    clone_windows is only safe because window dicts hold primitives, so these pin both halves of
+    that contract: the copy must equal a deepcopy, and mutating either side must not affect the
+    other. The start-mutation case mirrors what Prediction.thread_run_prediction_export does to
+    the window list it is handed, which is the reason the copy exists at all.
+    """
+    print("**** Running clone_windows tests ****")
+    failed = False
+
+    # Equivalence with deepcopy over the window shapes actually used in the planner
+    cases = [
+        ("empty", []),
+        ("bounds only", [{"start": 0, "end": 30}]),
+        ("with average", [{"start": 0, "end": 30, "average": 12.5}, {"start": 30, "end": 60, "average": 7.0}]),
+        ("with target and sort keys", [{"start": 60, "end": 120, "average": 3.25, "target": 4.0, "id": 2, "key": "0100.2501"}]),
+    ]
+    for name, windows in cases:
+        cloned = clone_windows(windows)
+        if cloned != copy.deepcopy(windows):
+            print("ERROR: clone_windows {} did not match deepcopy: {} vs {}".format(name, cloned, copy.deepcopy(windows)))
+            failed = True
+        if len(cloned) != len(windows):
+            print("ERROR: clone_windows {} changed the list length {} -> {}".format(name, len(windows), len(cloned)))
+            failed = True
+
+    # The list itself must be a new object, and so must every dict in it
+    original = [{"start": 0, "end": 30, "average": 5.0}, {"start": 30, "end": 60, "average": 6.0}]
+    cloned = clone_windows(original)
+    if cloned is original:
+        print("ERROR: clone_windows returned the same list object")
+        failed = True
+    for index, window in enumerate(cloned):
+        if window is original[index]:
+            print("ERROR: clone_windows shared dict {} with the original".format(index))
+            failed = True
+
+    # Writing a start into the copy must not reach the original - this is exactly what
+    # thread_run_prediction_export does to the window list optimise_export hands it
+    cloned[0]["start"] = 15
+    if original[0]["start"] != 0:
+        print("ERROR: clone_windows leaked a start mutation back to the original: {}".format(original[0]["start"]))
+        failed = True
+
+    # And the reverse direction, since the planner also mutates the original between passes
+    original[1]["target"] = 99.0
+    if "target" in cloned[1]:
+        print("ERROR: clone_windows leaked a new key from the original into the copy")
+        failed = True
 
     return failed

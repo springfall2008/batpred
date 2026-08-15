@@ -18,12 +18,11 @@ launch_run_prediction_* and the first handle read flushes them all through one
 call to the C++ prediction kernel, which is where the threading now lives.
 """
 
-import copy
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
 
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
+from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
 from prediction_kernel import kernel_status_summary
 from predbat_metrics import metrics
@@ -1088,7 +1087,7 @@ class Plan:
         """Copy the single window an optimisation pass can modify, so the change can be undone."""
         if typ == "c":
             return self.charge_limit_best[window_n]
-        return self.export_limits_best[window_n], copy.deepcopy(self.export_window_best[window_n])
+        return self.export_limits_best[window_n], self.export_window_best[window_n].copy()
 
     def plan_window_restore(self, typ, window_n, snapshot):
         """Put a window back as it was when plan_window_snapshot() captured it."""
@@ -1257,10 +1256,10 @@ class Plan:
         if recompute:
             # Obtain previous plan data for comparison
             if self.plan_valid:
-                charge_limit_best_prev = copy.deepcopy(self.charge_limit_best)
-                charge_window_best_prev = copy.deepcopy(self.charge_window_best)
-                export_window_best_prev = copy.deepcopy(self.export_window_best)
-                export_limits_best_prev = copy.deepcopy(self.export_limits_best)
+                charge_limit_best_prev = self.charge_limit_best.copy()
+                charge_window_best_prev = clone_windows(self.charge_window_best)
+                export_window_best_prev = clone_windows(self.export_window_best)
+                export_limits_best_prev = self.export_limits_best.copy()
                 preclip_prev = self.plan_preclip
                 self.log("Recompute is saving previous plan...")
             else:
@@ -1276,16 +1275,16 @@ class Plan:
             # Calculate best charge windows
             if self.low_rates and self.calculate_best_charge and self.set_charge_window:
                 # If we are using calculated windows directly then save them
-                self.charge_window_best = copy.deepcopy(self.low_rates)
+                self.charge_window_best = clone_windows(self.low_rates)
             else:
                 # Default best charge window as this one
-                self.charge_window_best = copy.deepcopy(self.charge_window)
+                self.charge_window_best = clone_windows(self.charge_window)
 
             # Calculate best export windows
             if self.calculate_best_export and self.set_export_window:
-                self.export_window_best = copy.deepcopy(self.high_export_rates)
+                self.export_window_best = clone_windows(self.high_export_rates)
             else:
-                self.export_window_best = copy.deepcopy(self.export_window)
+                self.export_window_best = clone_windows(self.export_window)
 
             # Pre-fill best charge limit with the current charge limit
             self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window_best))]
@@ -1426,7 +1425,7 @@ class Plan:
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
 
             # Snapshot the plan as optimised, before clipping adjusts the percentages for execution
-            preclip_new = (copy.deepcopy(self.charge_limit_best), copy.deepcopy(self.charge_window_best), copy.deepcopy(self.export_window_best), copy.deepcopy(self.export_limits_best))
+            preclip_new = (self.charge_limit_best.copy(), clone_windows(self.charge_window_best), clone_windows(self.export_window_best), self.export_limits_best.copy())
 
             # Model-based clipping: drop slots that do nothing in the central forecast. Runs after the
             # scoring snapshot so plan selection still compares plans as optimised (#4403).
@@ -1533,10 +1532,10 @@ class Plan:
                 fragmentation_new = self.plan_fragmentation(score_new[1], score_new[0], score_new[2], score_new[3])
                 if not self.should_replace_plan(metric_prev, metric, fragmentation_prev, fragmentation_new):
                     self.log("New plan metric is not significantly better (metric_min_improvement_plan {}) than previous plan, using previous plan".format(self.metric_min_improvement_plan))
-                    self.charge_window_best = copy.deepcopy(charge_window_best_prev)
-                    self.charge_limit_best = copy.deepcopy(charge_limit_best_prev)
-                    self.export_window_best = copy.deepcopy(export_window_best_prev)
-                    self.export_limits_best = copy.deepcopy(export_limits_best_prev)
+                    self.charge_window_best = clone_windows(charge_window_best_prev)
+                    self.charge_limit_best = charge_limit_best_prev.copy()
+                    self.export_window_best = clone_windows(export_window_best_prev)
+                    self.export_limits_best = export_limits_best_prev.copy()
                     # Keeping the incumbent keeps its pre-clip snapshot too, so the next cycle still compares
                     # like for like
                     preclip_new = preclip_prev
@@ -2410,7 +2409,7 @@ class Plan:
         """
         Sort windows in start time order, return a new list of windows
         """
-        window_sorted = copy.deepcopy(windows)
+        window_sorted = clone_windows(windows)
         window_sorted.sort(key=self.window_sort_func_start)
         return window_sorted
 
@@ -2572,7 +2571,7 @@ class Plan:
         """
         Sort the charge windows by highest price first, return a list of window IDs
         """
-        window_with_id = copy.deepcopy(windows)
+        window_with_id = clone_windows(windows)
         wid = 0
         for window in window_with_id:
             window["id"] = wid
@@ -2914,7 +2913,7 @@ class Plan:
                     if self.debug_enable:
                         self.log("Combine export slot {} with previous - percent {} slot {}".format(window_n, new_enable[-1], new_best[-1]))
                 else:
-                    new_best.append(copy.deepcopy(export_window_best[window_n]))
+                    new_best.append(export_window_best[window_n].copy())
                     new_enable.append(export_limits_best[window_n])
 
         return new_enable, new_best
@@ -3016,8 +3015,8 @@ class Plan:
         Write debug plan to file
         """
         if debug_mode:
-            orig_charge_limit_best = copy.deepcopy(self.charge_limit_best)
-            orig_charge_window_best = copy.deepcopy(self.charge_window_best)
+            orig_charge_limit_best = self.charge_limit_best.copy()
+            orig_charge_window_best = clone_windows(self.charge_window_best)
             self.charge_limit_best, self.charge_window_best = remove_intersecting_windows(self.charge_limit_best, self.charge_window_best, self.export_limits_best, self.export_window_best)
 
             (
@@ -3102,8 +3101,8 @@ class Plan:
         for day in days:
             # Snapshot the current plan so we can revert this day if it costs too much. The window
             # list is snapshotted too as re-optimising force exports can move window start times.
-            orig_export_limits_best = copy.deepcopy(self.export_limits_best)
-            orig_export_window_best = copy.deepcopy(self.export_window_best)
+            orig_export_limits_best = self.export_limits_best.copy()
+            orig_export_window_best = clone_windows(self.export_window_best)
 
             day_start = day * (24 * 60)
             day_end = day_start + (24 * 60)

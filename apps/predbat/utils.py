@@ -993,6 +993,16 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
+def clone_windows(windows):
+    """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
+
+    Window dicts never hold nested mutable values, so copying each dict is equivalent to
+    copy.deepcopy(windows) here but far cheaper - deepcopy's generic recursive walk measured
+    ~275us per call on a typical export_window, this is a few us.
+    """
+    return [w.copy() for w in windows]
+
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows
