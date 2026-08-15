@@ -849,6 +849,117 @@ def run_clipping_parity_tests(my_predbat, count=250):
     return failed
 
 
+def build_batch_jobs(my_predbat, rng, count):
+    """Build a list of BatchJob scenarios plus the Prediction they run against"""
+    apply_random_scenario(my_predbat, rng)
+    pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng)
+    my_predbat.prediction_kernel_enable = True
+    prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+    prediction.kernel_handle = create_kernel_context(prediction)
+
+    charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(2, 5))
+    export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(2, 5))
+    end_record = my_predbat.forecast_minutes
+
+    jobs = []
+    for index in range(count):
+        charge_limit = [round(rng.uniform(0, my_predbat.soc_max), 2) for _ in charge_window]
+        export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(1, 99), 1)]) for _ in export_window]
+        pv_scenario = rng.choice([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90])
+        # Every third job asks for the SoC range over a charge window, as the min/max fan-out does
+        range_window = charge_window[index % len(charge_window)] if (index % 3) == 0 else None
+        start_step = -1
+        end_step = -1
+        if range_window is not None:
+            start_step = max(int((range_window["start"] - my_predbat.minutes_now) / 5) * 5, 0) // 5
+            end_step = int((range_window["end"] - my_predbat.minutes_now) / 5) * 5 // 5
+        jobs.append(
+            prediction_kernel.BatchJob(
+                charge_limit,
+                charge_window,
+                export_window,
+                export_limits,
+                pv_scenario,
+                end_record,
+                5,
+                soc_range_start_step=start_step,
+                soc_range_end_step=end_step,
+                want_range=range_window is not None,
+                range_window=range_window,
+            )
+        )
+    return prediction, jobs
+
+
+def run_batch_parity_tests(my_predbat, count=60):
+    """Check pk_run_batch matches a loop of pk_run exactly, at every thread count, returns True on failure.
+
+    The batch path is the only one Python will use after this refactor, and it is the only one that
+    can run scenarios concurrently, so it is checked against the single-scenario path it replaces
+    rather than against the Python engine (which run_random_sweep_tests already pins pk_run against).
+    Results must be bit-identical, not merely close: the whole point of the fan-out is that plans do
+    not change.
+    """
+    print("**** Running kernel batch parity tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
+    failed = False
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(4321), count)
+    if not prediction.kernel_handle:
+        print("ERROR: batch parity kernel context creation failed")
+        return True
+
+    # Reference: one pk_run per scenario, with the SoC series materialised so the range can be
+    # scanned in Python exactly as thread_run_prediction_charge_min_max does
+    reference = []
+    for job in jobs:
+        single = run_prediction_kernel(prediction, job.charge_limit, job.charge_window, job.export_window, job.export_limits, job.pv_scenario, job.end_record, 5, False)
+        if single is None:
+            print("ERROR: reference pk_run failed")
+            return True
+        if job.range_window is None:
+            soc_range = (prediction.soc_max, 0)
+        else:
+            soc_range = prediction.scan_soc_range(single[11], job.range_window)
+        reference.append((single, soc_range))
+
+    for n_threads in (1, 2, 4, 8):
+        batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+        if batched is None:
+            print("ERROR: pk_run_batch failed at {} threads".format(n_threads))
+            return True
+        if len(batched) != len(jobs):
+            print("ERROR: pk_run_batch returned {} results for {} jobs".format(len(batched), len(jobs)))
+            return True
+        for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
+            single, (expect_min, expect_max) = reference[index]
+            if result_tuple is None:
+                print("ERROR: job {} reported a non-zero status at {} threads".format(index, n_threads))
+                failed = True
+                continue
+            for field, name in enumerate(RESULT_NAMES):
+                if result_tuple[field] != single[field]:
+                    print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
+                    failed = True
+            # The batch never materialises the SoC series - that is what makes it affordable
+            if result_tuple[11] != {}:
+                print("ERROR: job {} returned a SoC series from the batch path".format(index))
+                failed = True
+            for field, name in [(12, "car_charging_soc_next"), (13, "iboost_next"), (14, "iboost_running"), (15, "iboost_running_solar"), (16, "iboost_running_full")]:
+                if result_tuple[field] != single[field]:
+                    print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
+                    failed = True
+            if soc_range_min != expect_min or soc_range_max != expect_max:
+                print("ERROR: job {} at {} threads SoC range {} {} expected {} {}".format(index, n_threads, soc_range_min, soc_range_max, expect_min, expect_max))
+                failed = True
+
+    if not failed:
+        print("Batch parity: {} scenarios bit-identical to pk_run at 1, 2, 4 and 8 threads".format(count))
+    return failed
+
+
 def kernel_available():
     """Ensure the kernel library is built and loaded, returns (available, required_failure)"""
     if not ensure_kernel_built():
@@ -927,6 +1038,8 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_random_sweep_tests(my_predbat)
         if not failed:
             failed |= run_clipping_parity_tests(my_predbat)
+        if not failed:
+            failed |= run_batch_parity_tests(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
 

@@ -212,6 +212,33 @@ class PkBatchResult(ctypes.Structure):
     ]
 
 
+class BatchJob:
+    """One queued prediction: its trial inputs, how the result should be shaped, and the result itself.
+
+    run_prediction_kernel_batch reads only the input fields and the SoC range steps. sim_hash,
+    want_range, range_window and result belong to the batch runner in prediction_batch.py, which is
+    the only thing that creates these; they live here so the ctypes layer can be tested on its own.
+    """
+
+    __slots__ = ("charge_limit", "charge_window", "export_window", "export_limits", "pv_scenario", "end_record", "step", "soc_range_start_step", "soc_range_end_step", "sim_hash", "want_range", "range_window", "result")
+
+    def __init__(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, soc_range_start_step=-1, soc_range_end_step=-1, sim_hash=None, want_range=False, range_window=None):
+        """Record one job's trial inputs; result stays None until the batch is flushed"""
+        self.charge_limit = charge_limit
+        self.charge_window = charge_window
+        self.export_window = export_window
+        self.export_limits = export_limits
+        self.pv_scenario = pv_scenario
+        self.end_record = end_record
+        self.step = step
+        self.soc_range_start_step = soc_range_start_step
+        self.soc_range_end_step = soc_range_end_step
+        self.sim_hash = sim_hash
+        self.want_range = want_range
+        self.range_window = range_window
+        self.result = None
+
+
 def kernel_library_candidates():
     """Return the ordered list of shared library paths to try loading.
 
@@ -286,7 +313,9 @@ def load_kernel(log=None):
             lib.pk_run.argtypes = [ctypes.c_int64, ctypes.POINTER(PkScenario), ctypes.POINTER(PkResult)]
             try:
                 lib.pk_run_batch.restype = ctypes.c_int32
-                lib.pk_run_batch.argtypes = [ctypes.c_int64, ctypes.POINTER(PkBatchJob), ctypes.c_int32, ctypes.POINTER(PkBatchResult)]
+                # The trailing c_int32 is n_threads - pk_run_batch takes five arguments, and ctypes
+                # will happily pass a fourth-and-a-bit if the binding says otherwise
+                lib.pk_run_batch.argtypes = [ctypes.c_int64, ctypes.POINTER(PkBatchJob), ctypes.c_int32, ctypes.POINTER(PkBatchResult), ctypes.c_int32]
                 KERNEL_HAS_BATCH = True
             except AttributeError:
                 KERNEL_HAS_BATCH = False
@@ -535,6 +564,136 @@ def kernel_supported(pred, save, step):
     return not save and not pred.debug_enable and getattr(pred, "kernel_handle", 0) != 0
 
 
+def kernel_result_tuple(pred, result, predict_soc):
+    """Assemble the 17-field Prediction.run_prediction() result tuple from a PkResult.
+
+    Shared by the single-scenario and batch paths - mirrors prediction.py:626-628, 1266-1284.
+    """
+    car_charging_soc_next = pred.car_charging_soc_next[:]
+    if result.car_soc_next_valid:
+        for car_n in range(pred.num_cars):
+            car_charging_soc_next[car_n] = result.car_soc_next[car_n]
+
+    iboost_next = result.iboost_next if pred.iboost_enable else pred.iboost_next
+
+    return (
+        round(result.final_metric, 4),
+        round(result.import_kwh_battery, 4),
+        round(result.import_kwh_house, 4),
+        round(result.export_kwh, 4),
+        round(result.soc_min, 4),
+        round(result.final_soc, 4),
+        result.soc_min_minute,
+        round(result.battery_cycle, 4),
+        round(result.metric_keep, 4),
+        round(result.final_iboost, 4),
+        round(result.final_carbon_g, 4),
+        predict_soc,
+        car_charging_soc_next,
+        iboost_next,
+        bool(result.iboost_running),
+        bool(result.iboost_running_solar),
+        bool(result.iboost_running_full),
+    )
+
+
+def reset_kernel_run_state(pred):
+    """Clear the per-run state attributes exactly as the Python engine does - prediction.py:414-422
+
+    Non-save runs never populate these, so they simply stay empty/False; a kernel run has to leave
+    the Prediction in the same state a Python run would.
+    """
+    pred.predict_soc_best = {}
+    pred.predict_metric_best = {}
+    pred.predict_iboost_best = {}
+    pred.predict_carbon_best = {}
+    pred.predict_clipped_best = {}
+    pred.iboost_running = False
+    pred.iboost_running_solar = False
+    pred.iboost_running_full = False
+
+
+def run_prediction_kernel_batch(pred, jobs, n_threads=1):
+    """Run a whole fan-out of prediction scenarios through the kernel in one pk_run_batch call.
+
+    Returns a list of (result_tuple, soc_range_min, soc_range_max) in job order, where result_tuple
+    is the same 17-field tuple Prediction.run_prediction() returns, or None for a job the kernel
+    refused - the caller re-runs those through the Python engine. Returns None when the batch could
+    not be run at all (no kernel, no batch entry point, or a non-zero return code).
+
+    Whether the kernel is allowed to answer at all is the caller's decision, not this function's:
+    kernel_supported() also refuses debug and saving runs, and flush_batch checks it before getting
+    here.
+
+    Batched jobs never materialise the per-minute SoC series: their callers all discard it, and one
+    buffer per job would be ~84MB on a large batch. The one thing a caller does want from it - the
+    SoC range across a charge window - the kernel tracks inline over
+    [soc_range_start_step, soc_range_end_step] instead.
+    """
+    lib = KERNEL_LIB
+    if not lib or not KERNEL_HAS_BATCH or not getattr(pred, "kernel_handle", 0):
+        return None
+
+    n_jobs = len(jobs)
+    job_array = (PkBatchJob * n_jobs)()
+    result_array = (PkBatchResult * n_jobs)()
+    # Every ctypes buffer behind a pointer field has to outlive the call. Structures reached through
+    # an array index do not keep their own _objects, so the buffers are held here rather than relying
+    # on ctypes' keepalive doing the right thing through the array.
+    buffers = []
+    # A fan-out reuses the same window lists across most of its jobs, so their start/end arrays are
+    # marshalled once per distinct list instead of once per job - that is the bulk of the batching
+    # win. Keyed on identity, with the list retained so an id() cannot be recycled mid-batch. This
+    # relies on no caller mutating a window list between enqueue and flush (see prediction_batch.py).
+    window_cache = {}
+
+    def window_arrays(windows):
+        """Marshal a window list's start/end arrays, reusing an earlier job's arrays where possible"""
+        entry = window_cache.get(id(windows))
+        if entry is None:
+            entry = (int32_array([window["start"] for window in windows]), int32_array([window["end"] for window in windows]), windows)
+            window_cache[id(windows)] = entry
+        return entry
+
+    for index, job in enumerate(jobs):
+        charge_start, charge_end, _ = window_arrays(job.charge_window)
+        export_start, export_end, _ = window_arrays(job.export_window)
+        charge_limit = double_array(job.charge_limit)
+        export_limits = double_array(job.export_limits)
+        buffers.append((charge_limit, export_limits))
+
+        pk_job = job_array[index]
+        pk_job.charge_limit = charge_limit
+        pk_job.charge_start = charge_start
+        pk_job.charge_end = charge_end
+        pk_job.export_limits = export_limits
+        pk_job.export_start = export_start
+        pk_job.export_end = export_end
+        pk_job.soc_out = None
+        pk_job.n_charge = len(job.charge_window)
+        pk_job.n_export = len(job.export_window)
+        pk_job.pv_scenario = int(job.pv_scenario)
+        pk_job.end_record = job.end_record
+        pk_job.step = PREDICT_STEP  # the caller's step is ignored - see run_prediction_kernel
+        pk_job.soc_range_start_step = job.soc_range_start_step
+        pk_job.soc_range_end_step = job.soc_range_end_step
+
+    return_code = lib.pk_run_batch(pred.kernel_handle, job_array, n_jobs, result_array, max(int(n_threads), 1))
+    if return_code != 0:
+        return None
+
+    reset_kernel_run_state(pred)
+
+    results = []
+    for index in range(n_jobs):
+        batch_result = result_array[index]
+        if batch_result.status != 0:
+            results.append((None, 0.0, 0.0))
+            continue
+        results.append((kernel_result_tuple(pred, batch_result.result, {}), batch_result.soc_range_min, batch_result.soc_range_max))
+    return results
+
+
 def run_prediction_kernel(pred, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, cache):
     """Run one prediction scenario through the C++ kernel.
 
@@ -582,18 +741,9 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     if return_code != 0:
         return None
 
-    # Reset the per-run state attributes exactly as the Python engine does - prediction.py:414-422
-    # (non-save runs never populate these, so they remain empty/False)
-    pred.predict_soc_best = {}
-    pred.predict_metric_best = {}
-    pred.predict_iboost_best = {}
-    pred.predict_carbon_best = {}
-    pred.predict_clipped_best = {}
-    pred.iboost_running = False
-    pred.iboost_running_solar = False
-    pred.iboost_running_full = False
+    reset_kernel_run_state(pred)
 
-    # Assemble the same return value as the Python engine - prediction.py:626-628, 1266-1284
+    # Assemble the same return value as the Python engine
     predict_soc = {}
     if not cache:
         # Indexed loop, not dict(zip(range(...), soc_out)): iterating a ctypes array boxes each double
@@ -601,29 +751,4 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
         for k in range(n_steps):
             predict_soc[k * PREDICT_STEP] = soc_out[k]
 
-    car_charging_soc_next = pred.car_charging_soc_next[:]
-    if result.car_soc_next_valid:
-        for car_n in range(pred.num_cars):
-            car_charging_soc_next[car_n] = result.car_soc_next[car_n]
-
-    iboost_next = result.iboost_next if pred.iboost_enable else pred.iboost_next
-
-    return (
-        round(result.final_metric, 4),
-        round(result.import_kwh_battery, 4),
-        round(result.import_kwh_house, 4),
-        round(result.export_kwh, 4),
-        round(result.soc_min, 4),
-        round(result.final_soc, 4),
-        result.soc_min_minute,
-        round(result.battery_cycle, 4),
-        round(result.metric_keep, 4),
-        round(result.final_iboost, 4),
-        round(result.final_carbon_g, 4),
-        predict_soc,
-        car_charging_soc_next,
-        iboost_next,
-        bool(result.iboost_running),
-        bool(result.iboost_running_solar),
-        bool(result.iboost_running_full),
-    )
+    return kernel_result_tuple(pred, result, predict_soc)

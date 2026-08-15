@@ -295,6 +295,25 @@ class Prediction:
             final_carbon_g,
         )
 
+    def scan_soc_range(self, predict_soc, window):
+        """Return the (min, max) SoC across a charge window - shared by the direct and batch min/max paths.
+
+        The kernel computes the same range inline (see PkBatchJob.soc_range_start_step), so this is
+        only reached when a job falls back to the Python engine; the two must agree exactly, including
+        the clamping that collapses an empty range to a single value rather than leaving min above max.
+        """
+        min_soc = self.soc_max
+        max_soc = 0
+        predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
+        predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
+        for minute in range(predict_minute_start, predict_minute_end + 5, 5):
+            if minute in predict_soc:
+                min_soc = min(predict_soc[minute], min_soc)
+                max_soc = max(predict_soc[minute], max_soc)
+        max_soc = max(max_soc, min_soc)
+        min_soc = min(min_soc, max_soc)
+        return min_soc, max_soc
+
     def thread_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Run prediction in a thread
@@ -329,15 +348,7 @@ class Prediction:
         min_soc = self.soc_max
         max_soc = 0
         if not all_n:
-            window = charge_window[window_n]
-            predict_minute_start = max(int((window["start"] - self.minutes_now) / 5) * 5, 0)
-            predict_minute_end = int((window["end"] - self.minutes_now) / 5) * 5
-            for minute in range(predict_minute_start, predict_minute_end + 5, 5):
-                if minute in predict_soc:
-                    min_soc = min(predict_soc[minute], min_soc)
-                    max_soc = max(predict_soc[minute], max_soc)
-            max_soc = max(max_soc, min_soc)
-            min_soc = min(min_soc, max_soc)
+            min_soc, max_soc = self.scan_soc_range(predict_soc, charge_window[window_n])
 
         return (
             cost,
