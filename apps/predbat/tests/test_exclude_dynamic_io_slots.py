@@ -25,7 +25,9 @@ def run_exclude_dynamic_io_slots_tests(my_predbat):
 
     saved_trust_dynamic = my_predbat.trust_future_dynamic_iog_slots
     saved_io_adjusted = dict(my_predbat.io_adjusted)
+    saved_minutes_now = my_predbat.minutes_now
     my_predbat.rate_max_base = 30.0
+    my_predbat.minutes_now = 600  # 10:00, so current_block = 600
 
     try:
         print("Test 1: a dynamic (out-of-window) io_adjusted minute is restored to rate_max_base and cleared")
@@ -99,9 +101,26 @@ def run_exclude_dynamic_io_slots_tests(my_predbat):
         if 120 not in my_predbat.io_adjusted:
             print("  ERROR: expected the fixed-window minute to remain in io_adjusted")
             failed = True
+
+        # Test 7 (#4516 follow-up): a dynamic io_adjusted minute already underway or in the past
+        # (minutes_now=600, so current_block=600) is left untouched regardless of the switch -
+        # today_cost()'s actual-spend figures need genuine historical rates, not ones retroactively
+        # excluded once we know the dispatch already happened.
+        print("Test 7: a past/current dynamic io_adjusted minute is left untouched regardless of the switch")
+        my_predbat.trust_future_dynamic_iog_slots = False
+        my_predbat.io_adjusted = {570: True}  # 09:30 - before minutes_now (10:00), outside the fixed window
+        rates = {570: 4.0}
+        result = my_predbat.exclude_dynamic_io_slots(rates)
+        if result.get(570) != 4.0:
+            print("  ERROR: expected past minute 570 untouched at 4.0, got {}".format(result.get(570)))
+            failed = True
+        if 570 not in my_predbat.io_adjusted:
+            print("  ERROR: expected past minute 570 to remain marked io_adjusted, was cleared")
+            failed = True
     finally:
         my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
         my_predbat.io_adjusted = saved_io_adjusted
+        my_predbat.minutes_now = saved_minutes_now
 
     if failed:
         print("\n**** exclude_dynamic_io_slots tests: FAILED ****")

@@ -379,6 +379,18 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_20 = {minute: 4.0 for minute in range(840, 870)}
     failed |= run_rate_add_io_slots_test("test20_switch_on_trusts_dynamic_slots", my_predbat, slots_18, True, 12, expected_rates_20)
 
+    # Test 21 (#4516 follow-up): a dynamic slot already underway or in the past is trusted
+    # regardless of the switch - its rescission risk has already resolved one way or the other,
+    # and today_cost()'s actual-spend figures (house and car) need genuine historical rates or a
+    # real dynamic dispatch that already happened today would wrongly report as full price.
+    print("\n**** Test 21: A past/current dynamic slot is trusted regardless of the switch ****")
+    my_predbat.trust_future_dynamic_iog_slots = False
+    slot_start_21 = midnight_utc + timedelta(hours=9)  # 09:00 - before minutes_now (10:00), outside the fixed window
+    slot_end_21 = slot_start_21 + timedelta(minutes=30)
+    slots_21 = [{"start": slot_start_21.strftime(TIME_FORMAT), "end": slot_end_21.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "unknown", "location": "AT_HOME"}]
+    expected_rates_21 = {minute: 4.0 for minute in range(540, 570)}
+    failed |= run_rate_add_io_slots_test("test21_past_dynamic_slot_always_trusted", my_predbat, slots_21, True, 12, expected_rates_21)
+
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
 
     # Restore original forecast_minutes

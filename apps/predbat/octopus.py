@@ -2740,6 +2740,12 @@ class Octopus:
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
         trust_future_dynamic_iog_slots = self.trust_future_dynamic_iog_slots
+        # The start of the current 30-min settlement period. A slot at or before this has already
+        # started or completed - #4516's risk (Octopus withdrawing a still-provisional slot before
+        # it happens) has already resolved one way or the other, and today_cost()'s actual-spend
+        # figures (house and car) need genuine historical rates regardless of the switch, or a real
+        # dynamic dispatch that already happened today would wrongly report as full price.
+        current_block = (self.minutes_now // 30) * 30
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -2796,7 +2802,10 @@ class Octopus:
                         # provisional/revisable plan - it can be moved or rescinded before it
                         # occurs. The fixed 23:30-05:30 window is guaranteed cheap by the tariff
                         # itself, not by the dispatch mechanism, so it's never gated here (#4516).
-                        trusted = trust_future_dynamic_iog_slots or self.minute_in_iog_fixed_window(slot_start)
+                        # A slot already underway or in the past is trusted regardless - its
+                        # rescission risk has already resolved, and its rate must reflect what
+                        # genuinely happened for today_cost()'s actual-spend figures to be correct.
+                        trusted = trust_future_dynamic_iog_slots or self.minute_in_iog_fixed_window(slot_start) or (slot_start <= current_block)
 
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
@@ -2845,12 +2854,19 @@ class Octopus:
         Runs once per cycle (not per car - rates/io_adjusted are shared, not per-car), after
         rate_add_io_slots() has run for every car but before the independent saving-session/free/
         manual rate mechanisms apply their own adjustments on top.
+
+        A minute already underway or in the past is left untouched regardless of the switch -
+        see rate_add_io_slots()'s matching carve-out for why: today_cost()'s actual-spend figures
+        need genuine historical rates, not ones retroactively excluded by this switch.
         """
         if self.trust_future_dynamic_iog_slots or not self.io_adjusted:
             return rates
 
+        current_block = (self.minutes_now // 30) * 30
+
         for minute in list(self.io_adjusted.keys()):
-            if self.io_adjusted[minute] and not self.minute_in_iog_fixed_window(minute):
+            slot_start = (minute // 30) * 30
+            if self.io_adjusted[minute] and not self.minute_in_iog_fixed_window(minute) and slot_start > current_block:
                 rates[minute] = self.rate_max_base
                 del self.io_adjusted[minute]
 
