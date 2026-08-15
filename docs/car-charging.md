@@ -352,6 +352,12 @@ Predbat will still assume all Octopus charging slots are low rates even if some 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
+- The switch **switch.predbat_trust_future_dynamic_iog_slots** (*expert mode*) (default value is Off) controls whether a future daytime Intelligent dispatch slot (outside the fixed 23:30-05:30 off-peak window) is treated as a guaranteed cheap rate for the **house battery** plan.
+A daytime dispatch is still Octopus's own provisional plan until it actually happens - it can be moved or withdrawn beforehand, which could otherwise lead Predbat to make an irreversible decision (e.g. an early force-export) in anticipation of a cheap recharge that never occurs.
+With the switch Off (the default), only the fixed 23:30-05:30 window and dispatches that have already started or completed are trusted as cheap for battery planning purposes; a still-provisional future daytime slot is left at the normal rate instead.
+This does not affect car charging: future dispatch slots are still used in full to forecast when your EV will charge, regardless of this switch - only whether they're trusted as a cheap rate for the house battery is affected.
+Turn this On to restore the previous behaviour, where every dispatch slot Octopus reports is trusted as cheap for the house battery the moment it's known, whether provisional or confirmed.
+
 - Let the Octopus app control when your car charges.
 
 ### Predbat-led charging

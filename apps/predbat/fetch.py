@@ -981,6 +981,10 @@ class Fetch:
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
+            # #4516: undo any dynamic (out-of-window) IOG dispatch discount that arrived via the
+            # rate feed itself (self.io_adjusted) rather than rate_add_io_slots()'s own overlay -
+            # see exclude_dynamic_io_slots()'s docstring for why both sources need handling.
+            import_rates = self.exclude_dynamic_io_slots(import_rates)
             self.load_saving_slot(self.octopus_saving_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             self.load_free_slot(self.octopus_free_slots, import_rates, export=False, rate_replicate=self.rate_import_replicated)
             load_axle_slot(self, self.axle_sessions, import_rates, export=False, rate_replicate=self.rate_import_replicated)
@@ -2522,6 +2526,7 @@ class Fetch:
         self.octopus_intelligent_charging = self.get_arg("octopus_intelligent_charging")
         self.octopus_intelligent_ignore_unplugged = self.get_arg("octopus_intelligent_ignore_unplugged")
         self.octopus_intelligent_consider_full = self.get_arg("octopus_intelligent_consider_full")
+        self.trust_future_dynamic_iog_slots = self.get_arg("trust_future_dynamic_iog_slots")
         self.car_energy_reported_load = self.get_arg("car_energy_reported_load")
         self.get_car_charging_planned()
         self.load_inday_adjustment = 1.0

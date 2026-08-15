@@ -2488,6 +2488,22 @@ class Octopus:
                         if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
 
+    def minute_in_iog_fixed_window(self, minute_abs):
+        """
+        True if minute_abs (minutes-since-midnight-of-today, may be negative or beyond
+        forecast_minutes) falls within the fixed IOG off-peak window (23:30-05:30), which is
+        guaranteed cheap by the tariff itself, not by the dispatch mechanism - so a slot inside it
+        is never at risk of being reclaimed the way an out-of-window dispatch slot is (#4516).
+        """
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        start_minute = window["start"][0] * 60 + window["start"][1]
+        end_minute = window["end"][0] * 60 + window["end"][1]
+        minute_of_day = minute_abs % 1440
+        if window["cross_midnight"]:
+            return minute_of_day >= start_minute or minute_of_day < end_minute
+        else:
+            return start_minute <= minute_of_day < end_minute
+
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
@@ -2723,6 +2739,7 @@ class Octopus:
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
+        trust_future_dynamic_iog_slots = self.trust_future_dynamic_iog_slots
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -2775,9 +2792,15 @@ class Octopus:
                         # Calculate the 30-min slot start for this minute
                         slot_start = (minute // 30) * 30
 
+                        # A dynamic (out-of-window) dispatch slot is still Octopus's own
+                        # provisional/revisable plan - it can be moved or rescinded before it
+                        # occurs. The fixed 23:30-05:30 window is guaranteed cheap by the tariff
+                        # itself, not by the dispatch mechanism, so it's never gated here (#4516).
+                        trusted = trust_future_dynamic_iog_slots or self.minute_in_iog_fixed_window(slot_start)
+
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
-                            if slots_per_day[day_offset] < octopus_slot_max:
+                            if trusted and slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
                                 rates[minute] = assumed_price
@@ -2790,8 +2813,8 @@ class Octopus:
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
-                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
-                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
+                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}, trusted {}".format(
+                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate, trusted
                                 )
                             )
 
@@ -2799,6 +2822,37 @@ class Octopus:
         for day_offset in sorted(slots_per_day.keys()):
             if slots_per_day[day_offset] > 0:
                 self.log("Octopus: Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
+
+        return rates
+
+    def exclude_dynamic_io_slots(self, rates):
+        """
+        When trust_future_dynamic_iog_slots is off, undo any IOG dispatch discount outside the
+        fixed 23:30-05:30 window that's already present in `rates` before rate_add_io_slots() ever
+        runs (#4516).
+
+        rate_add_io_slots() only stops *itself* adding a new dynamic-slot discount - it can't
+        touch one that arrived a different way. For a genuine Octopus Intelligent tariff,
+        fetch_octopus_rates() can receive the dispatch-discounted rate directly from the rate feed
+        itself (marked via self.io_adjusted, from its own is_intelligent_adjusted flag), entirely
+        independently of the octopus_slots/octopus_intelligent_slot dispatch-list mechanism
+        rate_add_io_slots() reads. Leaving that alone would defeat the switch for exactly the
+        installs it matters most for. Restores rate_max_base - the true peak rate before any
+        saving-session/override/IOG distortion - and clears the io_adjusted marker so downstream
+        consumers (e.g. plan.py's future-slot risk penalty) don't still treat the minute as
+        IOG-adjusted once its discount has been removed.
+
+        Runs once per cycle (not per car - rates/io_adjusted are shared, not per-car), after
+        rate_add_io_slots() has run for every car but before the independent saving-session/free/
+        manual rate mechanisms apply their own adjustments on top.
+        """
+        if self.trust_future_dynamic_iog_slots or not self.io_adjusted:
+            return rates
+
+        for minute in list(self.io_adjusted.keys()):
+            if self.io_adjusted[minute] and not self.minute_in_iog_fixed_window(minute):
+                rates[minute] = self.rate_max_base
+                del self.io_adjusted[minute]
 
         return rates
 

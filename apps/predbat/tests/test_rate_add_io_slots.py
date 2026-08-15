@@ -63,6 +63,12 @@ def run_rate_add_io_slots_tests(my_predbat):
     my_predbat.rate_min = 4
     my_predbat.rate_min_base = 4
 
+    # Tests 1-17 predate #4516's trust_future_dynamic_iog_slots gate and use daytime slots
+    # throughout to exercise the cap/dedup/low_rate mechanics specifically - not the new window
+    # gate, which tests 18-20 cover explicitly. Default to trusting dynamic slots here so tests
+    # 1-17 keep testing exactly what they were designed to test.
+    my_predbat.trust_future_dynamic_iog_slots = True
+
     # Test 1: Simple single slot within limit
     print("\n**** Test 1: Single 30-min slot ****")
     slot_start = midnight_utc + timedelta(hours=2)
@@ -344,6 +350,36 @@ def run_rate_add_io_slots_tests(my_predbat):
     for minute in range(870, 930):  # Both 14:30–15:00 and 15:00–15:30 should be cheap
         expected_rates_17[minute] = 4.0
     failed |= run_rate_add_io_slots_test("test17_dup_does_not_waste_cap", my_predbat, slots_17, True, 2, expected_rates_17)
+
+    # Tests 18-20 (#4516): trust_future_dynamic_iog_slots - a dynamic (out-of-window) daytime
+    # dispatch slot is still Octopus's own provisional/revisable plan and can be moved or rescinded
+    # before it occurs, so by default it must not be treated as guaranteed cheap for the house
+    # battery. The fixed 23:30-05:30 window is guaranteed cheap by the tariff itself and is never
+    # affected regardless of the switch.
+    saved_trust_dynamic = my_predbat.trust_future_dynamic_iog_slots
+
+    print("\n**** Test 18: Dynamic daytime slot is not low rate by default ****")
+    my_predbat.trust_future_dynamic_iog_slots = False
+    slot_start_18 = midnight_utc + timedelta(hours=14)  # 14:00 - well outside the fixed window
+    slot_end_18 = slot_start_18 + timedelta(minutes=30)
+    slots_18 = [{"start": slot_start_18.strftime(TIME_FORMAT), "end": slot_end_18.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    expected_rates_18 = {minute: 10.0 for minute in range(840, 870)}  # left at the normal rate
+    failed |= run_rate_add_io_slots_test("test18_dynamic_slot_not_trusted_by_default", my_predbat, slots_18, True, 12, expected_rates_18)
+
+    print("\n**** Test 19: Fixed 23:30-05:30 window slot stays low rate regardless of the switch ****")
+    my_predbat.trust_future_dynamic_iog_slots = False
+    slot_start_19 = midnight_utc + timedelta(hours=2)  # 02:00 - well inside 23:30-05:30
+    slot_end_19 = slot_start_19 + timedelta(minutes=30)
+    slots_19 = [{"start": slot_start_19.strftime(TIME_FORMAT), "end": slot_end_19.strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "smart-charge", "location": "AT_HOME"}]
+    expected_rates_19 = {minute: 4.0 for minute in range(120, 150)}
+    failed |= run_rate_add_io_slots_test("test19_fixed_window_always_trusted", my_predbat, slots_19, True, 12, expected_rates_19)
+
+    print("\n**** Test 20: Switch on restores unconditional trust of dynamic slots ****")
+    my_predbat.trust_future_dynamic_iog_slots = True
+    expected_rates_20 = {minute: 4.0 for minute in range(840, 870)}
+    failed |= run_rate_add_io_slots_test("test20_switch_on_trusts_dynamic_slots", my_predbat, slots_18, True, 12, expected_rates_20)
+
+    my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
 
     # Restore original forecast_minutes
     my_predbat.forecast_minutes = original_forecast_minutes

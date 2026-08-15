@@ -175,6 +175,7 @@ from tests.test_annual_tariff import test_annual_tariff
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
 from tests.test_dispatch_timeline import run_dispatch_timeline_tests
+from tests.test_exclude_dynamic_io_slots import run_exclude_dynamic_io_slots_tests
 from tests.test_battery_curve_keys import run_battery_curve_keys_tests
 from tests.test_balance_inverters import run_balance_inverters_tests
 from tests.test_octopus_download_rates import test_octopus_download_rates_wrapper
@@ -423,6 +424,7 @@ def main():
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
         ("iog_charge_skew", run_iog_charge_skew_tests, "IOG earlier-charge skew characterisation tests", False),
         ("dispatch_timeline", run_dispatch_timeline_tests, "Dispatch timeline diagnostic tests (#4516 Stage 1)", False),
+        ("exclude_dynamic_io_slots", run_exclude_dynamic_io_slots_tests, "Exclude dynamic IOG slots tests (#4516)", False),
         ("rate_replicate", test_rate_replicate, "Rate replicate comprehensive tests (missing slots, IO, offsets, gas)", False),
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
