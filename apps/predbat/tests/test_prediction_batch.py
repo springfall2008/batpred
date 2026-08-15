@@ -14,8 +14,9 @@ handle whose first get() flushes the whole batch through one pk_run_batch call. 
 that deferral relies on: that a trial owns its inputs rather than sharing the caller's, that a queued
 job returns exactly what the direct thread_run_prediction_* path returns for every job shape and step,
 that nothing runs before the first get() and one get() drains the batch, that cache hits and
-intra-batch duplicates never reach the kernel while min/max jobs are never cached at all, and that
-every job the kernel will not take still runs on the engine the direct path would have used.
+intra-batch duplicates never reach the kernel while min/max jobs are never cached at all, that every
+job the kernel will not take still runs on the engine the direct path would have used, and that every
+handle in a multi-job batch comes back with its own job's result rather than a neighbour's.
 """
 
 
@@ -78,6 +79,38 @@ def test_export_trial_does_not_mutate_caller_window(my_predbat):
 
     if not failed:
         print("Export trial input tests passed")
+    return failed
+
+
+def test_batch_state_exists_without_a_base(my_predbat):
+    """A Prediction built without a base must still be able to queue, returns True on failure.
+
+    pending_batch and batch_threads used to be initialised only inside __init__'s `if base:` branch,
+    so a baseless Prediction raised AttributeError on its first enqueue. Nothing constructs one today
+    - the wrapped_* trampolines that did went with the process pool - which is exactly why the trap
+    is easy to walk back into.
+    """
+    print("**** Running baseless Prediction tests ****")
+    failed = False
+    prediction = Prediction()
+
+    if prediction.pending_batch != []:
+        print("ERROR: a baseless Prediction has pending_batch {}".format(prediction.pending_batch))
+        failed = True
+    if prediction.batch_threads != 1:
+        print("ERROR: a baseless Prediction has batch_threads {}".format(prediction.batch_threads))
+        failed = True
+
+    handle = prediction.enqueue_prediction([], [], [], [], PV_SCENARIO_NOMINAL, 0, PREDICT_STEP, False)
+    if len(prediction.pending_batch) != 1:
+        print("ERROR: enqueue on a baseless Prediction left {} pending job(s)".format(len(prediction.pending_batch)))
+        failed = True
+    if handle.job.result is not None:
+        print("ERROR: enqueue on a baseless Prediction ran the job")
+        failed = True
+
+    if not failed:
+        print("Baseless Prediction tests passed")
     return failed
 
 
@@ -377,42 +410,111 @@ def test_batch_fallbacks(my_predbat):
     return failed
 
 
-def test_batch_threads_do_not_change_results(my_predbat):
-    """A threaded flush must return exactly what a serial one does, returns True on failure.
+def test_save_run_drains_pending_batch(my_predbat):
+    """A saving run must flush any pending batch before it runs, returns True on failure.
 
-    pk_run_batch is pinned bit-identical across thread counts at the C level (kernel_parity), so this
-    is really checking the Python side: that results are matched back to their own job regardless of
-    how the kernel split the work.
+    A save run is the only one that populates predict_soc_best and friends, and it goes down the
+    Python engine because kernel_supported() refuses save. If a batch were left pending across it,
+    the next handle read would flush it and reset_kernel_run_state would blank exactly those
+    attributes - the published plan and the debug HTML would come back empty. All four fan-outs drain
+    their handles before any save run today, so this pins the guard, not a live bug: it is what stops
+    a fifth fan-out from introducing one.
     """
-    print("**** Running batch threading tests ****")
+    print("**** Running save-run batch drain tests ****")
     failed = False
     prediction, charge_window, export_window, charge_limit, export_limits = make_batch_prediction(my_predbat)
     end_record = my_predbat.forecast_minutes
-    socs = [round(my_predbat.soc_max * fraction, 2) for fraction in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)]
 
-    reference = None
+    handle = prediction.queue_run_prediction_charge(3.0, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record)
+    if handle.job.result is not None:
+        print("ERROR: the queued job ran before the save run")
+        failed = True
+
+    prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record=end_record, save="best")
+
+    if prediction.pending_batch:
+        print("ERROR: the save run left {} job(s) pending".format(len(prediction.pending_batch)))
+        failed = True
+    if handle.job.result is None:
+        print("ERROR: the save run did not flush the pending job")
+        failed = True
+    if not prediction.predict_soc_best:
+        print("ERROR: the save run published no predict_soc_best, so this test cannot see it being blanked")
+        failed = True
+
+    # The point of the guard: reading the handle afterwards must not wipe what the save run published
+    published = dict(prediction.predict_soc_best)
+    handle.get()
+    if prediction.predict_soc_best != published:
+        print("ERROR: reading a handle after a save run changed predict_soc_best ({} entries, was {})".format(len(prediction.predict_soc_best), len(published)))
+        failed = True
+
+    if not failed:
+        print("Save-run batch drain tests passed")
+    return failed
+
+
+def test_batch_results_match_their_own_job(my_predbat):
+    """Every handle in a multi-job batch must get its own job's result, at any thread count, returns True on failure.
+
+    The oracle is external, and it has to be: flush_batch resolves cache hits and intra-batch
+    duplicates before the kernel call and then walks the surviving jobs alongside the kernel's
+    results, so an off-by-one or reversed job->result mapping is easy to introduce and returns a
+    perfectly plausible cost for every trial. Comparing a batch against another batch cannot see
+    that - both would be wrong the same way - and neither can sweeping n_threads, which is forwarded
+    verbatim to C with nothing on the Python side varying with it.
+
+    So each handle is compared against thread_run_prediction_charge for the same try_soc, with the
+    prediction cache cleared between the two runs so neither can be answered out of what the other
+    stored. The SoCs are checked to give genuinely distinct costs first, otherwise a misrouted result
+    could match by coincidence.
+
+    The thread sweep rides along: pk_run_batch is pinned bit-identical across thread counts at the C
+    level (kernel_parity), so this pins that the Python side routes results the same way however the
+    kernel split the work.
+    """
+    print("**** Running batch result routing tests ****")
+    failed = False
+    # Seed 5 rather than the shared default: this test needs ten trials with ten different costs, and
+    # the default scenario's battery saturates so that nine of the ten come out identical
+    prediction, charge_window, export_window, charge_limit, export_limits = make_batch_prediction(my_predbat, seed=5)
+    end_record = my_predbat.forecast_minutes
+    socs = [round(my_predbat.soc_max * fraction, 2) for fraction in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)]
+    # Every charge window takes the trial SoC, not just one: moving a single window's limit saturates
+    # once that window can no longer absorb more, which collapses the costs back together
+    all_n = list(range(len(charge_window)))
+
+    # The oracle: one direct run per SoC, each from a cold cache so it is genuinely simulated
+    expected = []
+    for soc in socs:
+        prediction.prediction_cache = {}
+        expected.append(prediction.thread_run_prediction_charge(soc, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record))
+
+    costs = [result[0] for result in expected]
+    if len(set(costs)) != len(costs):
+        print("ERROR: the trial SoCs do not all give distinct costs ({}) - a misrouted result could match by luck".format(costs))
+        failed = True
+
     for n_threads in (1, 2, 8):
         prediction.batch_threads = n_threads
         prediction.prediction_cache = {}
-        handles = [prediction.queue_run_prediction_charge(soc, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, None, end_record) for soc in socs]
+        handles = [prediction.queue_run_prediction_charge(soc, 1, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, all_n, end_record) for soc in socs]
         results = [handle.get() for handle in handles]
-        if reference is None:
-            reference = results
-        elif results != reference:
-            for index, (got, want) in enumerate(zip(results, reference)):
-                if got != want:
-                    print("ERROR: job {} at {} threads returned {} expected {}".format(index, n_threads, got, want))
-            failed = True
+        for index, (got, want) in enumerate(zip(results, expected)):
+            if got != want:
+                print("ERROR: job {} (try_soc {}) at {} threads returned {} expected {}".format(index, socs[index], n_threads, got, want))
+                failed = True
     prediction.batch_threads = 1
 
     if not failed:
-        print("Batch threading tests passed - identical results at 1, 2 and 8 threads")
+        print("Batch result routing tests passed - {} jobs matched their own direct run at 1, 2 and 8 threads".format(len(socs)))
     return failed
 
 
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
     failed = test_export_trial_does_not_mutate_caller_window(my_predbat)
+    failed |= test_batch_state_exists_without_a_base(my_predbat)
 
     available, required_failure = kernel_available()
     if not available:
@@ -426,7 +528,8 @@ def run_prediction_batch_tests(my_predbat):
         failed |= test_batch_is_lazy(my_predbat)
         failed |= test_batch_cache_and_dedup(my_predbat)
         failed |= test_batch_fallbacks(my_predbat)
-        failed |= test_batch_threads_do_not_change_results(my_predbat)
+        failed |= test_save_run_drains_pending_batch(my_predbat)
+        failed |= test_batch_results_match_their_own_job(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
         my_predbat.prediction_kernel_enable = False

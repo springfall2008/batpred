@@ -173,8 +173,10 @@ class Prediction(PredictionBatch):
             if self.prediction_kernel_enable:
                 self.kernel_handle = create_kernel_context(self)
 
-            self.pending_batch = []
-            self.batch_threads = 1
+        # Outside the `if base:` block on purpose: a Prediction built without a base is still a valid
+        # object and its first enqueue_prediction would otherwise raise AttributeError
+        self.pending_batch = []
+        self.batch_threads = 1
 
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.
@@ -196,8 +198,11 @@ class Prediction(PredictionBatch):
         return try_charge_limit
 
     def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
-        """
-        Run single prediction in a thread
+        """Run one single-scenario prediction now and return its result.
+
+        Nothing runs in a Python thread any more: this is the direct synchronous path, kept as the
+        reference the batch is checked against and as what a queued job falls back to when the kernel
+        will not take it.
         """
         charge_limit, export_limits = self._prepare_single(charge_limit, export_limits)
 
@@ -223,13 +228,20 @@ class Prediction(PredictionBatch):
         return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
     def queue_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
-        """Queue a single-scenario prediction, returning a handle - the batch runs on the first get()"""
+        """Queue a single-scenario prediction, returning a handle - the batch runs on the first get().
+
+        The window lists and dicts are read at flush time, not now, so the caller must not mutate
+        anything it passed in before calling get() on the returned handle.
+        """
         charge_limit, export_limits = self._prepare_single(charge_limit, export_limits)
         return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, self.prediction_cache_enable)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """
-        Run prediction in a thread
+        """Run one charge-window trial prediction now and return its result.
+
+        Nothing runs in a Python thread any more: this is the direct synchronous path, kept as the
+        reference the batch is checked against and as what a queued job falls back to when the kernel
+        will not take it.
         """
 
         try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
@@ -268,7 +280,11 @@ class Prediction(PredictionBatch):
         )
 
     def queue_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """Queue a charge-window trial prediction, returning a handle"""
+        """Queue a charge-window trial prediction, returning a handle.
+
+        The window lists and dicts are read at flush time, not now, so the caller must not mutate
+        anything it passed in before calling get() on the returned handle.
+        """
         try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
         return self.enqueue_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable)
 
@@ -292,8 +308,11 @@ class Prediction(PredictionBatch):
         return min_soc, max_soc
 
     def thread_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """
-        Run prediction in a thread
+        """Run one charge-window trial prediction now and return its result plus the SoC range.
+
+        Nothing runs in a Python thread any more: this is the direct synchronous path, kept as the
+        reference the batch is checked against and as what a queued job falls back to when the kernel
+        will not take it.
         """
 
         try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
@@ -343,6 +362,9 @@ class Prediction(PredictionBatch):
 
         Uncached, exactly as the direct path is: the SoC range is not part of the cached result, so a
         hit would answer with the wrong shape.
+
+        The window lists and dicts are read at flush time, not now, so the caller must not mutate
+        anything it passed in before calling get() on the returned handle.
         """
         try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
         range_window = None if all_n else charge_window[window_n]
@@ -373,8 +395,11 @@ class Prediction(PredictionBatch):
         return export_window, export_limits
 
     def thread_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """
-        Run prediction in a thread
+        """Run one export-window trial prediction now and return its result.
+
+        Nothing runs in a Python thread any more: this is the direct synchronous path, kept as the
+        reference the batch is checked against and as what a queued job falls back to when the kernel
+        will not take it.
         """
         export_window, export_limits = self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n)
 
@@ -400,7 +425,11 @@ class Prediction(PredictionBatch):
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
     def queue_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """Queue an export-window trial prediction, returning a handle"""
+        """Queue an export-window trial prediction, returning a handle.
+
+        The window lists and dicts are read at flush time, not now, so the caller must not mutate
+        anything it passed in before calling get() on the returned handle.
+        """
         export_window, export_limits = self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n)
         return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable)
 
@@ -427,6 +456,16 @@ class Prediction(PredictionBatch):
         KERNEL_PARITY_REVISION (prediction_kernel.py) and PK_PARITY_REVISION (prediction_kernel.cpp)
         must both be bumped, and the kernel_parity test must pass (cd coverage && ./run_all --test kernel_parity).
         """
+        # A saving run publishes predict_soc_best and friends, and it is the only run that does. If a
+        # batch were left pending, the next handle read would flush it and reset_kernel_run_state
+        # would blank exactly those attributes, emptying the published plan and the debug HTML; a job
+        # flushed after its inputs were mutated would also be cached under a key hashed from the old
+        # ones, poisoning the shared cache. Draining first makes both impossible. Every fan-out site
+        # already drains its handles before saving, so this is the class defending its own invariant
+        # rather than a live fix - and it costs the ~250k non-save calls a single test of a local.
+        if save and self.pending_batch:
+            self.flush_batch()
+
         # The cache key is only wanted when the cache is actually in play - a saving run always
         # simulates - so it is not computed otherwise. Building it as one tuple hash keeps the
         # per-window hashing in C rather than looping in Python, which matters because this runs on

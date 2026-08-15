@@ -950,10 +950,17 @@ def check_batch_results(jobs, reference, batched, n_threads):
             if result_tuple[field] != single[field]:
                 print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
                 failed = True
-        # The batch never materialises the SoC series - that is what makes it affordable
-        if result_tuple[11] != {}:
-            print("ERROR: job {} returned a SoC series from the batch path".format(index))
+        # The batch never materialises the SoC series - that is what makes it affordable. Checked
+        # against the single path rather than against an empty dict on its own, so this fails both
+        # if the batch starts filling the series and if the reference stopped filling it (which
+        # would make the batch's emptiness prove nothing).
+        if result_tuple[11] or not single[11]:
+            print("ERROR: job {} SoC series: batch has {} entries, single reference has {}".format(index, len(result_tuple[11]), len(single[11])))
             failed = True
+        # car_charging_soc_next is recorded at minute 0, before any trial limit can move it, so it is
+        # the same value for every job in the fan-out - comparing it job by job pins that the batch
+        # assembles it like the single path does, but cannot catch a mis-routed result. That the
+        # kernel fills it at all is asserted once per run in run_batch_parity_tests.
         for field, name in [(12, "car_charging_soc_next"), (13, "iboost_next"), (14, "iboost_running"), (15, "iboost_running_solar"), (16, "iboost_running_full")]:
             if result_tuple[field] != single[field]:
                 print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
@@ -988,6 +995,18 @@ def run_batch_parity_tests(my_predbat, count=60):
         return True
 
     failed = False
+    # The per-job car_charging_soc_next comparison in check_batch_results is only worth anything if
+    # the kernel actually fills that field - otherwise both sides are the Prediction's own baseline
+    # copied through, and the comparison is two copies of the same list. Seed 4321 gives this
+    # scenario cars; assert it rather than assume it, so changing the seed cannot silently hollow the
+    # comparison out.
+    if not prediction.num_cars:
+        print("ERROR: batch parity scenario has no cars - the car_charging_soc_next comparison is vacuous")
+        failed = True
+    elif reference[0][0][12][: prediction.num_cars] == prediction.car_charging_soc_next[: prediction.num_cars]:
+        print("ERROR: car_charging_soc_next was not filled by the kernel, it is the Prediction's baseline {}".format(prediction.car_charging_soc_next))
+        failed = True
+
     for n_threads in (1, 2, 4, 8):
         batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
         if batched is None:
