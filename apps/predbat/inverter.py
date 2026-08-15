@@ -29,6 +29,12 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+# Give up enabling/writing the discharge target register after this many consecutive cycles where
+# rest_enableChargeTarget() itself fails - stops a genuinely unsupported inverter retrying forever,
+# every cycle, indefinitely (#4517). Small enough to bound the write storm quickly, but more than 1
+# so a single transient GivTCP/network hiccup doesn't permanently give up on a working register.
+DISCHARGE_TARGET_ENABLE_MAX_CYCLE_FAILURES = 3
+
 
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
@@ -186,6 +192,9 @@ class Inverter:
         self.rest_v3 = False
         self.serial_number = "Unknown"
         self.count_register_writes = 0
+        self.discharge_target_enable_failures = 0
+        self.discharge_target_enable_unsupported = False
+        self.discharge_target_enable_ever_succeeded = False
         self.created_attributes = {}
         self.track_charge_start = "00:00:00"
         self.track_charge_end = "00:00:00"
@@ -2527,7 +2536,42 @@ class Inverter:
                 if current is None:
                     self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
                 elif current != target_soc:
-                    self.rest_setDischargeTarget(target_soc)
+                    # Without Enable_Charge_Target on, the inverter ignores a written discharge
+                    # target - GivTCP still reports the write as successful, but it never sticks, so
+                    # this repeats every cycle indefinitely (#4517). adjust_battery_target() already
+                    # enables this before writing a charge target; mirror that here. No-ops if
+                    # already enabled.
+                    if self.discharge_target_enable_unsupported:
+                        # Already gave up after DISCHARGE_TARGET_ENABLE_MAX_CYCLE_FAILURES consecutive
+                        # failures below, having never once succeeded - don't keep retrying either
+                        # endpoint forever on hardware that has demonstrated it can't do this, or the
+                        # fix just moves the write storm from setDischargeTarget onto
+                        # enableChargeTarget instead of reducing it.
+                        pass
+                    elif self.rest_enableChargeTarget(True):
+                        self.discharge_target_enable_failures = 0
+                        self.discharge_target_enable_ever_succeeded = True
+                        self.rest_setDischargeTarget(target_soc)
+                    else:
+                        self.discharge_target_enable_failures += 1
+                        if self.discharge_target_enable_failures >= DISCHARGE_TARGET_ENABLE_MAX_CYCLE_FAILURES and not self.discharge_target_enable_ever_succeeded:
+                            # Never once worked since startup - a genuine capability gap, not a
+                            # transient blip, so stop attempting it rather than retrying forever.
+                            self.discharge_target_enable_unsupported = True
+                            message = "Warn: Inverter {} Enable_Charge_Target failed {} cycles in a row and has never succeeded, giving up on the discharge target register as unsupported".format(self.id, self.discharge_target_enable_failures)
+                            self.log(message)
+                            self.base.record_status(message, had_errors=True)
+                        elif self.discharge_target_enable_failures >= DISCHARGE_TARGET_ENABLE_MAX_CYCLE_FAILURES:
+                            # Worked before, failing now - a different problem (regression, GivTCP
+                            # restart, transient fault) to "never supported at all", so keep retrying
+                            # rather than writing the hardware off permanently, but flag it loudly.
+                            message = "Warn: Inverter {} Enable_Charge_Target has failed {} cycles in a row after previously working - not giving up, but this looks like a regression rather than an unsupported inverter".format(
+                                self.id, self.discharge_target_enable_failures
+                            )
+                            self.log(message)
+                            self.base.record_status(message, had_errors=True)
+                        else:
+                            self.log("Inverter {} Unable to enable charge target, discharge target not written".format(self.id))
                 else:
                     self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
