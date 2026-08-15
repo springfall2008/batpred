@@ -2066,7 +2066,7 @@ class Octopus:
         Download octopus free session data directly from a URL, no caching.
         """
         try:
-            r = requests.get(url)
+            r = requests.get(url, timeout=30)
         except requests.exceptions.ConnectionError:
             self.log("Warn: Octopus: Unable to download Octopus data from URL {} (ConnectionError)".format(url))
             self.record_status("Warn: Unable to download Octopus free session data", debug=url, had_errors=True)
