@@ -274,8 +274,7 @@ self.log("Error: Failed with: {}".format(e))
 Core prediction happens in `apps/predbat/prediction.py`:
 
 - `Prediction` class runs battery simulation in 5-min steps
-- Multiprocessing via `wrapped_run_prediction_*` functions
-- Global state in `PRED_GLOBAL` dict for process sharing
+- Batched predictions via `launch_run_prediction_*()` queuing jobs and `BatchHandle.get()` flushing through the C++ kernel
 - Optimisation in `apps/predbat/plan.py` via `optimise_all_windows()`
 
 ### State Management

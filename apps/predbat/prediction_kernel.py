@@ -650,10 +650,10 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     buffers = []
     # The charge fan-outs reuse the same window lists across every job, so their start/end arrays are
     # marshalled once per distinct list instead of once per job - which is most of what those batches
-    # save. The export fan-out gets nothing from this: _prepare_export builds a fresh export_window
-    # list per job, so every one of those misses the memo and pays its own marshalling. Keyed on
-    # identity, with the list retained so an id() cannot be recycled mid-batch. This relies on no
-    # caller mutating a window list between enqueue and flush (see prediction_batch.py).
+    # save. Export windows share this memo only when all_n is truthy; otherwise _prepare_export builds
+    # a fresh one per job. Keyed on identity, with the list retained so an id() cannot be recycled
+    # mid-batch. This relies on no caller mutating a window list between enqueue and flush (see
+    # prediction_batch.py).
     window_cache = {}
 
     def window_arrays(windows):
