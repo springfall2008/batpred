@@ -293,7 +293,7 @@ produced at any setting - so this only trades CPU for planning time.
 Valid values are:
 
 - 'auto' - Use the same number of threads as your CPU count
-- '0' - Don't use threads - disabled
+- '0' - Clamped up to a single kernel thread, i.e. each batch is simulated serially
 - 'N' - Use N threads, recommended values are between 2 and 8
 
 ```yaml

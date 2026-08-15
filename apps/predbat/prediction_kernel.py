@@ -37,7 +37,7 @@ KERNEL_PARITY_REVISION = 5
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = 4
 
-# Module-level loader state, inherited by forked worker processes
+# Module-level loader state - the library is loaded once per process and shared by every Prediction
 KERNEL_LIB = None
 KERNEL_LOAD_TRIED = False
 KERNEL_STATUS = "not loaded"
@@ -215,9 +215,12 @@ class PkBatchResult(ctypes.Structure):
 class BatchJob:
     """One queued prediction: its trial inputs, how the result should be shaped, and the result itself.
 
-    run_prediction_kernel_batch reads only the input fields and the SoC range steps. sim_hash,
+    run_prediction_kernel_batch reads only the input fields (charge_limit, charge_window,
+    export_window, export_limits, pv_scenario, end_record) and the SoC range steps. step, sim_hash,
     want_range, range_window and result belong to the batch runner in prediction_batch.py, which is
     the only thing that creates these; they live here so the ctypes layer can be tested on its own.
+    step is deliberately not one of the kernel's inputs - run_prediction_kernel_batch overrides it
+    with PREDICT_STEP, so it is only read when a job falls back to the Python engine.
     """
 
     __slots__ = ("charge_limit", "charge_window", "export_window", "export_limits", "pv_scenario", "end_record", "step", "soc_range_start_step", "soc_range_end_step", "sim_hash", "want_range", "range_window", "result")
@@ -280,8 +283,9 @@ def kernel_status_summary(pred):
 def load_kernel(log=None):
     """Load and verify the kernel shared library, returns the ctypes library or None.
 
-    The result is cached module-wide (including across forked workers); failures
-    are logged once and result in a permanent fallback to the Python engine.
+    The result is cached module-wide, so the library is loaded and verified once
+    per process; failures are logged once and result in a permanent fallback to
+    the Python engine.
     """
     global KERNEL_LIB, KERNEL_LOAD_TRIED, KERNEL_STATUS, KERNEL_HAS_BATCH
 
@@ -359,8 +363,11 @@ def double_array(values):
     positional arguments and is several times slower, which matters because these are rebuilt on
     every simulation. from_buffer returns a view over the array.array, and ctypes keeps the backing
     object alive through the view's _objects, so the buffer cannot be collected while the kernel is
-    using it. Each pool worker is a separate process (multiprocessing with fork), so no buffer is
-    ever shared between workers.
+    using it. The view is never written to once built: it is filled on the calling thread before
+    pk_run/pk_run_batch is entered and the kernel only ever reads it, so even a buffer deliberately
+    shared between jobs (the window memo in run_prediction_kernel_batch) is only read concurrently -
+    the kernel's worker threads never see a buffer change under them, because the one thread that
+    could change it is blocked inside the call.
 
     An iterable is taken rather than a list so callers can hand over a map/generator and skip
     materialising an intermediate list - array.array consumes it in C and coerces each item to a double
@@ -641,10 +648,12 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     # covers this (b_base walks up to job_array._objects), so this list is belt-and-braces: the limit
     # arrays are held explicitly here rather than relying on ctypes' container keepalive.
     buffers = []
-    # A fan-out reuses the same window lists across most of its jobs, so their start/end arrays are
-    # marshalled once per distinct list instead of once per job - that is the bulk of the batching
-    # win. Keyed on identity, with the list retained so an id() cannot be recycled mid-batch. This
-    # relies on no caller mutating a window list between enqueue and flush (see prediction_batch.py).
+    # The charge fan-outs reuse the same window lists across every job, so their start/end arrays are
+    # marshalled once per distinct list instead of once per job - which is most of what those batches
+    # save. The export fan-out gets nothing from this: _prepare_export builds a fresh export_window
+    # list per job, so every one of those misses the memo and pays its own marshalling. Keyed on
+    # identity, with the list retained so an id() cannot be recycled mid-batch. This relies on no
+    # caller mutating a window list between enqueue and flush (see prediction_batch.py).
     window_cache = {}
 
     def window_arrays(windows):

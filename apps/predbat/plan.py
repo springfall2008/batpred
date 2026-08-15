@@ -13,8 +13,9 @@
 
 Implements the search algorithm that finds optimal charge and discharge windows
 by exploring combinations of price thresholds, window sizes, and SoC targets.
-Uses multi-threaded prediction runs to evaluate thousands of scenarios and select
-the plan that minimises the overall cost metric.
+The search itself is serial Python: each fan-out queues its scenarios through
+launch_run_prediction_* and the first handle read flushes them all through one
+call to the C++ prediction kernel, which is where the threading now lives.
 """
 
 import copy
@@ -67,8 +68,10 @@ class Plan:
     """Plan optimisation mixin for finding optimal charge/discharge windows.
 
     Implements the search algorithm that explores price thresholds,
-    window combinations, and SoC targets using multi-threaded prediction
-    runs to minimise the overall cost metric.
+    window combinations, and SoC targets to minimise the overall cost
+    metric. Scenarios are evaluated in batches: launch_run_prediction_*
+    queues them and reading the first handle runs the whole batch through
+    one C++ kernel call, which spreads it across its own threads.
     """
 
     def dynamic_load(self):
@@ -648,19 +651,35 @@ class Plan:
         )
 
     def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step=PREDICT_STEP):
-        """Queue a prediction and return a handle to its result"""
+        """Queue a prediction and return a handle to its result.
+
+        Nothing runs here: the inputs are read when the batch is flushed, so no list or window dict
+        passed in may be mutated until the returned handle's get() has been called.
+        """
         return self.prediction.queue_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step)
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """Queue a prediction and return a handle to its result"""
+        """Queue a prediction and return a handle to its result.
+
+        Nothing runs here: the inputs are read when the batch is flushed, so no list or window dict
+        passed in may be mutated until the returned handle's get() has been called.
+        """
         return self.prediction.queue_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
     def launch_run_prediction_charge_min_max(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """Queue a prediction and return a handle to its result"""
+        """Queue a prediction and return a handle to its result.
+
+        Nothing runs here: the inputs are read when the batch is flushed, so no list or window dict
+        passed in may be mutated until the returned handle's get() has been called.
+        """
         return self.prediction.queue_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
     def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
-        """Queue a prediction and return a handle to its result"""
+        """Queue a prediction and return a handle to its result.
+
+        Nothing runs here: the inputs are read when the batch is flushed, so no list or window dict
+        passed in may be mutated until the returned handle's get() has been called.
+        """
         return self.prediction.queue_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
 
     def scenario_summary_title(self, record_time):

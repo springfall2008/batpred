@@ -62,7 +62,11 @@ def shape_batch_result(job, result, soc_range_min, soc_range_max):
 
 
 class BatchHandle:
-    """Result handle for a queued prediction - the drop-in for the pool's AsyncResult"""
+    """Result handle for a queued prediction: get() runs the batch if it has not run yet.
+
+    Deliberately shaped like a future so a fan-out reads as launch-all-then-get-all, but nothing is
+    running in the background - the work happens inside the first get().
+    """
 
     __slots__ = ("pred", "job")
 
