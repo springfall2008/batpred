@@ -224,10 +224,30 @@ class Prediction:
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
 
+    def _prepare_single(self, charge_limit, export_limits):
+        """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.
+
+        The copy used to live in Plan.launch_run_prediction_single, where it protected the caller's
+        lists from the pool pickling them; the batch path defers the read to flush time, which needs
+        the same protection, so it belongs with the other trial-input building.
+        """
+        return list(charge_limit), list(export_limits)
+
+    def _prepare_charge(self, try_soc, window_n, charge_limit, all_n):
+        """Build the trial charge limits - shared by thread_run_prediction_charge/_charge_min_max and the batch path"""
+        try_charge_limit = charge_limit.copy()
+        if all_n:
+            for set_n in all_n:
+                try_charge_limit[set_n] = try_soc
+        else:
+            try_charge_limit[window_n] = try_soc
+        return try_charge_limit
+
     def thread_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
         """
         Run single prediction in a thread
         """
+        charge_limit, export_limits = self._prepare_single(charge_limit, export_limits)
 
         (
             cost,
@@ -255,12 +275,7 @@ class Prediction:
         Run prediction in a thread
         """
 
-        try_charge_limit = charge_limit.copy()
-        if all_n:
-            for set_n in all_n:
-                try_charge_limit[set_n] = try_soc
-        else:
-            try_charge_limit[window_n] = try_soc
+        try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
 
         (
             cost,
@@ -319,12 +334,7 @@ class Prediction:
         Run prediction in a thread
         """
 
-        try_charge_limit = charge_limit.copy()
-        if all_n:
-            for set_n in all_n:
-                try_charge_limit[set_n] = try_soc
-        else:
-            try_charge_limit[window_n] = try_soc
+        try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
 
         (
             cost,

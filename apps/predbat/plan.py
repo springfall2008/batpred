@@ -672,8 +672,6 @@ class Plan:
         """
         Launch a thread to run a prediction
         """
-        charge_limit = list(charge_limit)
-        export_limits = list(export_limits)
         if self.pool and self.pool._state == "RUN":
             han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step))
         else:
