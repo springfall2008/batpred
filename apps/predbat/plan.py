@@ -431,25 +431,39 @@ class Plan:
                 charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
+                # Which charge windows the price threshold selects depends only on loop_price (fixed here),
+                # max_charge_slots and try_charge_freeze - not on either of the export loops it is nested
+                # inside, so without this it is rebuilt identically once per (max_export_slots,
+                # try_export_freeze) pair. That scan was the single hottest loop in planning, ~52M
+                # iterations on a heavy scenario. Memoised rather than hoisted so the iteration order, and
+                # with it every tie-break in the search below, is untouched.
+                #
+                # Sharing the cached objects between iterations is safe because neither is mutated after it
+                # is built: all_n is copied into pred_item, and charge_mods is only ever read.
+                charge_selection_cache = {}
+
                 for max_charge_slots in charge_slot_choices:
                     for max_export_slots in export_slot_choices:
                         for try_charge_freeze in charge_freeze_options:
                             for try_export_freeze in export_freeze_options:
-                                all_n = []
                                 all_d = []
-                                count_c = 0
                                 count_d = 0
-                                charge_mods = {}  # window_n -> freeze flag, for charge windows modified from the reset limits
                                 export_mods = {}  # window_n -> freeze flag, for export windows modified from the reset limits
 
-                                for price, window_n, freeze in price_set_charge:
-                                    if loop_price >= price:
-                                        if freeze and not try_charge_freeze:
-                                            pass
-                                        elif count_c < max_charge_slots and (window_n not in charge_mods):
-                                            all_n.append(window_n)
-                                            charge_mods[window_n] = freeze
-                                            count_c += 1
+                                charge_selection = charge_selection_cache.get((max_charge_slots, try_charge_freeze))
+                                if charge_selection is None:
+                                    all_n = []
+                                    count_c = 0
+                                    charge_mods = {}  # window_n -> freeze flag, for charge windows modified from the reset limits
+                                    for price, window_n, freeze in price_set_charge:
+                                        if loop_price >= price:
+                                            if not (freeze and not try_charge_freeze) and count_c < max_charge_slots and (window_n not in charge_mods):
+                                                all_n.append(window_n)
+                                                charge_mods[window_n] = freeze
+                                                count_c += 1
+                                    charge_selection_cache[(max_charge_slots, try_charge_freeze)] = (all_n, charge_mods)
+                                else:
+                                    all_n, charge_mods = charge_selection
 
                                 for price, window_n, freeze in price_set_export:
                                     if loop_price < price:
