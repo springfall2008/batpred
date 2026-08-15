@@ -3406,6 +3406,8 @@ class Inverter:
         write is even needed can end up re-writing every cycle on hardware where that field never
         catches up (#4421, #4517).
         """
+        if not isinstance(self.rest_data, dict):
+            return None
         try:
             result = int(float(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None)))
         except (ValueError, TypeError):
