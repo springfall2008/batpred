@@ -878,6 +878,38 @@ def run_model_kernel_tests(my_predbat):
         my_predbat.prediction_kernel_enable = False
 
 
+def run_soc_percent_table_tests():
+    """Check the kernel's SoC percent bucket table is exactly the round_py path it replaced.
+
+    The hot loop maps SoC to a curve percent through precomputed bucket boundaries instead of
+    round(soc, 1), which is only legitimate if the two agree for every SoC that can occur. The kernel
+    exposes pk_verify_soc_percent_table for this: it sweeps the SoC range and, more importantly,
+    probes either side of all 101 boundaries, which is the only place a disagreement could hide.
+
+    A failure here means plans would silently diverge from the Python engine at a bucket edge, so it
+    is checked across the range of battery sizes rather than one convenient value.
+    """
+    print("**** Running SoC percent table tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_soc_percent_table"):
+        print("SKIP: kernel does not expose pk_verify_soc_percent_table")
+        return False
+
+    lib.pk_verify_soc_percent_table.restype = ctypes.c_int32
+    lib.pk_verify_soc_percent_table.argtypes = [ctypes.c_double, ctypes.c_int32]
+    failed = False
+    # Spread of real battery capacities, including awkward non-round ones where the percent
+    # boundaries do not line up with tidy SoC values
+    for soc_max in (0.5, 2.0, 4.8, 5.0, 9.5, 10.0, 13.5, 20.0, 25.6, 30.0, 100.0):
+        bad = lib.pk_verify_soc_percent_table(ctypes.c_double(soc_max), 200000)
+        if bad:
+            print("ERROR: SoC percent table disagrees with round_py in {} places for soc_max {}".format(bad, soc_max))
+            failed = True
+    if not failed:
+        print("SoC percent table matches round_py for every sampled SoC and every bucket boundary")
+    return failed
+
+
 def run_kernel_parity_tests(my_predbat):
     """Compare the C++ prediction kernel against the Python engine, returns True on failure"""
     print("**** Running kernel parity tests ****")
@@ -889,6 +921,7 @@ def run_kernel_parity_tests(my_predbat):
     state = snapshot_scenario_state(my_predbat)
     try:
         failed = run_marshalling_tests()
+        failed |= run_soc_percent_table_tests()
         failed |= run_edge_case_tests(my_predbat)
         if not failed:
             failed |= run_random_sweep_tests(my_predbat)

@@ -447,6 +447,7 @@ slugifies
 slugify
 slugifying
 snakeviz
+snprintf
 socb
 socketloop
 socs
@@ -472,6 +473,7 @@ stdlib
 stepline
 Stromligning
 strptime
+strtod
 Strømligning
 subclassing
 submessage
