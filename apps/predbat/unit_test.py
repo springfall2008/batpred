@@ -220,8 +220,14 @@ KEEP_SCALE = 0.5
 
 
 def run_debug_cases(my_predbat):
-    """
-    Run debug case files from the cases directory
+    """Run debug case files from the cases directory.
+
+    my_predbat is deliberately unused: each case gets a freshly created instance instead. read_debug_yaml
+    only restores the attributes its dump actually carries, so on a shared instance anything the dump omits
+    inherits whatever the previous test happened to leave behind - which made these cases depend on test
+    ordering, and made the plan produced here differ from the one `--debug <case>` produces standalone.
+    Neither is a property a golden regression test can afford. Building the instance the same way the
+    standalone path does makes the two agree and makes the result independent of what ran before.
     """
     failed = False
     print("**** Running debug case files ****")
@@ -235,8 +241,9 @@ def run_debug_cases(my_predbat):
         pathname = os.path.dirname(filename)
         if basename == "random_scenarios.yaml":
             continue  # Skip the random scenarios template file
-        test_failed = run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
-        total_calculate_plan_time += getattr(my_predbat, "last_calculate_plan_time", 0.0)
+        case_predbat = create_predbat()
+        test_failed = run_single_debug(basename, case_predbat, filename, pathname + "/" + basename + ".expected.json")
+        total_calculate_plan_time += getattr(case_predbat, "last_calculate_plan_time", 0.0)
         case_count += 1
         if test_failed:
             print(f"**** Debug case {basename}: FAILED ****")
@@ -249,6 +256,19 @@ def run_debug_cases(my_predbat):
         print("**** Debug cases calculate_plan total time: {} seconds across {} case(s), average {} seconds ****".format(round(total_calculate_plan_time, 3), case_count, round(total_calculate_plan_time / case_count, 3)))
 
     return failed
+
+
+def run_annual_integration_isolated(my_predbat):
+    """Run the annual integration test against a freshly created instance.
+
+    my_predbat is unused, for the same reason run_debug_cases ignores it: this test plans a year of
+    sampled days against whatever state the shared instance is carrying, and never sets that state up
+    itself. It used to be shielded by debug_cases running immediately before it and overwriting most of
+    the instance from a debug dump; once debug_cases stopped mutating the shared instance, the ambient
+    state it inherited instead made it 13x slower (34s -> 463s) without ever failing, which is exactly
+    the kind of coupling a test suite should not have.
+    """
+    return test_annual_integration(create_predbat())
 
 
 def create_predbat():
@@ -499,7 +519,7 @@ def main():
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
-        ("annual_integration", test_annual_integration, "Annual prediction integration tests", True),
+        ("annual_integration", run_annual_integration_isolated, "Annual prediction integration tests", True),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
     ]
 
