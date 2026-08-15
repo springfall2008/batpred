@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from const import PREDICT_STEP
+from output import yesterday_slot_is_exporting
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -1123,6 +1124,34 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
     return failed
 
 
+def _test_yesterday_slot_is_exporting(my_predbat, failed):
+    """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
+
+    Regression for PR #4466: the "yesterday" plan reconstruction classified a historical
+    predbat.status slot as exporting purely via "exporting" in slot_status. "Cross-charging"
+    contains "charging" but not "exporting", so a genuine cross-charging slot was silently
+    dropped from the export side, only ever showing up as a charge window.
+    """
+    print("calculate_yesterday: Test - yesterday_slot_is_exporting recognises Cross-charging")
+
+    cases = [
+        ("exporting", True),
+        ("freeze exporting", True),
+        ("cross-charging", True),
+        ("charging", False),
+        ("freeze charging", False),
+        ("demand", False),
+        ("hold for car", False),
+    ]
+    for slot_status, expected in cases:
+        result = yesterday_slot_is_exporting(slot_status)
+        if result != expected:
+            print("ERROR: yesterday_slot_is_exporting({!r}) should be {}, got {}".format(slot_status, expected, result))
+            failed = True
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -1145,5 +1174,6 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
+    failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
 
     return failed
