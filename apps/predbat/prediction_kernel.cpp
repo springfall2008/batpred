@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +55,71 @@ int32_t calc_percent_limit(double charge_limit, double soc_max)
         return 0;
     }
     return std::min(static_cast<int32_t>((charge_limit / soc_max * 100.0) + 0.5), 100);
+}
+
+// The SoC percent that Python's round(soc, 1) -> calc_percent_limit() pair produces.
+//
+// The 1dp rounding is not a modelling decision - it is there so utils.get_charge_rate_curve_cached's
+// lru_cache hits - but rounding before the percent is taken occasionally moves the integer, so the
+// kernel has to reproduce it exactly.
+int32_t percent_via_round(double soc, double soc_max)
+{
+    return calc_percent_limit(round_py(soc, 1), soc_max);
+}
+
+// Smallest SoC whose percent_via_round() reaches p, found by bisecting the double's bit pattern.
+//
+// Non-negative doubles compare in the same order as their bit patterns read as integers, so this is
+// an exact bisection over every representable value in the bracket rather than an approximation:
+// the boundary it returns is the true one, to the last bit.
+double smallest_soc_for_percent(double soc_max, int32_t p, double hi_d)
+{
+    if (percent_via_round(0.0, soc_max) >= p) {
+        return 0.0;
+    }
+    if (percent_via_round(hi_d, soc_max) < p) {
+        return std::numeric_limits<double>::infinity();
+    }
+    uint64_t lo_bits, hi_bits;
+    double lo_d = 0.0;
+    std::memcpy(&lo_bits, &lo_d, sizeof(lo_bits));
+    std::memcpy(&hi_bits, &hi_d, sizeof(hi_bits));
+    while (hi_bits - lo_bits > 1) {
+        const uint64_t mid_bits = lo_bits + (hi_bits - lo_bits) / 2;
+        double mid_d;
+        std::memcpy(&mid_d, &mid_bits, sizeof(mid_d));
+        if (percent_via_round(mid_d, soc_max) >= p) {
+            hi_bits = mid_bits;
+        } else {
+            lo_bits = mid_bits;
+        }
+    }
+    double result;
+    std::memcpy(&result, &hi_bits, sizeof(result));
+    return result;
+}
+
+// Boundaries of the 101 SoC percent buckets, so the hot loop can map SoC to percent with a binary
+// search over doubles instead of a round_py (snprintf + strtod, ~96ns and the most expensive thing
+// in the loop - and unusable under threading, since it serialises on the C library's global locale).
+// out[p] is the smallest SoC that reads as p percent; out[0] is unused.
+void build_soc_percent_thresholds(std::vector<double> &out, double soc_max)
+{
+    out.assign(101, 0.0);
+    if (soc_max <= 0) {
+        return;
+    }
+    const double hi = soc_max * 2.0 + 1.0;
+    for (int32_t p = 1; p <= 100; p++) {
+        out[p] = smallest_soc_for_percent(soc_max, p, hi);
+    }
+    // upper_bound needs a non-decreasing sequence; the map is monotone so this only guards against
+    // an unreachable percent leaving an infinity in front of a later finite entry
+    for (int32_t p = 2; p <= 100; p++) {
+        if (out[p] < out[p - 1]) {
+            out[p] = out[p - 1];
+        }
+    }
 }
 
 // Per-plan static context passed from Python, arrays are all n_steps long
@@ -248,6 +314,7 @@ struct ContextStore {
     std::vector<double> charge_curve, discharge_curve;
     std::vector<double> carbon, gas_rate, iboost_plan_load;
     std::vector<double> car_load_flat, car_rate_flat;
+    std::vector<double> soc_percent_threshold; // see build_soc_percent_thresholds
     PkContext ctx;
 };
 
@@ -277,6 +344,14 @@ inline double get_total_inverted(double battery_draw, double pv_dc, double pv_ac
 // Mirror of utils.py get_charge_rate_curve_cached()/get_discharge_rate_curve_cached().
 // soc_key is passed exactly as Python does (usually round(soc, 1), but raw soc for the DC-rate lookups).
 // temp_cap_base is the pre-computed find_battery_temperature_cap() value before the min with max_rate.
+inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double rate_max, double temp_cap_base, const double *curve, double rate_min)
+{
+    double max_rate = rate_max * curve[soc_percent];
+    double max_rate_cap = std::min(temp_cap_base, rate_max);
+    max_rate = std::min(max_rate, max_rate_cap);
+    return std::max(std::min(rate_setting, max_rate), rate_min);
+}
+
 inline double rate_curve(double soc_key, double rate_setting, double rate_max, double temp_cap_base, const double *curve, double soc_max, double rate_min)
 {
     int32_t soc_percent = calc_percent_limit(soc_key, soc_max);
@@ -417,6 +492,7 @@ int64_t pk_context_create(const PkContext *in)
         return 0;
     }
     auto store = std::make_unique<ContextStore>();
+    build_soc_percent_thresholds(store->soc_percent_threshold, in->soc_max);
     size_t n = static_cast<size_t>(in->n_steps);
     store->rate_import.assign(in->rate_import, in->rate_import + n);
     store->rate_export.assign(in->rate_export, in->rate_export + n);
@@ -480,14 +556,14 @@ void pk_context_free(int64_t handle)
 // Look up a context by handle, or null when the handle is unknown. The returned pointer stays valid
 // as long as the caller does not free the context concurrently, which no caller does: contexts are
 // created once per plan and released by a weakref finaliser once the Prediction is gone.
-static const PkContext *lookup_context(int64_t handle)
+static const ContextStore *lookup_context(int64_t handle)
 {
     std::lock_guard<std::mutex> lock(g_context_mutex);
     auto it = g_contexts.find(handle);
     if (it == g_contexts.end()) {
         return nullptr;
     }
-    return &it->second->ctx;
+    return it->second.get();
 }
 
 // Simulate one scenario against an already-resolved context.
@@ -498,8 +574,10 @@ static const PkContext *lookup_context(int64_t handle)
 // soc_out may be null (see PkBatchJob). soc_range_min/max are optional out-params: when non-null and
 // soc_range_start_step >= 0, they receive the min/max of the rounded SoC over that inclusive step
 // range, mirroring the predict_soc scan in Prediction.thread_run_prediction_charge_min_max.
-static int32_t pk_run_one(const PkContext *c, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, PkScratch &scratch)
+static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, PkScratch &scratch)
 {
+    const PkContext *c = &store->ctx;
+    const std::vector<double> &soc_pct_threshold = store->soc_percent_threshold;
     if (!s || !out || s->step != 5) {
         return 2;
     }
@@ -794,11 +872,14 @@ static int32_t pk_run_one(const PkContext *c, const PkScenario *s, PkResult *out
             }
         }
 
-        // Current real charge rate - prediction.py:777-786
-        const double soc_round1 = round_py(soc, 1);
-        double charge_rate_now_curve = rate_curve(soc_round1, charge_rate_now, battery_rate_max_charge, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+        // Current real charge rate - prediction.py:777-786.
+        // Python rounds SoC to 1dp here purely to quantise an lru_cache key, but the rounding moves
+        // the percent at bucket edges so it is observable. The precomputed bucket boundaries give
+        // the identical percent from a binary search, with no round_py in the loop at all.
+        const int32_t soc_percent_round1 = soc >= 0.0 ? static_cast<int32_t>(std::upper_bound(soc_pct_threshold.begin() + 1, soc_pct_threshold.end(), soc) - (soc_pct_threshold.begin() + 1)) : percent_via_round(soc, soc_max);
+        double charge_rate_now_curve = rate_curve_pct(soc_percent_round1, charge_rate_now, battery_rate_max_charge, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
         double charge_rate_now_curve_step = charge_rate_now_curve * step;
-        double discharge_rate_now_curve = rate_curve(soc_round1, discharge_rate_now, battery_rate_max_discharge, c->temp_discharge_cap[k], c->discharge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling_discharge;
+        double discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_discharge, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
         double discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
         const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
@@ -821,7 +902,7 @@ static int32_t pk_run_one(const PkContext *c, const PkScenario *s, PkResult *out
                 export_rate_adjust = 1 - (export_limit_now - static_cast<double>(static_cast<int64_t>(export_limit_now)));
             }
             discharge_rate_now = battery_rate_max_export * export_rate_adjust;
-            discharge_rate_now_curve = rate_curve(soc_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling_discharge;
+            discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
             discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
             battery_draw = std::min(discharge_rate_now_curve_step, battery_to_min);
@@ -907,7 +988,7 @@ static int32_t pk_run_one(const PkContext *c, const PkScenario *s, PkResult *out
             // find_charge_rate with set_charge_low_power off (always the case for scenario runs)
             // reduces to the max rate and its curve value - utils.py:1145,1237-1238
             charge_rate_now = battery_rate_max_charge_combined;
-            charge_rate_now_curve = rate_curve(soc_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+            charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
             battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
@@ -1184,12 +1265,12 @@ static int32_t pk_run_one(const PkContext *c, const PkScenario *s, PkResult *out
 // entry point existed still satisfies the loader and every single-scenario caller.
 int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
 {
-    const PkContext *c = lookup_context(handle);
+    const ContextStore *c = lookup_context(handle);
     if (!c) {
         return 1;
     }
     PkScratch scratch;
-    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, scratch);
+    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, scratch);  // c is the store
 }
 
 // Run n_jobs scenarios against one context in a single call.
@@ -1203,7 +1284,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
 // malformed scenario cannot discard the rest of the fan-out.
 // Simulate one batched scenario into its result slot. Split out so the serial and threaded paths
 // below share exactly one copy of the marshalling.
-static void run_batch_job(const PkContext *c, const PkBatchJob &job, PkBatchResult &out, PkScratch &scratch)
+static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchResult &out, PkScratch &scratch)
 {
     PkScenario scenario;
     scenario.charge_limit = job.charge_limit;
@@ -1235,7 +1316,7 @@ static void run_batch_job(const PkContext *c, const PkBatchJob &job, PkBatchResu
 // aborting the batch, so one malformed scenario cannot discard the rest of the fan-out.
 int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads)
 {
-    const PkContext *c = lookup_context(handle);
+    const ContextStore *c = lookup_context(handle);
     if (!c) {
         return 1;
     }
@@ -1268,5 +1349,45 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
     return 0;
 }
 
+
+// Test hook: sweep SoC densely and confirm the precomputed bucket boundaries give exactly the same
+// percent as the round_py path they replace. Returns the number of disagreements (0 = equivalent).
+int32_t pk_verify_soc_percent_table(double soc_max, int32_t samples)
+{
+    std::vector<double> table;
+    build_soc_percent_thresholds(table, soc_max);
+    int32_t bad = 0;
+    const double hi = soc_max * 1.2 + 0.5;
+    for (int32_t i = 0; i <= samples; i++) {
+        const double soc = hi * static_cast<double>(i) / static_cast<double>(samples);
+        const int32_t want = percent_via_round(soc, soc_max);
+        const int32_t got = static_cast<int32_t>(std::upper_bound(table.begin() + 1, table.end(), soc) - (table.begin() + 1));
+        if (want != got) {
+            bad++;
+        }
+    }
+    // Also probe either side of every boundary, where a disagreement would actually hide
+    for (int32_t p = 1; p <= 100; p++) {
+        const double edge = table[p];
+        if (!std::isfinite(edge)) {
+            continue;
+        }
+        for (int32_t d = -2; d <= 2; d++) {
+            double probe = edge;
+            for (int32_t n = 0; n < std::abs(d); n++) {
+                probe = d < 0 ? std::nextafter(probe, -1.0) : std::nextafter(probe, 1e18);
+            }
+            if (probe < 0) {
+                continue;
+            }
+            const int32_t want = percent_via_round(probe, soc_max);
+            const int32_t got = static_cast<int32_t>(std::upper_bound(table.begin() + 1, table.end(), probe) - (table.begin() + 1));
+            if (want != got) {
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
 
 } // extern "C"
