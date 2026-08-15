@@ -14,8 +14,14 @@ Two separate things are covered here. car_charging_solar places car slots on for
 price-based pass only has to cover the shortfall. The trade-off between exporting the battery and
 saving it for the car needs no new machinery - it already falls out of the cost model whenever
 car_charging_from_battery is on - so the tests here pin that behaviour rather than add to it.
+
+Solar slots are sized from the forecast surplus (PV less house load) rather than the charger's rated
+power, because a charge-on-solar charger modulates to whatever is spare. set_house_load below is what
+makes that testable: it drives the load forecast directly instead of through the fixture's history.
 """
 
+from const import PREDICT_STEP
+from utils import dp2
 from tests.test_infra import reset_inverter, reset_rates, update_rates_import, update_rates_export
 from prediction import Prediction
 
@@ -30,8 +36,34 @@ def ready_time_str(my_predbat, minutes_ahead):
     return "{:02d}:{:02d}:00".format(target // 60, target % 60)
 
 
-def setup_car(my_predbat, car_kwh=8.0, ready_ahead=720, rate=7.4):
-    """Configure a single car needing car_kwh within ready_ahead minutes, and clear any existing plan."""
+def set_house_load(my_predbat, kw):
+    """Force the house load forecast to a flat kw, whatever history the shared fixture is carrying.
+
+    step_data_history normally builds load from days_previous, which no test can predict. Turning on
+    load_forecast_only zeroes that historical term, and dynamic_load_baseline then sets each bucket's
+    floor - so with everything else neutralised each bucket comes out at exactly the requested power.
+    """
+    my_predbat.load_forecast_only = True
+    my_predbat.load_forecast = {}
+    my_predbat.load_scaling = 1.0
+    my_predbat.load_inday_adjustment = 1.0
+    my_predbat.load_scaling_dynamic = {}
+    my_predbat.manual_load_adjust = {}
+    my_predbat.metric_load_divergence = None
+    kwh_per_step = kw * PREDICT_STEP / 60.0
+    my_predbat.dynamic_load_baseline = {my_predbat.minutes_now + offset: kwh_per_step for offset in range(0, my_predbat.forecast_minutes + my_predbat.plan_interval_minutes, PREDICT_STEP)}
+
+
+def setup_car(my_predbat, car_kwh=8.0, ready_ahead=720, rate=7.4, house_kw=0.0):
+    """Configure a single car needing car_kwh within ready_ahead minutes, and clear any existing plan.
+
+    minutes_now is snapped down onto the plan-interval grid first. Solar windows sit on that grid while
+    set_pv places the sunny block at an offset from minutes_now, so unless the two are aligned the first
+    and last windows only partly overlap the sun and legitimately carry less than the full surplus - which
+    made the per-slot power assertions depend on the wall-clock minute the suite happened to start at.
+    """
+    my_predbat.minutes_now = int(my_predbat.minutes_now / my_predbat.plan_interval_minutes) * my_predbat.plan_interval_minutes
+    set_house_load(my_predbat, house_kw)
     my_predbat.num_cars = 1
     my_predbat.car_charging_soc = [0.0]
     my_predbat.car_charging_limit = [car_kwh]
@@ -225,6 +257,143 @@ def test_min_soc_splits_bought_from_solar(my_predbat):
     return failed
 
 
+def solar_kw_in_slot(slot):
+    """Average power a planned slot draws, in kW."""
+    return slot["kwh"] * 60.0 / (slot["end"] - slot["start"])
+
+
+def test_solar_slot_size_follows_surplus(my_predbat):
+    """A solar slot is sized from PV minus house load, not from the charger's rated power."""
+    print("  - test_solar_slot_size_follows_surplus")
+    failed = False
+    # 7kW of sun against a 3kW house leaves 4kW for a 7kW charger
+    setup_car(my_predbat, car_kwh=50.0, ready_ahead=720, rate=7.0, house_kw=3.0)
+    reset_rates(my_predbat, 30.0, 5.0)
+    set_pv(my_predbat, 7.0)
+    my_predbat.car_charging_solar = True
+
+    plan = my_predbat.plan_car_charging(0, [])
+    solar_slots = [slot for slot in plan if slot.get("solar")]
+    if not solar_slots:
+        print("ERROR: expected solar slots with 7kW of sun against a 3kW house")
+        return True
+
+    for slot in solar_slots:
+        power = solar_kw_in_slot(slot)
+        if abs(power - 4.0) > 0.3:
+            print("ERROR: slot should draw the 4kW surplus, got {}kW ({})".format(dp2(power), slot))
+            failed = True
+
+    # The old behaviour was to assume the full charger rate regardless, so pin that it is gone
+    if any(solar_kw_in_slot(slot) > 6.0 for slot in solar_slots):
+        print("ERROR: a solar slot is still being sized at the charger's rated power")
+        failed = True
+
+    # Raising the house load must reduce what the car is predicted to take, from the same sunshine
+    total_at_3kw = sum(slot["kwh"] for slot in solar_slots)
+    set_house_load(my_predbat, 5.0)
+    total_at_5kw = sum(slot["kwh"] for slot in my_predbat.plan_car_charging(0, []) if slot.get("solar"))
+    if not (total_at_5kw < total_at_3kw):
+        print("ERROR: a bigger house load should leave the car less, got {} vs {}".format(total_at_5kw, total_at_3kw))
+        failed = True
+
+    return failed
+
+
+def test_solar_slot_capped_by_charger(my_predbat):
+    """Surplus beyond what the charger can take is not credited to the car."""
+    print("  - test_solar_slot_capped_by_charger")
+    failed = False
+    # 12kW of sun and a 1kW house leaves 11kW spare, but the charger tops out at 7kW
+    setup_car(my_predbat, car_kwh=50.0, ready_ahead=720, rate=7.0, house_kw=1.0)
+    reset_rates(my_predbat, 30.0, 5.0)
+    set_pv(my_predbat, 12.0)
+    my_predbat.car_charging_solar = True
+
+    plan = my_predbat.plan_car_charging(0, [])
+    solar_slots = [slot for slot in plan if slot.get("solar")]
+    if not solar_slots:
+        print("ERROR: expected solar slots with 12kW of sun")
+        return True
+    for slot in solar_slots:
+        power = solar_kw_in_slot(slot)
+        if power > 7.05:
+            print("ERROR: slot draws {}kW, above the 7kW charger limit ({})".format(dp2(power), slot))
+            failed = True
+        if abs(power - 7.0) > 0.3:
+            print("ERROR: with 11kW spare the charger should run flat out at 7kW, got {}kW".format(dp2(power)))
+            failed = True
+    return failed
+
+
+def test_solar_window_needs_real_surplus(my_predbat):
+    """The excess threshold is tested against surplus, so sun the house is already eating does not qualify."""
+    print("  - test_solar_window_needs_real_surplus")
+    failed = False
+    setup_car(my_predbat, rate=7.0, house_kw=0.0)
+    reset_rates(my_predbat, 30.0, 5.0)
+    my_predbat.car_charging_solar = True
+    my_predbat.car_charging_solar_excess = 1.0
+    set_pv(my_predbat, 4.0)
+
+    # Sanity: with no house load 4kW of sun is 4kW of surplus and qualifies
+    if not my_predbat.plan_car_charging_solar_windows():
+        print("ERROR: 4kW of sun against an idle house should qualify")
+        failed = True
+
+    # The same 4kW of sun against a 4kW house leaves nothing, and must not qualify
+    set_house_load(my_predbat, 4.0)
+    windows = my_predbat.plan_car_charging_solar_windows()
+    if windows:
+        print("ERROR: 4kW of sun fully consumed by a 4kW house should produce no windows, got {}".format(windows[:3]))
+        failed = True
+
+    # A house drawing 3.5kW leaves 0.5kW, still under the 1kW threshold
+    set_house_load(my_predbat, 3.5)
+    if my_predbat.plan_car_charging_solar_windows():
+        print("ERROR: a 0.5kW surplus is below the 1kW threshold and should produce no windows")
+        failed = True
+
+    # Drop the house to 2kW and the remaining 2kW surplus clears it
+    set_house_load(my_predbat, 2.0)
+    if not my_predbat.plan_car_charging_solar_windows():
+        print("ERROR: a 2kW surplus should clear the 1kW threshold")
+        failed = True
+    return failed
+
+
+def test_solar_surplus_floored_per_bucket(my_predbat):
+    """Surplus is floored at zero per bucket, so a dark half slot cannot cancel a sunny one."""
+    print("  - test_solar_surplus_floored_per_bucket")
+    failed = False
+    setup_car(my_predbat, rate=7.0, house_kw=2.0)
+    reset_rates(my_predbat, 30.0, 5.0)
+
+    # An hour of sun starting two hours out, against a house that draws 2kW around the clock
+    set_pv(my_predbat, 6.0, start_offset=120, length=60)
+    load_step = my_predbat.car_solar_load_forecast()
+
+    now = my_predbat.minutes_now
+    # The sunny hour on its own: 6kW of sun less 2kW of house is 4kW, so 4kWh over the hour
+    sunny = my_predbat.car_solar_surplus_kwh(now + 120, now + 180, load_step)
+    if abs(sunny - 4.0) > 0.2:
+        print("ERROR: expected 4kWh of surplus over the sunny hour, got {}".format(dp2(sunny)))
+        failed = True
+
+    # A dark hour is a 2kW deficit, but a deficit is not a negative surplus - it is simply nothing
+    dark = my_predbat.car_solar_surplus_kwh(now + 240, now + 300, load_step)
+    if abs(dark) > 0.01:
+        print("ERROR: a dark hour should yield no surplus, got {}".format(dp2(dark)))
+        failed = True
+
+    # Spanning both, the dark half must not eat into the sunny half's 4kWh
+    spanning = my_predbat.car_solar_surplus_kwh(now + 120, now + 300, load_step)
+    if abs(spanning - 4.0) > 0.2:
+        print("ERROR: the dark hours should not cancel the sunny one, expected 4kWh got {}".format(dp2(spanning)))
+        failed = True
+    return failed
+
+
 def test_solar_windows_ignore_ready_time(my_predbat):
     """Solar windows run to the forecast horizon, so a morning ready time does not exclude daylight."""
     print("  - test_solar_windows_ignore_ready_time")
@@ -336,10 +505,21 @@ def run_car_solar_tests(my_predbat):
 
     The car settings live on the shared my_predbat instance, so they are snapshotted and put back
     afterwards. Without this a lowered car_charging_plan_min_soc leaks into whichever test runs next
-    and silently halves its expected charge - which only shows up in some test orderings.
+    and silently halves its expected charge - which only shows up in some test orderings. The load
+    forecast inputs set_house_load overwrites are carried for the same reason: leaving
+    load_forecast_only on would zero the historical load of every test that follows.
     """
     print("**** Running car solar tests ****\n")
     carried = (
+        "minutes_now",
+        "load_forecast_only",
+        "load_forecast",
+        "load_scaling",
+        "load_inday_adjustment",
+        "load_scaling_dynamic",
+        "manual_load_adjust",
+        "metric_load_divergence",
+        "dynamic_load_baseline",
         "num_cars",
         "car_charging_soc",
         "car_charging_limit",
@@ -365,6 +545,10 @@ def run_car_solar_tests(my_predbat):
         failed |= test_solar_slots_do_not_overlap(my_predbat)
         failed |= test_solar_windows_ignore_ready_time(my_predbat)
         failed |= test_min_soc_splits_bought_from_solar(my_predbat)
+        failed |= test_solar_surplus_floored_per_bucket(my_predbat)
+        failed |= test_solar_window_needs_real_surplus(my_predbat)
+        failed |= test_solar_slot_size_follows_surplus(my_predbat)
+        failed |= test_solar_slot_capped_by_charger(my_predbat)
         if failed:
             return failed
         failed |= test_car_export_tradeoff(my_predbat)

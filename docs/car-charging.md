@@ -505,12 +505,24 @@ This may mean you need to use expert mode and change your low-rate threshold (**
 - Turn On **switch.predbat_car_charging_solar** if you want the car to soak up excess solar rather than that energy being exported.
 Predbat places car slots on forecast sunshine first, so the price-based planning above only has to cover whatever solar cannot deliver.
 
-    A slot counts as solar when two conditions hold. The forecast PV power is at least **input_number.predbat_car_charging_solar_excess** (1kW by default),
-and the export rate is no higher than **input_number.predbat_car_charging_rate_threshold_export** (99p by default, i.e. always divert).
+    A slot counts as solar when two conditions hold. The forecast **surplus** - predicted PV generation minus predicted house load - is at least
+**input_number.predbat_car_charging_solar_excess** (1kW by default), and the export rate is no higher than
+**input_number.predbat_car_charging_rate_threshold_export** (99p by default, i.e. always divert).
 Lower that export threshold if you would rather sell your solar than put it in the car whenever export pays well.
 
     Predbat only decides *when* to enable charging, never at what current - your charger or car modulates itself to whatever surplus is actually available,
 which is how Tesla's charge-on-solar and similar features are designed to work.
+
+    Because the charger modulates, Predbat forecasts the car drawing the surplus rather than its rated power. A 7kW charger under 5kW of sun with a 2kW
+house is predicted to take 3kW, not 7kW, and it is capped at the charger's rating when the surplus is larger than that. Surplus is worked out in five
+minute buckets and floored at zero in each, so a bright half hour is not cancelled out by a dark one either side of it.
+
+    This matters beyond the car plan itself: the car's predicted draw is part of the load Predbat plans the battery around. Assuming the full charger
+rate would put demand in the forecast that the sun cannot meet, making the battery look like it had to cover the difference and skewing every charge and
+export decision that follows.
+
+    One caveat if you also charge a home battery from solar: Predbat gives the car first call on the surplus, with the battery taking what is left.
+If your equipment prioritises the other way round, the car's share will be over-predicted while both are charging.
 
 - **input_number.predbat_car_charging_plan_min_soc** sets how much of the car's charge Predbat will pay for, as a percentage.
 It defaults to 100%, meaning anything solar does not deliver is bought, which is the behaviour if you leave it alone.

@@ -921,7 +921,7 @@ CONFIG_ITEMS = [
     },
     {
         "name": "car_charging_solar_excess",
-        "friendly_name": "Car solar charging power threshold",
+        "friendly_name": "Car solar charging surplus threshold",
         "type": "input_number",
         "min": 0.1,
         "max": 20.0,

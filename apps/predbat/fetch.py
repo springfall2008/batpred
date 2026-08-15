@@ -1112,12 +1112,6 @@ class Fetch:
         # Fetch PV forecast if enabled, today must be enabled, other days are optional
         self.pv_forecast_minute, self.pv_forecast_minute10, self.pv_forecast_minute90 = self.fetch_pv_forecast()
 
-        # Work out car plan? Runs after the PV forecast so car_charging_solar can place slots on
-        # predicted sunshine; nothing between here and its old position uses the car plan.
-        self.fetch_sensor_data_car_planning()
-        # Publish the car plan
-        self.publish_car_plan()
-
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
             # forecast deliberately ignores missing-data buckets, so the gap-filling/padding the modal filter
@@ -1147,6 +1141,15 @@ class Fetch:
             self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
         else:
             self.load_inday_adjustment = 1.0
+
+        # Work out car plan? Runs after the PV forecast so car_charging_solar can place slots on predicted
+        # sunshine, and after the load forecast is finished - the modal filter above rewrites load_minutes,
+        # the history forecast adds to load_forecast, and load_inday_adjustment is only computed here, all
+        # three of which feed the house load that solar surplus is measured against. Nothing between the
+        # PV forecast and this point uses the car plan.
+        self.fetch_sensor_data_car_planning()
+        # Publish the car plan
+        self.publish_car_plan()
 
         force_replan = False
         # Compare on the change-detection signature, not the raw slots, so the per-cycle re-clocking
