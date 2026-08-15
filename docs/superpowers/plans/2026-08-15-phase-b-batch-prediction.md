@@ -1581,6 +1581,49 @@ Required: 20 scenarios unchanged with `+0.0000` on metric, cost and all three PV
 
 Then report, best of 3 each: serial batch vs threaded batch vs the 31.6s pre-Phase-B baseline.
 
+## What it actually measured, once built
+
+The plan was executed and these are the results, kept here because the hand-off notes this plan was
+written from are deleted by the last task.
+
+**The serial win is the payoff.** 20-scenario benchmark, best of 3: **26.3s** against the 31.6s
+recorded before this work (that baseline was inherited, not re-measured on the same machine). It
+comes from paying the ctypes boundary and the window marshalling once per fan-out.
+
+**Threading buys nothing measurable: 26.27s serial vs 26.05s at 16 threads**, inside the 2-6%
+run-to-run noise band. Results are bit-identical either way.
+
+**Why**, from a `n_jobs` census over one benchmark run:
+
+```text
+25,091 pk_run_batch calls carrying 253,899 jobs
+mean 10.12 jobs/call, median 6, p95 24, max 363
+97.4% of calls carry fewer than 32 jobs
+```
+
+This plan's own profile predicted fan-outs of ~1176, ~900 and ~628 jobs. The gap is mostly not a
+batching failure: the large fan-out is scoped to one `(loop_price, coarse)` iteration and its ~1176
+launches become ~363 kernel jobs once the ~44% prediction-cache hit rate and the intra-batch dedup
+have taken their share. The median of 6 is `optimise_charge_limit`'s min/max pre-pass, which is
+genuinely that small. So the batch is collecting whole fan-outs — the fan-outs are just small.
+
+At ~6 jobs of ~30us each, `pk_run_batch` builds and joins six `std::thread`s to cover ~180us of work.
+Thread setup dominates by construction.
+
+**Where the next change goes**, in order:
+
+1. **`pk_run_batch` in `prediction_kernel.cpp`** — replace the per-call `std::vector<std::thread>`
+   with a pool created once at `pk_context_create` and woken per batch. This is the smallest change
+   with the largest effect, and it makes threading pay at today's batch sizes without touching Python.
+2. **`plan.py`, not `prediction_batch.py`**, if larger batches are wanted. The ceiling is
+   `optimise_charge_limit`'s internal serialisation: the min/max pre-pass computes the SoC-pruning
+   envelope that decides which `try_socs` are launched at all. Breaking that read-then-decide
+   dependency means either launching the unpruned SoC set speculatively or running the pre-pass for
+   every window before any trial — both change optimiser semantics and risk moving plans.
+   `enqueue_prediction`/`flush_batch` already accept arbitrarily large batches; they need no change.
+3. **Not** a batch-size threshold before threading in `run_prediction_kernel_batch` — the C++ already
+   clamps threads to job count, and a Python-side knob would only hide (1).
+
 ## Notes for whoever picks this up
 
 - **`PR #4536` (`perf/window-bounds-cache`) is in flight and independent**, worth -21% on its own. Batching partly subsumes it — a batch ships window bounds once per fan-out rather than per call — but the `sim_hash` half still matters, and `prediction_cache_key()` in `prediction_batch.py` is exactly where that half would land. If both branches merge, re-profile before assuming what is left.
