@@ -2126,7 +2126,11 @@ class Plan:
         export_step = 5
         export_step_large = 15
 
-        if not self.set_export_freeze:
+        if not self.set_export_freeze or self.inverter_can_charge_during_export:
+            # An inverter that charges the battery from surplus PV regardless of what it's been told
+            # (inverter_can_charge_during_export) can't actually achieve a frozen SoC - it behaves
+            # identically to idle in that case, so offering freeze as a distinct option is pointless
+            # and would mislabel the plan (#4207/#4425).
             allow_freeze = False
 
         # loop on each export option
@@ -3048,8 +3052,10 @@ class Plan:
         """
         curr = self.currency_symbols[1]
 
-        # Freeze export slots only have an effect when export freeze is enabled
-        if not self.calculate_best_export or not self.set_export_freeze or not self.export_window_best:
+        # Freeze export slots only have an effect when export freeze is enabled, and only mean anything
+        # distinct from idle when the inverter can actually hold SoC flat - see optimise_export()'s
+        # matching gate (#4207/#4425) for why inverter_can_charge_during_export rules it out too.
+        if not self.calculate_best_export or not self.set_export_freeze or not self.export_window_best or self.inverter_can_charge_during_export:
             return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
         pv_forecast_minute_step = self.prediction.pv_forecast_minute_step
