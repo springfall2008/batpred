@@ -101,7 +101,14 @@ This can however use a lot of CPU power especially on more complex tariffs like 
 You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (default 10 minutes) to reduce the frequency of replanning while keeping the inverter control in the fixed 5-minute slots.
 E.g. a value of 10 or 15 minutes should also give good results.
 
-If you have performance problems turn On **switch.predbat_performance_tweaks** and then turn Off **switch.predbat_calculate_second_pass**, as it's quite CPU intensive. It is On by default because it does improve the plan; the cost is planning time, which grows with the length of your plan.
+If you have performance problems, turn On **switch.predbat_performance_tweaks** to reveal the two switches that cost the most planning time. Both are On by
+default because both improve the plan; turn them Off to buy the time back:
+
+- **switch.predbat_calculate_pv90_plan** - simulating the third (sunny) scenario is the larger of the two costs
+- **switch.predbat_calculate_second_pass** - re-optimises every window in the plan rather than just the near-term ones
+
+As a rough guide, on a 20-scenario benchmark of one-day plans, turning both Off returns planning time to about three quarters of what it takes with them On.
+The second pass in particular gets more expensive the longer your plan is, so on a two-day horizon it costs proportionally more than that.
 
 You can turn on **switch.predbat_combine_charge_slots** and **switch.predbat_combine_export_slots** (_expert mode_) to speed up planning.
 Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
