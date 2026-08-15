@@ -572,7 +572,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.car_charging_limit = [size for size in cars["battery_kwh"]] or [100.0]
     my_predbat.car_charging_soc = [0.0 for _ in range(num_cars)]
     my_predbat.car_charging_soc_next = [None for _ in range(num_cars)]
-    my_predbat.car_charging_rate = [7.4 for _ in range(num_cars)]
+    my_predbat.car_charging_rate = [7.4 for _ in range(max(num_cars, 1))]
     my_predbat.car_charging_planned = [False for _ in range(num_cars)]
     my_predbat.car_charging_now = [False for _ in range(num_cars)]
     my_predbat.car_charging_plan_smart = [False for _ in range(num_cars)]
