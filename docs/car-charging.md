@@ -353,13 +353,15 @@ Predbat will still assume all Octopus charging slots are low rates even if some 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
 
-- The switch **switch.predbat_trust_future_dynamic_iog_slots** (*expert mode*) (default value is Off) controls whether a future daytime Intelligent dispatch slot (outside the fixed 23:30-05:30 off-peak window) is treated as a guaranteed cheap rate for the **house battery** plan.
+- **select.predbat_trust_future_dynamic_iog_slots** (*expert mode*) (default value is `none`) controls whether a future daytime Intelligent dispatch slot (outside the fixed 23:30-05:30 off-peak window) is treated as a guaranteed cheap rate for the **house battery** plan.
 A daytime dispatch is still Octopus's own provisional plan until it actually happens - it can be moved or withdrawn beforehand, which could otherwise lead Predbat to make an irreversible decision (e.g. an early force-export) in anticipation of a cheap recharge that never occurs.
-With the switch Off (the default), only the fixed 23:30-05:30 window and dispatches that have already started or completed are trusted as cheap for battery planning purposes; a still-provisional future daytime slot is left at the normal rate instead.
-A slot is only ever held back while it's still in the future and unconfirmed - the moment it starts (or if it's already in the past), it's trusted regardless of this switch.
-This matters beyond the plan itself: Predbat's "today's actual cost so far" figures (for both the house and, separately, your car's own charging cost) are calculated from these same rates against what was genuinely imported today, so a dispatch that has already happened is always reflected accurately - this switch only ever withholds trust from a slot that hasn't happened yet, never rewrites what already did.
-This does not affect car charging: future dispatch slots are still used in full to forecast when your EV will charge, regardless of this switch - only whether they're trusted as a cheap rate for the house battery is affected.
-Turn this On to restore the previous behaviour, where every dispatch slot Octopus reports is trusted as cheap for the house battery the moment it's known, whether provisional or confirmed.
+Note that a slot's start time passing is not itself confirmation - Octopus can still revoke a dispatch that has technically started but where the car never actually drew power, so none of these levels trust a slot on clock time alone:
+    - `none` - only the fixed 23:30-05:30 window is trusted as cheap for battery planning; every daytime dispatch is left at the normal rate until Octopus reports it as completed.
+    - `completed` - also trusts a daytime dispatch once Octopus reports it as a completed (metered) dispatch, i.e. it genuinely happened.
+    - `started` - also trusts the current 30-minute block of a still-provisional dispatch if **car_charging_now** reports the car is actually charging right now - waiting for Octopus to report the slot as `completed` can be too slow to still be useful for that block's own planning decision. This level needs **car_charging_now** configured in `apps.yaml`; if it isn't set, Predbat logs a warning and behaves the same as `completed`.
+The fixed overnight window is always trusted regardless of this setting.
+This matters beyond the plan itself: Predbat's "today's actual cost so far" figures (for both the house and, separately, your car's own charging cost) are calculated from these same rates against what was genuinely imported today, so a dispatch that has already happened is always reflected accurately - this setting only ever withholds trust from a slot that hasn't genuinely happened yet, never rewrites what already did.
+This does not affect car charging: future dispatch slots are still used in full to forecast when your EV will charge, regardless of this setting - only whether they're trusted as a cheap rate for the house battery is affected.
 
 - Let the Octopus app control when your car charges.
 
