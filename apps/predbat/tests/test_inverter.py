@@ -460,6 +460,51 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     return failed
 
 
+def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, rate, discharge=False):
+    """
+    Test that timed_charge_current / timed_discharge_current is re-asserted on every call to
+    adjust_charge_rate()/adjust_discharge_rate(), even when the rate itself is unchanged between
+    calls - regression test for #4415. The register can be reset externally (observed on Solis
+    GS_fb00); before this fix the write was only attempted when the rate itself changed, so an
+    external reset between rate changes was never corrected.
+    """
+    failed = False
+    inv.rest_data = None
+    inv.rest_api = None
+    inv.inv_output_charge_control = "current"
+    inv.battery_voltage = 50.0
+    inv.inv_current_dp = 1
+
+    entity = "number.timed_discharge_current" if discharge else "number.timed_charge_current"
+    expect_current = round(rate / inv.battery_voltage, 1)
+
+    # First call establishes the rate and writes the current register correctly
+    if discharge:
+        inv.adjust_discharge_rate(rate)
+    else:
+        inv.adjust_charge_rate(rate)
+
+    if ha.get_state(entity) != expect_current:
+        print("ERROR: {} expected initial current {} got {}".format(test_name, expect_current, ha.get_state(entity)))
+        failed = True
+
+    # Simulate something external (firmware reset, etc.) resetting the register between cycles
+    ha.dummy_items[entity] = prev_current
+
+    # Second call with the SAME rate - before the fix this would be a no-op, since the write was
+    # gated behind "did the rate change" rather than the current register's own live state
+    if discharge:
+        inv.adjust_discharge_rate(rate)
+    else:
+        inv.adjust_charge_rate(rate)
+
+    if ha.get_state(entity) != expect_current:
+        print("ERROR: {} expected current re-asserted to {} after external reset, got {}".format(test_name, expect_current, ha.get_state(entity)))
+        failed = True
+
+    return failed
+
+
 def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, expect_mode=None):
     """
     Test the adjust_inverter_mode function
@@ -2314,6 +2359,8 @@ def run_inverter_tests(my_predbat_dummy):
         "sensor.predbat_GE_0_scheduled_discharge_enable": "off",
         "number.discharge_target_soc": 4,
         "switch.inverter_button": False,
+        "number.timed_charge_current": 0.0,
+        "number.timed_discharge_current": 0.0,
     }
     my_predbat.ha_interface.dummy_items = dummy_items
     my_predbat.args["auto_restart"] = [{"service": "switch/turn_on", "entity_id": "switch.restart"}]
@@ -2637,6 +2684,13 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 250.1, 250, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 250, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
+    if failed:
+        return failed
+
+    # #4415: timed_charge_current/timed_discharge_current must be re-asserted every call, not
+    # just when the rate itself changes
+    failed |= test_current_reasserted_on_unchanged_rate("current_reassert_charge", ha, inv, 0, 200)
+    failed |= test_current_reasserted_on_unchanged_rate("current_reassert_discharge", ha, inv, 0, 250, discharge=True)
     if failed:
         return failed
 
