@@ -3190,6 +3190,7 @@ class Plan:
         """
         swapped_target = {}
         curr = self.currency_symbols[1]
+        first = True
 
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
@@ -3197,9 +3198,11 @@ class Plan:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
-                self.log(
-                    "Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr)
-                )
+                if first:
+                    self.log(
+                        "Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr)
+                    )
+                first = False
                 swapped = False
 
                 for window_n_target in range(record_export_windows - 1, 0, -1):
@@ -3438,12 +3441,15 @@ class Plan:
 
         swapped_target = {}
         swapped = True
+        first = True
         while swapped:
             selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, selected_export = self.run_prediction_metric(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
             )
-            self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
+            if first:
+                self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
             swapped = False
+            first = False
 
             for window_n_target in range(record_charge_windows - 1, 0, -1):
                 window_start_target = self.charge_window_best[window_n_target]["start"]

@@ -483,7 +483,7 @@ def main():
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
-        ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with/without the C++ kernel", False),
+        ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
