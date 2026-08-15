@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #define PK_ABI_VERSION 3
@@ -182,6 +183,60 @@ struct PkResult {
     int32_t iboost_running;
     int32_t iboost_running_solar;
     int32_t iboost_running_full;
+};
+
+// One scenario in a pk_run_batch() call; field order MUST match the ctypes Structure in
+// prediction_kernel.py.
+//
+// This is deliberately a separate type from PkScenario rather than extra fields on it: pk_run keeps
+// its existing layout, so a kernel binary predating the batch entry point still loads and runs, and
+// Python falls back to looping pk_run when pk_run_batch is absent.
+//
+// soc_out may be null. A batched scenario is always a cached (non-saving) run, whose caller discards
+// the per-minute SoC series, and materialising one buffer per job would cost ~84MB on a large batch.
+// The one thing callers do want from the series is the SoC range across a charge window, so the
+// kernel tracks that inline over [soc_range_start_step, soc_range_end_step] instead - set
+// soc_range_start_step < 0 to skip it.
+struct PkBatchJob {
+    const double *charge_limit;
+    const int32_t *charge_start;
+    const int32_t *charge_end;
+    const double *export_limits;
+    const int32_t *export_start;
+    const int32_t *export_end;
+    double *soc_out; // optional, null to skip
+
+    int32_t n_charge;
+    int32_t n_export;
+    int32_t pv_scenario;
+    int32_t end_record;
+    int32_t step;
+    int32_t soc_range_start_step; // <0 to skip the SoC range scan
+    int32_t soc_range_end_step;   // inclusive
+};
+
+// Result for one batched scenario; field order MUST match the ctypes Structure in
+// prediction_kernel.py. soc_range_min/max mirror thread_run_prediction_charge_min_max's scan over
+// predict_soc and are only meaningful when the job asked for a range.
+struct PkBatchResult {
+    PkResult result;
+    double soc_range_min;
+    double soc_range_max;
+    int32_t status; // 0 = ok, matching pk_run's return codes otherwise
+    int32_t pad;
+};
+
+// Reusable per-simulation scratch buffers.
+//
+// build_window_membership assigns n_steps entries and the clip helpers clear-then-push, so all of
+// these can be reused across scenarios without reallocating - which matters a lot under threading:
+// each scenario would otherwise heap-allocate ~70KB, and 1200 of those per batch put every worker
+// thread in contention on the allocator. Measured 4 threads at 0.6x of serial before this, because
+// the simulation is cheap enough that malloc, not arithmetic, was the bottleneck.
+struct PkScratch {
+    std::vector<int32_t> charge_member, export_member;
+    std::vector<int32_t> clipped_start, clipped_end;
+    std::vector<double> clipped_limit;
 };
 
 // Deep-copied context storage so Python-side buffers can be freed after create
@@ -422,20 +477,37 @@ void pk_context_free(int64_t handle)
 // Run one prediction scenario. Returns 0 on success, non-zero on error.
 // Mirrors the hot loop of Prediction.run_prediction() (prediction.py:385-1200) for the
 // supported configuration: save=None, debug off, step=5 (cars, iBoost and carbon included).
-int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
+// Look up a context by handle, or null when the handle is unknown. The returned pointer stays valid
+// as long as the caller does not free the context concurrently, which no caller does: contexts are
+// created once per plan and released by a weakref finaliser once the Prediction is gone.
+static const PkContext *lookup_context(int64_t handle)
 {
-    const PkContext *c;
-    {
-        std::lock_guard<std::mutex> lock(g_context_mutex);
-        auto it = g_contexts.find(handle);
-        if (it == g_contexts.end()) {
-            return 1;
-        }
-        c = &it->second->ctx;
+    std::lock_guard<std::mutex> lock(g_context_mutex);
+    auto it = g_contexts.find(handle);
+    if (it == g_contexts.end()) {
+        return nullptr;
     }
+    return &it->second->ctx;
+}
+
+// Simulate one scenario against an already-resolved context.
+//
+// Shared by pk_run and pk_run_batch, and safe to call concurrently on one context: c is const, every
+// working value below is a local, and results go only to the caller's own out/soc_range slots.
+//
+// soc_out may be null (see PkBatchJob). soc_range_min/max are optional out-params: when non-null and
+// soc_range_start_step >= 0, they receive the min/max of the rounded SoC over that inclusive step
+// range, mirroring the predict_soc scan in Prediction.thread_run_prediction_charge_min_max.
+static int32_t pk_run_one(const PkContext *c, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, PkScratch &scratch)
+{
     if (!s || !out || s->step != 5) {
         return 2;
     }
+    // Seeded to match Prediction.thread_run_prediction_charge_min_max, which starts min at soc_max
+    // and max at 0 so a range covering no recorded step leaves them in that state
+    double soc_range_min = c->soc_max;
+    double soc_range_max = 0.0;
+    const bool want_soc_range = soc_range_start_step >= 0;
 
     const int32_t pv_scenario = s->pv_scenario;
     const bool is_pv10 = pv_scenario == 1;
@@ -445,12 +517,14 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     const bool inverter_hybrid = c->inverter_hybrid != 0;
 
     // Window membership - prediction.py:494-495 / find_charge_window_optimised
-    std::vector<int32_t> charge_window_optimised, export_window_optimised;
+    std::vector<int32_t> &charge_window_optimised = scratch.charge_member;
+    std::vector<int32_t> &export_window_optimised = scratch.export_member;
 
     // The caller hands over the raw charge windows; clipping them against the export windows used to
     // be done in Python on every simulation, which cost more than the simulation itself
-    std::vector<int32_t> clipped_start, clipped_end;
-    std::vector<double> clipped_limit;
+    std::vector<int32_t> &clipped_start = scratch.clipped_start;
+    std::vector<int32_t> &clipped_end = scratch.clipped_end;
+    std::vector<double> &clipped_limit = scratch.clipped_limit;
     clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits);
     const int32_t n_charge_clipped = static_cast<int32_t>(clipped_start.size());
 
@@ -570,8 +644,28 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
             record = false;
         }
 
-        // Save SoC prediction data - prediction.py:627-628 (kernel always fills the buffer)
-        s->soc_out[k] = round_py(soc, 3);
+        // Save SoC prediction data - prediction.py:627-628. Batched scenarios pass a null buffer
+        // (their caller discards the series); the rounded value is still what feeds the SoC range,
+        // so the range matches a Python scan over predict_soc exactly.
+        // round_py is snprintf+strtod, ~96ns and by far the most expensive thing in this loop, so it
+        // is only paid when something actually consumes the value. soc itself is never rounded - the
+        // result feeds soc_out and the SoC range and nothing else - so skipping it when a batched
+        // scenario wants neither cannot change the simulation.
+        const bool in_soc_range = want_soc_range && k >= soc_range_start_step && k <= soc_range_end_step;
+        if (s->soc_out || in_soc_range) {
+            const double soc_rounded = round_py(soc, 3);
+            if (s->soc_out) {
+                s->soc_out[k] = soc_rounded;
+            }
+            if (in_soc_range) {
+                if (soc_rounded < soc_range_min) {
+                    soc_range_min = soc_rounded;
+                }
+                if (soc_rounded > soc_range_max) {
+                    soc_range_max = soc_rounded;
+                }
+            }
+        }
 
         // Get load and pv forecast - prediction.py:657-659
         double pv_now = pv_step[k];
@@ -1074,7 +1168,105 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     out->iboost_running = iboost_running;
     out->iboost_running_solar = iboost_running_solar;
     out->iboost_running_full = iboost_running_full;
+    if (soc_range_min_out) {
+        // Mirrors the two clamping lines that follow the scan in
+        // thread_run_prediction_charge_min_max, so an empty range collapses to a single value
+        // rather than leaving min above max
+        const double clamped_max = soc_range_max > soc_range_min ? soc_range_max : soc_range_min;
+        const double clamped_min = soc_range_min < clamped_max ? soc_range_min : clamped_max;
+        *soc_range_min_out = clamped_min;
+        *soc_range_max_out = clamped_max;
+    }
     return 0;
 }
+
+// Run one scenario. Kept with its original signature and struct so a binary built before the batch
+// entry point existed still satisfies the loader and every single-scenario caller.
+int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
+{
+    const PkContext *c = lookup_context(handle);
+    if (!c) {
+        return 1;
+    }
+    PkScratch scratch;
+    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, scratch);
+}
+
+// Run n_jobs scenarios against one context in a single call.
+//
+// The point is to pay the Python/C boundary and the context lookup once for a whole fan-out of
+// scenarios instead of once each: the per-call Python around pk_run measured ~31us against ~55us of
+// simulation, and neither Python threads nor a process pool can recover it (the GIL serialises the
+// former, pickling the latter).
+//
+// Per-job failures are reported in that job's status field rather than aborting the batch, so one
+// malformed scenario cannot discard the rest of the fan-out.
+// Simulate one batched scenario into its result slot. Split out so the serial and threaded paths
+// below share exactly one copy of the marshalling.
+static void run_batch_job(const PkContext *c, const PkBatchJob &job, PkBatchResult &out, PkScratch &scratch)
+{
+    PkScenario scenario;
+    scenario.charge_limit = job.charge_limit;
+    scenario.charge_start = job.charge_start;
+    scenario.charge_end = job.charge_end;
+    scenario.export_limits = job.export_limits;
+    scenario.export_start = job.export_start;
+    scenario.export_end = job.export_end;
+    scenario.soc_out = job.soc_out;
+    scenario.n_charge = job.n_charge;
+    scenario.n_export = job.n_export;
+    scenario.pv_scenario = job.pv_scenario;
+    scenario.end_record = job.end_record;
+    scenario.step = job.step;
+    out.soc_range_min = 0.0;
+    out.soc_range_max = 0.0;
+    out.pad = 0;
+    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, scratch);
+}
+
+// Run n_jobs scenarios against one context in a single call.
+//
+// The context lookup and the Python/C boundary are paid once for a whole fan-out rather than once
+// per scenario, but the real point is n_threads: 19209 separate ctypes calls cannot be parallelised
+// usefully from Python (the GIL serialises threads, and a process pool pays pickling), whereas one
+// batch can split the work across cores with no GIL involved at all.
+//
+// n_threads <= 1 runs serially. Per-job failures land in that job's status field rather than
+// aborting the batch, so one malformed scenario cannot discard the rest of the fan-out.
+int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads)
+{
+    const PkContext *c = lookup_context(handle);
+    if (!c) {
+        return 1;
+    }
+    if (!jobs || !results || n_jobs < 0) {
+        return 2;
+    }
+    // Scenarios are independent - each reads the shared const context and writes only its own result
+    // slot - so they are split across threads by stride.
+    if (n_threads > 1 && n_jobs > 1) {
+        const int32_t use = n_threads < n_jobs ? n_threads : n_jobs;
+        std::vector<std::thread> pool;
+        pool.reserve(use);
+        for (int32_t t = 0; t < use; t++) {
+            pool.emplace_back([c, jobs, results, n_jobs, use, t]() {
+                PkScratch scratch;
+                for (int32_t i = t; i < n_jobs; i += use) {
+                    run_batch_job(c, jobs[i], results[i], scratch);
+                }
+            });
+        }
+        for (auto &th : pool) {
+            th.join();
+        }
+        return 0;
+    }
+    PkScratch scratch;
+    for (int32_t i = 0; i < n_jobs; i++) {
+        run_batch_job(c, jobs[i], results[i], scratch);
+    }
+    return 0;
+}
+
 
 } // extern "C"

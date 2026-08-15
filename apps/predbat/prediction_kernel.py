@@ -41,6 +41,9 @@ KERNEL_MAX_CARS = 4
 KERNEL_LIB = None
 KERNEL_LOAD_TRIED = False
 KERNEL_STATUS = "not loaded"
+# True when the loaded binary exposes pk_run_batch. Probed rather than required so a kernel built
+# before the batch entry point existed still runs every scenario through the single-call path.
+KERNEL_HAS_BATCH = False
 
 
 class PkContext(ctypes.Structure):
@@ -176,6 +179,39 @@ class PkResult(ctypes.Structure):
     ]
 
 
+class PkBatchJob(ctypes.Structure):
+    """ctypes mirror of the PkBatchJob struct in prediction_kernel.cpp (field order must match exactly)"""
+
+    _fields_ = [
+        ("charge_limit", ctypes.POINTER(ctypes.c_double)),
+        ("charge_start", ctypes.POINTER(ctypes.c_int32)),
+        ("charge_end", ctypes.POINTER(ctypes.c_int32)),
+        ("export_limits", ctypes.POINTER(ctypes.c_double)),
+        ("export_start", ctypes.POINTER(ctypes.c_int32)),
+        ("export_end", ctypes.POINTER(ctypes.c_int32)),
+        ("soc_out", ctypes.POINTER(ctypes.c_double)),
+        ("n_charge", ctypes.c_int32),
+        ("n_export", ctypes.c_int32),
+        ("pv_scenario", ctypes.c_int32),
+        ("end_record", ctypes.c_int32),
+        ("step", ctypes.c_int32),
+        ("soc_range_start_step", ctypes.c_int32),
+        ("soc_range_end_step", ctypes.c_int32),
+    ]
+
+
+class PkBatchResult(ctypes.Structure):
+    """ctypes mirror of the PkBatchResult struct in prediction_kernel.cpp (field order must match exactly)"""
+
+    _fields_ = [
+        ("result", PkResult),
+        ("soc_range_min", ctypes.c_double),
+        ("soc_range_max", ctypes.c_double),
+        ("status", ctypes.c_int32),
+        ("pad", ctypes.c_int32),
+    ]
+
+
 def kernel_library_candidates():
     """Return the ordered list of shared library paths to try loading.
 
@@ -220,7 +256,7 @@ def load_kernel(log=None):
     The result is cached module-wide (including across forked workers); failures
     are logged once and result in a permanent fallback to the Python engine.
     """
-    global KERNEL_LIB, KERNEL_LOAD_TRIED, KERNEL_STATUS
+    global KERNEL_LIB, KERNEL_LOAD_TRIED, KERNEL_STATUS, KERNEL_HAS_BATCH
 
     if KERNEL_LOAD_TRIED:
         return KERNEL_LIB
@@ -248,6 +284,12 @@ def load_kernel(log=None):
             lib.pk_context_free.argtypes = [ctypes.c_int64]
             lib.pk_run.restype = ctypes.c_int32
             lib.pk_run.argtypes = [ctypes.c_int64, ctypes.POINTER(PkScenario), ctypes.POINTER(PkResult)]
+            try:
+                lib.pk_run_batch.restype = ctypes.c_int32
+                lib.pk_run_batch.argtypes = [ctypes.c_int64, ctypes.POINTER(PkBatchJob), ctypes.c_int32, ctypes.POINTER(PkBatchResult)]
+                KERNEL_HAS_BATCH = True
+            except AttributeError:
+                KERNEL_HAS_BATCH = False
             KERNEL_LIB = lib
             KERNEL_STATUS = "loaded from {}".format(path)
             if log:
@@ -523,7 +565,11 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     scenario.export_limits = double_array(export_limits)
     scenario.export_start = int32_array([window["start"] for window in export_window])
     scenario.export_end = int32_array([window["end"] for window in export_window])
-    soc_out = (ctypes.c_double * n_steps)()
+    # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
+    # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per
+    # step, which is snprintf+strtod and the single most expensive thing in the kernel's hot loop -
+    # measured 52.8us -> 28.5us per scenario, for a value that was being thrown away.
+    soc_out = (ctypes.c_double * n_steps)() if not cache else None
     scenario.soc_out = soc_out
     scenario.n_charge = len(charge_window)
     scenario.n_export = len(export_window)
