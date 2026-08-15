@@ -403,6 +403,97 @@ def _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat
     return failed
 
 
+def _test_predicted_today_stable_across_the_day(my_predbat, failed):
+    """
+    Follow-up regression test for issue #4496: load_energy_predicted's state/"today" total
+    (the whole midnight-to-midnight forecast, as opposed to "today_remaining") must not drift
+    as minutes_now advances through the day when load_scaling != 1.0. The two fixes above
+    (#4506, #4511) applied load_scaling/load_scaling_dynamic/manual_load_adjust to future
+    minutes only, correctly fixing today_remaining, but load_total_pred - the same accumulator
+    the whole-day "today" total was read from - summed those scaled future buckets alongside
+    unscaled past buckets. As minutes_now advanced, buckets kept flipping from the scaled group
+    to the unscaled one, so the published "today" total silently shrank (with load_scaling > 1)
+    or grew (with load_scaling < 1) even though nothing about the underlying forecast changed -
+    exactly the "prediction drops from 11.5kWh to 11.3kWh by 08:00" regression a user reported
+    after taking the #4511 fix. This asserts the whole-day total is identical whether computed
+    at the start of the day or partway through it, given the same underlying load model.
+    """
+    print("  test: load_energy_predicted's whole-day 'today' total is stable as minutes_now advances")
+
+    saved = {
+        "car_charging_hold": my_predbat.car_charging_hold,
+        "car_charging_energy": my_predbat.car_charging_energy,
+        "iboost_energy_subtract": my_predbat.iboost_energy_subtract,
+        "iboost_energy_today": my_predbat.iboost_energy_today,
+        "base_load": my_predbat.base_load,
+        "load_forecast_only": my_predbat.load_forecast_only,
+        "days_previous": my_predbat.days_previous,
+        "days_previous_weight": my_predbat.days_previous_weight,
+        "load_minutes_age": my_predbat.load_minutes_age,
+        "load_scaling": my_predbat.load_scaling,
+        "load_scaling_dynamic": my_predbat.load_scaling_dynamic,
+        "manual_load_adjust": my_predbat.manual_load_adjust,
+        "now_utc": my_predbat.now_utc,
+        "midnight_utc": my_predbat.midnight_utc,
+        "minutes_now": my_predbat.minutes_now,
+    }
+
+    try:
+        my_predbat.car_charging_hold = False
+        my_predbat.car_charging_energy = None
+        my_predbat.iboost_energy_subtract = False
+        my_predbat.iboost_energy_today = None
+        my_predbat.base_load = 0.0
+        my_predbat.load_forecast_only = False
+        my_predbat.days_previous = [1]
+        my_predbat.days_previous_weight = [1.0]
+        my_predbat.load_minutes_age = 1
+        my_predbat.load_scaling = 1.05
+        my_predbat.load_scaling_dynamic = {}
+        my_predbat.manual_load_adjust = {}
+
+        midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        my_predbat.midnight_utc = midnight_utc
+
+        load_minutes = build_cumulative(0.02, 3000)  # 0.02 kWh/min -> 0.1 kWh per 5-min bucket
+        load_forecast = {}
+        import_minutes = build_cumulative(0.0, 3000)
+
+        # Same day, same underlying load model, only minutes_now differs: at midnight (nothing
+        # elapsed yet) and again mid-afternoon (most of the day elapsed).
+        today_at_midnight = None
+        today_mid_afternoon = None
+        for minutes_now in (0, 900):  # 00:00 and 15:00
+            my_predbat.now_utc = midnight_utc + timedelta(minutes=minutes_now)
+            my_predbat.minutes_now = minutes_now
+            my_predbat.load_today_comparison(load_minutes, load_forecast, {}, import_minutes, minutes_now=minutes_now, step=5, save=True)
+            attrs = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["attributes"]
+            state = my_predbat.dashboard_values[my_predbat.prefix + ".load_energy_predicted"]["state"]
+            if minutes_now == 0:
+                today_at_midnight = attrs["today"]
+                state_at_midnight = state
+            else:
+                today_mid_afternoon = attrs["today"]
+                state_mid_afternoon = state
+
+        if today_at_midnight <= 0:
+            print("  ERROR: today total at midnight should be positive for this to be a meaningful test, got {}".format(today_at_midnight))
+            failed = True
+        elif abs(today_mid_afternoon - today_at_midnight) > 0.02:
+            print("  ERROR: 'today' total drifted as minutes_now advanced - midnight {} vs 15:00 {} (load_scaling=1.05 constant throughout)".format(today_at_midnight, today_mid_afternoon))
+            failed = True
+        elif abs(state_mid_afternoon - state_at_midnight) > 0.02:
+            print("  ERROR: state drifted as minutes_now advanced - midnight {} vs 15:00 {} (load_scaling=1.05 constant throughout)".format(state_at_midnight, state_mid_afternoon))
+            failed = True
+        else:
+            print("  PASS: 'today' total and state stayed flat across the day ({} at 00:00, {} at 15:00)".format(today_at_midnight, today_mid_afternoon))
+    finally:
+        for key, value in saved.items():
+            setattr(my_predbat, key, value)
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -412,9 +503,10 @@ def test_load_today_comparison(my_predbat):
     """
     Unit tests for load_today_comparison() covering the None-guard fix
     for dp2() calls when filtered_today() returns None, the
-    import-exceeds-load regression (batpred#4154, #2537), and the
+    import-exceeds-load regression (batpred#4154, #2537), the
     load_scaling/load_scaling_dynamic/manual_load_adjust-not-applied
-    regression (#4496).
+    regression (#4496), and the whole-day "today" total drifting as
+    minutes_now advances (#4496 follow-up).
     """
     failed = False
     print("**** Running load_today_comparison tests ****")
@@ -423,5 +515,6 @@ def test_load_today_comparison(my_predbat):
     failed = _test_import_exceeding_load_still_counted(my_predbat, failed) or failed
     failed = _test_load_scaling_applied_to_predicted(my_predbat, failed) or failed
     failed = _test_load_scaling_dynamic_and_manual_adjust_applied_to_predicted(my_predbat, failed) or failed
+    failed = _test_predicted_today_stable_across_the_day(my_predbat, failed) or failed
 
     return failed
