@@ -64,7 +64,7 @@ FOX_SETTINGS_DEFAULTS = {
 # range/unit/precision to schedule-derived settings) so a persisted cache from before that
 # change is detected as stale and forces one settings/scheduler refresh regardless of age,
 # instead of being reused as-is - potentially forever, since nothing else would ever correct it.
-FOX_SETTINGS_CACHE_VERSION = 2
+FOX_SETTINGS_CACHE_VERSION = 3
 
 # Storage cache keys for device data persisted between reboots
 FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "device_settings_unavailable", "device_settings_version", "scheduler_state", "device_values", "device_production_month"]
