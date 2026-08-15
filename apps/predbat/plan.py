@@ -406,6 +406,7 @@ class Plan:
         # for 221 distinct answers. Only the collision itself is cached - the limit that follows from it
         # depends on charge_mods/best_limits_reset and changes from trial to trial.
         hit_charge_cache = {}
+        hit_car_cache = {}  # (start, end) -> does this window hit a car charging slot
 
         # Start loop of trials
         for loop_price in all_prices:
@@ -431,25 +432,39 @@ class Plan:
                 charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
+                # Which charge windows the price threshold selects depends only on loop_price (fixed here),
+                # max_charge_slots and try_charge_freeze - not on either of the export loops it is nested
+                # inside, so without this it is rebuilt identically once per (max_export_slots,
+                # try_export_freeze) pair. That scan was the single hottest loop in planning, ~52M
+                # iterations on a heavy scenario. Memoised rather than hoisted so the iteration order, and
+                # with it every tie-break in the search below, is untouched.
+                #
+                # Sharing the cached objects between iterations is safe because neither is mutated after it
+                # is built: all_n is copied into pred_item, and charge_mods is only ever read.
+                charge_selection_cache = {}
+
                 for max_charge_slots in charge_slot_choices:
                     for max_export_slots in export_slot_choices:
                         for try_charge_freeze in charge_freeze_options:
                             for try_export_freeze in export_freeze_options:
-                                all_n = []
                                 all_d = []
-                                count_c = 0
                                 count_d = 0
-                                charge_mods = {}  # window_n -> freeze flag, for charge windows modified from the reset limits
                                 export_mods = {}  # window_n -> freeze flag, for export windows modified from the reset limits
 
-                                for price, window_n, freeze in price_set_charge:
-                                    if loop_price >= price:
-                                        if freeze and not try_charge_freeze:
-                                            pass
-                                        elif count_c < max_charge_slots and (window_n not in charge_mods):
-                                            all_n.append(window_n)
-                                            charge_mods[window_n] = freeze
-                                            count_c += 1
+                                charge_selection = charge_selection_cache.get((max_charge_slots, try_charge_freeze))
+                                if charge_selection is None:
+                                    all_n = []
+                                    count_c = 0
+                                    charge_mods = {}  # window_n -> freeze flag, for charge windows modified from the reset limits
+                                    for price, window_n, freeze in price_set_charge:
+                                        if loop_price >= price:
+                                            if not (freeze and not try_charge_freeze) and count_c < max_charge_slots and (window_n not in charge_mods):
+                                                all_n.append(window_n)
+                                                charge_mods[window_n] = freeze
+                                                count_c += 1
+                                    charge_selection_cache[(max_charge_slots, try_charge_freeze)] = (all_n, charge_mods)
+                                else:
+                                    all_n, charge_mods = charge_selection
 
                                 for price, window_n, freeze in price_set_export:
                                     if loop_price < price:
@@ -457,7 +472,7 @@ class Plan:
                                         if freeze and not try_export_freeze:
                                             pass
                                         elif count_d < max_export_slots and (window_n not in export_mods):
-                                            if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"]):
+                                            if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"], cache=hit_car_cache):
                                                 pass
                                             elif not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, export_window[window_n]["start"], export_window[window_n]["end"]) >= 0):
                                                 pass
@@ -3175,6 +3190,7 @@ class Plan:
         """
         swapped_target = {}
         curr = self.currency_symbols[1]
+        first = True
 
         if self.calculate_best_export and record_export_windows >= 2:
             swapped = True
@@ -3182,9 +3198,13 @@ class Plan:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
-                self.log(
-                    "Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr)
-                )
+                if first:
+                    self.log(
+                        "Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(
+                            dp2(selected_metric), curr, dp2(selected_cost), curr, dp2(selected_battery_value), self.metric_min_improvement_swap, curr
+                        )
+                    )
+                first = False
                 swapped = False
 
                 for window_n_target in range(record_export_windows - 1, 0, -1):
@@ -3423,12 +3443,15 @@ class Plan:
 
         swapped_target = {}
         swapped = True
+        first = True
         while swapped:
             selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, selected_export = self.run_prediction_metric(
                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
             )
-            self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
+            if first:
+                self.log("Swap charge optimisation started metric {}{}, cost {}{}, min_improvement_swap {}{}".format(dp2(selected_metric), curr, dp2(selected_cost), curr, min_improvement_swap, curr))
             swapped = False
+            first = False
 
             for window_n_target in range(record_charge_windows - 1, 0, -1):
                 window_start_target = self.charge_window_best[window_n_target]["start"]
@@ -5141,16 +5164,38 @@ class Plan:
             car_charging_kwh = dp2(car_charging_kwh)
         return car_charging_kwh
 
-    def hit_car_window(self, window_start, window_end):
+    def hit_car_window(self, window_start, window_end, cache=None):
+        """Does this window intersect a car charging window?
+
+        cache, when given, is a caller-owned dict of (start, end) -> hit. The optimiser asks the same
+        question about the same handful of windows millions of times per plan, so the caller keeps a dict
+        for as long as car_charging_slots cannot change underneath it and the scan collapses to a lookup.
+        Deliberately not held on self: the lifetime then belongs to whoever knows when the slots change.
+
+        The slot scan tests the intersection before dp2(): rounding every slot's kwh up front made this the
+        most expensive function in planning for anyone with an EV, since the rounding was being done for
+        nearly every slot the overlap test then discarded (6.45us -> 1.08us per call at 48 slots). dp2 is
+        pure, so testing it last cannot change the answer.
         """
-        Does this window intersect a car charging window?
-        """
-        if self.num_cars > 0:
-            for car_n in range(self.num_cars):
-                for window in self.car_charging_slots[car_n]:
-                    start = window["start"]
-                    end = window["end"]
-                    kwh = dp2(window["kwh"])
-                    if end > window_start and start < window_end and kwh > 0:
-                        return True
-        return False
+        if self.num_cars <= 0:
+            # No car, no cache work - this is the common case and it has to stay a single test
+            return False
+
+        key = (window_start, window_end)
+        if cache is not None:
+            hit = cache.get(key)
+            if hit is not None:
+                return hit
+
+        hit = False
+        for car_n in range(self.num_cars):
+            for window in self.car_charging_slots[car_n]:
+                if window["end"] > window_start and window["start"] < window_end and dp2(window["kwh"]) > 0:
+                    hit = True
+                    break
+            if hit:
+                break
+
+        if cache is not None:
+            cache[key] = hit
+        return hit

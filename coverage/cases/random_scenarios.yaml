@@ -5771,6 +5771,10 @@ scenarios:
       rate_max_charge_kw: 4.56
       rate_max_discharge_kw: 1.16
       soc_max_kwh: 9.5
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 1330
     export_rates:
@@ -11581,6 +11585,129 @@ scenarios:
       rate_max_charge_kw: 4.39
       rate_max_discharge_kw: 4.06
       soc_max_kwh: 4.8
+    cars:
+      battery_kwh:
+      - 100.0
+      - 77.0
+      num_cars: 2
+      slots:
+      - - end: 340
+          kwh: 1.023
+          start: 310
+        - end: 370
+          kwh: 2.52
+          start: 340
+        - end: 400
+          kwh: 3.402
+          start: 370
+        - end: 430
+          kwh: 3.189
+          start: 400
+        - end: 460
+          kwh: 3.335
+          start: 430
+        - end: 490
+          kwh: 3.476
+          start: 460
+        - end: 520
+          kwh: 2.578
+          start: 490
+        - end: 550
+          kwh: 3.401
+          start: 520
+        - end: 580
+          kwh: 1.965
+          start: 550
+        - end: 610
+          kwh: 0.543
+          start: 580
+        - end: 640
+          kwh: 1.247
+          start: 610
+        - end: 670
+          kwh: 2.303
+          start: 640
+        - end: 700
+          kwh: 2.534
+          start: 670
+        - end: 730
+          kwh: 1.993
+          start: 700
+        - end: 760
+          kwh: 2.662
+          start: 730
+        - end: 790
+          kwh: 0.308
+          start: 760
+        - end: 820
+          kwh: 1.782
+          start: 790
+        - end: 850
+          kwh: 0.538
+          start: 820
+        - end: 880
+          kwh: 2.878
+          start: 850
+        - end: 910
+          kwh: 1.118
+          start: 880
+      - - end: 1085
+          kwh: 0.199
+          start: 1055
+        - end: 1115
+          kwh: 0.036
+          start: 1085
+        - end: 1145
+          kwh: 1.192
+          start: 1115
+        - end: 1175
+          kwh: 0.454
+          start: 1145
+        - end: 1205
+          kwh: 0.182
+          start: 1175
+        - end: 1235
+          kwh: 0.945
+          start: 1205
+        - end: 1265
+          kwh: 2.324
+          start: 1235
+        - end: 1295
+          kwh: 3.321
+          start: 1265
+        - end: 1325
+          kwh: 1.457
+          start: 1295
+        - end: 1355
+          kwh: 0.264
+          start: 1325
+        - end: 1385
+          kwh: 2.333
+          start: 1355
+        - end: 1415
+          kwh: 2.465
+          start: 1385
+        - end: 1445
+          kwh: 1.941
+          start: 1415
+        - end: 35
+          kwh: 2.407
+          start: 5
+        - end: 65
+          kwh: 1.669
+          start: 35
+        - end: 95
+          kwh: 1.157
+          start: 65
+        - end: 125
+          kwh: 2.687
+          start: 95
+        - end: 155
+          kwh: 2.407
+          start: 125
+        - end: 185
+          kwh: 1.303
+          start: 155
     clock:
       minutes_now: 975
     export_rates:
@@ -17385,6 +17512,10 @@ scenarios:
       rate_max_charge_kw: 1.34
       rate_max_discharge_kw: 4.34
       soc_max_kwh: 2.4
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 600
     export_rates:
@@ -23189,6 +23320,10 @@ scenarios:
       rate_max_charge_kw: 3.18
       rate_max_discharge_kw: 2.48
       soc_max_kwh: 4.8
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 1210
     export_rates:
@@ -28995,6 +29130,10 @@ scenarios:
       rate_max_charge_kw: 1.41
       rate_max_discharge_kw: 2.58
       soc_max_kwh: 4.8
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 990
     export_rates:
@@ -34807,6 +34946,102 @@ scenarios:
       rate_max_charge_kw: 3.97
       rate_max_discharge_kw: 4.18
       soc_max_kwh: 13.5
+    cars:
+      battery_kwh:
+      - 60.0
+      - 77.0
+      num_cars: 2
+      slots:
+      - - end: 410
+          kwh: 2.135
+          start: 380
+        - end: 440
+          kwh: 2.356
+          start: 410
+        - end: 470
+          kwh: 0.371
+          start: 440
+        - end: 500
+          kwh: 2.293
+          start: 470
+        - end: 530
+          kwh: 1.566
+          start: 500
+        - end: 560
+          kwh: 1.326
+          start: 530
+        - end: 590
+          kwh: 1.665
+          start: 560
+        - end: 620
+          kwh: 2.4
+          start: 590
+        - end: 650
+          kwh: 1.13
+          start: 620
+        - end: 680
+          kwh: 1.118
+          start: 650
+        - end: 710
+          kwh: 2.323
+          start: 680
+        - end: 740
+          kwh: 2.351
+          start: 710
+        - end: 770
+          kwh: 0.525
+          start: 740
+        - end: 800
+          kwh: 1.247
+          start: 770
+        - end: 830
+          kwh: 1.37
+          start: 800
+        - end: 860
+          kwh: 2.588
+          start: 830
+        - end: 890
+          kwh: 1.694
+          start: 860
+      - - end: 460
+          kwh: 1.068
+          start: 430
+        - end: 490
+          kwh: 2.697
+          start: 460
+        - end: 520
+          kwh: 2.374
+          start: 490
+        - end: 550
+          kwh: 2.234
+          start: 520
+        - end: 580
+          kwh: 0.11
+          start: 550
+        - end: 610
+          kwh: 2.864
+          start: 580
+        - end: 640
+          kwh: 2.543
+          start: 610
+        - end: 670
+          kwh: 2.82
+          start: 640
+        - end: 700
+          kwh: 3.481
+          start: 670
+        - end: 730
+          kwh: 0.731
+          start: 700
+        - end: 760
+          kwh: 1.895
+          start: 730
+        - end: 790
+          kwh: 0.689
+          start: 760
+        - end: 820
+          kwh: 2.411
+          start: 790
     clock:
       minutes_now: 535
     export_rates:
@@ -40613,6 +40848,38 @@ scenarios:
       rate_max_charge_kw: 2.94
       rate_max_discharge_kw: 2.05
       soc_max_kwh: 13.5
+    cars:
+      battery_kwh:
+      - 40.0
+      num_cars: 1
+      slots:
+      - - end: 965
+          kwh: 2.603
+          start: 935
+        - end: 995
+          kwh: 0.601
+          start: 965
+        - end: 1025
+          kwh: 0.115
+          start: 995
+        - end: 1055
+          kwh: 1.892
+          start: 1025
+        - end: 1085
+          kwh: 1.793
+          start: 1055
+        - end: 1115
+          kwh: 1.163
+          start: 1085
+        - end: 1145
+          kwh: 1.486
+          start: 1115
+        - end: 1175
+          kwh: 2.968
+          start: 1145
+        - end: 1205
+          kwh: 2.668
+          start: 1175
     clock:
       minutes_now: 500
     export_rates:
@@ -46421,6 +46688,87 @@ scenarios:
       rate_max_charge_kw: 2.58
       rate_max_discharge_kw: 1.19
       soc_max_kwh: 7.0
+    cars:
+      battery_kwh:
+      - 60.0
+      - 77.0
+      num_cars: 2
+      slots:
+      - - end: 270
+          kwh: 2.511
+          start: 240
+        - end: 300
+          kwh: 2.36
+          start: 270
+        - end: 330
+          kwh: 0.187
+          start: 300
+        - end: 360
+          kwh: 1.543
+          start: 330
+        - end: 390
+          kwh: 2.819
+          start: 360
+        - end: 420
+          kwh: 1.113
+          start: 390
+        - end: 450
+          kwh: 1.565
+          start: 420
+        - end: 480
+          kwh: 2.707
+          start: 450
+        - end: 510
+          kwh: 1.498
+          start: 480
+        - end: 540
+          kwh: 1.478
+          start: 510
+        - end: 570
+          kwh: 0.221
+          start: 540
+      - - end: 660
+          kwh: 2.094
+          start: 630
+        - end: 690
+          kwh: 0.099
+          start: 660
+        - end: 720
+          kwh: 1.704
+          start: 690
+        - end: 750
+          kwh: 1.139
+          start: 720
+        - end: 780
+          kwh: 1.61
+          start: 750
+        - end: 810
+          kwh: 3.142
+          start: 780
+        - end: 840
+          kwh: 2.06
+          start: 810
+        - end: 870
+          kwh: 1.131
+          start: 840
+        - end: 900
+          kwh: 3.489
+          start: 870
+        - end: 930
+          kwh: 1.129
+          start: 900
+        - end: 960
+          kwh: 2.934
+          start: 930
+        - end: 990
+          kwh: 0.693
+          start: 960
+        - end: 1020
+          kwh: 2.222
+          start: 990
+        - end: 1050
+          kwh: 3.065
+          start: 1020
     clock:
       minutes_now: 950
     export_rates:
@@ -52231,6 +52579,56 @@ scenarios:
       rate_max_charge_kw: 4.85
       rate_max_discharge_kw: 1.51
       soc_max_kwh: 4.8
+    cars:
+      battery_kwh:
+      - 100.0
+      num_cars: 1
+      slots:
+      - - end: 280
+          kwh: 2.962
+          start: 250
+        - end: 310
+          kwh: 1.16
+          start: 280
+        - end: 340
+          kwh: 3.213
+          start: 310
+        - end: 370
+          kwh: 3.133
+          start: 340
+        - end: 400
+          kwh: 2.368
+          start: 370
+        - end: 430
+          kwh: 0.063
+          start: 400
+        - end: 460
+          kwh: 2.051
+          start: 430
+        - end: 490
+          kwh: 0.389
+          start: 460
+        - end: 520
+          kwh: 0.039
+          start: 490
+        - end: 550
+          kwh: 0.428
+          start: 520
+        - end: 580
+          kwh: 0.543
+          start: 550
+        - end: 610
+          kwh: 2.788
+          start: 580
+        - end: 640
+          kwh: 2.471
+          start: 610
+        - end: 670
+          kwh: 2.321
+          start: 640
+        - end: 700
+          kwh: 2.059
+          start: 670
     clock:
       minutes_now: 160
     export_rates:
@@ -58037,6 +58435,10 @@ scenarios:
       rate_max_charge_kw: 2.49
       rate_max_discharge_kw: 1.55
       soc_max_kwh: 9.5
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 570
     export_rates:
@@ -63840,6 +64242,53 @@ scenarios:
       rate_max_charge_kw: 2.72
       rate_max_discharge_kw: 3.31
       soc_max_kwh: 13.5
+    cars:
+      battery_kwh:
+      - 40.0
+      num_cars: 1
+      slots:
+      - - end: 400
+          kwh: 1.916
+          start: 370
+        - end: 430
+          kwh: 1.95
+          start: 400
+        - end: 460
+          kwh: 2.455
+          start: 430
+        - end: 490
+          kwh: 1.537
+          start: 460
+        - end: 520
+          kwh: 0.852
+          start: 490
+        - end: 550
+          kwh: 3.238
+          start: 520
+        - end: 580
+          kwh: 0.422
+          start: 550
+        - end: 610
+          kwh: 1.587
+          start: 580
+        - end: 640
+          kwh: 1.327
+          start: 610
+        - end: 670
+          kwh: 1.174
+          start: 640
+        - end: 700
+          kwh: 0.661
+          start: 670
+        - end: 730
+          kwh: 2.006
+          start: 700
+        - end: 760
+          kwh: 1.887
+          start: 730
+        - end: 790
+          kwh: 1.901
+          start: 760
     clock:
       minutes_now: 10
     export_rates:
@@ -69650,6 +70099,56 @@ scenarios:
       rate_max_charge_kw: 4.43
       rate_max_discharge_kw: 4.12
       soc_max_kwh: 9.5
+    cars:
+      battery_kwh:
+      - 60.0
+      num_cars: 1
+      slots:
+      - - end: 1455
+          kwh: 2.753
+          start: 1425
+        - end: 45
+          kwh: 1.839
+          start: 15
+        - end: 75
+          kwh: 2.436
+          start: 45
+        - end: 105
+          kwh: 0.676
+          start: 75
+        - end: 135
+          kwh: 0.452
+          start: 105
+        - end: 165
+          kwh: 2.801
+          start: 135
+        - end: 195
+          kwh: 1.955
+          start: 165
+        - end: 225
+          kwh: 2.315
+          start: 195
+        - end: 255
+          kwh: 0.608
+          start: 225
+        - end: 285
+          kwh: 0.871
+          start: 255
+        - end: 315
+          kwh: 1.868
+          start: 285
+        - end: 345
+          kwh: 2.398
+          start: 315
+        - end: 375
+          kwh: 0.998
+          start: 345
+        - end: 405
+          kwh: 0.107
+          start: 375
+        - end: 435
+          kwh: 0.003
+          start: 405
     clock:
       minutes_now: 150
     export_rates:
@@ -75454,6 +75953,68 @@ scenarios:
       rate_max_charge_kw: 3.63
       rate_max_discharge_kw: 3.67
       soc_max_kwh: 9.5
+    cars:
+      battery_kwh:
+      - 77.0
+      num_cars: 1
+      slots:
+      - - end: 590
+          kwh: 3.19
+          start: 560
+        - end: 620
+          kwh: 1.51
+          start: 590
+        - end: 650
+          kwh: 0.154
+          start: 620
+        - end: 680
+          kwh: 1.21
+          start: 650
+        - end: 710
+          kwh: 0.594
+          start: 680
+        - end: 740
+          kwh: 2.28
+          start: 710
+        - end: 770
+          kwh: 2.513
+          start: 740
+        - end: 800
+          kwh: 0.124
+          start: 770
+        - end: 830
+          kwh: 2.913
+          start: 800
+        - end: 860
+          kwh: 1.638
+          start: 830
+        - end: 890
+          kwh: 2.337
+          start: 860
+        - end: 920
+          kwh: 2.643
+          start: 890
+        - end: 950
+          kwh: 2.359
+          start: 920
+        - end: 980
+          kwh: 2.796
+          start: 950
+        - end: 1010
+          kwh: 1.34
+          start: 980
+        - end: 1040
+          kwh: 0.196
+          start: 1010
+        - end: 1070
+          kwh: 2.719
+          start: 1040
+        - end: 1100
+          kwh: 0.157
+          start: 1070
+        - end: 1130
+          kwh: 1.694
+          start: 1100
     clock:
       minutes_now: 230
     export_rates:
@@ -81264,6 +81825,10 @@ scenarios:
       rate_max_charge_kw: 3.74
       rate_max_discharge_kw: 3.74
       soc_max_kwh: 7.0
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 1150
     export_rates:
@@ -87064,6 +87629,105 @@ scenarios:
       rate_max_charge_kw: 3.81
       rate_max_discharge_kw: 3.61
       soc_max_kwh: 2.4
+    cars:
+      battery_kwh:
+      - 100.0
+      - 40.0
+      num_cars: 2
+      slots:
+      - - end: 555
+          kwh: 0.352
+          start: 525
+        - end: 585
+          kwh: 2.996
+          start: 555
+        - end: 615
+          kwh: 1.357
+          start: 585
+        - end: 645
+          kwh: 1.408
+          start: 615
+        - end: 675
+          kwh: 1.885
+          start: 645
+        - end: 705
+          kwh: 1.748
+          start: 675
+        - end: 735
+          kwh: 0.755
+          start: 705
+        - end: 765
+          kwh: 3.257
+          start: 735
+        - end: 795
+          kwh: 0.462
+          start: 765
+        - end: 825
+          kwh: 2.03
+          start: 795
+        - end: 855
+          kwh: 3.087
+          start: 825
+        - end: 885
+          kwh: 2.936
+          start: 855
+        - end: 915
+          kwh: 1.377
+          start: 885
+        - end: 945
+          kwh: 3.43
+          start: 915
+        - end: 975
+          kwh: 0.84
+          start: 945
+        - end: 1005
+          kwh: 1.509
+          start: 975
+      - - end: 625
+          kwh: 0.032
+          start: 595
+        - end: 655
+          kwh: 2.969
+          start: 625
+        - end: 685
+          kwh: 1.199
+          start: 655
+        - end: 715
+          kwh: 2.721
+          start: 685
+        - end: 745
+          kwh: 0.626
+          start: 715
+        - end: 775
+          kwh: 1.343
+          start: 745
+        - end: 805
+          kwh: 3.237
+          start: 775
+        - end: 835
+          kwh: 0.569
+          start: 805
+        - end: 865
+          kwh: 2.397
+          start: 835
+        - end: 895
+          kwh: 1.091
+          start: 865
+        - end: 925
+          kwh: 2.485
+          start: 895
+        - end: 955
+          kwh: 2.265
+          start: 925
+        - end: 985
+          kwh: 2.786
+          start: 955
+        - end: 1015
+          kwh: 1.759
+          start: 985
+        - end: 1045
+          kwh: 2.447
+          start: 1015
     clock:
       minutes_now: 700
     export_rates:
@@ -92873,6 +93537,47 @@ scenarios:
       rate_max_charge_kw: 3.09
       rate_max_discharge_kw: 1.14
       soc_max_kwh: 4.8
+    cars:
+      battery_kwh:
+      - 60.0
+      num_cars: 1
+      slots:
+      - - end: 1305
+          kwh: 1.881
+          start: 1275
+        - end: 1335
+          kwh: 1.616
+          start: 1305
+        - end: 1365
+          kwh: 3.267
+          start: 1335
+        - end: 1395
+          kwh: 1.855
+          start: 1365
+        - end: 1425
+          kwh: 2.194
+          start: 1395
+        - end: 1455
+          kwh: 3.031
+          start: 1425
+        - end: 45
+          kwh: 2.87
+          start: 15
+        - end: 75
+          kwh: 1.231
+          start: 45
+        - end: 105
+          kwh: 1.231
+          start: 75
+        - end: 135
+          kwh: 1.071
+          start: 105
+        - end: 165
+          kwh: 2.595
+          start: 135
+        - end: 195
+          kwh: 2.958
+          start: 165
     clock:
       minutes_now: 1150
     export_rates:
@@ -98683,6 +99388,10 @@ scenarios:
       rate_max_charge_kw: 2.92
       rate_max_discharge_kw: 2.67
       soc_max_kwh: 7.0
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 1185
     export_rates:
@@ -104483,6 +105192,65 @@ scenarios:
       rate_max_charge_kw: 4.23
       rate_max_discharge_kw: 4.84
       soc_max_kwh: 13.5
+    cars:
+      battery_kwh:
+      - 100.0
+      num_cars: 1
+      slots:
+      - - end: 275
+          kwh: 2.241
+          start: 245
+        - end: 305
+          kwh: 1.944
+          start: 275
+        - end: 335
+          kwh: 3.402
+          start: 305
+        - end: 365
+          kwh: 2.125
+          start: 335
+        - end: 395
+          kwh: 2.971
+          start: 365
+        - end: 425
+          kwh: 1.031
+          start: 395
+        - end: 455
+          kwh: 1.674
+          start: 425
+        - end: 485
+          kwh: 0.674
+          start: 455
+        - end: 515
+          kwh: 3.078
+          start: 485
+        - end: 545
+          kwh: 0.276
+          start: 515
+        - end: 575
+          kwh: 0.787
+          start: 545
+        - end: 605
+          kwh: 2.666
+          start: 575
+        - end: 635
+          kwh: 2.16
+          start: 605
+        - end: 665
+          kwh: 3.017
+          start: 635
+        - end: 695
+          kwh: 0.627
+          start: 665
+        - end: 725
+          kwh: 1.158
+          start: 695
+        - end: 755
+          kwh: 1.168
+          start: 725
+        - end: 785
+          kwh: 2.744
+          start: 755
     clock:
       minutes_now: 360
     export_rates:
@@ -110293,6 +111061,10 @@ scenarios:
       rate_max_charge_kw: 3.65
       rate_max_discharge_kw: 2.34
       soc_max_kwh: 4.8
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 1035
     export_rates:
@@ -116099,6 +116871,10 @@ scenarios:
       rate_max_charge_kw: 4.14
       rate_max_discharge_kw: 3.08
       soc_max_kwh: 20.0
+    cars:
+      battery_kwh: []
+      num_cars: 0
+      slots: []
     clock:
       minutes_now: 40
     export_rates:

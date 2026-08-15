@@ -282,7 +282,7 @@ INT32_TYPECODE = select_array_typecode(("i", "l", "h"), ctypes.c_int32)
 
 
 def double_array(values):
-    """Create a ctypes double array from a Python list.
+    """Create a ctypes double array from any iterable of numbers.
 
     Built via array.array rather than (ctypes.c_double * n)(*values): the latter unpacks the list as
     positional arguments and is several times slower, which matters because these are rebuilt on
@@ -290,16 +290,22 @@ def double_array(values):
     object alive through the view's _objects, so the buffer cannot be collected while the kernel is
     using it. Each pool worker is a separate process (multiprocessing with fork), so no buffer is
     ever shared between workers.
+
+    An iterable is taken rather than a list so callers can hand over a map/generator and skip
+    materialising an intermediate list - array.array consumes it in C and coerces each item to a double
+    itself, which is what the caller's float() was doing.
     """
     if DOUBLE_TYPECODE is None:
+        values = list(values)
         return (ctypes.c_double * len(values))(*values)
     backing = array.array(DOUBLE_TYPECODE, values)
     return (ctypes.c_double * len(backing)).from_buffer(backing)
 
 
 def int32_array(values):
-    """Create a ctypes int32 array from a Python list - see double_array for why array.array is used"""
+    """Create a ctypes int32 array from any iterable of ints - see double_array for why array.array is used"""
     if INT32_TYPECODE is None:
+        values = list(values)
         return (ctypes.c_int32 * len(values))(*values)
     backing = array.array(INT32_TYPECODE, values)
     return (ctypes.c_int32 * len(backing)).from_buffer(backing)
@@ -507,10 +513,14 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
 
     n_steps = pred.forecast_minutes // PREDICT_STEP
     scenario = PkScenario()
-    scenario.charge_limit = double_array([float(limit) for limit in charge_limit])
+    # The limits are fed to array.array directly: it coerces each item to a double in C, so the float() and
+    # the intermediate list the comprehension built are both wasted work (measured 0.89 -> 0.53us per call).
+    # The window fields keep their list comprehensions - map(itemgetter(...)) measured *slower* here at these
+    # list lengths, the per-item call overhead outweighing what the comprehension costs.
+    scenario.charge_limit = double_array(charge_limit)
     scenario.charge_start = int32_array([window["start"] for window in charge_window])
     scenario.charge_end = int32_array([window["end"] for window in charge_window])
-    scenario.export_limits = double_array([float(limit) for limit in export_limits])
+    scenario.export_limits = double_array(export_limits)
     scenario.export_start = int32_array([window["start"] for window in export_window])
     scenario.export_end = int32_array([window["end"] for window in export_window])
     soc_out = (ctypes.c_double * n_steps)()
@@ -540,6 +550,8 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     # Assemble the same return value as the Python engine - prediction.py:626-628, 1266-1284
     predict_soc = {}
     if not cache:
+        # Indexed loop, not dict(zip(range(...), soc_out)): iterating a ctypes array boxes each double
+        # through the sequence protocol and measured 34% slower than subscripting it.
         for k in range(n_steps):
             predict_soc[k * PREDICT_STEP] = soc_out[k]
 

@@ -28,6 +28,14 @@ from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 # ---------------------------------------------------------------------------
 
 MINUTES_PER_DAY = 1440
+# Car charging. Drawn from a separate RNG stream (see generate_random_scenario) so adding cars leaves
+# every pre-existing scenario parameter bit-identical and old benchmark baselines stay comparable.
+CAR_SEED_SALT = 0x5CA12          # keeps the car draws off the main rng sequence
+CAR_PROBABILITY = 0.5            # fraction of scenarios that get at least one car
+CAR_MAX_COUNT = 2
+CAR_SLOTS_MIN = 4                # a plugged-in EV typically has a handful of planned slots
+CAR_SLOTS_MAX = 20
+CAR_BATTERY_KWH_OPTIONS = [40.0, 60.0, 77.0, 100.0]
 CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so start times are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
@@ -298,12 +306,42 @@ def generate_random_scenario(scenario_id, seed):
     # get exercised.
     clock_minutes_now = rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
 
+    # --- Cars ---
+    # Deliberately drawn from a SEPARATE rng seeded off the same scenario seed, not from rng above.
+    # Taking these from the main stream would shift every subsequent draw and silently rewrite every
+    # existing scenario, making stored benchmark baselines incomparable. This way re-generating an
+    # existing seed reproduces all of the above exactly and only adds the car block.
+    #
+    # Cars matter to the benchmark because hit_car_window() is called millions of times per plan and
+    # returns on its first line when num_cars is 0 - so a car-less suite cannot see the cost of the
+    # code it guards, nor of the car load itself in the prediction.
+    car_rng = random.Random(seed ^ CAR_SEED_SALT)
+    num_cars = car_rng.randint(1, CAR_MAX_COUNT) if car_rng.random() < CAR_PROBABILITY else 0
+    car_battery_kwh = []
+    car_slots = []
+    for _car_n in range(num_cars):
+        car_battery_kwh.append(car_rng.choice(CAR_BATTERY_KWH_OPTIONS))
+        slot_count = car_rng.randint(CAR_SLOTS_MIN, CAR_SLOTS_MAX)
+        # Contiguous half hour slots from a random start, which is the shape predbat's own planners
+        # produce, wrapped inside the day so the slots stay within the profile.
+        slot_start = car_rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
+        slots = []
+        for slot_n in range(slot_count):
+            start = (slot_start + slot_n * 30) % MINUTES_PER_DAY
+            slots.append({"start": start, "end": start + 30, "kwh": round(car_rng.uniform(0.0, 3.5), 3)})
+        car_slots.append(slots)
+
     return {
         "id": scenario_id,
         "seed": seed,
         "params": {
             "clock": {
                 "minutes_now": clock_minutes_now,
+            },
+            "cars": {
+                "num_cars": num_cars,
+                "battery_kwh": car_battery_kwh,
+                "slots": car_slots,
             },
             "battery": {
                 "soc_max_kwh": soc_max_kwh,
@@ -520,6 +558,28 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.inverter_hybrid = inv["hybrid"]
     my_predbat.inverter_limit = inv["inverter_limit_kw"] / 60.0
     my_predbat.export_limit = inv["export_limit_kw"] / 60.0
+
+    # --- Cars ---
+    # Scenarios written before cars existed carry no "cars" entry; those run car-less exactly as before.
+    cars = params.get("cars", {"num_cars": 0, "battery_kwh": [], "slots": []})
+    num_cars = cars["num_cars"]
+    my_predbat.num_cars = num_cars
+    # Every per-car attribute predbat indexes by car_n has to be sized to num_cars, not just the ones
+    # this scenario varies - set_rate_thresholds takes max(car_charging_plan_max_price[:num_cars]) and
+    # raises on an empty slice, and the prediction indexes the rest per car per minute.
+    my_predbat.car_charging_slots = [list(slots) for slots in cars["slots"]] + [[] for _ in range(8 - num_cars)]
+    my_predbat.car_charging_battery_size = list(cars["battery_kwh"]) or [100.0]
+    my_predbat.car_charging_limit = [size for size in cars["battery_kwh"]] or [100.0]
+    my_predbat.car_charging_soc = [0.0 for _ in range(num_cars)]
+    my_predbat.car_charging_soc_next = [None for _ in range(num_cars)]
+    my_predbat.car_charging_rate = [7.4 for _ in range(max(num_cars, 1))]
+    my_predbat.car_charging_planned = [False for _ in range(num_cars)]
+    my_predbat.car_charging_now = [False for _ in range(num_cars)]
+    my_predbat.car_charging_plan_smart = [False for _ in range(num_cars)]
+    my_predbat.car_charging_plan_max_price = [0.0 for _ in range(num_cars)]
+    my_predbat.car_charging_plan_time = ["07:00:00" for _ in range(num_cars)]
+    my_predbat.car_charging_manual_soc = [False for _ in range(num_cars)]
+    my_predbat.car_charging_exclusive = [False for _ in range(num_cars)]
 
     # --- Fix forecast horizon so all scenarios are comparable ---
     my_predbat.forecast_minutes = 24 * 60
@@ -939,6 +999,9 @@ def _save_results(results, results_file, scenarios_file, template_yaml):
     }
     with open(results_file, "w") as f:
         json.dump(output, f, indent=2)
+        # Trailing newline so the checked-in baseline does not trip the end-of-file hook every time it is
+        # regenerated - that is what produced the stray pre-commit.ci fixup commits on earlier branches.
+        f.write("\n")
     passed = sum(1 for r in results if not r["failed"])
     failed = len(results) - passed
     print("Wrote {} result(s) to {} ({} passed, {} failed)".format(len(results), results_file, passed, failed))
