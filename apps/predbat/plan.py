@@ -18,7 +18,6 @@ the plan that minimises the overall cost metric.
 """
 
 import copy
-import traceback
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
@@ -62,26 +61,6 @@ def scenario_hash_entry(kind, window_n, value):
     acc = ((acc ^ (acc >> 30)) * 0xBF58476D1CE4E5B9) & MASK_64
     acc = ((acc ^ (acc >> 27)) * 0x94D049BB133111EB) & MASK_64
     return acc ^ (acc >> 31)
-
-
-"""
-Used to mimic threads when they are disabled
-"""
-
-
-class DummyThread:
-    def __init__(self, result):
-        """
-        Store the data into the class
-        """
-        self.result = result
-        time.sleep(0)  # Yield control
-
-    def get(self):
-        """
-        Return the result
-        """
-        return self.result
 
 
 class Plan:
@@ -1575,16 +1554,6 @@ class Plan:
                 for line in text_lines:
                     self.log(line)
                 self.publish_html_plan(pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, self.end_record)
-
-        # Destroy pool
-        if self.pool:
-            try:
-                self.pool.close()
-                self.pool.join()
-            except Exception as e:
-                self.log("Warn: failed to close thread pool: {}".format(e))
-                self.log("Warn: " + traceback.format_exc())
-            self.pool = None
 
         # Record planning duration for SLO metrics
         self.plan_last_duration_seconds = time.time() - plan_start_time

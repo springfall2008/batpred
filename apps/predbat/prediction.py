@@ -25,48 +25,6 @@ from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
 
-# Only assign globals once to avoid re-creating them with processes are forked
-if not "PRED_GLOBAL" in globals():
-    PRED_GLOBAL = {}
-
-
-def reset_prediction_globals():
-    global PRED_GLOBAL
-    PRED_GLOBAL = {}
-
-
-def wrapped_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
-    """Reconstruct a Prediction from the global shared state and run a single-scenario prediction in a worker process."""
-    global PRED_GLOBAL
-    pred = Prediction()
-    pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step)
-
-
-def wrapped_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-    """Reconstruct a Prediction from the global shared state and run a charge-window trial prediction in a worker process."""
-    global PRED_GLOBAL
-    pred = Prediction()
-    pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_charge(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
-
-
-def wrapped_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-    """Reconstruct a Prediction from the global shared state and run a charge min/max trial prediction in a worker process."""
-    global PRED_GLOBAL
-    pred = Prediction()
-    pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_charge_min_max(try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
-
-
-def wrapped_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-    """Reconstruct a Prediction from the global shared state and run an export-window trial prediction in a worker process."""
-    global PRED_GLOBAL
-    pred = Prediction()
-    pred.__dict__ = PRED_GLOBAL["dict"].copy()
-    return pred.thread_run_prediction_export(this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
-
-
 def get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp):
     """
     Get AC output difference
@@ -105,7 +63,6 @@ class Prediction(PredictionBatch):
         pv_forecast_minute90_step and load_minutes_step90 fall back to the nominal step arrays when None, so
         every existing call site that never requests the pv90 scenario keeps working unchanged.
         """
-        global PRED_GLOBAL
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
@@ -216,11 +173,6 @@ class Prediction(PredictionBatch):
             if self.prediction_kernel_enable:
                 self.kernel_handle = create_kernel_context(self)
 
-            # Store this dictionary in global so we can reconstruct it in the thread without passing the data
-            PRED_GLOBAL["dict"] = self.__dict__.copy()
-
-            # Deliberately after the PRED_GLOBAL snapshot: a pool worker reconstructs its Prediction
-            # from that dict and never queues anything, so it has no business carrying a batch.
             self.pending_batch = []
             self.batch_threads = 1
 

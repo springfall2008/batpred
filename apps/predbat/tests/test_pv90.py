@@ -10,7 +10,6 @@
 """Tests for the pv90 upside forecast scenario."""
 
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
-from plan import DummyThread
 from tests.test_infra import reset_inverter, reset_rates
 
 
@@ -785,8 +784,8 @@ def _setup_calculate_plan_with_real_windows(my_predbat):
     window in each direction to search, so the counting assertions below are actually exercised.
 
     threads is forced to 0 - the same idiom already used by test_execute.py, test_random_scenarios.py and
-    test_single_debug.py - so calculate_plan() takes the synchronous DummyThread fallback instead of
-    spinning up a real multiprocessing Pool, keeping the test fast and deterministic.
+    test_single_debug.py - so calculate_plan() sizes the kernel's batch thread pool to a single thread
+    rather than the 'auto' cpu_count() default, keeping the test fast and deterministic.
 
     Returns a snapshot dict for _restore_calculate_plan_with_real_windows.
     """
@@ -1103,6 +1102,22 @@ def test_pv90_switch_on_runs_simulation_via_weight(my_predbat):
     return failed
 
 
+class FakeHandle:
+    """Minimal result-handle double with a get(), standing in for a real BatchHandle.
+
+    Used to substitute an encoded result into a launch_run_prediction_* return value without routing
+    it back through the kernel/batch machinery.
+    """
+
+    def __init__(self, result):
+        """Store the pre-computed result tuple."""
+        self.result = result
+
+    def get(self):
+        """Return the stored result."""
+        return self.result
+
+
 def test_pv90_charge_limit_results_paired_with_try_soc(my_predbat):
     """optimise_charge_limit's pv90 results must stay paired with the try_soc that produced them.
 
@@ -1149,7 +1164,7 @@ def test_pv90_charge_limit_results_paired_with_try_soc(my_predbat):
         if pv_scenario in encoded_scenarios:
             encoded_result = list(handle.get())
             encoded_result[0] = loop_soc
-            handle = DummyThread(tuple(encoded_result))
+            handle = FakeHandle(tuple(encoded_result))
         return handle
 
     original_launch_min_max = my_predbat.launch_run_prediction_charge_min_max
@@ -1160,7 +1175,7 @@ def test_pv90_charge_limit_results_paired_with_try_soc(my_predbat):
         if pv_scenario in encoded_scenarios:
             encoded_result = list(handle.get())
             encoded_result[0] = loop_soc
-            handle = DummyThread(tuple(encoded_result))
+            handle = FakeHandle(tuple(encoded_result))
         return handle
 
     original_optimise_charge_limit = my_predbat.optimise_charge_limit

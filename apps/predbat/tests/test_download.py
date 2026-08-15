@@ -1693,7 +1693,6 @@ def _test_predbat_download_main_uses_configured_repository(my_predbat):
     class DummyPredBat:
         def __init__(self):
             self.stop_thread = False
-            self.pool = None
 
         def log(self, *_args, **_kwargs):
             return None
@@ -1725,7 +1724,6 @@ def _test_predbat_download_tag_uses_default_repository(my_predbat):
     class DummyPredBat:
         def __init__(self):
             self.stop_thread = False
-            self.pool = None
 
         def log(self, *_args, **_kwargs):
             return None
