@@ -995,9 +995,11 @@ def test_pv90_switch_off_skips_all_launch_paths(my_predbat):
     """With calculate_pv90_plan switched Off, no pv90 prediction may be launched through any of the four launch
     paths test_pv90_weight_zero_skips_simulation counts (that test hand-sets pv_metric90_weight=0.0 directly).
 
-    The switch defaults On now, so the Off state is produced the way the product produces it - by switching it
-    off and letting fetch_config_options' override drive pv_metric90_weight to 0.0 - rather than by setting the
-    weight by hand. A regression that broke the switch-to-weight wiring is still caught here.
+    The switch defaults On now, so the Off state has to be set up rather than read from the ambient defaults.
+    It is set directly here - both the switch and the weight - so this test isolates one question: given the
+    Off state, does any launch path still fire? The wiring that produces that state from the switch, i.e.
+    fetch_config_options forcing pv_metric90_weight to 0.0, is exercised separately by
+    test_pv90_switch_off_forces_weight_zero, which does call fetch_config_options.
     """
     saved_switch = my_predbat.config_index["calculate_pv90_plan"].get("value")
     saved_perf = my_predbat.config_index["performance_tweaks"].get("value")

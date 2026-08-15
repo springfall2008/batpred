@@ -23,15 +23,16 @@ from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
 
+from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
+from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export
+from prediction_kernel import kernel_status_summary
+from predbat_metrics import metrics
+import time
+
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
 # windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
 # picks up value further out at a proportional cost in planning time.
 PLAN_PASS_WINDOW_BUDGET = 8
-from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, calc_percent_limit, in_car_slot
-from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export, wrapped_run_prediction_charge_min_max
-from prediction_kernel import kernel_status_summary
-from predbat_metrics import metrics
-import time
 
 
 def slots_around(target_slots, slot_lengths):
@@ -2890,9 +2891,9 @@ class Plan:
         exists because the near-term windows are the ones about to be executed, but the cap is what makes
         the fast path miss value further out - see calculate_second_pass, which runs unbudgeted.
 
-        The metric is measured from the plan we were handed rather than taken from the caller:
-        optimise_swap_export runs before this and mutates the plan without its return value being used,
-        so the caller's metric is already stale.
+        The metric is measured from the plan in hand rather than accepted from the caller, so it cannot
+        be handed a stale one - passes ahead of this can mutate the plan without their return value being
+        threaded through, and the swap passes that follow re-baseline for the same reason.
 
         Each export window's start is reset to start_orig before it is re-optimised. Without that reset a
         window trimmed by an earlier pass can only ever be trimmed further, so the pass cannot recover a
