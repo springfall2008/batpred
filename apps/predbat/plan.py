@@ -24,7 +24,7 @@ from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENAR
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
-from prediction_kernel import kernel_status_summary
+from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
 
@@ -2979,7 +2979,7 @@ class Plan:
                     continue
 
                 snapshot = self.plan_window_snapshot(typ, window_n)
-                self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
+                set_window_start(self.export_window_best[window_n], self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"]))
                 best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = self.optimise_export(
                     window_n,
                     record_export_windows,
@@ -2991,7 +2991,7 @@ class Plan:
                 )
                 self.export_limits_best[window_n] = best_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                self.export_window_best[window_n]["start"] = best_start
+                set_window_start(self.export_window_best[window_n], best_start)
                 candidate = (best_metric_plan, best_cost, best_keep, best_cycle, best_carbon, best_import)
                 selected = self.keep_window_change_if_improved(selected, candidate, typ, window_n, snapshot)
             if (count % 16) == 0 and self.debug_enable:
@@ -3136,7 +3136,7 @@ class Plan:
                 if self.export_limits_best[window_n] == 99.0:
                     start_orig = self.export_window_best[window_n].get("start_orig", window_start)
                     if start_orig < window_start:
-                        self.export_window_best[window_n]["start"] = start_orig
+                        set_window_start(self.export_window_best[window_n], start_orig)
                     continue
 
                 # Only enable currently idle (disabled) export windows
@@ -3192,7 +3192,7 @@ class Plan:
                 )
                 self.export_limits_best[window_n] = new_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                self.export_window_best[window_n]["start"] = new_start
+                set_window_start(self.export_window_best[window_n], new_start)
                 re_optimised += 1
 
             # Simulate the final plan for this day on top of any days already kept and decide on the
@@ -3340,9 +3340,9 @@ class Plan:
                             if export_limit_target < 99 and (window_length_target + window_length) <= orig_length_target:
                                 # Full combine
                                 self.export_limits_best[window_n] = 100
-                                self.export_window_best[window_n]["start"] = window_start_orig
+                                set_window_start(self.export_window_best[window_n], window_start_orig)
                                 self.export_limits_best[window_n_target] = export_limit
-                                self.export_window_best[window_n_target]["start"] = self.export_window_best[window_n_target]["end"] - (window_length + window_length_target)
+                                set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - (window_length + window_length_target))
                                 is_combined = True
                             elif export_limit_target < 99 and window_length_target < orig_length_target:
                                 # Partial combine
@@ -3350,8 +3350,8 @@ class Plan:
                                 window_length_target_new = amount_to_move + window_length_target
                                 window_length_new = amount_to_move + window_length
                                 self.export_limits_best[window_n] = min(export_limit, export_limit_target)
-                                self.export_window_best[window_n]["start"] = self.export_window_best[window_n]["end"] - window_length_new
-                                self.export_window_best[window_n_target]["start"] = self.export_window_best[window_n_target]["end"] - window_length_target_new
+                                set_window_start(self.export_window_best[window_n], self.export_window_best[window_n]["end"] - window_length_new)
+                                set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - window_length_target_new)
                                 self.export_limits_best[window_n_target] = min(export_limit, export_limit_target)
                                 is_combined = True
                             else:
@@ -3362,9 +3362,9 @@ class Plan:
 
                                 # Set the current window to off and optimise the swap window
                                 self.export_limits_best[window_n] = export_limit_target
-                                self.export_window_best[window_n]["start"] = max(self.export_window_best[window_n]["end"] - window_length_target, previous_end)
+                                set_window_start(self.export_window_best[window_n], max(self.export_window_best[window_n]["end"] - window_length_target, previous_end))
                                 self.export_limits_best[window_n_target] = export_limit
-                                self.export_window_best[window_n_target]["start"] = max(self.export_window_best[window_n_target]["end"] - window_length, previous_end_target)
+                                set_window_start(self.export_window_best[window_n_target], max(self.export_window_best[window_n_target]["end"] - window_length, previous_end_target))
 
                             best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
                                 self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
@@ -3435,9 +3435,9 @@ class Plan:
                             else:
                                 # Revert the change
                                 self.export_limits_best[window_n] = export_limit
-                                self.export_window_best[window_n]["start"] = window_start
+                                set_window_start(self.export_window_best[window_n], window_start)
                                 self.export_limits_best[window_n_target] = export_limit_target
-                                self.export_window_best[window_n_target]["start"] = window_start_target
+                                set_window_start(self.export_window_best[window_n_target], window_start_target)
 
             self.log(
                 "Swap export optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
@@ -3855,7 +3855,7 @@ class Plan:
                                 )
                             # Try to optimise the export window
                             keep_start = self.export_window_best[window_n]["start"]
-                            self.export_window_best[window_n]["start"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
+                            set_window_start(self.export_window_best[window_n], self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"]))
                             n_best_soc, n_best_start, n_best_metric, n_best_cost, n_soc_min, n_soc_min_minute, n_best_keep, n_best_cycle, n_best_carbon, n_best_import, n_best_metric_plan = self.optimise_export(
                                 window_n,
                                 record_export_windows,
@@ -3867,7 +3867,7 @@ class Plan:
                                 freeze_only=(typ == "df") or pass_type == "freeze",
                                 allow_freeze=True,
                             )
-                            self.export_window_best[window_n]["start"] = keep_start
+                            set_window_start(self.export_window_best[window_n], keep_start)
                             # The export trim pass may only reduce export, never add it, so the cheapest slots
                             # shed any levels over-export before the high-priced peak is touched. A reduction is
                             # a shallower discharge (higher SoC limit) and/or a smaller window (later start) -
@@ -3891,7 +3891,7 @@ class Plan:
                                 best_soc_min_minute = n_soc_min_minute
                                 self.export_limits_best[window_n] = best_soc
                                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
-                                self.export_window_best[window_n]["start"] = best_start
+                                set_window_start(self.export_window_best[window_n], best_start)
 
                                 self.plan_write_debug(debug_mode, "plan_{}_export_{}.html".format(pass_type, window_n), self.pv_forecast_minute_step, self.pv_forecast_minute10_step, self.load_minutes_step, self.load_minutes_step10, self.end_record)
 
