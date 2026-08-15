@@ -637,9 +637,9 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
     n_jobs = len(jobs)
     job_array = (PkBatchJob * n_jobs)()
     result_array = (PkBatchResult * n_jobs)()
-    # Every ctypes buffer behind a pointer field has to outlive the call. Structures reached through
-    # an array index do not keep their own _objects, so the buffers are held here rather than relying
-    # on ctypes' keepalive doing the right thing through the array.
+    # Every ctypes buffer behind a pointer field has to outlive the call. ctypes' own keepalive already
+    # covers this (b_base walks up to job_array._objects), so this list is belt-and-braces: the limit
+    # arrays are held explicitly here rather than relying on ctypes' container keepalive.
     buffers = []
     # A fan-out reuses the same window lists across most of its jobs, so their start/end arrays are
     # marshalled once per distinct list instead of once per job - that is the bulk of the batching

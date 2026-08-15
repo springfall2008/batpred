@@ -423,6 +423,19 @@ def run_marshalling_tests():
             print("ERROR: {}([]) should be empty, got length {}".format(name, len(empty)))
             failed = True
 
+    # pk_run_batch's binding used to be missing its trailing n_threads entry in argtypes. That bug is invisible
+    # to the batch parity test: ctypes silently accepts more call arguments than argtypes declares, and
+    # a garbage thread count only changes how pk_run_batch splits work across threads - the results are
+    # thread-count-independent by design. Only asserting the binding itself catches a regression here.
+    if prediction_kernel.KERNEL_HAS_BATCH:
+        expected_argtypes = (ctypes.c_int64, ctypes.POINTER(prediction_kernel.PkBatchJob), ctypes.c_int32, ctypes.POINTER(prediction_kernel.PkBatchResult), ctypes.c_int32)
+        actual_argtypes = tuple(prediction_kernel.KERNEL_LIB.pk_run_batch.argtypes)
+        if actual_argtypes != expected_argtypes:
+            print("ERROR: pk_run_batch.argtypes is {} but the C++ signature (handle, jobs, n_jobs, results, n_threads) needs {}".format(actual_argtypes, expected_argtypes))
+            failed = True
+    else:
+        print("SKIP: pk_run_batch argtypes check - kernel does not expose pk_run_batch")
+
     if not failed:
         print("PASS")
     return failed
@@ -849,20 +862,29 @@ def run_clipping_parity_tests(my_predbat, count=250):
     return failed
 
 
-def build_batch_jobs(my_predbat, rng, count):
-    """Build a list of BatchJob scenarios plus the Prediction they run against"""
+def build_batch_jobs(my_predbat, rng, count, window_variants=1):
+    """Build a list of BatchJob scenarios plus the Prediction they run against.
+
+    window_variants controls how many distinct charge/export window lists the batch draws from, cycled
+    by job index (job N uses variant N % window_variants). The default of 1 shares a single list across
+    every job, as the real min/max fan-out does when it scans one window at a time. A caller wanting
+    per-job window lists - to exercise run_prediction_kernel_batch's identity-keyed window memo, whose
+    cache key is id(windows), not its content - passes a larger value.
+    """
     apply_random_scenario(my_predbat, rng)
     pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng)
     my_predbat.prediction_kernel_enable = True
     prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
     prediction.kernel_handle = create_kernel_context(prediction)
 
-    charge_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(2, 5))
-    export_window = make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(2, 5))
+    charge_windows = [make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(2, 5)) for _ in range(window_variants)]
+    export_windows = [make_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes, rng.randint(2, 5)) for _ in range(window_variants)]
     end_record = my_predbat.forecast_minutes
 
     jobs = []
     for index in range(count):
+        charge_window = charge_windows[index % window_variants]
+        export_window = export_windows[index % window_variants]
         charge_limit = [round(rng.uniform(0, my_predbat.soc_max), 2) for _ in charge_window]
         export_limits = [rng.choice([100.0, 99.0, 0.0, round(rng.uniform(1, 99), 1)]) for _ in export_window]
         pv_scenario = rng.choice([PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90])
@@ -891,6 +913,57 @@ def build_batch_jobs(my_predbat, rng, count):
     return prediction, jobs
 
 
+def build_batch_reference(prediction, jobs):
+    """Run one pk_run per job to build the reference results run_prediction_kernel_batch is checked against.
+
+    The SoC series is materialised (unlike the batch path) so the range can be scanned in Python
+    exactly as thread_run_prediction_charge_min_max does. Returns None if a reference run itself fails.
+    """
+    reference = []
+    for job in jobs:
+        single = run_prediction_kernel(prediction, job.charge_limit, job.charge_window, job.export_window, job.export_limits, job.pv_scenario, job.end_record, 5, False)
+        if single is None:
+            print("ERROR: reference pk_run failed")
+            return None
+        if job.range_window is None:
+            soc_range = (prediction.soc_max, 0)
+        else:
+            soc_range = prediction.scan_soc_range(single[11], job.range_window)
+        reference.append((single, soc_range))
+    return reference
+
+
+def check_batch_results(jobs, reference, batched, n_threads):
+    """Compare one pk_run_batch call's results against the build_batch_reference() reference, returns True on failure"""
+    if len(batched) != len(jobs):
+        print("ERROR: pk_run_batch returned {} results for {} jobs".format(len(batched), len(jobs)))
+        return True
+
+    failed = False
+    for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
+        single, (expect_min, expect_max) = reference[index]
+        if result_tuple is None:
+            print("ERROR: job {} reported a non-zero status at {} threads".format(index, n_threads))
+            failed = True
+            continue
+        for field, name in enumerate(RESULT_NAMES):
+            if result_tuple[field] != single[field]:
+                print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
+                failed = True
+        # The batch never materialises the SoC series - that is what makes it affordable
+        if result_tuple[11] != {}:
+            print("ERROR: job {} returned a SoC series from the batch path".format(index))
+            failed = True
+        for field, name in [(12, "car_charging_soc_next"), (13, "iboost_next"), (14, "iboost_running"), (15, "iboost_running_solar"), (16, "iboost_running_full")]:
+            if result_tuple[field] != single[field]:
+                print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
+                failed = True
+        if soc_range_min != expect_min or soc_range_max != expect_max:
+            print("ERROR: job {} at {} threads SoC range {} {} expected {} {}".format(index, n_threads, soc_range_min, soc_range_max, expect_min, expect_max))
+            failed = True
+    return failed
+
+
 def run_batch_parity_tests(my_predbat, count=60):
     """Check pk_run_batch matches a loop of pk_run exactly, at every thread count, returns True on failure.
 
@@ -905,58 +978,69 @@ def run_batch_parity_tests(my_predbat, count=60):
         print("SKIP: kernel does not expose pk_run_batch")
         return False
 
-    failed = False
     prediction, jobs = build_batch_jobs(my_predbat, random.Random(4321), count)
     if not prediction.kernel_handle:
         print("ERROR: batch parity kernel context creation failed")
         return True
 
-    # Reference: one pk_run per scenario, with the SoC series materialised so the range can be
-    # scanned in Python exactly as thread_run_prediction_charge_min_max does
-    reference = []
-    for job in jobs:
-        single = run_prediction_kernel(prediction, job.charge_limit, job.charge_window, job.export_window, job.export_limits, job.pv_scenario, job.end_record, 5, False)
-        if single is None:
-            print("ERROR: reference pk_run failed")
-            return True
-        if job.range_window is None:
-            soc_range = (prediction.soc_max, 0)
-        else:
-            soc_range = prediction.scan_soc_range(single[11], job.range_window)
-        reference.append((single, soc_range))
+    reference = build_batch_reference(prediction, jobs)
+    if reference is None:
+        return True
 
+    failed = False
     for n_threads in (1, 2, 4, 8):
         batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
         if batched is None:
             print("ERROR: pk_run_batch failed at {} threads".format(n_threads))
             return True
-        if len(batched) != len(jobs):
-            print("ERROR: pk_run_batch returned {} results for {} jobs".format(len(batched), len(jobs)))
-            return True
-        for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
-            single, (expect_min, expect_max) = reference[index]
-            if result_tuple is None:
-                print("ERROR: job {} reported a non-zero status at {} threads".format(index, n_threads))
-                failed = True
-                continue
-            for field, name in enumerate(RESULT_NAMES):
-                if result_tuple[field] != single[field]:
-                    print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
-                    failed = True
-            # The batch never materialises the SoC series - that is what makes it affordable
-            if result_tuple[11] != {}:
-                print("ERROR: job {} returned a SoC series from the batch path".format(index))
-                failed = True
-            for field, name in [(12, "car_charging_soc_next"), (13, "iboost_next"), (14, "iboost_running"), (15, "iboost_running_solar"), (16, "iboost_running_full")]:
-                if result_tuple[field] != single[field]:
-                    print("ERROR: job {} at {} threads differs on {}: batch {} single {}".format(index, n_threads, name, result_tuple[field], single[field]))
-                    failed = True
-            if soc_range_min != expect_min or soc_range_max != expect_max:
-                print("ERROR: job {} at {} threads SoC range {} {} expected {} {}".format(index, n_threads, soc_range_min, soc_range_max, expect_min, expect_max))
-                failed = True
+        failed |= check_batch_results(jobs, reference, batched, n_threads)
 
     if not failed:
         print("Batch parity: {} scenarios bit-identical to pk_run at 1, 2, 4 and 8 threads".format(count))
+    return failed
+
+
+def run_batch_window_variant_tests(my_predbat, count=30, window_variants=6):
+    """Check the batch's per-job window marshalling picks the right list, not a cached neighbour's.
+
+    build_batch_jobs's default (window_variants=1) shares one charge/export window list across the
+    whole batch, which exercises run_prediction_kernel_batch's window memo only on its cache-hit path:
+    every job asks for the same id(windows), so a memo keyed on anything coarser than list identity
+    would still pass. Task 4's real fan-out mixes windows freely between jobs, so here several distinct
+    window lists are cycled across the jobs (some jobs sharing a list, most not) and checked against the
+    same per-scenario pk_run reference run_batch_parity_tests uses - a job that picked up another list's
+    start/end arrays would simulate the wrong charge/export times and show up as a wrong result.
+    """
+    print("**** Running kernel batch window variant tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(9876), count, window_variants=window_variants)
+    if not prediction.kernel_handle:
+        print("ERROR: batch window variant kernel context creation failed")
+        return True
+
+    distinct_charge = len({id(job.charge_window) for job in jobs})
+    distinct_export = len({id(job.export_window) for job in jobs})
+    if distinct_charge < 2 or distinct_export < 2:
+        print("ERROR: batch window variant test only produced {} charge and {} export window list(s) - not exercising the memo".format(distinct_charge, distinct_export))
+        return True
+
+    reference = build_batch_reference(prediction, jobs)
+    if reference is None:
+        return True
+
+    failed = False
+    for n_threads in (1, 4):
+        batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+        if batched is None:
+            print("ERROR: pk_run_batch failed at {} threads".format(n_threads))
+            return True
+        failed |= check_batch_results(jobs, reference, batched, n_threads)
+
+    if not failed:
+        print("Batch window variant parity: {} scenarios across {} charge and {} export window lists bit-identical to pk_run".format(count, distinct_charge, distinct_export))
     return failed
 
 
@@ -1040,6 +1124,8 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_clipping_parity_tests(my_predbat)
         if not failed:
             failed |= run_batch_parity_tests(my_predbat)
+        if not failed:
+            failed |= run_batch_window_variant_tests(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
 
