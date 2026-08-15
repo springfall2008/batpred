@@ -2980,7 +2980,7 @@ class Octopus:
                                 # see https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/issues/1823
                                 # so for now dummy a positive response
                                 result = True
-                                self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id, return_response=True)
+                                self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             if result:
                                 if self.get_arg("set_event_notify"):
                                     msg = "Joined Octopus saving event " + start_time.strftime("%a %d/%m %H:%M") + "-" + end_time.strftime("%H:%M") + ", " + str(saving_rate) + " p/kWh"
