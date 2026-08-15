@@ -1586,12 +1586,28 @@ Then report, best of 3 each: serial batch vs threaded batch vs the 31.6s pre-Pha
 The plan was executed and these are the results, kept here because the hand-off notes this plan was
 written from are deleted by the last task.
 
-**The serial win is the payoff.** 20-scenario benchmark, best of 3: **26.3s** against the 31.6s
-recorded before this work (that baseline was inherited, not re-measured on the same machine). It
-comes from paying the ctypes boundary and the window marshalling once per fan-out.
+**The win is the batching itself, and it is large.** Measured against `a131f12c`, the fork point,
+with the kernel built from each commit's own source and confirmed active on both sides, runs
+interleaved, best of 3, on a 16-CPU machine. All 20 scenarios byte-identical in every configuration.
 
-**Threading buys nothing measurable: 26.27s serial vs 26.05s at 16 threads**, inside the 2-6%
-run-to-run noise band. Results are bit-identical either way.
+| 20-scenario benchmark | fork point | this branch | delta |
+|---|---|---|---|
+| parallelism off (`threads: 0`) | 41.74s | 26.22s | **37.2% faster** |
+| each side's default (`threads: auto`) | 40.02s | 25.81s | **35.5% faster** |
+
+The 31.6s figure in the hand-off notes was measured in an earlier session under unknown conditions
+and did not survive re-measurement — do not carry it forward.
+
+**Neither side's parallelism is worth much.** The fork point's 16-process pool bought 41.74s → 40.02s
+(4%); this branch's 16 kernel threads buy 26.22s → 25.81s (1.6%), inside the 2-6% noise band. The
+entire improvement is the batching and the marshalling it removes, not concurrency.
+
+**The fork point's process pool was also broken outside the `__main__` entry point.** Its workers
+rebuild their `Prediction` from a module global populated only in the parent, which requires `fork`
+start semantics; `hass.py` sets those only under `if __name__ == "__main__"`. On macOS (spawn by
+default since 3.8) every worker therefore started empty and every scenario died with
+`KeyError: 'dict'` — the benchmark above needed `fork` forced to get comparable numbers out of the
+baseline at all. This branch removes that failure mode by removing the pool.
 
 **Why**, from a `n_jobs` census over one benchmark run:
 
