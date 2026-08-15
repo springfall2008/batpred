@@ -19,9 +19,9 @@ plans and select the one with the lowest cost metric.
 
 from datetime import timedelta
 from const import PREDICT_STEP, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT
-from operator import itemgetter
 
 from utils import remove_intersecting_windows, get_charge_rate_curve_cached, get_discharge_rate_curve_cached, find_charge_rate, calc_percent_limit, in_iboost_slot, in_car_slot, charge_curve_to_tuple
+from prediction_batch import PredictionBatch, prediction_cache_key
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
 
@@ -94,12 +94,7 @@ def get_total_inverted(battery_draw, pv_dc, pv_ac, inverter_loss, inverter_hybri
     return total_inverted
 
 
-# Pulls (start, end) from a window dict; used to build the prediction cache key without a Python
-# level loop over every window
-window_bounds = itemgetter("start", "end")
-
-
-class Prediction:
+class Prediction(PredictionBatch):
     """
     Class to hold prediction input and output data and the run function
     """
@@ -224,12 +219,17 @@ class Prediction:
             # Store this dictionary in global so we can reconstruct it in the thread without passing the data
             PRED_GLOBAL["dict"] = self.__dict__.copy()
 
+            # Deliberately after the PRED_GLOBAL snapshot: a pool worker reconstructs its Prediction
+            # from that dict and never queues anything, so it has no business carrying a batch.
+            self.pending_batch = []
+            self.batch_threads = 1
+
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.
 
-        The copy used to live in Plan.launch_run_prediction_single, where it protected the caller's
-        lists from the pool pickling them; the batch path defers the read to flush time, which needs
-        the same protection, so it belongs with the other trial-input building.
+        The copy used to live in Plan.launch_run_prediction_single. It is kept here because the batch
+        path does not read these lists until the batch is flushed, so a trial has to own the copy it
+        will eventually be simulated from rather than share the caller's list.
         """
         return list(charge_limit), list(export_limits)
 
@@ -270,6 +270,11 @@ class Prediction:
         ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, step=step, cache=self.prediction_cache_enable)
         return (cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g)
 
+    def queue_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step):
+        """Queue a single-scenario prediction, returning a handle - the batch runs on the first get()"""
+        charge_limit, export_limits = self._prepare_single(charge_limit, export_limits)
+        return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, self.prediction_cache_enable)
+
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
         """
         Run prediction in a thread
@@ -309,6 +314,11 @@ class Prediction:
             final_iboost,
             final_carbon_g,
         )
+
+    def queue_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Queue a charge-window trial prediction, returning a handle"""
+        try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
+        return self.enqueue_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable)
 
     def scan_soc_range(self, predict_soc, window):
         """Return the (min, max) SoC across a charge window - shared by the direct and batch min/max paths.
@@ -376,6 +386,16 @@ class Prediction:
             max_soc,
         )
 
+    def queue_run_prediction_charge_min_max(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Queue a charge-window trial prediction that also reports the SoC range across that window.
+
+        Uncached, exactly as the direct path is: the SoC range is not part of the cached result, so a
+        hit would answer with the wrong shape.
+        """
+        try_charge_limit = self._prepare_charge(try_soc, window_n, charge_limit, all_n)
+        range_window = None if all_n else charge_window[window_n]
+        return self.enqueue_prediction(try_charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, False, want_range=True, range_window=range_window)
+
     def _prepare_export(self, this_export_limit, start, window_n, export_window, export_limits, all_n):
         """Build the trial export limits and window list - shared by thread_run_prediction_export and the batch path.
 
@@ -427,6 +447,11 @@ class Prediction:
         ) = self.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record=end_record, cache=self.prediction_cache_enable)
         return metricmid, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g
 
+    def queue_run_prediction_export(self, this_export_limit, start, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
+        """Queue an export-window trial prediction, returning a handle"""
+        export_window, export_limits = self._prepare_export(this_export_limit, start, window_n, export_window, export_limits, all_n)
+        return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, PREDICT_STEP, self.prediction_cache_enable)
+
     def find_charge_window_optimised(self, charge_windows, charge_limit, is_export=False):
         """
         Takes in an array of charge windows
@@ -456,17 +481,7 @@ class Prediction:
         # every simulation with a few hundred windows.
         sim_hash = None
         if cache and not save:
-            sim_hash = hash(
-                (
-                    tuple(charge_limit),
-                    tuple(map(window_bounds, charge_window)),
-                    tuple(export_limits),
-                    tuple(map(window_bounds, export_window)),
-                    pv_scenario,
-                    end_record,
-                    step,
-                )
-            )
+            sim_hash = prediction_cache_key(charge_limit, charge_window, export_limits, export_window, pv_scenario, end_record, step)
             cached_result = self.prediction_cache.get(sim_hash)
             if cached_result is not None:
                 # Return cached result

@@ -20,11 +20,10 @@ the plan that minimises the overall cost metric.
 import copy
 import traceback
 from datetime import datetime, timedelta
-from multiprocessing import Pool, cpu_count
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT
 
 from utils import calc_percent_limit, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
-from prediction import Prediction, wrapped_run_prediction_single, wrapped_run_prediction_charge, wrapped_run_prediction_charge_min_max, wrapped_run_prediction_export
+from prediction import Prediction
 from prediction_kernel import kernel_status_summary
 from predbat_metrics import metrics
 import time
@@ -669,47 +668,20 @@ class Plan:
         )
 
     def launch_run_prediction_single(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step=PREDICT_STEP):
-        """
-        Launch a thread to run a prediction
-        """
-        if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_single, (charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step))
-        else:
-            han = DummyThread(self.prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step))
-        return han
+        """Queue a prediction and return a handle to its result"""
+        return self.prediction.queue_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step)
 
     def launch_run_prediction_charge(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """
-        Launch a thread to run a prediction
-        """
-        if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_charge, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
-        else:
-            han = DummyThread(self.prediction.thread_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
-        return han
+        """Queue a prediction and return a handle to its result"""
+        return self.prediction.queue_run_prediction_charge(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
     def launch_run_prediction_charge_min_max(self, loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
-        """
-        Launch a thread to run a prediction
-        """
-        if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(wrapped_run_prediction_charge_min_max, (loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
-        else:
-            han = DummyThread(self.prediction.thread_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record))
-        return han
+        """Queue a prediction and return a handle to its result"""
+        return self.prediction.queue_run_prediction_charge_min_max(loop_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record)
 
     def launch_run_prediction_export(self, this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record):
-        """
-        Launch a thread to run a prediction
-        """
-        if self.pool and self.pool._state == "RUN":
-            han = self.pool.apply_async(
-                wrapped_run_prediction_export,
-                (this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record),
-            )
-        else:
-            han = DummyThread(self.prediction.thread_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record))
-        return han
+        """Queue a prediction and return a handle to its result"""
+        return self.prediction.queue_run_prediction_export(this_export_limit, start, window_n, try_charge_limit, charge_window, try_export_window, try_export, pv_scenario, all_n, end_record)
 
     def scenario_summary_title(self, record_time):
         txt = ""
@@ -1332,35 +1304,16 @@ class Plan:
 
         # Creation prediction object
         self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90)
+        # Serial for now - Task 5 wires this to the threads config
+        self.prediction.batch_threads = 1
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))
 
-        # Check if LoadML is active and disable thread pools as it causes lockup due to race conditions with NumPy
+        # Check if LoadML is active - it used to force the process pool off, which no longer exists;
+        # the kernel's threads are C++ threads with no fork and no NumPy involvement
         load_ml_comp = self.components.get_component("load_ml") if self.components else None
-        load_ml_calculating = False
         if load_ml_comp:
-            load_ml_calculating = load_ml_comp.is_calculating()
-            self.log("LoadML is_calculating {}".format(load_ml_calculating))
-            if load_ml_calculating and self.pool:
-                self.log("Disabling thread pool as LoadML is calculating to avoid lockups")
-                self.pool.close()
-                self.pool.join()
-                self.pool = None
-
-        # Create pool
-        if not self.pool:
-            if load_ml_calculating:
-                self.log("Not using thread pool as LoadML is calculating to avoid lockups")
-            else:
-                threads = self.get_arg("threads", "auto")
-                if threads == "auto":
-                    self.log("Creating pool of {} processes to match your CPU count".format(cpu_count()))
-                    self.pool = Pool(processes=cpu_count())
-                elif threads:
-                    self.log("Creating pool of {} processes as per apps.yaml".format(int(threads)))
-                    self.pool = Pool(processes=int(threads))
-                else:
-                    self.log("Not using threading as threads is set to 0 in apps.yaml")
+            self.log("LoadML is_calculating {}".format(load_ml_comp.is_calculating()))
 
         # Simulate current settings to get initial data
         metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = self.run_prediction(
