@@ -36,6 +36,12 @@ CAR_MAX_COUNT = 2
 CAR_SLOTS_MIN = 4                # a plugged-in EV typically has a handful of planned slots
 CAR_SLOTS_MAX = 20
 CAR_BATTERY_KWH_OPTIONS = [40.0, 60.0, 77.0, 100.0]
+# Feature flags. Drawn from their own RNG stream for the same reason as cars, so adding them leaves
+# every pre-existing scenario parameter bit-identical. Until these existed the template pinned all
+# three for every scenario - low power charge on, iboost and low power export off - so the
+# byte-identical benchmark could not see any change to the code paths they guard.
+FEATURE_SEED_SALT = 0xFEA7        # keeps the feature draws off the main rng sequence
+IBOOST_PROBABILITY = 0.4          # fraction of scenarios running an immersion boost
 CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so start times are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
@@ -331,6 +337,29 @@ def generate_random_scenario(scenario_id, seed):
             slots.append({"start": start, "end": start + 30, "kwh": round(car_rng.uniform(0.0, 3.5), 3)})
         car_slots.append(slots)
 
+    # --- Feature flags ---
+    # Separate rng, see the car block above. iboost_smart is what makes fetch build an iboost_plan,
+    # and iboost_on_export decides whether an export window colliding with that plan is rejected -
+    # the two together are what exercise the optimiser's iboost path rather than just the prediction's.
+    feature_rng = random.Random(seed ^ FEATURE_SEED_SALT)
+    features = {
+        "set_export_low_power": feature_rng.choice([True, False]),
+        "iboost_enable": feature_rng.random() < IBOOST_PROBABILITY,
+    }
+    if features["iboost_enable"]:
+        features.update(
+            {
+                "iboost_solar": feature_rng.choice([True, False]),
+                "iboost_smart": feature_rng.choice([True, False]),
+                "iboost_charging": feature_rng.choice([True, False]),
+                "iboost_on_export": feature_rng.choice([True, False]),
+                "iboost_prevent_discharge": feature_rng.choice([True, False]),
+                "iboost_max_energy": round(feature_rng.uniform(1.0, 10.0), 2),
+                "iboost_max_power_kw": round(feature_rng.uniform(1.0, 3.0), 2),
+                "iboost_today": round(feature_rng.uniform(0.0, 3.0), 2),
+            }
+        )
+
     return {
         "id": scenario_id,
         "seed": seed,
@@ -338,6 +367,7 @@ def generate_random_scenario(scenario_id, seed):
             "clock": {
                 "minutes_now": clock_minutes_now,
             },
+            "features": features,
             "cars": {
                 "num_cars": num_cars,
                 "battery_kwh": car_battery_kwh,
@@ -667,6 +697,32 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
         if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
             my_predbat.rate_import_cost_threshold = highest
+
+    # --- Feature flags ---
+    # Scenario files written before this existed carry no "features" entry; those keep the template's
+    # own settings so previously recorded benchmark results stay comparable, exactly as "clock" does.
+    features = params.get("features")
+    if features:
+        my_predbat.set_export_low_power = features["set_export_low_power"]
+        my_predbat.iboost_enable = features["iboost_enable"]
+        # The whole block is written every scenario, not just the enabled ones. Setting these only
+        # when iboost is on leaves the previous scenario's values behind, which makes a plan depend
+        # on what ran before it - the same trap run_debug_cases documents. The off-case values are the
+        # template's, so a scenario with iboost disabled plans exactly as it did before this existed.
+        my_predbat.iboost_solar = features.get("iboost_solar", True)
+        my_predbat.iboost_smart = features.get("iboost_smart", False)
+        my_predbat.iboost_charging = features.get("iboost_charging", False)
+        my_predbat.iboost_on_export = features.get("iboost_on_export", False)
+        my_predbat.iboost_prevent_discharge = features.get("iboost_prevent_discharge", False)
+        my_predbat.iboost_max_energy = features.get("iboost_max_energy", 3.0)
+        my_predbat.iboost_max_power = features["iboost_max_power_kw"] / 60.0 if "iboost_max_power_kw" in features else 0.04
+        my_predbat.iboost_today = features.get("iboost_today", 0.0)
+        my_predbat.iboost_plan = []
+        # fetch_sensor_data builds the plan in the product, and the scenario runner never calls fetch,
+        # so it is built here on the same condition. Without it iboost_plan stays empty and the
+        # optimiser's iboost path - which only fires on a non-empty plan - is never reached.
+        if my_predbat.iboost_enable and (((not my_predbat.iboost_solar) and (not my_predbat.iboost_charging)) or my_predbat.iboost_smart):
+            my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
 
 
 # ---------------------------------------------------------------------------

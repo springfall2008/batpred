@@ -5787,6 +5787,17 @@ scenarios:
         peak_start_hhmm: '18:00'
         shoulder_rate: 8.7
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.81
+      iboost_max_power_kw: 2.92
+      iboost_on_export: false
+      iboost_prevent_discharge: true
+      iboost_smart: false
+      iboost_solar: true
+      iboost_today: 0.95
+      set_export_low_power: true
     import_rates:
       params:
         base_rate: 14.83
@@ -11714,6 +11725,9 @@ scenarios:
       params:
         rate: 5.38
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 17.66
@@ -17526,6 +17540,17 @@ scenarios:
         num_highs: 3
         num_lows: 1
       type: halfhourly
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 2.22
+      iboost_max_power_kw: 1.51
+      iboost_on_export: false
+      iboost_prevent_discharge: true
+      iboost_smart: false
+      iboost_solar: false
+      iboost_today: 1.52
+      set_export_low_power: true
     import_rates:
       params:
         rate: 33.07
@@ -23333,6 +23358,9 @@ scenarios:
         night_rate: 6.79
         night_start_hhmm: '23:30'
       type: dual
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         day_rate: 37.36
@@ -29146,6 +29174,17 @@ scenarios:
         peak_start_hhmm: '16:00'
         shoulder_rate: 14.07
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.85
+      iboost_max_power_kw: 1.32
+      iboost_on_export: true
+      iboost_prevent_discharge: false
+      iboost_smart: false
+      iboost_solar: true
+      iboost_today: 0.31
+      set_export_low_power: false
     import_rates:
       params:
         night_end_hhmm: '7:30'
@@ -35051,6 +35090,17 @@ scenarios:
         night_rate: 6.09
         night_start_hhmm: 0:30
       type: dual
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.04
+      iboost_max_power_kw: 1.95
+      iboost_on_export: false
+      iboost_prevent_discharge: false
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 2.04
+      set_export_low_power: true
     import_rates:
       params:
         day_rate: 23.64
@@ -40890,6 +40940,17 @@ scenarios:
         num_highs: 2
         num_lows: 2
       type: halfhourly
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 8.38
+      iboost_max_power_kw: 1.64
+      iboost_on_export: true
+      iboost_prevent_discharge: true
+      iboost_smart: false
+      iboost_solar: false
+      iboost_today: 0.63
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 10.54
@@ -46781,6 +46842,9 @@ scenarios:
         peak_start_hhmm: '16:00'
         shoulder_rate: 11.78
       type: triple
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 14.48
@@ -52641,6 +52705,17 @@ scenarios:
         peak_start_hhmm: '18:00'
         shoulder_rate: 11.32
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.64
+      iboost_max_power_kw: 1.07
+      iboost_on_export: true
+      iboost_prevent_discharge: true
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 1.86
+      set_export_low_power: true
     import_rates:
       params:
         rate: 27.28
@@ -58445,6 +58520,9 @@ scenarios:
       params:
         rate: 18.78
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         day_rate: 21.03
@@ -64301,6 +64379,17 @@ scenarios:
         peak_start_hhmm: '18:00'
         shoulder_rate: 13.37
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 4.03
+      iboost_max_power_kw: 2.43
+      iboost_on_export: false
+      iboost_prevent_discharge: true
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 0.81
+      set_export_low_power: true
     import_rates:
       params:
         base_rate: 19.21
@@ -70159,6 +70248,9 @@ scenarios:
         num_highs: 1
         num_lows: 3
       type: halfhourly
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         rate: 28.93
@@ -76025,6 +76117,9 @@ scenarios:
         num_highs: 3
         num_lows: 3
       type: halfhourly
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         night_end_hhmm: '5:30'
@@ -81835,6 +81930,17 @@ scenarios:
       params:
         rate: 18.07
       type: single
+    features:
+      iboost_charging: true
+      iboost_enable: true
+      iboost_max_energy: 8.06
+      iboost_max_power_kw: 2.96
+      iboost_on_export: true
+      iboost_prevent_discharge: false
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 0.29
+      set_export_low_power: false
     import_rates:
       params:
         rate: 34.89
@@ -87737,6 +87843,9 @@ scenarios:
         night_rate: 3.05
         night_start_hhmm: '23:30'
       type: dual
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         night_end_hhmm: '6:30'
@@ -93588,6 +93697,17 @@ scenarios:
         num_highs: 2
         num_lows: 3
       type: halfhourly
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 1.84
+      iboost_max_power_kw: 2.37
+      iboost_on_export: false
+      iboost_prevent_discharge: false
+      iboost_smart: false
+      iboost_solar: true
+      iboost_today: 0.85
+      set_export_low_power: true
     import_rates:
       params:
         night_end_hhmm: '8:30'
@@ -99398,6 +99518,9 @@ scenarios:
       params:
         rate: 18.4
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         rate: 31.84
@@ -105263,6 +105386,9 @@ scenarios:
         peak_start_hhmm: '17:00'
         shoulder_rate: 14.18
       type: triple
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 16.38
@@ -111074,6 +111200,9 @@ scenarios:
         night_rate: 6.58
         night_start_hhmm: '23:30'
       type: dual
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         day_rate: 24.0
@@ -116881,6 +117010,9 @@ scenarios:
       params:
         rate: 17.05
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         base_rate: 7.02

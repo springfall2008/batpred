@@ -37,7 +37,13 @@ def run_kernel_static_cache_tests(my_predbat):
 
 
 def build_environment(my_predbat):
-    """Set up a predbat with a varying battery temperature so the temperature memo is exercised"""
+    """Set up a predbat exercising the parts of the static context that vary per step.
+
+    The battery temperature changes over the horizon so the temperature memo has to key on the right
+    thing, and iboost runs with a real plan so iboost_plan_load is a non-trivial array rather than
+    576 zeroes - otherwise the cache could be reusing it wrongly and every comparison would still
+    agree.
+    """
     reset_inverter(my_predbat)
     my_predbat.forecast_minutes = 24 * 60
     my_predbat.prediction_kernel_enable = True
@@ -47,8 +53,29 @@ def build_environment(my_predbat):
     # Real rates, or every prediction costs 0.0 and the two loads compare equal - which would leave
     # the leak test above unable to fail
     reset_rates(my_predbat, 10.0, 5.0)
-    # A temperature that changes over the horizon, so a memo keyed on it has to key on the right thing
+    # A temperature that changes over the horizon, so a memo keyed on it has to key on the right thing.
+    # The curves matter as much as the profile: with no curve configured every temperature yields the
+    # same cap, and a memo keyed on the wrong thing entirely would still agree at every step.
     my_predbat.battery_temperature_prediction = {minute: max(20 - minute / (2 * 60.0), -5) for minute in range(0, my_predbat.forecast_minutes, 5)}
+    my_predbat.battery_temperature_charge_curve = {20: 1.0, 15: 0.9, 10: 0.7, 5: 0.5, 0: 0.3, -5: 0.2, -10: 0.1}
+    my_predbat.battery_temperature_discharge_curve = {20: 1.0, 15: 0.95, 10: 0.85, 5: 0.6, 0: 0.4, -5: 0.25, -10: 0.15}
+
+    # iboost on, with a plan covering part of the horizon, so the cached iboost_plan_load array
+    # carries real slot data
+    my_predbat.iboost_enable = True
+    my_predbat.iboost_solar = False
+    my_predbat.iboost_charging = False
+    my_predbat.iboost_on_export = False
+    my_predbat.iboost_prevent_discharge = False
+    my_predbat.iboost_max_energy = 5.0
+    my_predbat.iboost_max_power = 2.5 / 60.0
+    my_predbat.iboost_min_power = 0.0
+    my_predbat.iboost_today = 0.0
+    my_predbat.iboost_next = 0.0
+    my_predbat.iboost_plan = [
+        {"start": my_predbat.minutes_now + 120, "end": my_predbat.minutes_now + 240, "kwh": 3.0},
+        {"start": my_predbat.minutes_now + 480, "end": my_predbat.minutes_now + 540, "kwh": 1.5},
+    ]
 
     pv_step = {minute: 0.05 for minute in range(0, my_predbat.forecast_minutes, 5)}
     return pv_step
