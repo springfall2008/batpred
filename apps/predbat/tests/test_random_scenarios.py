@@ -10,6 +10,7 @@
 
 import math
 import json
+import os
 import random
 import datetime
 import time
@@ -42,6 +43,13 @@ CAR_BATTERY_KWH_OPTIONS = [40.0, 60.0, 77.0, 100.0]
 # byte-identical benchmark could not see any change to the code paths they guard.
 FEATURE_SEED_SALT = 0xFEA7        # keeps the feature draws off the main rng sequence
 IBOOST_PROBABILITY = 0.4          # fraction of scenarios running an immersion boost
+# Load scaling for the three simulated futures, again on its own rng stream. The template pinned
+# load_scaling 0.5 / load_scaling10 0.6 and left load_scaling90 at its 0.7 default, which the planner
+# detects as inverted and clamps back to 0.5 - so PV90 carried exactly the central case's load in
+# every scenario and the pv90 column could not measure anything the nominal column did not.
+LOAD_SCALING_SEED_SALT = 0x10AD5
+LOAD_SCALING_MIN = 0.2
+LOAD_SCALING_MAX = 2.0
 CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so start times are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
@@ -337,6 +345,14 @@ def generate_random_scenario(scenario_id, seed):
             slots.append({"start": start, "end": start + 30, "kwh": round(car_rng.uniform(0.0, 3.5), 3)})
         car_slots.append(slots)
 
+    # --- Load scaling ---
+    # Own rng stream, see the car block above. Sorted so that load_scaling90 <= load_scaling <=
+    # load_scaling10, which is the order the planner requires: PV90 is the sunny, light load future
+    # and PV10 the cloudy, heavy one. Out of order it clamps them and warns, which is what the
+    # template was doing.
+    scaling_rng = random.Random(seed ^ LOAD_SCALING_SEED_SALT)
+    scaling_pv90, scaling_nominal, scaling_pv10 = sorted(round(scaling_rng.uniform(LOAD_SCALING_MIN, LOAD_SCALING_MAX), 3) for _ in range(3))
+
     # --- Feature flags ---
     # Separate rng, see the car block above. iboost_smart is what makes fetch build an iboost_plan,
     # and iboost_on_export decides whether an export window colliding with that plan is rejected -
@@ -368,6 +384,11 @@ def generate_random_scenario(scenario_id, seed):
                 "minutes_now": clock_minutes_now,
             },
             "features": features,
+            "load_scaling": {
+                "nominal": scaling_nominal,
+                "pv10": scaling_pv10,
+                "pv90": scaling_pv90,
+            },
             "cars": {
                 "num_cars": num_cars,
                 "battery_kwh": car_battery_kwh,
@@ -697,6 +718,14 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
         if my_predbat.rate_low_threshold == 0 and highest >= my_predbat.rate_min:
             my_predbat.rate_import_cost_threshold = highest
+
+    # --- Load scaling for the three simulated futures ---
+    # Absent in scenario files written before this existed, which keep the template's own values.
+    scaling = params.get("load_scaling")
+    if scaling:
+        my_predbat.load_scaling = scaling["nominal"]
+        my_predbat.load_scaling10 = scaling["pv10"]
+        my_predbat.load_scaling90 = scaling["pv90"]
 
     # --- Feature flags ---
     # Scenario files written before this existed carry no "features" entry; those keep the template's
@@ -1033,7 +1062,11 @@ def run_scenarios_from_file(my_predbat, scenarios_file, template_yaml, results_f
             print("  ERROR: {}".format(result["error"]))
         results.append(result)
 
-    _save_results(results, results_file, scenarios_file, template_yaml)
+    # results_file is optional so an in-process caller - the plan regression test - can compare the
+    # results directly instead of round-tripping them through a file it would then have to clean up
+    if results_file:
+        _save_results(results, results_file, scenarios_file, template_yaml)
+    return results
 
 
 def _save_results(results, results_file, scenarios_file, template_yaml):
@@ -1100,8 +1133,8 @@ def compare_results(file_a, file_b):
     print("")
 
     # Column widths
-    header = "{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>8}".format(
-        "ID", "metric_A", "metric_B", "met_diff", "cost_A", "cost_B", "cost_diff", "time_A", "time_B", "status"
+    header = "{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>10}  {:>8}".format(
+        "ID", "metric_A", "metric_B", "met_diff", "cost_A", "cost_B", "cost_diff", "time_A", "time_B", "time_diff", "status"
     )
     print(header)
     print("-" * len(header))
@@ -1159,12 +1192,16 @@ def compare_results(file_a, file_b):
 
         ta_str = "n/a"
         tb_str = "n/a"
+        time_diff_str = "n/a"
         if ta is not None:
             ta_str = "{:.3f}s".format(ta)
         if tb is not None:
             tb_str = "{:.3f}s".format(tb)
         if ta is not None and tb is not None:
             runtime_diffs.append(tb - ta)
+            # Shown as a percentage as well as seconds: the absolute numbers only mean anything
+            # against the machine that produced them, but the ratio survives the comparison
+            time_diff_str = "{:+.1f}%".format(((tb - ta) / ta * 100) if ta else 0.0)
 
         for key, diffs in future_diffs.items():
             fa = ra.get(key)
@@ -1172,8 +1209,8 @@ def compare_results(file_a, file_b):
             if fa is not None and fb is not None:
                 diffs.append(fb - fa)
 
-        print("{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>8}".format(
-            sid, ma_str, mb_str, met_diff_str, ca_str, cb_str, cost_diff_str, ta_str, tb_str, status
+        print("{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>10}  {:>8}".format(
+            sid, ma_str, mb_str, met_diff_str, ca_str, cb_str, cost_diff_str, ta_str, tb_str, time_diff_str, status
         ))
 
     print("-" * len(header))
@@ -1232,6 +1269,84 @@ def compare_results(file_a, file_b):
         print("  Average diff : {:+.3f}s  (+ = B slower, - = B faster)".format(avg_rt_diff))
         print("  Min diff     : {:+.3f}s".format(min(runtime_diffs)))
         print("  Max diff     : {:+.3f}s".format(max(runtime_diffs)))
+        total_a = sum(r.get("runtime_s") or 0 for r in results_a.values())
+        total_b = sum(r.get("runtime_s") or 0 for r in results_b.values())
+        if total_a:
+            print("  Total        : {:.2f}s -> {:.2f}s  ({:+.1f}%)".format(total_a, total_b, (total_b - total_a) / total_a * 100))
+
+
+RANDOM_TEMPLATE = "cases/predbat_debug_agile1.yaml"
+RANDOM_SCENARIOS = "cases/random_scenarios.yaml"
+RANDOM_BASELINE = "cases/random_results.json"
+# Every recorded field except these has to match the baseline exactly. runtime_s is wall-clock and so
+# says more about the machine than the code; timestamp is when the baseline was taken.
+RANDOM_IGNORED_FIELDS = ("runtime_s",)
+
+
+def run_random_scenario_tests(my_predbat):
+    """Replay the 20 scenario benchmark and fail if any plan differs from the committed baseline.
+
+    This is the gate the planning work is held to: every optimiser change is expected to leave all
+    twenty plans bit-identical, so a change that moves one has either changed behaviour or introduced
+    a bug, and either way wants a deliberate baseline regeneration rather than a quiet drift.
+
+    Timing is reported but never asserted on. The suite runs on developer machines and CI runners of
+    wildly different speeds, so a runtime threshold here would either be so loose it caught nothing or
+    so tight it failed for reasons that have nothing to do with the change under test.
+
+    my_predbat is deliberately unused - each run gets a fresh instance, for the reason run_debug_cases
+    gives: read_debug_yaml only restores what its dump carries, so replaying a plan on the shared
+    instance both inherits and leaves behind state that other tests depend on.
+    """
+    print("**** Running random scenario plan regression ****")
+
+    if not os.path.exists(RANDOM_BASELINE):
+        print("ERROR: no baseline at {} - regenerate it with ./run_random".format(RANDOM_BASELINE))
+        return True
+
+    with open(RANDOM_BASELINE, "r") as file_handle:
+        baseline = {r["id"]: r for r in json.load(file_handle).get("results", [])}
+
+    # Imported here rather than at module scope: unit_test imports this module, so a top level
+    # import would be circular
+    from unit_test import create_predbat
+
+    scenario_predbat = create_predbat()
+    results = run_scenarios_from_file(scenario_predbat, RANDOM_SCENARIOS, RANDOM_TEMPLATE, None)
+    current = {r["id"]: r for r in results}
+
+    missing = sorted(set(baseline) - set(current))
+    extra = sorted(set(current) - set(baseline))
+    if missing or extra:
+        print("ERROR: scenario ids do not match the baseline - missing {} extra {}".format(missing, extra))
+        return True
+
+    failed = False
+    compared_fields = 0
+    total_base = 0.0
+    total_now = 0.0
+    for sid in sorted(baseline):
+        want = baseline[sid]
+        got = current[sid]
+        total_base += want.get("runtime_s") or 0.0
+        total_now += got.get("runtime_s") or 0.0
+        for field in want:
+            if field in RANDOM_IGNORED_FIELDS:
+                continue
+            compared_fields += 1
+            if want[field] != got.get(field):
+                print("ERROR: scenario {} {} changed: {} -> {}".format(sid, field, want[field], got.get(field)))
+                failed = True
+
+    # Informational only - see the docstring for why this is not an assertion
+    if total_base:
+        print("Runtime: baseline {:.2f}s, this run {:.2f}s ({:+.1f}%) - not asserted on, machine dependent".format(total_base, total_now, (total_now - total_base) / total_base * 100))
+
+    if failed:
+        print("ERROR: plans differ from {}. If the change is intended, regenerate with ./run_random".format(RANDOM_BASELINE))
+    else:
+        print("All {} scenarios match the baseline across {} compared fields".format(len(baseline), compared_fields))
+    return failed
 
 
 # ---------------------------------------------------------------------------
