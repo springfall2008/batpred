@@ -16,6 +16,7 @@
 // Build: bash apps/predbat/build_kernel.sh (g++/clang, C++17, no dependencies)
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <limits>
 #include <cstdio>
@@ -299,11 +300,41 @@ struct PkBatchResult {
 // each scenario would otherwise heap-allocate ~70KB, and 1200 of those per batch put every worker
 // thread in contention on the allocator. Measured 4 threads at 0.6x of serial before this, because
 // the simulation is cheap enough that malloc, not arithmetic, was the bottleneck.
+//
+// See thread_scratch() below: one of these now serves every batch a thread runs, not one per call.
+
+// Counts PkScratch constructions for the life of the library, for pk_scratch_construct_count(). The
+// suite asserts this stops growing with the number of batches rather than trusting the reuse.
+std::atomic<int64_t> g_scratch_constructions{0};
+
 struct PkScratch {
     std::vector<int32_t> charge_member, export_member;
     std::vector<int32_t> clipped_start, clipped_end;
     std::vector<double> clipped_limit;
+
+    PkScratch()
+    {
+        g_scratch_constructions.fetch_add(1, std::memory_order_relaxed);
+    }
 };
+
+// One scratch per thread, reused for that thread's lifetime.
+//
+// Every field is fully rewritten before it is read on each run - build_window_membership assigns
+// exactly n_steps entries and the clip helpers clear-then-push - which is the same invariant that
+// already let one scratch serve a whole stride within a batch. Extending it across calls means a
+// thread grows these buffers once instead of once per call: a benchmark plan issues ~25,000 batch
+// calls, and at a median of 6 jobs each the ~70KB allocation was the same order as the simulation it
+// wrapped.
+//
+// Thread-local rather than per-context because nothing here survives a simulation, so it never needs
+// to belong to a particular context. A thread that later runs a context with a different n_steps
+// simply has the vectors reassigned to the new length.
+static PkScratch &thread_scratch()
+{
+    static thread_local PkScratch scratch;
+    return scratch;
+}
 
 // Deep-copied context storage so Python-side buffers can be freed after create
 struct ContextStore {
@@ -1276,8 +1307,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     if (!c) {
         return 1;
     }
-    PkScratch scratch;
-    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, scratch);  // c is the store
+    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, thread_scratch());  // c is the store
 }
 
 // Run n_jobs scenarios against one context in a single call.
@@ -1338,9 +1368,8 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
         pool.reserve(use);
         for (int32_t t = 0; t < use; t++) {
             pool.emplace_back([c, jobs, results, n_jobs, use, t]() {
-                PkScratch scratch;
                 for (int32_t i = t; i < n_jobs; i += use) {
-                    run_batch_job(c, jobs[i], results[i], scratch);
+                    run_batch_job(c, jobs[i], results[i], thread_scratch());
                 }
             });
         }
@@ -1349,11 +1378,21 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
         }
         return 0;
     }
-    PkScratch scratch;
     for (int32_t i = 0; i < n_jobs; i++) {
-        run_batch_job(c, jobs[i], results[i], scratch);
+        run_batch_job(c, jobs[i], results[i], thread_scratch());
     }
     return 0;
+}
+
+
+// Test hook: how many PkScratch instances have been constructed since the library was loaded.
+//
+// The scratch buffers are the only heap allocation a simulation makes, and the kernel's whole
+// batching win rests on not paying them per call - so the suite asserts this counter stops growing
+// with the number of batches rather than trusting the code to be reusing them.
+int64_t pk_scratch_construct_count(void)
+{
+    return g_scratch_constructions.load(std::memory_order_relaxed);
 }
 
 

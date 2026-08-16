@@ -1124,6 +1124,100 @@ def run_soc_percent_table_tests():
     return failed
 
 
+def run_scratch_reuse_tests(my_predbat, batches=10):
+    """Check a thread builds its scratch buffers once, not once per batch, returns True on failure.
+
+    The scratch vectors are the only heap allocation a simulation makes - roughly 70KB once they have
+    grown to n_steps - and a benchmark plan issues around 25,000 batch calls, so paying that per call
+    is the difference between the allocator and the arithmetic being the bottleneck. The kernel
+    exposes pk_scratch_construct_count for this: the count must stop growing with the number of
+    batches rather than tracking it.
+    """
+    print("**** Running kernel scratch reuse tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_scratch_construct_count"):
+        print("SKIP: kernel does not expose pk_scratch_construct_count")
+        return False
+
+    lib.pk_scratch_construct_count.restype = ctypes.c_int64
+    lib.pk_scratch_construct_count.argtypes = []
+
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(99), 4)
+    if not prediction.kernel_handle:
+        print("ERROR: scratch reuse kernel context creation failed")
+        return True
+
+    # One batch first, so any first-touch allocation is already paid before the count is taken
+    prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1)
+    before = lib.pk_scratch_construct_count()
+    for _ in range(batches):
+        if prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1) is None:
+            print("ERROR: scratch reuse batch call failed")
+            return True
+    grew = lib.pk_scratch_construct_count() - before
+
+    if grew:
+        print("ERROR: {} batches built {} scratch buffers - they should be reused, not rebuilt per call".format(batches, grew))
+        return True
+    print("Scratch reuse: {} batches on one thread built 0 further scratch buffers".format(batches))
+    return False
+
+
+def run_scratch_cross_context_tests(my_predbat, rounds=3):
+    """Check a reused scratch cannot leak between contexts of different sizes, returns True on failure.
+
+    One scratch now serves every batch a thread ever runs, and Predbat builds a fresh context each
+    plan cycle - with a different n_steps whenever forecast_minutes changes. The buffers are only safe
+    to reuse because every field is fully rewritten before it is read: build_window_membership assigns
+    exactly n_steps entries and the clip helpers clear before pushing. If that ever stopped holding, a
+    large context followed by a small one would read the large one's tail.
+
+    So the contexts are deliberately run largest-first and then interleaved, and each must keep
+    returning what it returned on its own.
+    """
+    print("**** Running kernel scratch cross-context tests ****")
+    saved_forecast = my_predbat.forecast_minutes
+    try:
+        cases = []
+        # Largest first: a later, smaller context is the one that would read a stale tail
+        for forecast_minutes in (48 * 60, 12 * 60):
+            my_predbat.forecast_minutes = forecast_minutes
+            prediction, jobs = build_batch_jobs(my_predbat, random.Random(forecast_minutes), 6)
+            if not prediction.kernel_handle:
+                print("ERROR: cross-context kernel context creation failed for {} minutes".format(forecast_minutes))
+                return True
+            cases.append((forecast_minutes, prediction, jobs, build_batch_reference(prediction, jobs)))
+
+        failed = False
+        for round_n in range(rounds):
+            for forecast_minutes, prediction, jobs, reference in cases:
+                batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1)
+                if batched is None:
+                    print("ERROR: cross-context batch call failed for {} minutes".format(forecast_minutes))
+                    return True
+                for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
+                    single, (expect_min, expect_max) = reference[index]
+                    if result_tuple is None:
+                        print("ERROR: round {} {} minutes job {} reported a non-zero status".format(round_n, forecast_minutes, index))
+                        failed = True
+                        continue
+                    for field, name in enumerate(RESULT_NAMES):
+                        if result_tuple[field] != single[field]:
+                            print("ERROR: round {} {} minutes job {} differs on {}: got {} want {}".format(round_n, forecast_minutes, index, name, result_tuple[field], single[field]))
+                            failed = True
+                    if soc_range_min != expect_min or soc_range_max != expect_max:
+                        print("ERROR: round {} {} minutes job {} SoC range {} {} want {} {}".format(round_n, forecast_minutes, index, soc_range_min, soc_range_max, expect_min, expect_max))
+                        failed = True
+            if failed:
+                break
+
+        if not failed:
+            print("Scratch cross-context: {} rounds interleaving {} and {} minute contexts, all identical".format(rounds, cases[0][0], cases[1][0]))
+        return failed
+    finally:
+        my_predbat.forecast_minutes = saved_forecast
+
+
 def run_kernel_parity_tests(my_predbat):
     """Compare the C++ prediction kernel against the Python engine, returns True on failure"""
     print("**** Running kernel parity tests ****")
@@ -1145,6 +1239,10 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_batch_parity_tests(my_predbat)
         if not failed:
             failed |= run_batch_window_variant_tests(my_predbat)
+        if not failed:
+            failed |= run_scratch_reuse_tests(my_predbat)
+        if not failed:
+            failed |= run_scratch_cross_context_tests(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
 
