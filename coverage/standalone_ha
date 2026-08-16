@@ -3,6 +3,7 @@ rm predbat.log
 mkdir -p predbat_standalone_ha
 cd predbat_standalone_ha
 ln -s ../../apps/predbat/*.py .
+ln -s ../../apps/predbat/*.so .
 cd ..
 cp /Volumes/addon_configs/6adb4f0d_predbat/apps.yaml predbat_standalone_ha/apps.yaml
 cp /Volumes/addon_configs/6adb4f0d_predbat/secrets.yaml predbat_standalone_ha/secrets.yaml
