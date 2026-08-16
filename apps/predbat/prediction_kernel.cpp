@@ -34,7 +34,12 @@
 #include <pthread.h>
 #endif
 
-#define PK_ABI_VERSION 3
+// ABI 4: PkScenario::soc_out may be null, and pk_run_batch was added. The null is the reason this had
+// to move - Python now passes no SoC buffer for every cached run, and an ABI 3 binary writes to it
+// unconditionally, so loading one against this Python segfaults on the first prediction rather than
+// falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
+// point of the check.
+#define PK_ABI_VERSION 4
 #define PK_PARITY_REVISION 5
 #define PK_MAX_CARS 4
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
