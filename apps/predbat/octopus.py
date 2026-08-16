@@ -1415,7 +1415,7 @@ class OctopusAPI(ComponentBase):
             result = await self.async_download_octopus_url(url, json_only=json_only)
             return result if result else None
 
-        data = await self.storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=30, stale_minutes=35, format="yaml")
+        data = await self.storage.fetch_cached("octopus", url_hash, _download, fresh_minutes=120, stale_minutes=35, format="yaml")
         if not data:
             self.log("Warn: Unable to download Octopus data from URL {}".format(url))
         return data
