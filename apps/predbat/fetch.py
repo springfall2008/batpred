@@ -20,7 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
-from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR, LOAD_FORECAST_HISTORY_MAX_DAYS
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR, LOAD_FORECAST_HISTORY_MAX_DAYS, PREDBAT_MAX_CARS
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
@@ -2345,6 +2345,10 @@ class Fetch:
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
+        if self.num_cars > PREDBAT_MAX_CARS:
+            self.log("Warn: num_cars {} exceeds the {} cars Predbat supports - clamping to {}".format(self.num_cars, PREDBAT_MAX_CARS, PREDBAT_MAX_CARS))
+            self.record_status("Warn: num_cars {} clamped to the maximum of {} supported cars".format(self.num_cars, PREDBAT_MAX_CARS), had_errors=True)
+            self.num_cars = PREDBAT_MAX_CARS
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
         self.calculate_savings_max_charge_slots = self.get_arg("calculate_savings_max_charge_slots", 1)
 

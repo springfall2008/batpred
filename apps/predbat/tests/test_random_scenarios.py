@@ -21,12 +21,21 @@ import traceback
 import yaml
 
 from tests.test_infra import reset_inverter
+from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 MINUTES_PER_DAY = 1440
+# Car charging. Drawn from a separate RNG stream (see generate_random_scenario) so adding cars leaves
+# every pre-existing scenario parameter bit-identical and old benchmark baselines stay comparable.
+CAR_SEED_SALT = 0x5CA12          # keeps the car draws off the main rng sequence
+CAR_PROBABILITY = 0.5            # fraction of scenarios that get at least one car
+CAR_MAX_COUNT = 2
+CAR_SLOTS_MIN = 4                # a plugged-in EV typically has a handful of planned slots
+CAR_SLOTS_MAX = 20
+CAR_BATTERY_KWH_OPTIONS = [40.0, 60.0, 77.0, 100.0]
 CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so start times are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
@@ -297,12 +306,42 @@ def generate_random_scenario(scenario_id, seed):
     # get exercised.
     clock_minutes_now = rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
 
+    # --- Cars ---
+    # Deliberately drawn from a SEPARATE rng seeded off the same scenario seed, not from rng above.
+    # Taking these from the main stream would shift every subsequent draw and silently rewrite every
+    # existing scenario, making stored benchmark baselines incomparable. This way re-generating an
+    # existing seed reproduces all of the above exactly and only adds the car block.
+    #
+    # Cars matter to the benchmark because hit_car_window() is called millions of times per plan and
+    # returns on its first line when num_cars is 0 - so a car-less suite cannot see the cost of the
+    # code it guards, nor of the car load itself in the prediction.
+    car_rng = random.Random(seed ^ CAR_SEED_SALT)
+    num_cars = car_rng.randint(1, CAR_MAX_COUNT) if car_rng.random() < CAR_PROBABILITY else 0
+    car_battery_kwh = []
+    car_slots = []
+    for _car_n in range(num_cars):
+        car_battery_kwh.append(car_rng.choice(CAR_BATTERY_KWH_OPTIONS))
+        slot_count = car_rng.randint(CAR_SLOTS_MIN, CAR_SLOTS_MAX)
+        # Contiguous half hour slots from a random start, which is the shape predbat's own planners
+        # produce, wrapped inside the day so the slots stay within the profile.
+        slot_start = car_rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
+        slots = []
+        for slot_n in range(slot_count):
+            start = (slot_start + slot_n * 30) % MINUTES_PER_DAY
+            slots.append({"start": start, "end": start + 30, "kwh": round(car_rng.uniform(0.0, 3.5), 3)})
+        car_slots.append(slots)
+
     return {
         "id": scenario_id,
         "seed": seed,
         "params": {
             "clock": {
                 "minutes_now": clock_minutes_now,
+            },
+            "cars": {
+                "num_cars": num_cars,
+                "battery_kwh": car_battery_kwh,
+                "slots": car_slots,
             },
             "battery": {
                 "soc_max_kwh": soc_max_kwh,
@@ -520,6 +559,28 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.inverter_limit = inv["inverter_limit_kw"] / 60.0
     my_predbat.export_limit = inv["export_limit_kw"] / 60.0
 
+    # --- Cars ---
+    # Scenarios written before cars existed carry no "cars" entry; those run car-less exactly as before.
+    cars = params.get("cars", {"num_cars": 0, "battery_kwh": [], "slots": []})
+    num_cars = cars["num_cars"]
+    my_predbat.num_cars = num_cars
+    # Every per-car attribute predbat indexes by car_n has to be sized to num_cars, not just the ones
+    # this scenario varies - set_rate_thresholds takes max(car_charging_plan_max_price[:num_cars]) and
+    # raises on an empty slice, and the prediction indexes the rest per car per minute.
+    my_predbat.car_charging_slots = [list(slots) for slots in cars["slots"]] + [[] for _ in range(8 - num_cars)]
+    my_predbat.car_charging_battery_size = list(cars["battery_kwh"]) or [100.0]
+    my_predbat.car_charging_limit = [size for size in cars["battery_kwh"]] or [100.0]
+    my_predbat.car_charging_soc = [0.0 for _ in range(num_cars)]
+    my_predbat.car_charging_soc_next = [None for _ in range(num_cars)]
+    my_predbat.car_charging_rate = [7.4 for _ in range(max(num_cars, 1))]
+    my_predbat.car_charging_planned = [False for _ in range(num_cars)]
+    my_predbat.car_charging_now = [False for _ in range(num_cars)]
+    my_predbat.car_charging_plan_smart = [False for _ in range(num_cars)]
+    my_predbat.car_charging_plan_max_price = [0.0 for _ in range(num_cars)]
+    my_predbat.car_charging_plan_time = ["07:00:00" for _ in range(num_cars)]
+    my_predbat.car_charging_manual_soc = [False for _ in range(num_cars)]
+    my_predbat.car_charging_exclusive = [False for _ in range(num_cars)]
+
     # --- Fix forecast horizon so all scenarios are comparable ---
     my_predbat.forecast_minutes = 24 * 60
     my_predbat.forecast_plan_hours = 24
@@ -556,7 +617,12 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     my_predbat.pv_forecast_minute = pv_normal
     my_predbat.pv_forecast_minute10 = pv10
     my_predbat.pv_forecast_minute90 = pv90
-    my_predbat.calculate_second_pass = False
+
+    # Follow the shipped default rather than pinning a literal, so the benchmark measures the planning
+    # path users actually run. Read the CONFIG_ITEMS default rather than get_arg so this stays independent
+    # of whatever the template debug dump happened to capture - the point of pinning it here at all is that
+    # every scenario is planned the same way regardless of which template it was run against.
+    my_predbat.calculate_second_pass = my_predbat.config_index["calculate_second_pass"]["default"]
 
     # --- Rebuild PV step dicts via step_data_history ---
     my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(
@@ -631,6 +697,8 @@ def run_scenario(my_predbat, scenario, debug=False):
         "seed": seed,
         "metric": None,
         "cost": None,
+        "cost_pv10": None,
+        "cost_pv90": None,
         "import_kwh_battery": None,
         "import_kwh_house": None,
         "export_kwh": None,
@@ -657,7 +725,7 @@ def run_scenario(my_predbat, scenario, debug=False):
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
-            False,
+            PV_SCENARIO_NOMINAL,
             end_record=my_predbat.end_record,
             save="best",
         )
@@ -668,9 +736,22 @@ def run_scenario(my_predbat, scenario, debug=False):
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
-            True,
+            PV_SCENARIO_PV10,
             end_record=my_predbat.end_record,
         )
+
+        # PV90 prediction (optimistic solar, lighter load). Scoring the plan in each future is what makes a
+        # hedging feature measurable at all: a plan that weights PV90 spends money the central forecast says
+        # is wasted, so scoring only the nominal future marks it down no matter how well it does on the day
+        # it was hedging for.
+        cost90 = my_predbat.run_prediction(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            PV_SCENARIO_PV90,
+            end_record=my_predbat.end_record,
+        )[0]
 
         # Combined metric: cost + battery value adjustment + pv10 weighting + carbon + self-sufficiency + cycle cost
         metric, _ = my_predbat.compute_metric(
@@ -694,6 +775,8 @@ def run_scenario(my_predbat, scenario, debug=False):
             {
                 "metric": round(float(metric), 4),
                 "cost": round(float(cost), 4),
+                "cost_pv10": round(float(cost10), 4),
+                "cost_pv90": round(float(cost90), 4),
                 "import_kwh_battery": round(float(import_kwh_battery), 4),
                 "import_kwh_house": round(float(import_kwh_house), 4),
                 "export_kwh": round(float(export_kwh), 4),
@@ -916,6 +999,9 @@ def _save_results(results, results_file, scenarios_file, template_yaml):
     }
     with open(results_file, "w") as f:
         json.dump(output, f, indent=2)
+        # Trailing newline so the checked-in baseline does not trip the end-of-file hook every time it is
+        # regenerated - that is what produced the stray pre-commit.ci fixup commits on earlier branches.
+        f.write("\n")
     passed = sum(1 for r in results if not r["failed"])
     failed = len(results) - passed
     print("Wrote {} result(s) to {} ({} passed, {} failed)".format(len(results), results_file, passed, failed))
@@ -967,6 +1053,9 @@ def compare_results(file_a, file_b):
     metric_diffs = []
     cost_diffs = []
     runtime_diffs = []
+    # Cost in each simulated future. Result files written before these were recorded simply contribute
+    # nothing here, so old baselines stay comparable on the columns they do carry.
+    future_diffs = {"cost_pv10": [], "cost": [], "cost_pv90": []}
 
     for sid in common_ids:
         ra = results_a[sid]
@@ -1021,6 +1110,12 @@ def compare_results(file_a, file_b):
         if ta is not None and tb is not None:
             runtime_diffs.append(tb - ta)
 
+        for key, diffs in future_diffs.items():
+            fa = ra.get(key)
+            fb = rb.get(key)
+            if fa is not None and fb is not None:
+                diffs.append(fb - fa)
+
         print("{:>4}  {:>12}  {:>12}  {:>10}  {:>12}  {:>12}  {:>10}  {:>8}  {:>8}  {:>8}".format(
             sid, ma_str, mb_str, met_diff_str, ca_str, cb_str, cost_diff_str, ta_str, tb_str, status
         ))
@@ -1051,6 +1146,24 @@ def compare_results(file_a, file_b):
         print("  Average diff : {:+.4f}".format(avg_cost))
         print("  Min diff     : {:+.4f}".format(min(cost_diffs)))
         print("  Max diff     : {:+.4f}".format(max(cost_diffs)))
+
+    # The same plan scored in each of the three simulated futures. A change that helps only when the sun
+    # shows up - PV90 weighting is the obvious one - is invisible in the nominal column and shows here.
+    labels = {"cost_pv10": "PV10 (cloudy, heavier load)", "cost": "nominal", "cost_pv90": "PV90 (sunny, lighter load)"}
+    if any(future_diffs.values()):
+        print("")
+        print("Cost by simulated future (- = B cheaper in that future):")
+        print("  {:<30} {:>10} {:>10} {:>10} {:>8} {:>8} {:>10}".format("future", "avg", "min", "max", "better", "worse", "unchanged"))
+        for key in ("cost_pv10", "cost", "cost_pv90"):
+            diffs = future_diffs[key]
+            if not diffs:
+                print("  {:<30} {:>10}".format(labels[key], "n/a"))
+                continue
+            better = sum(1 for d in diffs if d < -0.01)
+            worse = sum(1 for d in diffs if d > 0.01)
+            print("  {:<30} {:>+10.4f} {:>+10.4f} {:>+10.4f} {:>8} {:>8} {:>10}".format(
+                labels[key], sum(diffs) / len(diffs), min(diffs), max(diffs), better, worse, len(diffs) - better - worse
+            ))
 
     if runtime_diffs:
         avg_rt_a = sum(ra.get("runtime_s") or 0 for ra in results_a.values() if ra.get("runtime_s") is not None) / max(1, sum(1 for ra in results_a.values() if ra.get("runtime_s") is not None))

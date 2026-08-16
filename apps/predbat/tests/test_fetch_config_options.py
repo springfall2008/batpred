@@ -356,6 +356,24 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ Case-insensitivity test passed")
 
+    # Test 14: num_cars is clamped to the maximum Predbat/kernel supports
+    print("\n*** Test 14: num_cars is clamped to the supported maximum ***")
+
+    # An Octopus account with more registered devices than Predbat supports (or any other
+    # misconfiguration) must not be allowed through - car indices beyond the supported maximum
+    # have no HA config entity, which previously crashed get_car_charging_planned() with
+    # TypeError: float() argument must be a string or a real number, not 'NoneType'.
+    mock_config.config["num_cars"] = 6
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.num_cars == 4, "num_cars should be clamped to 4 (the supported maximum), got {}".format(my_predbat.num_cars)
+
+    print("✓ num_cars clamp test passed")
+
+    # Restore num_cars for any tests appended after this one
+    mock_config.config["num_cars"] = 2
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times

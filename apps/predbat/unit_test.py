@@ -18,6 +18,7 @@ from predbat import PredBat
 from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_pv90 import run_pv90_tests
+from tests.test_performance_tweaks import run_performance_tweaks_tests
 from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
@@ -219,8 +220,14 @@ KEEP_SCALE = 0.5
 
 
 def run_debug_cases(my_predbat):
-    """
-    Run debug case files from the cases directory
+    """Run debug case files from the cases directory.
+
+    my_predbat is deliberately unused: each case gets a freshly created instance instead. read_debug_yaml
+    only restores the attributes its dump actually carries, so on a shared instance anything the dump omits
+    inherits whatever the previous test happened to leave behind - which made these cases depend on test
+    ordering, and made the plan produced here differ from the one `--debug <case>` produces standalone.
+    Neither is a property a golden regression test can afford. Building the instance the same way the
+    standalone path does makes the two agree and makes the result independent of what ran before.
     """
     failed = False
     print("**** Running debug case files ****")
@@ -234,8 +241,9 @@ def run_debug_cases(my_predbat):
         pathname = os.path.dirname(filename)
         if basename == "random_scenarios.yaml":
             continue  # Skip the random scenarios template file
-        test_failed = run_single_debug(basename, my_predbat, filename, pathname + "/" + basename + ".expected.json")
-        total_calculate_plan_time += getattr(my_predbat, "last_calculate_plan_time", 0.0)
+        case_predbat = create_predbat()
+        test_failed = run_single_debug(basename, case_predbat, filename, pathname + "/" + basename + ".expected.json")
+        total_calculate_plan_time += getattr(case_predbat, "last_calculate_plan_time", 0.0)
         case_count += 1
         if test_failed:
             print(f"**** Debug case {basename}: FAILED ****")
@@ -248,6 +256,19 @@ def run_debug_cases(my_predbat):
         print("**** Debug cases calculate_plan total time: {} seconds across {} case(s), average {} seconds ****".format(round(total_calculate_plan_time, 3), case_count, round(total_calculate_plan_time / case_count, 3)))
 
     return failed
+
+
+def run_annual_integration_isolated(my_predbat):
+    """Run the annual integration test against a freshly created instance.
+
+    my_predbat is unused, for the same reason run_debug_cases ignores it: this test plans a year of
+    sampled days against whatever state the shared instance is carrying, and never sets that state up
+    itself. It used to be shielded by debug_cases running immediately before it and overwriting most of
+    the instance from a debug dump; once debug_cases stopped mutating the shared instance, the ambient
+    state it inherited instead made it 13x slower (34s -> 463s) without ever failing, which is exactly
+    the kind of coupling a test suite should not have.
+    """
+    return test_annual_integration(create_predbat())
 
 
 def create_predbat():
@@ -288,6 +309,7 @@ def main():
         ("new_install_detection", test_new_install_detection, "New-install misdetection tests (Bug B, #4397/#4396, #3259, #3306)", False),
         ("compute_metric", run_compute_metric_tests, "Compute metric tests", False),
         ("pv90", run_pv90_tests, "pv90 upside scenario tests", False),
+        ("performance_tweaks", run_performance_tweaks_tests, "performance_tweaks toggle tests", False),
         ("minute_array", test_minute_array, "MinuteArray class tests", False),
         ("minute_data", test_minute_data, "Minute data tests", False),
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
@@ -480,19 +502,16 @@ def main():
         ("plan_tiebreak", run_plan_tiebreak_tests, "Plan fragmentation near-tie tie-break tests", False),
         ("plan_preclip", run_plan_preclip_tests, "Plan selection scores the pre-clip plan", True),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
-        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
-        # ("optimise_windows", run_optimise_all_windows_tests, "Optimise all windows tests", True),
-        ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with/without the C++ kernel", True),
         ("optimise_solar", run_optimise_solar_tests, "Optimise export more solar tests", False),
+        ("optimise_windows_kernel", run_optimise_all_windows_kernel_tests, "Optimise all windows tests with the C++ kernel", False),
         ("optimise_swap_charge", run_optimise_swap_charge_tests, "Optimise pairwise charge-window swap tests", False),
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
-        ("debug_cases", run_debug_cases, "Debug case file tests", True),
+        ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
         ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
         ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
         ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
-        ("annual_integration", test_annual_integration, "Annual prediction integration tests", True),
         ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
         ("annual_cli_machine", test_annual_cli_machine, "Annual CLI machine mode tests", False),
         ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
@@ -500,6 +519,8 @@ def main():
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
+        ("annual_integration", run_annual_integration_isolated, "Annual prediction integration tests", True),
+        ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
     ]
 
     # Parse command line arguments

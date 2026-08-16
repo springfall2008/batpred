@@ -460,6 +460,51 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
     return failed
 
 
+def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, rate, discharge=False):
+    """
+    Test that timed_charge_current / timed_discharge_current is re-asserted on every call to
+    adjust_charge_rate()/adjust_discharge_rate(), even when the rate itself is unchanged between
+    calls - regression test for #4415. The register can be reset externally (observed on Solis
+    GS_fb00); before this fix the write was only attempted when the rate itself changed, so an
+    external reset between rate changes was never corrected.
+    """
+    failed = False
+    inv.rest_data = None
+    inv.rest_api = None
+    inv.inv_output_charge_control = "current"
+    inv.battery_voltage = 50.0
+    inv.inv_current_dp = 1
+
+    entity = "number.timed_discharge_current" if discharge else "number.timed_charge_current"
+    expect_current = round(rate / inv.battery_voltage, 1)
+
+    # First call establishes the rate and writes the current register correctly
+    if discharge:
+        inv.adjust_discharge_rate(rate)
+    else:
+        inv.adjust_charge_rate(rate)
+
+    if ha.get_state(entity) != expect_current:
+        print("ERROR: {} expected initial current {} got {}".format(test_name, expect_current, ha.get_state(entity)))
+        failed = True
+
+    # Simulate something external (firmware reset, etc.) resetting the register between cycles
+    ha.dummy_items[entity] = prev_current
+
+    # Second call with the SAME rate - before the fix this would be a no-op, since the write was
+    # gated behind "did the rate change" rather than the current register's own live state
+    if discharge:
+        inv.adjust_discharge_rate(rate)
+    else:
+        inv.adjust_charge_rate(rate)
+
+    if ha.get_state(entity) != expect_current:
+        print("ERROR: {} expected current re-asserted to {} after external reset, got {}".format(test_name, expect_current, ha.get_state(entity)))
+        failed = True
+
+    return failed
+
+
 def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, expect_mode=None):
     """
     Test the adjust_inverter_mode function
@@ -1882,6 +1927,111 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
     return failed
 
 
+def test_discharge_target_skipped_for_ac_coupled(test_name, ha, inv, dummy_rest):
+    """
+    Regression test for issue #4517: AC Coupled inverters (raw.invertor.model == "Ac") don't have a
+    working Discharge_Target_SOC_1 register - GivTCP reports a write as successful, but it never
+    persists between cycles, so the caller sees a permanent mismatch and rewrites indefinitely.
+    Confirmed against GivEnergy's own firmware archive: "AC Coupled" is a single product line with
+    only two firmware releases ever published, not an early/late generational split - so there's no
+    newer AC-coupled variant that would need this write to still happen. Skip it outright rather than
+    attempting a write already known to be doomed.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+
+    try:
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.reserve_percent = 20
+
+        start_time = "03:33:00"
+        end_time = "04:44:00"
+        ts = datetime.strptime(start_time, "%H:%M:%S")
+        te = datetime.strptime(end_time, "%H:%M:%S")
+
+        inv.rest_data = {
+            "Control": {"Mode": "Timed Export", "Enable_Discharge_Schedule": "on"},
+            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
+            "raw": {"invertor": {"discharge_target_soc_1": "4", "model": "Ac"}},
+        }
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+
+        inv.adjust_force_export(True, ts, te)
+
+        commands = dummy_rest.get_commands()
+        if commands:
+            print("ERROR: {}: AC Coupled should attempt no discharge-target REST commands at all, got {}".format(test_name, commands))
+            failed = True
+
+        # A non-AC-Coupled model (or no model reported at all) must still attempt the write as before.
+        for model in ["Hybrid", ""]:
+            inv.rest_data["raw"]["invertor"]["model"] = model
+            dummy_rest.clear_queue()
+            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+            inv.adjust_force_export(True, ts, te)
+            commands = dummy_rest.get_commands()
+            if not any(c[0] == "dummy/setDischargeTarget" for c in commands):
+                print("ERROR: {}: model={!r} should still attempt setDischargeTarget, got {}".format(test_name, model, commands))
+                failed = True
+    finally:
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+
+    return failed
+
+
+def test_discharge_target_read_prefers_control(test_name, ha, inv):
+    """
+    Regression test for issue #4517: a discharge target write kept firing every cycle even when
+    unchanged, because the caller that decides whether to write at all (adjust_force_export) read
+    only raw.invertor.discharge_target_soc_1 - the same slow, self_run-poll-refreshed field #4492
+    moved away from as the primary signal inside rest_setDischargeTarget() itself. On hardware where
+    that field never catches up, the caller saw a permanent mismatch and re-wrote on every cycle.
+
+    rest_readDischargeTarget() is the fix: a shared helper both the caller and (potentially)
+    rest_setDischargeTarget() can use, checking Control.Discharge_Target_SOC_1 (GivTCP's synchronous
+    write-time signal) first and falling back to raw.invertor only if Control doesn't have it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+
+    try:
+        # Control has the real, current value - stale raw must not override it (the core of #4517:
+        # the old caller ignored Control entirely and would have seen "0", not "20", here).
+        inv.rest_data = {"Control": {"Discharge_Target_SOC_1": "20"}, "raw": {"invertor": {"discharge_target_soc_1": "0"}}}
+        result = inv.rest_readDischargeTarget()
+        if result != 20:
+            print("ERROR: {}: expected Control's value 20, got {}".format(test_name, result))
+            failed = True
+
+        # Control missing the key entirely - falls back to raw.
+        inv.rest_data = {"Control": {}, "raw": {"invertor": {"discharge_target_soc_1": "15"}}}
+        result = inv.rest_readDischargeTarget()
+        if result != 15:
+            print("ERROR: {}: expected raw fallback value 15, got {}".format(test_name, result))
+            failed = True
+
+        # Neither present - no crash, just None (matches "No current discharge target to read" path).
+        inv.rest_data = {"Control": {}, "raw": {"invertor": {}}}
+        result = inv.rest_readDischargeTarget()
+        if result is not None:
+            print("ERROR: {}: expected None when neither field is present, got {}".format(test_name, result))
+            failed = True
+    finally:
+        inv.rest_data = saved_rest_data
+
+    return failed
+
+
 def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     """
     Regression test for GS_fb00 (Solis) 'count register writes 0' bug.
@@ -2314,6 +2464,8 @@ def run_inverter_tests(my_predbat_dummy):
         "sensor.predbat_GE_0_scheduled_discharge_enable": "off",
         "number.discharge_target_soc": 4,
         "switch.inverter_button": False,
+        "number.timed_charge_current": 0.0,
+        "number.timed_discharge_current": 0.0,
     }
     my_predbat.ha_interface.dummy_items = dummy_items
     my_predbat.args["auto_restart"] = [{"service": "switch/turn_on", "entity_id": "switch.restart"}]
@@ -2637,6 +2789,13 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 250.1, 250, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 250, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
+    if failed:
+        return failed
+
+    # #4415: timed_charge_current/timed_discharge_current must be re-asserted every call, not
+    # just when the rate itself changes
+    failed |= test_current_reasserted_on_unchanged_rate("current_reassert_charge", ha, inv, 0, 200)
+    failed |= test_current_reasserted_on_unchanged_rate("current_reassert_discharge", ha, inv, 0, 250, discharge=True)
     if failed:
         return failed
 
@@ -3071,6 +3230,18 @@ charge_start_service:
     # Regression test for issue #4421 (follow-up): trust Control.Discharge_Target_SOC_1, GivTCP's
     # synchronous write-time signal, ahead of the much slower raw.invertor background-poll fallback
     failed |= test_discharge_target_control_signal("discharge_target_control_signal", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4517 (follow-up): AC Coupled inverters don't have a working
+    # discharge target register, skip the write entirely rather than retrying it forever
+    failed |= test_discharge_target_skipped_for_ac_coupled("discharge_target_skipped_for_ac_coupled", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4517: the caller deciding whether to write at all must also prefer
+    # Control.Discharge_Target_SOC_1 over the slow raw.invertor fallback, or it re-writes every cycle
+    failed |= test_discharge_target_read_prefers_control("discharge_target_read_prefers_control", ha, inv)
     if failed:
         return failed
 

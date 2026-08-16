@@ -1,7 +1,18 @@
 # Monotonic `tweak_plan` and `optimise_full_second_pass`
 
 **Date:** 2026-07-31
-**Status:** Approved
+**Status:** Approved - implemented, but the code it describes has since changed shape
+
+> **Superseded in part.** `tweak_plan` and `optimise_full_second_pass` were later merged into a
+> single `optimise_plan_pass(end_record, budget)`: they were the same loop, differing only in the
+> window cap and in an export-window `start_orig` reset that only `tweak_plan` performed.
+> `calculate_second_pass` now selects `budget=0` (every window in the record) rather than a second
+> implementation, and it defaults On behind `switch.predbat_performance_tweaks`.
+>
+> The guarantee this document specifies is unchanged and still holds - the merged pass keeps the
+> `keep_window_change_if_improved` check on every window it writes back, and both the budgeted and
+> unbudgeted forms are covered by the monotonicity tests in `test_export_commitment.py`. Only the
+> function names and the split between two passes are out of date below.
 
 ## Problem
 

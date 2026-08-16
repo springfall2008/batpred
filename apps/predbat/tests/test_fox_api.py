@@ -1558,6 +1558,31 @@ def test_api_get_device_detail(my_predbat):
     return False
 
 
+def test_capacity_watts_half_kw_device_type(my_predbat):
+    """
+    Test capacity_watts() corrects the truncated 'capacity' field for half-kW models.
+
+    Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter
+    reports capacity=10. Only a deviceType ending in '.5' with a whole-kW capacity
+    should be bumped up to end in 500; anything else passes through unchanged.
+    """
+    print("  - test_capacity_watts_half_kw_device_type")
+
+    # Whole-kW model is untouched
+    assert FoxAPI.capacity_watts({"capacity": 8, "deviceType": "KH8"}) == 8000
+    # Half-kW model gets bumped from a truncated whole-kW capacity
+    assert FoxAPI.capacity_watts({"capacity": 10, "deviceType": "KH10.5"}) == 10500
+    # Missing/unknown deviceType is left alone
+    assert FoxAPI.capacity_watts({"capacity": 10, "deviceType": "Unknown"}) == 10000
+    assert FoxAPI.capacity_watts({"capacity": 10}) == 10000
+    # Zero capacity is left alone even with a half-kW deviceType
+    assert FoxAPI.capacity_watts({"capacity": 0, "deviceType": "KH10.5"}) == 0
+    # A capacity that isn't a whole kW multiple is left alone (already carries a fraction)
+    assert FoxAPI.capacity_watts({"capacity": 10.3, "deviceType": "KH10.5"}) == 10300
+
+    return False
+
+
 def test_api_get_device_history(my_predbat):
     """
     Test get_device_history API endpoint
@@ -2187,6 +2212,72 @@ def test_api_get_scheduler(my_predbat):
     assert fox.fdpwr_max[deviceSN] == 8000
     assert fox.fdsoc_min[deviceSN] == 10
     assert fox.device_scheduler_count[deviceSN] == 2
+
+    return False
+
+
+def test_api_get_scheduler_half_kw_capacity(my_predbat):
+    """
+    Test get_scheduler doesn't clamp fdpwr_max below a genuine half-kW rating.
+
+    Fox's device/detail 'capacity' field is an integer, so a 10.5kW KH10.5 inverter reports
+    capacity=10 even though the scheduler API correctly reports a 10500W fdpwr max. The clamp
+    uses capacity_watts(), which corrects the half-kW deviceType before capping, so it should
+    still clamp to the true 10500W rather than the truncated 10000W.
+    """
+    print("  - test_api_get_scheduler_half_kw_capacity")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 10, "deviceType": "KH10.5"}
+
+    fox.set_mock_response(
+        "/op/v1/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [],
+            "properties": {
+                "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 10500.0}},
+                "fdsoc": {"unit": "%", "precision": 1.0, "range": {"min": 10.0, "max": 100.0}},
+            },
+        },
+    )
+
+    asyncio.run(fox.get_scheduler(deviceSN))
+
+    assert fox.fdpwr_max[deviceSN] == 10500
+
+    return False
+
+
+def test_api_get_scheduler_still_clamps_bogus_fdpwr(my_predbat):
+    """
+    Test get_scheduler still clamps a genuinely bogus fdpwr max that exceeds the
+    device's rated capacity.
+    """
+    print("  - test_api_get_scheduler_still_clamps_bogus_fdpwr")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_detail[deviceSN] = {"hasBattery": True, "capacity": 8}
+
+    fox.set_mock_response(
+        "/op/v1/device/scheduler/get",
+        {
+            "enable": 1,
+            "groups": [],
+            "properties": {
+                "fdpwr": {"unit": "W", "precision": 1.0, "range": {"min": 0.0, "max": 32000.0}},
+                "fdsoc": {"unit": "%", "precision": 1.0, "range": {"min": 10.0, "max": 100.0}},
+            },
+        },
+    )
+
+    asyncio.run(fox.get_scheduler(deviceSN))
+
+    assert fox.fdpwr_max[deviceSN] == 8000
 
     return False
 
@@ -5515,6 +5606,46 @@ def test_publish_data_device_info(my_predbat):
     return False
 
 
+def test_publish_data_device_info_half_kw_capacity(my_predbat):
+    """
+    Test publish_data corrects a half-kW model's truncated capacity.
+
+    Fox reports the device/detail 'capacity' field as an integer, so a 10.5kW KH10.5
+    inverter reports capacity=10. deviceType ending in '.5' with a whole-kW capacity
+    should bump the reported watts up to end in 500 rather than 000.
+    """
+    print("  - test_publish_data_device_info_half_kw_capacity")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {
+        "hasPV": True,
+        "hasBattery": True,
+        "capacity": 10,
+        "function": {"scheduler": True},
+        "deviceType": "KH10.5",
+        "stationName": "Test Home",
+        "batteryList": [{"capacity": 10360}],
+    }
+    fox.fdpwr_max[deviceSN] = 10500
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    run_async(fox.publish_data())
+
+    info_entity = f"sensor.predbat_fox_{deviceSN.lower()}_info"
+    assert fox.dashboard_items[info_entity]["attributes"]["inverterCapacity"] == 10500
+
+    inverter_capacity_entity = f"sensor.predbat_fox_{deviceSN.lower()}_inverter_capacity"
+    assert fox.dashboard_items[inverter_capacity_entity]["state"] == 10500
+
+    return False
+
+
 def test_publish_data_battery_soh(my_predbat):
     """
     Test publish_data creates battery_soh sensor with correct value and attributes
@@ -5643,6 +5774,42 @@ def test_publish_data_device_values_dual_soc(my_predbat):
     assert gen_entity in fox.dashboard_items
     assert fox.dashboard_items[gen_entity]["attributes"]["device_class"] == "energy"
     assert fox.dashboard_items[gen_entity]["attributes"]["state_class"] == "total"
+
+    return False
+
+
+def test_publish_data_production_today_and_month_rounded(my_predbat):
+    """
+    Test publish_data rounds the '_today' and '_month' production sensors to 2dp.
+
+    Fox's daily history values carry floating-point summation artifacts (e.g.
+    33.30000000000109), which without rounding leak through to the today total
+    directly and compound further when summed for the month total.
+    """
+    print("  - test_publish_data_production_today_and_month_rounded")
+
+    fox = MockFoxAPIWithRequests()
+    deviceSN = "TEST123456"
+
+    fox.device_list = [{"deviceSN": deviceSN}]
+    fox.device_detail[deviceSN] = {"hasPV": True, "hasBattery": True, "capacity": 8, "function": {}, "deviceType": "KH8", "stationName": "Test", "batteryList": []}
+    fox.fdpwr_max[deviceSN] = 8000
+    fox.fdsoc_min[deviceSN] = 10
+    fox.device_values[deviceSN] = {}
+    fox.device_settings[deviceSN] = {}
+    fox.local_schedule[deviceSN] = {}
+
+    # Every day carries the same artifact-laden value so the assertion doesn't depend on today's date
+    daily_value = 33.30000000000109
+    fox.device_production_month[deviceSN] = [{"unit": "kWh", "variable": "generation", "values": [daily_value] * 31}]
+
+    run_async(fox.publish_data())
+
+    today_entity = f"sensor.predbat_fox_{deviceSN.lower()}_generation_today"
+    assert fox.dashboard_items[today_entity]["state"] == 33.3, f"Expected 33.3 but got {fox.dashboard_items[today_entity]['state']}"
+
+    month_entity = f"sensor.predbat_fox_{deviceSN.lower()}_generation_month"
+    assert fox.dashboard_items[month_entity]["state"] == round(31 * daily_value, 2), f"Got {fox.dashboard_items[month_entity]['state']}"
 
     return False
 
@@ -6737,6 +6904,7 @@ def run_fox_api_tests(my_predbat):
         # API endpoint tests with mocked request_get
         failed |= test_api_get_device_list(my_predbat)
         failed |= test_api_get_device_detail(my_predbat)
+        failed |= test_capacity_watts_half_kw_device_type(my_predbat)
         failed |= test_api_get_device_history(my_predbat)
         failed |= test_api_get_device_history_empty(my_predbat)
         failed |= test_api_get_available_variables(my_predbat)
@@ -6755,6 +6923,8 @@ def run_fox_api_tests(my_predbat):
         failed |= test_api_get_battery_charging_time(my_predbat)
         failed |= test_api_set_battery_charging_time(my_predbat)
         failed |= test_api_get_scheduler(my_predbat)
+        failed |= test_api_get_scheduler_half_kw_capacity(my_predbat)
+        failed |= test_api_get_scheduler_still_clamps_bogus_fdpwr(my_predbat)
         failed |= test_api_get_scheduler_v2_evo(my_predbat)
         failed |= test_api_get_scheduler_v2_uses_real_properties(my_predbat)
         failed |= test_api_get_scheduler_derives_settings_from_schedule(my_predbat)
@@ -6875,9 +7045,11 @@ def run_fox_api_tests(my_predbat):
 
         # publish_data tests
         failed |= test_publish_data_device_info(my_predbat)
+        failed |= test_publish_data_device_info_half_kw_capacity(my_predbat)
         failed |= test_publish_data_battery_soh(my_predbat)
         failed |= test_publish_data_device_values(my_predbat)
         failed |= test_publish_data_device_values_dual_soc(my_predbat)
+        failed |= test_publish_data_production_today_and_month_rounded(my_predbat)
         failed |= test_publish_data_device_settings(my_predbat)
         failed |= test_publish_data_workmode_default_publishes_as_select(my_predbat)
         failed |= test_publish_data_derived_export_limit_publishes_as_number(my_predbat)
