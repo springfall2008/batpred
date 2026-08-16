@@ -2523,13 +2523,24 @@ class Inverter:
         if force_export:
             target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
-                current = self.rest_readDischargeTarget()
-                if current is None:
-                    self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
-                elif current != target_soc:
-                    self.rest_setDischargeTarget(target_soc)
+                # AC Coupled inverters don't have a working Discharge_Target_SOC_1 register - GivTCP
+                # still reports a write as successful, but it never persists between cycles, so the
+                # caller sees a permanent mismatch and rewrites indefinitely (#4517). Confirmed
+                # against GivEnergy's own firmware archive (github.com/DJBenson/giv-firmware): "AC
+                # Coupled" is a single product line with exactly two firmware releases ever published
+                # (D212-A212, A214-D214) - not an early/late generational split the way Hybrid has
+                # Gen1/2/3 - so there's no newer AC-coupled variant this would need to keep working for.
+                inverter_model = self.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+                if inverter_model == "Ac":
+                    self.log("Inverter {} is AC Coupled, discharge target register not supported, export target not written".format(self.id))
                 else:
-                    self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
+                    current = self.rest_readDischargeTarget()
+                    if current is None:
+                        self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
+                    elif current != target_soc:
+                        self.rest_setDischargeTarget(target_soc)
+                    else:
+                        self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:

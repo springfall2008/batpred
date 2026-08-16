@@ -1927,6 +1927,66 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
     return failed
 
 
+def test_discharge_target_skipped_for_ac_coupled(test_name, ha, inv, dummy_rest):
+    """
+    Regression test for issue #4517: AC Coupled inverters (raw.invertor.model == "Ac") don't have a
+    working Discharge_Target_SOC_1 register - GivTCP reports a write as successful, but it never
+    persists between cycles, so the caller sees a permanent mismatch and rewrites indefinitely.
+    Confirmed against GivEnergy's own firmware archive: "AC Coupled" is a single product line with
+    only two firmware releases ever published, not an early/late generational split - so there's no
+    newer AC-coupled variant that would need this write to still happen. Skip it outright rather than
+    attempting a write already known to be doomed.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_rest_data = inv.rest_data
+    saved_rest_api = inv.rest_api
+    saved_rest_v3 = inv.rest_v3
+
+    try:
+        inv.rest_api = "dummy"
+        inv.rest_v3 = True
+        inv.reserve_percent = 20
+
+        start_time = "03:33:00"
+        end_time = "04:44:00"
+        ts = datetime.strptime(start_time, "%H:%M:%S")
+        te = datetime.strptime(end_time, "%H:%M:%S")
+
+        inv.rest_data = {
+            "Control": {"Mode": "Timed Export", "Enable_Discharge_Schedule": "on"},
+            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
+            "raw": {"invertor": {"discharge_target_soc_1": "4", "model": "Ac"}},
+        }
+        dummy_rest.clear_queue()
+        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+
+        inv.adjust_force_export(True, ts, te)
+
+        commands = dummy_rest.get_commands()
+        if commands:
+            print("ERROR: {}: AC Coupled should attempt no discharge-target REST commands at all, got {}".format(test_name, commands))
+            failed = True
+
+        # A non-AC-Coupled model (or no model reported at all) must still attempt the write as before.
+        for model in ["Hybrid", ""]:
+            inv.rest_data["raw"]["invertor"]["model"] = model
+            dummy_rest.clear_queue()
+            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+            inv.adjust_force_export(True, ts, te)
+            commands = dummy_rest.get_commands()
+            if not any(c[0] == "dummy/setDischargeTarget" for c in commands):
+                print("ERROR: {}: model={!r} should still attempt setDischargeTarget, got {}".format(test_name, model, commands))
+                failed = True
+    finally:
+        inv.rest_data = saved_rest_data
+        inv.rest_api = saved_rest_api
+        inv.rest_v3 = saved_rest_v3
+
+    return failed
+
+
 def test_discharge_target_read_prefers_control(test_name, ha, inv):
     """
     Regression test for issue #4517: a discharge target write kept firing every cycle even when
@@ -3170,6 +3230,12 @@ charge_start_service:
     # Regression test for issue #4421 (follow-up): trust Control.Discharge_Target_SOC_1, GivTCP's
     # synchronous write-time signal, ahead of the much slower raw.invertor background-poll fallback
     failed |= test_discharge_target_control_signal("discharge_target_control_signal", ha, inv, dummy_rest)
+    if failed:
+        return failed
+
+    # Regression test for issue #4517 (follow-up): AC Coupled inverters don't have a working
+    # discharge target register, skip the write entirely rather than retrying it forever
+    failed |= test_discharge_target_skipped_for_ac_coupled("discharge_target_skipped_for_ac_coupled", ha, inv, dummy_rest)
     if failed:
         return failed
 
