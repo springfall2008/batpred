@@ -457,6 +457,33 @@ def run_window_cache_tests(my_predbat):
     print("**** Running window cache tests ****")
     failed = False
 
+    # A window list that grows or shrinks in place keeps its id(), so the entry must also check the
+    # length. Otherwise run_prediction_kernel passes n_charge = len(window_list) alongside the older,
+    # shorter cached arrays and the C kernel reads past their end - a memory-safety failure rather
+    # than merely a wrong plan, which is why this is guarded and not just documented.
+    prediction_kernel.invalidate_window_cache()
+    growing = [{"start": 0, "end": 30, "average": 5.0}]
+    starts_before, ends_before = prediction_kernel.window_bound_arrays(growing)
+    if len(starts_before) != 1:
+        print("ERROR: expected a single-entry bounds array, got {}".format(len(starts_before)))
+        failed = True
+    growing.append({"start": 60, "end": 120, "average": 6.0})
+    starts_after, ends_after = prediction_kernel.window_bound_arrays(growing)
+    if len(starts_after) != len(growing) or len(ends_after) != len(growing):
+        print("ERROR: bounds arrays are stale after the window list grew - len {} against {} windows".format(len(starts_after), len(growing)))
+        failed = True
+    elif list(starts_after) != [0, 60] or list(ends_after) != [30, 120]:
+        print("ERROR: bounds arrays wrong after growth: {} / {}".format(list(starts_after), list(ends_after)))
+        failed = True
+    # The tuple used for the prediction cache key has to follow the same rule
+    prediction_kernel.invalidate_window_cache()
+    shrinking = [{"start": 0, "end": 30, "average": 5.0}, {"start": 60, "end": 120, "average": 6.0}]
+    prediction_kernel.window_bound_tuple(shrinking)
+    shrinking.pop()
+    if prediction_kernel.window_bound_tuple(shrinking) != ((0, 30),):
+        print("ERROR: window_bound_tuple is stale after the window list shrank: {}".format(prediction_kernel.window_bound_tuple(shrinking)))
+        failed = True
+
     # A repeated lookup on an unchanged list returns the identical cached objects
     prediction_kernel.invalidate_window_cache()
     windows = [{"start": 0, "end": 30, "average": 5.0}, {"start": 60, "end": 120, "average": 6.0}]

@@ -398,9 +398,10 @@ def int32_array(values):
 # time in a plan. They are cached here, keyed on the identity of the window list.
 #
 # CORRECTNESS: the cache is only sound while no window's start or end changes underneath it. Every
-# such mutation must call invalidate_window_cache() - route them through
-# Plan.set_window_start()/Prediction.set_window_start() rather than assigning window["start"]
-# directly. run_window_cache_tests replays a full plan with VALIDATE_WINDOW_CACHE on, which
+# such mutation must call invalidate_window_cache() - route them through the set_window_start() and
+# set_window_end() helpers below rather than assigning window["start"] or window["end"] directly.
+# The prediction path does not need them: _prepare_export applies a trial start copy-on-write, to a
+# window dict and list of its own, so nothing the cache has seen is touched. run_window_cache_tests replays a full plan with VALIDATE_WINDOW_CACHE on, which
 # re-derives the bounds on every hit and fails on any stale entry, so a missed invalidation is a
 # test failure rather than a silently wrong plan.
 #
@@ -457,13 +458,19 @@ def _window_cache_entry(window_list):
     """
     key = id(window_list)
     entry = _WINDOW_BOUNDS_CACHE.get(key)
-    if entry is not None and entry[0] is window_list:
+    # The window count is part of the hit condition, not just the identity: a list that grows or
+    # shrinks in place keeps its id(), and run_prediction_kernel passes n_charge/n_export from
+    # len(window_list) alongside these arrays. A stale shorter array would then be read past its end
+    # by the C kernel - a memory-safety failure rather than merely a wrong plan. Bare start/end
+    # writes are handled by set_window_start/set_window_end instead; nothing on the planning path
+    # resizes a window list today, so this is a guard against the class rather than a live fix.
+    if entry is not None and entry[0] is window_list and entry[4] == len(window_list):
         if VALIDATE_WINDOW_CACHE:
             _validate_entry(window_list, entry)
         return entry
     if len(_WINDOW_BOUNDS_CACHE) >= WINDOW_CACHE_MAX:
         _WINDOW_BOUNDS_CACHE.clear()
-    entry = [window_list, None, None, None]
+    entry = [window_list, None, None, None, len(window_list)]
     _WINDOW_BOUNDS_CACHE[key] = entry
     return entry
 
