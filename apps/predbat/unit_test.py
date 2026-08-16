@@ -24,6 +24,7 @@ from tests.test_model import run_model_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
+from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
 from tests.test_octopus_slots import run_load_octopus_slots_tests
@@ -55,6 +56,7 @@ from tests.test_trim_export import run_trim_export_tests
 from tests.test_plan_tiebreak import run_plan_tiebreak_tests
 from tests.test_plan_preclip import run_plan_preclip_tests
 from tests.test_export_commitment import run_export_commitment_tests
+from tests.test_optimise_export_copy import run_optimise_export_copy_tests
 from tests.test_energydataservice import run_energydataservice_tests
 from tests.test_iboost import run_iboost_smart_tests
 from tests.test_alert_feed import test_alert_feed
@@ -100,6 +102,7 @@ from tests.test_web_annual import (
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
+from tests.test_window_selection import run_window_selection_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
@@ -109,6 +112,7 @@ from tests.test_minute_array import test_minute_array
 from tests.test_minute_data import test_minute_data, test_minute_data_load, test_minute_data_no_smoothing_backwards, test_minute_data_no_smoothing_forward
 from tests.test_minute_data_import_export import test_minute_data_import_export
 from tests.test_minute_data_state import test_minute_data_state
+from tests.test_minute_data_copy import run_minute_data_copy_tests
 from tests.test_format_time_ago import test_format_time_ago
 from tests.test_str2time import test_str2time
 from tests.test_override_time import test_get_override_time_from_string
@@ -322,6 +326,7 @@ def main():
         ("prune_today", test_prune_today, "Prune today tests", False),
         ("history_attribute", test_history_attribute, "History attribute tests", False),
         ("minute_data_state", test_minute_data_state, "Minute data state tests", False),
+        ("minute_data_copy", run_minute_data_copy_tests, "Minute data history copying tests", False),
         ("format_time_ago", test_format_time_ago, "Format time ago tests", False),
         ("str2time", test_str2time, "Time string parsing tests", False),
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
@@ -429,6 +434,9 @@ def main():
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
+        ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
+        ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
+        ("optimise_export_copy", run_optimise_export_copy_tests, "Optimise export window copying tests", False),
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),

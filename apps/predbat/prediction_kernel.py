@@ -395,11 +395,83 @@ def kernel_context_free(handle):
         KERNEL_LIB.pk_context_free(handle)
 
 
-def create_kernel_context(pred):
+def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
+    """Build the per-step context arrays that do not depend on the load forecast.
+
+    Split out from create_kernel_context so a caller building several contexts that differ only in
+    their load can compute these once - see the static_cache argument there. Everything here reads
+    rates, PV, temperature, carbon, gas, iboost and car data.
+    """
+    rate_import = []
+    rate_export = []
+    alert_keep = []
+    io_flag = []
+    pv = []
+    pv10 = []
+    pv90 = []
+    temp_charge_cap = []
+    temp_discharge_cap = []
+    carbon = []
+    gas_rate = []
+    iboost_plan_load = []
+    car_load_flat = [0.0] * (num_cars * n_steps)
+    car_rate_flat = [0.0] * (num_cars * n_steps)
+    # The temperature rate caps are a pure function of the temperature at that step, and a forecast
+    # normally holds one value for hours at a time, so the two curve walks are memoised per distinct
+    # temperature instead of repeated for every step. On the benchmark that is 17,856 calls per plan
+    # for a handful of answers.
+    temp_cap_memo = {}
+    for k in range(n_steps):
+        minute = k * PREDICT_STEP
+        minute_absolute = minute + minutes_now
+        rate_import.append(pred.rate_import.get(minute_absolute, 0))
+        rate_export.append(pred.rate_export.get(minute_absolute, 0))
+        alert_keep.append(pred.all_active_keep.get(minute_absolute, 0))
+        io_flag.append(1 if pred.io_adjusted.get(minute_absolute, 0) else 0)
+        pv.append(pred.pv_forecast_minute_step[minute])
+        pv10.append(pred.pv_forecast_minute10_step[minute])
+        pv90.append(pred.pv_forecast_minute90_step[minute])
+        # Pre-compute the temperature rate cap base (before the min against the max rate,
+        # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
+        battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
+        caps = temp_cap_memo.get(battery_temperature)
+        if caps is None:
+            caps = (
+                find_battery_temperature_cap(battery_temperature, pred.battery_temperature_charge_curve, pred.soc_max, float("inf")),
+                find_battery_temperature_cap(battery_temperature, pred.battery_temperature_discharge_curve, pred.soc_max, float("inf")),
+            )
+            temp_cap_memo[battery_temperature] = caps
+        temp_charge_cap.append(caps[0])
+        temp_discharge_cap.append(caps[1])
+        carbon.append(pred.carbon_intensity.get(minute, 0) if pred.carbon_intensity else 0)
+        # Gas rate pre-scaled by iboost_gas_scale - mirrors prediction.py:719/725
+        gas_rate.append((pred.rate_gas.get(minute_absolute, 99) * pred.iboost_gas_scale) if pred.rate_gas else 0)
+        iboost_plan_load.append(in_iboost_slot(minute_absolute, pred.iboost_plan) if pred.iboost_plan else 0)
+        if num_cars > 0:
+            car_load, car_rate_slot = in_car_slot(minute_absolute, num_cars, pred.car_charging_slots)
+            for car_n in range(num_cars):
+                car_load_flat[car_n * n_steps + k] = car_load[car_n]
+                car_rate_flat[car_n * n_steps + k] = car_rate_slot[car_n]
+
+    # Raw power curve multipliers by SoC percent - mirrors utils.py get_curve_value
+    charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
+    discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
+
+    return (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+
+
+def create_kernel_context(pred, static_cache=None):
     """Build the per-plan static context for a Prediction object and hand it to the kernel.
 
     Returns the kernel context handle (>0) or 0 when the kernel is unavailable or
     the context could not be built; 0 means the Python engine will be used.
+
+    static_cache is an opt-in dict for a caller building several contexts that differ ONLY in their
+    load forecast - calculate_marginal_costs builds 28 such contexts, one per matrix cell. Passing
+    the same dict to each build computes the load-independent arrays once instead of 28 times, which
+    is nearly all of the work here. The contract is the caller's to keep: anything else that differs
+    between contexts sharing a cache - rates, PV, temperature, carbon, car slots - would be silently
+    taken from the first build. Callers with nothing to share pass nothing and get a full build.
     """
     lib = load_kernel(log=pred.log)
     if not lib:
@@ -413,54 +485,28 @@ def create_kernel_context(pred):
             return 0
         n_steps = forecast_minutes // PREDICT_STEP
 
-        rate_import = []
-        rate_export = []
-        alert_keep = []
-        io_flag = []
-        pv = []
+        # The load arrays are what a static_cache caller varies, so they are always rebuilt here
         load = []
-        pv10 = []
         load10 = []
-        pv90 = []
         load90 = []
-        temp_charge_cap = []
-        temp_discharge_cap = []
-        carbon = []
-        gas_rate = []
-        iboost_plan_load = []
-        car_load_flat = [0.0] * (num_cars * n_steps)
-        car_rate_flat = [0.0] * (num_cars * n_steps)
+        load_step = pred.load_minutes_step
+        load10_step = pred.load_minutes_step10
+        load90_step = pred.load_minutes_step90
         for k in range(n_steps):
             minute = k * PREDICT_STEP
-            minute_absolute = minute + minutes_now
-            rate_import.append(pred.rate_import.get(minute_absolute, 0))
-            rate_export.append(pred.rate_export.get(minute_absolute, 0))
-            alert_keep.append(pred.all_active_keep.get(minute_absolute, 0))
-            io_flag.append(1 if pred.io_adjusted.get(minute_absolute, 0) else 0)
-            pv.append(pred.pv_forecast_minute_step[minute])
-            load.append(pred.load_minutes_step[minute])
-            pv10.append(pred.pv_forecast_minute10_step[minute])
-            load10.append(pred.load_minutes_step10[minute])
-            pv90.append(pred.pv_forecast_minute90_step[minute])
-            load90.append(pred.load_minutes_step90[minute])
-            # Pre-compute the temperature rate cap base (before the min against the max rate,
-            # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
-            battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
-            temp_charge_cap.append(find_battery_temperature_cap(battery_temperature, pred.battery_temperature_charge_curve, pred.soc_max, float("inf")))
-            temp_discharge_cap.append(find_battery_temperature_cap(battery_temperature, pred.battery_temperature_discharge_curve, pred.soc_max, float("inf")))
-            carbon.append(pred.carbon_intensity.get(minute, 0) if pred.carbon_intensity else 0)
-            # Gas rate pre-scaled by iboost_gas_scale - mirrors prediction.py:719/725
-            gas_rate.append((pred.rate_gas.get(minute_absolute, 99) * pred.iboost_gas_scale) if pred.rate_gas else 0)
-            iboost_plan_load.append(in_iboost_slot(minute_absolute, pred.iboost_plan) if pred.iboost_plan else 0)
-            if num_cars > 0:
-                car_load, car_rate_slot = in_car_slot(minute_absolute, num_cars, pred.car_charging_slots)
-                for car_n in range(num_cars):
-                    car_load_flat[car_n * n_steps + k] = car_load[car_n]
-                    car_rate_flat[car_n * n_steps + k] = car_rate_slot[car_n]
+            load.append(load_step[minute])
+            load10.append(load10_step[minute])
+            load90.append(load90_step[minute])
 
-        # Raw power curve multipliers by SoC percent - mirrors utils.py get_curve_value
-        charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
-        discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
+        # Keyed on the shape the arrays were built for, so a cache handed to a differently shaped
+        # Prediction rebuilds rather than returning arrays of the wrong length
+        shape = (n_steps, minutes_now, num_cars)
+        static = static_cache.get("arrays") if static_cache is not None else None
+        if static is None or static[0] != shape:
+            static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
+            if static_cache is not None:
+                static_cache["arrays"] = static
+        (rate_import, rate_export, alert_keep, io_flag, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve) = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)

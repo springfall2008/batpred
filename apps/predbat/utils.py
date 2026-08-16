@@ -392,7 +392,11 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
-    if not can_modify_history:
+    # The glitch filter below is the only code here that writes to history, and it only runs for
+    # backwards incrementing data, so that is the only case worth copying for. Copying regardless
+    # cost ~150k deepcopy calls on a plan cycle for the two calculate_yesterday calls alone, neither
+    # of which asks for the filter. can_modify_history stays the caller's explicit opt-out on top.
+    if clean_increment and backwards and not can_modify_history:
         history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
