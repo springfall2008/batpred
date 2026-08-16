@@ -5787,6 +5787,17 @@ scenarios:
         peak_start_hhmm: '18:00'
         shoulder_rate: 8.7
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.81
+      iboost_max_power_kw: 2.92
+      iboost_on_export: false
+      iboost_prevent_discharge: true
+      iboost_smart: false
+      iboost_solar: true
+      iboost_today: 0.95
+      set_export_low_power: true
     import_rates:
       params:
         base_rate: 14.83
@@ -5807,6 +5818,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 2.73
       morning_peak_minute: 285
+    load_scaling:
+      nominal: 1.398
+      pv10: 1.617
+      pv90: 1.02
     pv:
       peak_hour: 13.51
       peak_kw: 1.0
@@ -11714,6 +11729,9 @@ scenarios:
       params:
         rate: 5.38
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 17.66
@@ -11734,6 +11752,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 0.73
       morning_peak_minute: 798
+    load_scaling:
+      nominal: 1.502
+      pv10: 1.836
+      pv90: 1.467
     pv:
       peak_hour: 13.52
       peak_kw: 6.0
@@ -17526,6 +17548,17 @@ scenarios:
         num_highs: 3
         num_lows: 1
       type: halfhourly
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 2.22
+      iboost_max_power_kw: 1.51
+      iboost_on_export: false
+      iboost_prevent_discharge: true
+      iboost_smart: false
+      iboost_solar: false
+      iboost_today: 1.52
+      set_export_low_power: true
     import_rates:
       params:
         rate: 33.07
@@ -17542,6 +17575,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 2.1
       morning_peak_minute: 1042
+    load_scaling:
+      nominal: 1.121
+      pv10: 1.782
+      pv90: 0.747
     pv:
       peak_hour: 13.87
       peak_kw: 6.0
@@ -23333,6 +23370,9 @@ scenarios:
         night_rate: 6.79
         night_start_hhmm: '23:30'
       type: dual
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         day_rate: 37.36
@@ -23352,6 +23392,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 1.09
       morning_peak_minute: 963
+    load_scaling:
+      nominal: 0.756
+      pv10: 1.227
+      pv90: 0.377
     pv:
       peak_hour: 12.95
       peak_kw: 6.0
@@ -29146,6 +29190,17 @@ scenarios:
         peak_start_hhmm: '16:00'
         shoulder_rate: 14.07
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.85
+      iboost_max_power_kw: 1.32
+      iboost_on_export: true
+      iboost_prevent_discharge: false
+      iboost_smart: false
+      iboost_solar: true
+      iboost_today: 0.31
+      set_export_low_power: false
     import_rates:
       params:
         night_end_hhmm: '7:30'
@@ -29168,6 +29223,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 2.41
       morning_peak_minute: 1099
+    load_scaling:
+      nominal: 0.524
+      pv10: 0.576
+      pv90: 0.278
     pv:
       peak_hour: 13.56
       peak_kw: 2.0
@@ -35051,6 +35110,17 @@ scenarios:
         night_rate: 6.09
         night_start_hhmm: 0:30
       type: dual
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.04
+      iboost_max_power_kw: 1.95
+      iboost_on_export: false
+      iboost_prevent_discharge: false
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 2.04
+      set_export_low_power: true
     import_rates:
       params:
         day_rate: 23.64
@@ -35070,6 +35140,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 0.78
       morning_peak_minute: 504
+    load_scaling:
+      nominal: 1.252
+      pv10: 1.379
+      pv90: 0.846
     pv:
       peak_hour: 12.2
       peak_kw: 6.0
@@ -40890,6 +40964,17 @@ scenarios:
         num_highs: 2
         num_lows: 2
       type: halfhourly
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 8.38
+      iboost_max_power_kw: 1.64
+      iboost_on_export: true
+      iboost_prevent_discharge: true
+      iboost_smart: false
+      iboost_solar: false
+      iboost_today: 0.63
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 10.54
@@ -40910,6 +40995,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 0.55
       morning_peak_minute: 405
+    load_scaling:
+      nominal: 0.932
+      pv10: 1.206
+      pv90: 0.344
     pv:
       peak_hour: 13.08
       peak_kw: 6.0
@@ -46781,6 +46870,9 @@ scenarios:
         peak_start_hhmm: '16:00'
         shoulder_rate: 11.78
       type: triple
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 14.48
@@ -46801,6 +46893,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 1.55
       morning_peak_minute: 1128
+    load_scaling:
+      nominal: 0.586
+      pv10: 1.518
+      pv90: 0.285
     pv:
       peak_hour: 13.65
       peak_kw: 0.0
@@ -52641,6 +52737,17 @@ scenarios:
         peak_start_hhmm: '18:00'
         shoulder_rate: 11.32
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 7.64
+      iboost_max_power_kw: 1.07
+      iboost_on_export: true
+      iboost_prevent_discharge: true
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 1.86
+      set_export_low_power: true
     import_rates:
       params:
         rate: 27.28
@@ -52657,6 +52764,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 0.58
       morning_peak_minute: 799
+    load_scaling:
+      nominal: 0.67
+      pv10: 1.255
+      pv90: 0.576
     pv:
       peak_hour: 12.38
       peak_kw: 6.0
@@ -58445,6 +58556,9 @@ scenarios:
       params:
         rate: 18.78
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         day_rate: 21.03
@@ -58464,6 +58578,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 2.04
       morning_peak_minute: 776
+    load_scaling:
+      nominal: 1.153
+      pv10: 1.196
+      pv90: 0.62
     pv:
       peak_hour: 13.89
       peak_kw: 10.0
@@ -64301,6 +64419,17 @@ scenarios:
         peak_start_hhmm: '18:00'
         shoulder_rate: 13.37
       type: triple
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 4.03
+      iboost_max_power_kw: 2.43
+      iboost_on_export: false
+      iboost_prevent_discharge: true
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 0.81
+      set_export_low_power: true
     import_rates:
       params:
         base_rate: 19.21
@@ -64321,6 +64450,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 1.73
       morning_peak_minute: 739
+    load_scaling:
+      nominal: 0.879
+      pv10: 1.294
+      pv90: 0.208
     pv:
       peak_hour: 13.72
       peak_kw: 4.0
@@ -70159,6 +70292,9 @@ scenarios:
         num_highs: 1
         num_lows: 3
       type: halfhourly
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         rate: 28.93
@@ -70175,6 +70311,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 2.48
       morning_peak_minute: 621
+    load_scaling:
+      nominal: 0.401
+      pv10: 1.494
+      pv90: 0.355
     pv:
       peak_hour: 13.08
       peak_kw: 0.0
@@ -76025,6 +76165,9 @@ scenarios:
         num_highs: 3
         num_lows: 3
       type: halfhourly
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         night_end_hhmm: '5:30'
@@ -76047,6 +76190,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 2.0
       morning_peak_minute: 1354
+    load_scaling:
+      nominal: 1.357
+      pv10: 1.421
+      pv90: 1.118
     pv:
       peak_hour: 13.96
       peak_kw: 1.0
@@ -81835,6 +81982,17 @@ scenarios:
       params:
         rate: 18.07
       type: single
+    features:
+      iboost_charging: true
+      iboost_enable: true
+      iboost_max_energy: 8.06
+      iboost_max_power_kw: 2.96
+      iboost_on_export: true
+      iboost_prevent_discharge: false
+      iboost_smart: true
+      iboost_solar: false
+      iboost_today: 0.29
+      set_export_low_power: false
     import_rates:
       params:
         rate: 34.89
@@ -81851,6 +82009,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 1.83
       morning_peak_minute: 603
+    load_scaling:
+      nominal: 1.649
+      pv10: 1.84
+      pv90: 0.664
     pv:
       peak_hour: 12.25
       peak_kw: 4.0
@@ -87737,6 +87899,9 @@ scenarios:
         night_rate: 3.05
         night_start_hhmm: '23:30'
       type: dual
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         night_end_hhmm: '6:30'
@@ -87759,6 +87924,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 2.21
       morning_peak_minute: 242
+    load_scaling:
+      nominal: 1.036
+      pv10: 1.2
+      pv90: 0.277
     pv:
       peak_hour: 13.74
       peak_kw: 1.0
@@ -93588,6 +93757,17 @@ scenarios:
         num_highs: 2
         num_lows: 3
       type: halfhourly
+    features:
+      iboost_charging: false
+      iboost_enable: true
+      iboost_max_energy: 1.84
+      iboost_max_power_kw: 2.37
+      iboost_on_export: false
+      iboost_prevent_discharge: false
+      iboost_smart: false
+      iboost_solar: true
+      iboost_today: 0.85
+      set_export_low_power: true
     import_rates:
       params:
         night_end_hhmm: '8:30'
@@ -93610,6 +93790,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 1.35
       morning_peak_minute: 574
+    load_scaling:
+      nominal: 1.143
+      pv10: 1.475
+      pv90: 0.265
     pv:
       peak_hour: 12.69
       peak_kw: 2.0
@@ -99398,6 +99582,9 @@ scenarios:
       params:
         rate: 18.4
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         rate: 31.84
@@ -99414,6 +99601,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 0.53
       morning_peak_minute: 686
+    load_scaling:
+      nominal: 0.959
+      pv10: 1.969
+      pv90: 0.505
     pv:
       peak_hour: 13.9
       peak_kw: 1.0
@@ -105263,6 +105454,9 @@ scenarios:
         peak_start_hhmm: '17:00'
         shoulder_rate: 14.18
       type: triple
+    features:
+      iboost_enable: false
+      set_export_low_power: false
     import_rates:
       params:
         base_rate: 16.38
@@ -105283,6 +105477,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 0.57
       morning_peak_minute: 859
+    load_scaling:
+      nominal: 1.426
+      pv10: 1.436
+      pv90: 0.271
     pv:
       peak_hour: 13.6
       peak_kw: 6.0
@@ -111074,6 +111272,9 @@ scenarios:
         night_rate: 6.58
         night_start_hhmm: '23:30'
       type: dual
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         day_rate: 24.0
@@ -111093,6 +111294,10 @@ scenarios:
       load_type: residential
       morning_peak_kw: 1.16
       morning_peak_minute: 1416
+    load_scaling:
+      nominal: 1.281
+      pv10: 1.331
+      pv90: 0.9
     pv:
       peak_hour: 13.04
       peak_kw: 2.0
@@ -116881,6 +117086,9 @@ scenarios:
       params:
         rate: 17.05
       type: single
+    features:
+      iboost_enable: false
+      set_export_low_power: true
     import_rates:
       params:
         base_rate: 7.02
@@ -116901,6 +117109,10 @@ scenarios:
       load_type: flat
       morning_peak_kw: 0.77
       morning_peak_minute: 548
+    load_scaling:
+      nominal: 1.627
+      pv10: 1.951
+      pv90: 1.49
     pv:
       peak_hour: 13.79
       peak_kw: 2.0
