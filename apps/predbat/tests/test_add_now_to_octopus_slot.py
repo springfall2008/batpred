@@ -66,6 +66,15 @@ def test_add_now_to_octopus_slot(my_predbat):
             print("ERROR: Expected end {}, got {}".format(expected_end.strftime("%Y-%m-%dT%H:%M:%S%z"), slot["end"]))
             failed = True
 
+        # Regression check: a live car_charging_now reading is not the same as a genuinely settled
+        # Octopus dispatch - it must stay untrusted at the "completed"/"none" trust levels (only
+        # "started" deliberately re-checks it live for the current block). Tagging this True
+        # unconditionally let one noisy sensor reading get trusted as a cheap house import rate
+        # regardless of the user's chosen trust level.
+        if slot["_confirmed"] is not False:
+            print("ERROR: Expected _confirmed to be False (not a settled dispatch), got {}".format(slot["_confirmed"]))
+            failed = True
+
         if not failed:
             print("Test 1 passed - single car slot added correctly")
 

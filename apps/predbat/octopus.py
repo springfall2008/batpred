@@ -2358,7 +2358,15 @@ class Octopus:
             slot["end"] = slot_end_date.strftime(TIME_FORMAT)
             slot["source"] = "car_charging_now"
             slot["kwh"] = self.car_charging_rate[car_n] * 30 / 60  # Scale to 30 minute slot
-            slot["_confirmed"] = True  # Real-time confirmed draw, not a still-revisable Octopus plan
+            # Not genuinely confirmed - car_charging_now is a single live sensor read, not a settled
+            # Octopus dispatch record, and can be noisy (a charger's readiness sensor can blip on/off
+            # for reasons unrelated to a real charging session). Tagging this True unconditionally
+            # let a single spurious reading get trusted as a cheap house import rate under "completed"
+            # and "none" trust levels too - both of which exist specifically to require more than a
+            # live guess before trusting a dynamic slot. Leave it False and let rate_add_io_slots()'s
+            # own "started" level re-check car_charging_now live (current settlement block only) -
+            # that's the level that deliberately accepts this trade-off, not every level.
+            slot["_confirmed"] = False
             octopus_slots.append(slot)
             self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
