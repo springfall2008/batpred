@@ -29,6 +29,13 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+# GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
+# (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
+# reporter inverters, still repeating the write every cycle post-fix until added here.
+# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
+
 
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
@@ -2527,16 +2534,13 @@ class Inverter:
         if force_export:
             target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
-                # AC Coupled inverters don't have a working Discharge_Target_SOC_1 register - GivTCP
-                # still reports a write as successful, but it never persists between cycles, so the
-                # caller sees a permanent mismatch and rewrites indefinitely (#4517). Confirmed
-                # against GivEnergy's own firmware archive (github.com/DJBenson/giv-firmware): "AC
-                # Coupled" is a single product line with exactly two firmware releases ever published
-                # (D212-A212, A214-D214) - not an early/late generational split the way Hybrid has
-                # Gen1/2/3 - so there's no newer AC-coupled variant this would need to keep working for.
+                # Some GivTCP inverter models don't have a working Discharge_Target_SOC_1 register -
+                # GivTCP still reports a write as successful, but it never persists between cycles, so
+                # the caller sees a permanent mismatch and rewrites indefinitely (#4517). See
+                # DISCHARGE_TARGET_UNSUPPORTED_MODELS above for what's confirmed vs inferred.
                 inverter_model = self.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                if inverter_model == "Ac":
-                    self.log("Inverter {} is AC Coupled, discharge target register not supported, export target not written".format(self.id))
+                if inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+                    self.log("Inverter {} is {}, discharge target register not supported, export target not written".format(self.id, inverter_model))
                 else:
                     current = self.rest_readDischargeTarget()
                     if current is None:

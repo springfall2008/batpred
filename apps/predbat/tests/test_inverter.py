@@ -17,7 +17,7 @@ from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST
-from inverter import Inverter
+from inverter import Inverter, DISCHARGE_TARGET_UNSUPPORTED_MODELS
 
 
 def dummy_sleep(seconds):
@@ -1929,13 +1929,13 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
 
 def test_discharge_target_skipped_for_ac_coupled(test_name, ha, inv, dummy_rest):
     """
-    Regression test for issue #4517: AC Coupled inverters (raw.invertor.model == "Ac") don't have a
-    working Discharge_Target_SOC_1 register - GivTCP reports a write as successful, but it never
-    persists between cycles, so the caller sees a permanent mismatch and rewrites indefinitely.
-    Confirmed against GivEnergy's own firmware archive: "AC Coupled" is a single product line with
-    only two firmware releases ever published, not an early/late generational split - so there's no
-    newer AC-coupled variant that would need this write to still happen. Skip it outright rather than
-    attempting a write already known to be doomed.
+    Regression test for issue #4517: some GivTCP inverter models (see
+    DISCHARGE_TARGET_UNSUPPORTED_MODELS) don't have a working Discharge_Target_SOC_1 register -
+    GivTCP reports a write as successful, but it never persists between cycles, so the caller sees a
+    permanent mismatch and rewrites indefinitely. "Ac" (AC Coupled) was confirmed first; "Hybrid_gen1"
+    was added after a reporter confirmed live, post-fix, that two of his Gen1 inverters still repeated
+    the write every cycle while a third, genuinely AC Coupled, correctly stopped. Skip outright rather
+    than attempting a write already known to be doomed.
     """
     failed = False
     print("Test: {}".format(test_name))
@@ -1959,18 +1959,22 @@ def test_discharge_target_skipped_for_ac_coupled(test_name, ha, inv, dummy_rest)
             "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
             "raw": {"invertor": {"discharge_target_soc_1": "4", "model": "Ac"}},
         }
-        dummy_rest.clear_queue()
-        dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
 
-        inv.adjust_force_export(True, ts, te)
+        # Every model confirmed (or inferred - see the constant's own comment) unsupported must
+        # attempt no discharge-target REST commands at all.
+        for model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+            inv.rest_data["raw"]["invertor"]["model"] = model
+            dummy_rest.clear_queue()
+            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
+            inv.adjust_force_export(True, ts, te)
+            commands = dummy_rest.get_commands()
+            if commands:
+                print("ERROR: {}: model={!r} should attempt no discharge-target REST commands, got {}".format(test_name, model, commands))
+                failed = True
 
-        commands = dummy_rest.get_commands()
-        if commands:
-            print("ERROR: {}: AC Coupled should attempt no discharge-target REST commands at all, got {}".format(test_name, commands))
-            failed = True
-
-        # A non-AC-Coupled model (or no model reported at all) must still attempt the write as before.
-        for model in ["Hybrid", ""]:
+        # A model not on the unsupported list (including a later Hybrid generation, or no model
+        # reported at all) must still attempt the write as before.
+        for model in ["Hybrid", "Hybrid_gen3", ""]:
             inv.rest_data["raw"]["invertor"]["model"] = model
             dummy_rest.clear_queue()
             dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
