@@ -110,6 +110,10 @@ If there is a shortfall of generated solar power to meet the house load, the bat
 - **Hold exporting** - The plan was to force export but the minimum battery level was reached and thus the battery is kept in Demand mode.
 If the battery level again gets above the threshold it will be changed back to Export mode.
 
+- **Cross-charging** - On a multi-inverter system, at least one inverter is in a charge-side state (Charging, Freeze charging or Hold charging) while another is in an export-side state (Exporting, Freeze exporting or Hold exporting) at the same time. This includes the case where both sides are merely holding at their target (e.g. Hold charging + Hold exporting), with no current actually flowing, not just active charging/exporting.
+This is shown explicitly rather than the headline status just reflecting whichever inverter was processed last, so real disagreement between inverters is visible instead of hidden.
+If inverters only disagree on sub-state within the same side (e.g. one still actively Charging while another has reached Hold charging), the most active sub-state is shown instead, since Cross-charging specifically means disagreement across the charge/export divide, not within one side.
+
 - **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
 but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
 

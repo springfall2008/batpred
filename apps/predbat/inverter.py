@@ -1152,7 +1152,11 @@ class Inverter:
                 else:
                     search_range = range(99, 85, -1)
 
-                # Find 100% end points
+                # Find 100% end points. The exact-match checks below ("Charging" / "Exporting",
+                # "Discharging") deliberately exclude "Cross-charging" minutes - during genuine
+                # cross-charging another inverter is simultaneously drawing/feeding power at the
+                # same time, so this inverter's battery_power reading isn't a clean single-inverter
+                # charge/discharge sample and would corrupt the learned curve if included.
                 for data_point in search_range:
                     for minute in range(1, min_len):
                         # Start trigger is when the SoC just increased above the data point

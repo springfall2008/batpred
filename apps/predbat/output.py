@@ -52,6 +52,17 @@ REASON_TEMPLATES = {
 }
 
 
+def yesterday_slot_is_exporting(slot_status):
+    """True when a historical ``predbat.status`` string (already lower-cased) represents export
+    activity for the "yesterday" plan reconstruction in ``calculate_yesterday()``.
+
+    Includes "cross-charging" explicitly - it genuinely straddles both sides of the fleet at once,
+    but as a string it contains "charging" and not "exporting", so a plain substring check on
+    "exporting" alone would silently drop the export half of a real cross-charging slot.
+    """
+    return "exporting" in slot_status or "cross-charging" in slot_status
+
+
 class Output:
     """Output and sensor publishing mixin.
 
@@ -3183,7 +3194,10 @@ class Output:
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     real_minute = minute + slot_offset
 
-                    if "exporting" in slot_status:
+                    # Cross-charging genuinely straddles both sides - track it as both an exporting
+                    # and a charging slot (its name contains "charging" but not "exporting"), so
+                    # these are independent "if"s rather than "if/elif".
+                    if yesterday_slot_is_exporting(slot_status):
                         export_during_slot = slot_status
                         if export_start_minute is None:
                             export_start_minute = real_minute
@@ -3191,7 +3205,7 @@ class Output:
                                 export_start_minute -= 5
                             if charge_start_minute is not None:
                                 charge_end_minute = export_start_minute
-                    elif "charging" in slot_status:
+                    if "charging" in slot_status:
                         charge_during_slot = slot_status
                         if charge_start_minute is None:
                             charge_start_minute = real_minute
@@ -3206,7 +3220,7 @@ class Output:
                 if charge_end_minute is None and charge_start_minute is not None:
                     charge_end_minute = minute + self.plan_interval_minutes
 
-                if "exporting" in export_during_slot:
+                if yesterday_slot_is_exporting(export_during_slot):
                     # Assume exporting at this time
                     self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
                     if "freeze" in export_during_slot:
