@@ -81,8 +81,8 @@ def test_octopus_free(my_predbat):
         if mock_get.call_count != 1:
             print("FAIL: Expected 1 HTTP call when covering free-session timeout, got {}".format(mock_get.call_count))
             failed = True
-        elif mock_get.call_args.kwargs.get("timeout") != 30:
-            print("FAIL: Expected Octopus free-session timeout 30, got {}".format(mock_get.call_args.kwargs.get("timeout")))
+        elif mock_get.call_args.kwargs.get("timeout") != 120:
+            print("FAIL: Expected Octopus free-session timeout 120, got {}".format(mock_get.call_args.kwargs.get("timeout")))
             failed = True
         elif body != _JSON_BODY:
             print("FAIL: Expected Octopus free-session body to round-trip unchanged")
