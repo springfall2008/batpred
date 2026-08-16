@@ -1180,6 +1180,10 @@ def run_scratch_cross_context_tests(my_predbat, rounds=3):
     returning what it returned on its own.
     """
     print("**** Running kernel scratch cross-context tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
     saved_forecast = my_predbat.forecast_minutes
     try:
         cases = []
@@ -1291,6 +1295,10 @@ def run_pool_lane_tests(my_predbat):
     bypasses.
     """
     print("**** Running kernel pool lane tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
     prediction, jobs = build_batch_jobs(my_predbat, random.Random(2468), 8)
     if not prediction.kernel_handle:
         print("ERROR: pool lane kernel context creation failed")
@@ -1327,6 +1335,10 @@ def run_pool_concurrency_tests(my_predbat, rounds=400, n_threads=8):
     trim these numbers to make the suite look faster.
     """
     print("**** Running kernel pool concurrency tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
     sets = []
     for seed in (11, 22):
         prediction, jobs = build_batch_jobs(my_predbat, random.Random(seed), 6)
@@ -1375,6 +1387,10 @@ def run_pool_fork_tests(my_predbat, n_threads=4, timeout_s=60):
     treats the timeout as the failure rather than waiting on it.
     """
     print("**** Running kernel pool fork tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
     if not hasattr(os, "fork"):
         print("SKIP: platform has no fork()")
         return False
