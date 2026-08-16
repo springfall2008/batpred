@@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 4
-KERNEL_PARITY_REVISION = 5
+KERNEL_PARITY_REVISION = 6
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -97,8 +97,8 @@ class PkContext(ctypes.Structure):
         ("export_today_now", ctypes.c_double),
         ("iboost_today", ctypes.c_double),
         ("car_charging_loss", ctypes.c_double),
-        ("car_charging_limit", ctypes.c_double * 4),
-        ("car_charging_soc", ctypes.c_double * 4),
+        ("car_charging_limit", ctypes.c_double * KERNEL_MAX_CARS),
+        ("car_charging_soc", ctypes.c_double * KERNEL_MAX_CARS),
         ("iboost_max_energy", ctypes.c_double),
         ("iboost_max_power", ctypes.c_double),
         ("iboost_min_power", ctypes.c_double),
@@ -169,7 +169,7 @@ class PkResult(ctypes.Structure):
         ("metric_keep", ctypes.c_double),
         ("final_iboost", ctypes.c_double),
         ("final_carbon_g", ctypes.c_double),
-        ("car_soc_next", ctypes.c_double * 4),
+        ("car_soc_next", ctypes.c_double * KERNEL_MAX_CARS),
         ("iboost_next", ctypes.c_double),
         ("soc_min_minute", ctypes.c_int32),
         ("car_soc_next_valid", ctypes.c_int32),

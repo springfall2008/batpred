@@ -43,8 +43,8 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 4
-#define PK_PARITY_REVISION 5
-#define PK_MAX_CARS 4
+#define PK_PARITY_REVISION 6
+#define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
 namespace {

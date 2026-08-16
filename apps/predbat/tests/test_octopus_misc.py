@@ -1872,10 +1872,11 @@ def test_octopus_automatic_config_num_cars(my_predbat):
     original_args = dict(my_predbat.args)
 
     # Test 1: 5 registered devices, 2 suspended - only the 3 active devices should count towards
-    # num_cars and appear in the entity lists. Without this filter num_cars would be bumped to 5,
-    # which exceeds the 4 cars Predbat/the kernel support and previously crashed
-    # get_car_charging_planned() with TypeError: float() argument must be a string or a real number,
-    # not 'NoneType' (car_charging_rate_4 has no config entity).
+    # num_cars and appear in the entity lists. A stale/decommissioned device left in an Octopus
+    # account should not be treated as a car needing a charging slot (and, before
+    # fetch_config_options' num_cars clamp existed, an inflated count could push num_cars past
+    # what Predbat supports and crash get_car_charging_planned() with TypeError: float() argument
+    # must be a string or a real number, not 'NoneType').
     print("\n*** Test 1: Suspended devices are excluded from num_cars and entity lists ***")
     api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
     api.intelligent_devices = {

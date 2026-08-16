@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
+from const import PREDBAT_MAX_CARS
 from prediction import Prediction
 from matplotlib import pyplot as plt
 import asyncio
@@ -408,6 +409,10 @@ class MockConfigProvider:
             "car_charging_rate_1": 7.4,
             "car_charging_rate_2": 7.4,
             "car_charging_rate_3": 7.4,
+            "car_charging_rate_4": 7.4,
+            "car_charging_rate_5": 7.4,
+            "car_charging_rate_6": 7.4,
+            "car_charging_rate_7": 7.4,
             "car_charging_battery_size_0": 100.0,
             "car_charging_battery_size_1": 100.0,
             "car_charging_limit_0": 100.0,
@@ -509,8 +514,8 @@ def reset_inverter(my_predbat):
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []
     my_predbat.car_charging_from_battery = True
-    my_predbat.car_charging_limit = [100.0, 100.0, 100.0, 100.0]
-    my_predbat.car_charging_soc = [0, 0, 0, 0]
+    my_predbat.car_charging_limit = [100.0] * PREDBAT_MAX_CARS
+    my_predbat.car_charging_soc = [0] * PREDBAT_MAX_CARS
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
     my_predbat.iboost_gas = False
@@ -523,7 +528,7 @@ def reset_inverter(my_predbat):
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
-    my_predbat.car_charging_soc_next = [None for car_n in range(4)]
+    my_predbat.car_charging_soc_next = [None for car_n in range(PREDBAT_MAX_CARS)]
     my_predbat.charge_limit_best = []
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
