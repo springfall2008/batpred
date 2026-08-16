@@ -41,7 +41,7 @@ def build_environment(my_predbat):
 
     The battery temperature changes over the horizon so the temperature memo has to key on the right
     thing, and iboost runs with a real plan so iboost_plan_load is a non-trivial array rather than
-    576 zeroes - otherwise the cache could be reusing it wrongly and every comparison would still
+    288 zeroes - otherwise the cache could be reusing it wrongly and every comparison would still
     agree.
     """
     reset_inverter(my_predbat)

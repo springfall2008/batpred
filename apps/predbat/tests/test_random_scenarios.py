@@ -746,6 +746,15 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         my_predbat.iboost_max_energy = features.get("iboost_max_energy", 3.0)
         my_predbat.iboost_max_power = features["iboost_max_power_kw"] / 60.0 if "iboost_max_power_kw" in features else 0.04
         my_predbat.iboost_today = features.get("iboost_today", 0.0)
+        # Mirror the per-cycle reset in fetch_config_options. calculate_plan writes iboost_next back
+        # onto the instance, and the scenario runner never calls fetch, so without this a scenario
+        # inherits the previous one's iboost carry-over. No scenario's plan moves today - verified by
+        # running the suite with and without it - but the hazard is real and the reset is free.
+        my_predbat.iboost_next = my_predbat.iboost_today
+        my_predbat.iboost_running = False
+        my_predbat.iboost_running_solar = False
+        my_predbat.iboost_running_full = False
+        my_predbat.iboost_energy_today = {}
         my_predbat.iboost_plan = []
         # fetch_sensor_data builds the plan in the product, and the scenario runner never calls fetch,
         # so it is built here on the same condition. Without it iboost_plan stays empty and the
