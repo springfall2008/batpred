@@ -430,6 +430,11 @@ def run_rate_add_io_slots_tests(my_predbat):
     expected_rates_24 = {minute: 10.0 for minute in range(600, 630)}  # slots_22, but car isn't charging now this time
     failed |= run_rate_add_io_slots_test("test24_started_without_car_charging_now_behaves_like_completed", my_predbat, slots_22, True, 12, expected_rates_24, confirmed=False)
 
+    print("\n**** Test 25: 'planned' - trusts a dynamic slot unconditionally, even unconfirmed (old, pre-#4516 behaviour restored as an explicit opt-in) ****")
+    my_predbat.trust_future_dynamic_iog_slots = "planned"
+    expected_rates_25 = {minute: 4.0 for minute in range(840, 870)}
+    failed |= run_rate_add_io_slots_test("test25_planned_trusts_unconfirmed_slot", my_predbat, slots_18, True, 12, expected_rates_25, confirmed=False)
+
     my_predbat.trust_future_dynamic_iog_slots = saved_trust_dynamic
     my_predbat.car_charging_now = saved_car_charging_now
 

@@ -2823,9 +2823,15 @@ class Octopus:
                         # right now, without waiting for Octopus's own completed record to catch up.
                         # A slot merely having reached its scheduled start time is deliberately NOT
                         # enough on its own - the clock passing a boundary is not evidence the car
-                        # actually started, only that it was due to.
+                        # actually started, only that it was due to. "planned" restores the pre-#4516
+                        # behaviour of trusting every dynamic slot unconditionally, including one
+                        # Octopus has only provisionally scheduled and could still move or withdraw -
+                        # an explicit opt back into that risk for anyone who prefers Predbat to plan
+                        # ahead of a daytime slot rather than wait for any confirmation at all.
                         in_fixed_window = self.minute_in_iog_fixed_window(slot_start)
                         if in_fixed_window:
+                            trusted = True
+                        elif trust_future_dynamic_iog_slots == "planned":
                             trusted = True
                         elif trust_future_dynamic_iog_slots == "completed":
                             trusted = confirmed
