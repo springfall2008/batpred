@@ -57,11 +57,16 @@ class Prediction(PredictionBatch):
     Class to hold prediction input and output data and the run function
     """
 
-    def __init__(self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, pv_forecast_minute90_step=None, load_minutes_step90=None, soc_kw=None, soc_max=None):
+    def __init__(
+        self, base=None, pv_forecast_minute_step=None, pv_forecast_minute10_step=None, load_minutes_step=None, load_minutes_step10=None, pv_forecast_minute90_step=None, load_minutes_step90=None, soc_kw=None, soc_max=None, kernel_static_cache=None
+    ):
         """Build a Prediction, optionally copying simulation state from a base PredBat instance.
 
         pv_forecast_minute90_step and load_minutes_step90 fall back to the nominal step arrays when None, so
         every existing call site that never requests the pv90 scenario keeps working unchanged.
+
+        kernel_static_cache is passed straight through to create_kernel_context, for a caller building
+        several Predictions that differ only in their load forecast; see that function for the contract.
         """
         if base:
             self.minutes_now = base.minutes_now
@@ -171,7 +176,7 @@ class Prediction(PredictionBatch):
             self.prediction_kernel_enable = getattr(base, "prediction_kernel_enable", False)
             self.kernel_handle = 0
             if self.prediction_kernel_enable:
-                self.kernel_handle = create_kernel_context(self)
+                self.kernel_handle = create_kernel_context(self, static_cache=kernel_static_cache)
 
         # Outside the `if base:` block on purpose: a Prediction built without a base is still a valid
         # object and its first enqueue_prediction would otherwise raise AttributeError
