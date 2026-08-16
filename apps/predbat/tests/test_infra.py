@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
-from prediction import wrapped_run_prediction_single, Prediction
+from prediction import Prediction
 from matplotlib import pyplot as plt
 import asyncio
 import numpy as np
@@ -807,7 +807,7 @@ def simple_scenario(
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
+        ) = prediction.thread_run_prediction_single(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
     else:
         (
             metric,

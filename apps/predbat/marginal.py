@@ -86,8 +86,7 @@ class Marginal:
                     if minute in modified_load:
                         modified_load[minute] += extra_per_step
 
-                # Create a fresh Prediction with the modified load; this updates PRED_GLOBAL
-                # which is safe since we run synchronously (pool is idle at this point)
+                # Create a fresh Prediction with the modified load.
                 # No need to include 10% extra load as we only run normal simulations.
                 pred = Prediction(self, self.pv_forecast_minute_step, self.pv_forecast_minute_step, modified_load, modified_load)
 
