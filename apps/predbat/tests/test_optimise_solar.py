@@ -32,7 +32,7 @@ def run_optimise_solar(
     expect_export_start=None,
     car_charging_slots=None,
     car_charging_from_battery=False,
-    inverter_can_charge_during_export=False,
+    inverter_can_freeze_export=True,
 ):
     print("Starting optimise solar test {}".format(name))
     failed = False
@@ -42,7 +42,7 @@ def run_optimise_solar(
     my_predbat.calculate_best_export = calculate_best_export
     my_predbat.set_export_freeze = set_export_freeze
     my_predbat.set_charge_freeze = True
-    my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+    my_predbat.inverter_can_freeze_export = inverter_can_freeze_export
     my_predbat.export_more_solar_threshold = threshold
     my_predbat.soc_max = battery_size
     my_predbat.soc_kw = battery_soc
@@ -163,18 +163,19 @@ def run_optimise_solar_tests(my_predbat):
         set_export_freeze=False,
     )
 
-    # An inverter that charges the battery from surplus PV regardless of command can't actually hold
-    # SoC flat, so freeze is no different from idle for it (#4207/#4425) - feature is a no-op here too,
-    # same outcome as freeze_disabled above but via the capability gate instead of the switch
+    # An inverter that can't be commanded into a state where battery charging is disabled at all
+    # can't actually hold SoC flat, so freeze is no different from idle for it (#4207/#4538) - feature
+    # is a no-op here too, same outcome as freeze_disabled above but via the capability gate instead
+    # of the switch
     failed |= run_optimise_solar(
-        "freeze_pointless_when_inverter_always_charges",
+        "freeze_pointless_when_inverter_cannot_freeze",
         my_predbat,
         export_window_best=export_window_best,
         export_limits_best=[100.0, 100.0, 100.0],
         expect_export_limit=[100.0, 100.0, 100.0],
         pv_amount=3.0,
         threshold=100.0,
-        inverter_can_charge_during_export=True,
+        inverter_can_freeze_export=False,
     )
 
     # An already active export window (limit 0) is left untouched, only idle ones are converted
