@@ -2147,7 +2147,12 @@ class Plan:
         best_carbon = 0
         this_export_limit = 100.0
         window = export_window[window_n]
-        try_export_window = copy.deepcopy(export_window)
+        # A shallow copy is enough: nothing here writes to a window dict, and the one write that does
+        # happen downstream - the trial start - is applied copy-on-write by _prepare_export, which
+        # takes its own list and replaces that single window with dict(window, start=start). The list
+        # is still copied so a caller cannot reorder it underneath a batch that has not flushed yet.
+        # Deep-copying every window dict on entry was the largest block of copying in a plan.
+        try_export_window = list(export_window)
         try_export = list(export_limit)
         best_start = window["start"]
         best_size = window["end"] - best_start
