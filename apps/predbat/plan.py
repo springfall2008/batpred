@@ -35,6 +35,26 @@ import time
 PLAN_PASS_WINDOW_BUDGET = 8
 
 
+def resolve_batch_threads(threads, cpu_count_value):
+    """Map the threads setting onto how many kernel lanes one batch may use.
+
+    'auto' takes the core count and is deliberately not capped. On a fast machine the curve is very
+    flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
+    serial 26.33s, 4 threads 24.89s, 6 threads 24.71s, 8 threads 24.91s, 16 threads 25.04s - so a cap
+    looks attractive. But re-running with each job made eight times dearer, which is how a machine
+    where the kernel dominates behaves, the curve stops turning over entirely: 48.92s serial, 32.03s
+    at 4, 29.98s at 6, 29.85s at 8, 28.94s at 16.
+
+    That makes the risk asymmetric. Capping at 4 costs 0.7% on the fast machine but 10.7% on the
+    kernel-heavy one, while not capping costs 1.3% at worst. The worst case for a low cap is far
+    worse than the worst case for none, so 'auto' is left alone and anyone who wants fewer lanes sets
+    threads: explicitly.
+    """
+    if threads == "auto":
+        return max(cpu_count_value, 1)
+    return max(int(threads), 1)
+
+
 def slots_around(target_slots, slot_lengths):
     """
     Return a list of slot lengths around the target slots
@@ -1306,11 +1326,7 @@ class Plan:
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
-        threads = self.get_arg("threads", "auto")
-        if threads == "auto":
-            self.prediction.batch_threads = cpu_count()
-        else:
-            self.prediction.batch_threads = max(int(threads), 1)
+        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
         self.log("Prediction batch using {} kernel thread(s)".format(self.prediction.batch_threads))
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))

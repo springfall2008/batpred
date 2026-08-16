@@ -1,6 +1,9 @@
 # Persistent scratch and thread pool in the prediction kernel
 
-**Status:** design, approved in conversation, not yet implemented.
+**Status:** implemented. Three things below were changed by measurement during implementation and are
+recorded in place: stage 1 is a no-op on its own, broadcasting to wake workers was the wrong choice,
+and the `threads: auto` cap this design would have added was measured and rejected. See "What
+measurement changed" at the end.
 
 **Branch:** `perf/kernel-thread-pool`, stacked on `perf/kernel-batch-abi` (PR #4540). Neither
 `pk_run_batch` nor `PkScratch` exists on `main` — both arrive with that PR — so this work cannot be
@@ -216,3 +219,49 @@ anything resembling a 16x.
 - `apps/predbat/tests/test_kernel_parity.py`: the six tests above.
 - All six shipped binaries rebuilt with `build_kernel_cross.sh` and confirmed to load.
 - No change to any Python module.
+
+## What measurement changed
+
+Three parts of the design above did not survive contact with a benchmark. They are left in place so
+the reasoning can be compared against what actually happened.
+
+**Stage 1 is a no-op on its own.** Removing ~25,000 allocations of ~70KB per plan changed nothing:
+26.291s before, 26.344s after, interleaved best of 3 against ~1.8% run-to-run spread. The premise was
+a misreading of the kernel's own comment, which recorded the allocator being the bottleneck under
+four threads contending — a different problem from one thread repeatedly allocating and freeing the
+same-sized block, which never leaves the allocator's thread cache. Stage 1 is kept only because the
+pool's parked workers need per-thread scratch, and because its two tests are worth having.
+
+**Broadcasting to wake workers cost most of the win.** The design says "broadcasts on `work_ready`".
+Built that way the pool was worth 1.3% (25.833s → 25.489s), because a six-job batch woke all fifteen
+workers and eleven of them went straight back to sleep — roughly 250,000 wasted wakeups per plan.
+Giving each worker its own flag and condition variable, so exactly the needed lanes wake, took it to
+3.7% (26.008s → 25.056s). The shipped code does that; the single `work_ready` variable in the sketch
+above does not exist.
+
+**The `threads: auto` cap was measured and rejected.** With the pool in place the fast-machine curve
+peaks below the core count — serial 26.33s, 4 threads 24.89s, 6 threads 24.71s, 8 threads 24.91s,
+16 threads 25.04s — which argues for capping `auto`. Re-running with each job made eight times dearer,
+which is how a machine where the kernel dominates behaves, the curve stops turning over: 48.92s
+serial, 32.03s at 4, 29.98s at 6, 29.85s at 8, 28.94s at 16. Capping at 4 therefore costs 0.7% on a
+fast machine but 10.7% on a kernel-heavy one, while not capping costs 1.3% at worst. `auto` is left
+as the core count; `resolve_batch_threads` in `plan.py` carries the numbers.
+
+**Final result:** 26.33s serial → 24.71s at 6 threads on the 20-scenario benchmark, **6.1%**, on top
+of the 35% the batching work delivered. All 20 scenarios byte-identical at every thread count, in
+both the normal and the kernel-heavy regime.
+
+## What the tests found
+
+Every new test was mutation-checked, and two were not good enough on the first attempt:
+
+- The **fork** test earns its place. With the `pthread_atfork` handler removed the forked child
+  deadlocks on workers that no longer exist; the test kills it on a deadline and reports the timeout
+  rather than hanging the suite.
+- The **concurrency** test initially did not bite. With the dispatch mutex deleted, 25 rounds over 4
+  lanes passed happily — the GIL keeps two callers from overlapping often enough for the race to
+  land. At 400 rounds over 8 lanes it deadlocks within seconds. The round count is therefore
+  load-bearing and the test says so.
+- The **scratch cross-context** test cannot fail before its change, since without reuse there is
+  nothing to leak; it was verified by relaxing `build_window_membership`'s `assign` to skip shrinking,
+  which makes it fail immediately.

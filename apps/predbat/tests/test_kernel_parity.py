@@ -26,7 +26,11 @@ import ctypes
 import gc
 import os
 import random
+import signal
 import subprocess
+import sys
+import threading
+import time
 
 import prediction_kernel
 from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
@@ -1218,6 +1222,209 @@ def run_scratch_cross_context_tests(my_predbat, rounds=3):
         my_predbat.forecast_minutes = saved_forecast
 
 
+def run_worker_reuse_tests(my_predbat, batches=10, n_threads=4):
+    """Check threaded batches reuse parked workers instead of starting new ones, returns True on failure.
+
+    A benchmark plan issues ~25,000 threaded batch calls with a median of six jobs each. Starting a
+    thread per lane per call measured 201,545 threads and 1.5s of a 26s plan - more than the
+    parallelism was returning, which is why threading was worth 1.6% before the pool. The kernel
+    exposes pk_worker_thread_count for this: once warm, the count must stop growing with the number of
+    batches.
+    """
+    print("**** Running kernel worker reuse tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_worker_thread_count"):
+        print("SKIP: kernel does not expose pk_worker_thread_count")
+        return False
+
+    lib.pk_worker_thread_count.restype = ctypes.c_int64
+    lib.pk_worker_thread_count.argtypes = []
+
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(1234), 8)
+    if not prediction.kernel_handle:
+        print("ERROR: worker reuse kernel context creation failed")
+        return True
+
+    # Warm first, so the pool has grown to n_threads before the count is taken
+    prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+    before = lib.pk_worker_thread_count()
+    for _ in range(batches):
+        if prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads) is None:
+            print("ERROR: worker reuse batch call failed")
+            return True
+    grew = lib.pk_worker_thread_count() - before
+
+    if grew:
+        print("ERROR: {} batches at {} threads started {} more workers - they should be reused, not restarted per call".format(batches, n_threads, grew))
+        return True
+    print("Worker reuse: {} batches at {} threads started 0 further workers".format(batches, n_threads))
+    return False
+
+
+def compare_batch_to_reference(label, batched, reference):
+    """Compare a batch's results against a per-job pk_run reference, returns True on failure"""
+    failed = False
+    for index, (result_tuple, soc_range_min, soc_range_max) in enumerate(batched):
+        single, (expect_min, expect_max) = reference[index]
+        if result_tuple is None:
+            print("ERROR: {} job {} reported a non-zero status".format(label, index))
+            failed = True
+            continue
+        for field, name in enumerate(RESULT_NAMES):
+            if result_tuple[field] != single[field]:
+                print("ERROR: {} job {} differs on {}: got {} want {}".format(label, index, name, result_tuple[field], single[field]))
+                failed = True
+        if soc_range_min != expect_min or soc_range_max != expect_max:
+            print("ERROR: {} job {} SoC range {} {} want {} {}".format(label, index, soc_range_min, soc_range_max, expect_min, expect_max))
+            failed = True
+    return failed
+
+
+def run_pool_lane_tests(my_predbat):
+    """Check lane allocation across batch and pool sizes, returns True on failure.
+
+    The pool is sized by the largest thread count it has been asked for and never shrinks, so most
+    batches use fewer lanes than there are workers - the median batch is six jobs against a pool built
+    for more. Idle workers must sit out without touching the completion count, and a batch must never
+    wait on a lane that was never dispatched. These combinations walk a batch smaller than the pool,
+    the pool growing, the pool being asked for less than it has, and the single-job and single-thread
+    bypasses.
+    """
+    print("**** Running kernel pool lane tests ****")
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(2468), 8)
+    if not prediction.kernel_handle:
+        print("ERROR: pool lane kernel context creation failed")
+        return True
+    reference = build_batch_reference(prediction, jobs)
+
+    failed = False
+    for n_threads, n_jobs in ((16, 3), (8, 8), (2, 8), (16, 8), (4, 1), (1, 8), (3, 8)):
+        subset = jobs[:n_jobs]
+        batched = prediction_kernel.run_prediction_kernel_batch(prediction, subset, n_threads)
+        if batched is None:
+            print("ERROR: pool lane batch failed at {} threads {} jobs".format(n_threads, n_jobs))
+            return True
+        failed |= compare_batch_to_reference("threads={} jobs={}".format(n_threads, n_jobs), batched, reference[:n_jobs])
+
+    if not failed:
+        print("Pool lanes: 7 thread/job combinations all bit-identical to pk_run")
+    return failed
+
+
+def run_pool_concurrency_tests(my_predbat, rounds=400, n_threads=8):
+    """Check two Python threads can dispatch batches at once, returns True on failure.
+
+    ctypes releases the GIL, so predbat could enter pk_run_batch from two threads simultaneously. One
+    shared pool cannot serve two batches at once - the published job pointers would race - so dispatch
+    is serialised by a mutex. Nothing does this today, which is why it needs a test rather than an
+    assumption: each thread checks its own job set against its own reference, so a crossed batch shows
+    up as wrong values, not just a crash.
+
+    The round count is load-bearing and was chosen by mutation, not taste. With the dispatch mutex
+    deleted, 25 rounds over 4 lanes passes happily - the GIL keeps the two callers from overlapping
+    often enough for the race to land - while 400 rounds over 8 lanes deadlocks within seconds and is
+    caught by the join timeout below. The healthy case costs no measurable time either way, so do not
+    trim these numbers to make the suite look faster.
+    """
+    print("**** Running kernel pool concurrency tests ****")
+    sets = []
+    for seed in (11, 22):
+        prediction, jobs = build_batch_jobs(my_predbat, random.Random(seed), 6)
+        if not prediction.kernel_handle:
+            print("ERROR: pool concurrency kernel context creation failed")
+            return True
+        sets.append((prediction, jobs, build_batch_reference(prediction, jobs)))
+
+    errors = []
+
+    def hammer(label, prediction, jobs, reference):
+        """Run many batches on one context and record any mismatch against its own reference"""
+        for _ in range(rounds):
+            batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+            if batched is None:
+                errors.append("{}: batch call failed".format(label))
+                return
+            if compare_batch_to_reference(label, batched, reference):
+                errors.append("{}: result mismatch".format(label))
+                return
+
+    workers = [threading.Thread(target=hammer, args=("concurrent-{}".format(n), prediction, jobs, reference)) for n, (prediction, jobs, reference) in enumerate(sets)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=120)
+    for worker in workers:
+        if worker.is_alive():
+            print("ERROR: concurrent dispatch did not finish within 120s - suspect a deadlock")
+            return True
+
+    if errors:
+        for error in errors:
+            print("ERROR: {}".format(error))
+        return True
+    print("Pool concurrency: 2 threads x {} batches, all bit-identical to pk_run".format(rounds))
+    return False
+
+
+def run_pool_fork_tests(my_predbat, n_threads=4, timeout_s=60):
+    """Check a batch still runs in a forked child, returns True on failure.
+
+    Threads do not survive fork(), so a child inherits a pool whose workers do not exist. Without the
+    pthread_atfork handler that drops the pool, the child's first batch waits forever on lanes that
+    will never report - a hang, not a crash, which is why this test kills the child on a deadline and
+    treats the timeout as the failure rather than waiting on it.
+    """
+    print("**** Running kernel pool fork tests ****")
+    if not hasattr(os, "fork"):
+        print("SKIP: platform has no fork()")
+        return False
+
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(3690), 6)
+    if not prediction.kernel_handle:
+        print("ERROR: pool fork kernel context creation failed")
+        return True
+    reference = build_batch_reference(prediction, jobs)
+
+    # Warm the pool in the parent, so the child inherits one whose workers are gone
+    if prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads) is None:
+        print("ERROR: pool fork parent warm-up batch failed")
+        return True
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
+        # Child: os._exit throughout, so the parent's buffers are never flushed twice
+        try:
+            batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+            if batched is None:
+                os._exit(3)
+            os._exit(1 if compare_batch_to_reference("fork-child", batched, reference) else 0)
+        except BaseException:
+            os._exit(2)
+
+    deadline = time.time() + timeout_s
+    status = None
+    while time.time() < deadline:
+        waited, raw_status = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            status = raw_status
+            break
+        time.sleep(0.05)
+
+    if status is None:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        print("ERROR: forked child did not finish within {}s - the inherited pool deadlocked".format(timeout_s))
+        return True
+    if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+        print("ERROR: forked child exited with status {} (1 = mismatch, 2 = exception, 3 = batch failed)".format(status))
+        return True
+
+    print("Pool fork: a batch in a forked child matched pk_run")
+    return False
+
+
 def run_kernel_parity_tests(my_predbat):
     """Compare the C++ prediction kernel against the Python engine, returns True on failure"""
     print("**** Running kernel parity tests ****")
@@ -1243,6 +1450,14 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_scratch_reuse_tests(my_predbat)
         if not failed:
             failed |= run_scratch_cross_context_tests(my_predbat)
+        if not failed:
+            failed |= run_worker_reuse_tests(my_predbat)
+        if not failed:
+            failed |= run_pool_lane_tests(my_predbat)
+        if not failed:
+            failed |= run_pool_concurrency_tests(my_predbat)
+        if not failed:
+            failed |= run_pool_fork_tests(my_predbat)
     finally:
         restore_scenario_state(my_predbat, state)
 

@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <limits>
 #include <cstdio>
@@ -28,6 +29,10 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <pthread.h>
+#endif
 
 #define PK_ABI_VERSION 3
 #define PK_PARITY_REVISION 5
@@ -306,6 +311,11 @@ struct PkBatchResult {
 // Counts PkScratch constructions for the life of the library, for pk_scratch_construct_count(). The
 // suite asserts this stops growing with the number of batches rather than trusting the reuse.
 std::atomic<int64_t> g_scratch_constructions{0};
+
+// Counts worker threads started for the life of the library, for pk_worker_thread_count(). Thread
+// creation measured 7.5us each and a benchmark plan used to start 201,545 of them - 1.5s of a 26s
+// plan, which is what the pool exists to stop paying. The suite asserts this stops growing.
+std::atomic<int64_t> g_worker_threads_started{0};
 
 struct PkScratch {
     std::vector<int32_t> charge_member, export_member;
@@ -1342,6 +1352,170 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, scratch);
 }
 
+
+// A pool of worker threads that outlives every batch and every context.
+//
+// pk_run_batch used to build and join a fresh std::vector<std::thread> per call. Measured over one
+// benchmark plan that was 201,545 thread creations costing 1.5s - against 3.1s of simulation, so the
+// creation cost was cancelling most of what the parallelism won and threading measured 1.6% overall.
+// Parking workers on a condition variable replaces each creation with a wake.
+//
+// Workers park until `generation` changes, then take lane `index` of a stride partition. The calling
+// thread takes lane 0 itself, so a six-job batch wakes five workers rather than six and the caller
+// does useful work instead of blocking. Nobody holds the mutex while simulating; run_batch_job only
+// reads the shared const context and writes its own result slot, which is what made the previous
+// per-call threading safe and is unchanged here.
+class PkThreadPool {
+  public:
+    // Start workers until at least `want` exist. Grows, never shrinks. Returns how many there are.
+    int32_t reserve_workers(int32_t want)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        while (static_cast<int32_t>(workers.size()) < want) {
+            const int32_t lane = static_cast<int32_t>(workers.size()) + 1;  // lane 0 is the caller
+            std::unique_ptr<Worker> worker(new Worker());
+            try {
+                worker->thread = std::thread(&PkThreadPool::worker_loop, this, lane, worker.get());
+            } catch (const std::system_error &) {
+                // Out of thread resources - keep what we have and let the caller use fewer lanes.
+                break;
+            }
+            workers.push_back(std::move(worker));
+            g_worker_threads_started.fetch_add(1, std::memory_order_relaxed);
+        }
+        return static_cast<int32_t>(workers.size());
+    }
+
+    // Run jobs[0..n_jobs) across `use` lanes, the calling thread taking lane 0. `use` must be at
+    // least 1 and no more than worker_count() + 1.
+    void run(const ContextStore *c, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t use)
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            cur_ctx = c;
+            cur_jobs = jobs;
+            cur_results = results;
+            cur_n_jobs = n_jobs;
+            cur_use = use;
+            outstanding = use - 1;
+            // Each worker has its own flag and its own condition variable, so exactly the lanes this
+            // batch needs are woken. Broadcasting instead would wake every worker in the pool - with
+            // a median batch of six jobs against sixteen workers that was ~250,000 wakeups per plan
+            // spent entirely on threads that immediately went back to sleep.
+            for (int32_t lane = 1; lane < use; lane++) {
+                workers[lane - 1]->has_work = true;
+            }
+        }
+        for (int32_t lane = 1; lane < use; lane++) {
+            workers[lane - 1]->ready.notify_one();
+        }
+
+        PkScratch &scratch = thread_scratch();
+        for (int32_t i = 0; i < n_jobs; i += use) {
+            run_batch_job(c, jobs[i], results[i], scratch);
+        }
+
+        std::unique_lock<std::mutex> lock(mutex);
+        work_done.wait(lock, [this] { return outstanding == 0; });
+    }
+
+  private:
+    // One parked worker. The flag is written under the pool mutex before its condition variable is
+    // signalled, so a wake cannot be lost even if the worker has not re-parked yet.
+    struct Worker {
+        std::condition_variable ready;
+        bool has_work = false;
+        std::thread thread;
+    };
+
+    void worker_loop(int32_t lane, Worker *self)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        for (;;) {
+            self->ready.wait(lock, [self] { return self->has_work; });
+            self->has_work = false;
+            const ContextStore *c = cur_ctx;
+            const PkBatchJob *jobs = cur_jobs;
+            PkBatchResult *results = cur_results;
+            const int32_t n_jobs = cur_n_jobs;
+            const int32_t use = cur_use;
+            lock.unlock();
+
+            PkScratch &scratch = thread_scratch();
+            for (int32_t i = lane; i < n_jobs; i += use) {
+                run_batch_job(c, jobs[i], results[i], scratch);
+            }
+
+            lock.lock();
+            if (--outstanding == 0) {
+                work_done.notify_one();
+            }
+        }
+    }
+
+    std::mutex mutex;
+    std::condition_variable work_done;  // the caller waits here
+    const ContextStore *cur_ctx = nullptr;
+    const PkBatchJob *cur_jobs = nullptr;
+    PkBatchResult *cur_results = nullptr;
+    int32_t cur_n_jobs = 0;
+    int32_t cur_use = 1;
+    int32_t outstanding = 0;
+    std::vector<std::unique_ptr<Worker>> workers;
+};
+
+// The pool is created on first threaded use and deliberately never destroyed: a static destructor
+// running while CPython tears the process down risks a deadlock for no benefit, and the OS reclaims
+// the threads at exit.
+std::atomic<PkThreadPool *> g_pool{nullptr};
+std::mutex g_pool_create_mutex;
+// Held for a whole batch. Python can enter pk_run_batch from two threads at once because ctypes
+// releases the GIL, and one shared pool cannot serve two batches concurrently - its published job
+// state would race. Nothing in predbat does this today; serialising is the safe answer if it ever does.
+std::mutex g_dispatch_mutex;
+
+#if defined(__unix__) || defined(__APPLE__)
+// Threads do not survive fork(), so a child would inherit a pool whose workers do not exist and hang
+// waiting for them. The prepare/parent pair keep the dispatch mutex consistent across the fork, and
+// the child drops the pool so its next batch builds a fresh one. Nothing here allocates or takes a
+// new lock, which is what the child handler is allowed to do; the dead pool leaks in the child.
+void pk_atfork_prepare()
+{
+    g_dispatch_mutex.lock();
+}
+
+void pk_atfork_parent()
+{
+    g_dispatch_mutex.unlock();
+}
+
+void pk_atfork_child()
+{
+    g_dispatch_mutex.unlock();
+    g_pool.store(nullptr, std::memory_order_relaxed);
+}
+#endif
+
+// Fetch the pool, creating it on first use.
+static PkThreadPool *pool_singleton()
+{
+    PkThreadPool *pool = g_pool.load(std::memory_order_acquire);
+    if (pool) {
+        return pool;
+    }
+    std::lock_guard<std::mutex> lock(g_pool_create_mutex);
+    pool = g_pool.load(std::memory_order_relaxed);
+    if (!pool) {
+#if defined(__unix__) || defined(__APPLE__)
+        static std::once_flag atfork_once;
+        std::call_once(atfork_once, [] { pthread_atfork(pk_atfork_prepare, pk_atfork_parent, pk_atfork_child); });
+#endif
+        pool = new PkThreadPool();
+        g_pool.store(pool, std::memory_order_release);
+    }
+    return pool;
+}
+
 // Run n_jobs scenarios against one context in a single call.
 //
 // The context lookup and the Python/C boundary are paid once for a whole fan-out rather than once
@@ -1363,20 +1537,20 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
     // Scenarios are independent - each reads the shared const context and writes only its own result
     // slot - so they are split across threads by stride.
     if (n_threads > 1 && n_jobs > 1) {
-        const int32_t use = n_threads < n_jobs ? n_threads : n_jobs;
-        std::vector<std::thread> pool;
-        pool.reserve(use);
-        for (int32_t t = 0; t < use; t++) {
-            pool.emplace_back([c, jobs, results, n_jobs, use, t]() {
-                for (int32_t i = t; i < n_jobs; i += use) {
-                    run_batch_job(c, jobs[i], results[i], thread_scratch());
-                }
-            });
+        std::lock_guard<std::mutex> dispatch(g_dispatch_mutex);
+        int32_t use = n_threads < n_jobs ? n_threads : n_jobs;
+        PkThreadPool *pool = pool_singleton();
+        // Clamp to the lanes that actually exist: reserve_workers stops early if the system refuses a
+        // thread, and a batch must never wait on a worker that was never started.
+        const int32_t lanes = pool->reserve_workers(use - 1) + 1;
+        if (use > lanes) {
+            use = lanes;
         }
-        for (auto &th : pool) {
-            th.join();
+        if (use > 1) {
+            pool->run(c, jobs, n_jobs, results, use);
+            return 0;
         }
-        return 0;
+        // No workers available - fall through and run the batch inline.
     }
     for (int32_t i = 0; i < n_jobs; i++) {
         run_batch_job(c, jobs[i], results[i], thread_scratch());
@@ -1393,6 +1567,17 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
 int64_t pk_scratch_construct_count(void)
 {
     return g_scratch_constructions.load(std::memory_order_relaxed);
+}
+
+
+// Test hook: how many worker threads have been started since the library was loaded.
+//
+// Batches used to build and join a fresh set of threads on every call. The suite asserts this count
+// stops growing once the pool is warm, because a thread creation costs several microseconds against
+// a median batch of six jobs - it was cancelling the parallelism it was there to provide.
+int64_t pk_worker_thread_count(void)
+{
+    return g_worker_threads_started.load(std::memory_order_relaxed);
 }
 
 
