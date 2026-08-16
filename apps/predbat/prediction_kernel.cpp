@@ -27,6 +27,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+// std::system_error, thrown when the system refuses a thread. libc++ pulls this in through <thread>,
+// libstdc++ does not, so leaving it implicit builds on macOS and fails on GCC.
+#include <system_error>
 #include <thread>
 #include <vector>
 
