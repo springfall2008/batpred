@@ -997,14 +997,14 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
     """
     reset_sample_state(predbat)
 
-    # calculate_plan() spins up a multiprocessing Pool sized from args["threads"] (plan.py)
-    # unless it is exactly 0. The annual tool plans hundreds of individual days per run, each a
-    # small, fast calculation, so per-day pool creation is both wasted overhead and, on a
-    # spawn-based multiprocessing start method, unsafe: pool workers read the module-level
-    # PRED_GLOBAL dict in prediction.py, which is only populated in the parent process. This
-    # matches create_headless_predbat()'s own choice for a fully offline run; it is forced here
-    # too so run_day() behaves the same way against a caller-supplied PredBat instance (such as
-    # the standard unit test fixture) that has not gone through that bootstrap.
+    # calculate_plan() sizes the C++ kernel's batch thread count from args["threads"] (plan.py); it
+    # no longer spins up a Python multiprocessing Pool. pk_run_batch creates and joins its own
+    # std::thread pool fresh on every call, so leaving threads at its 'auto' default would pay that
+    # creation cost on each of the hundreds of small, fast per-day calculations the annual tool runs
+    # - overhead a plan this size cannot recoup. This matches create_headless_predbat()'s own choice
+    # for a fully offline run; it is forced here too so run_day() behaves the same way against a
+    # caller-supplied PredBat instance (such as the standard unit test fixture) that has not gone
+    # through that bootstrap.
     predbat.args["threads"] = 0
 
     predbat.midnight_utc = midnight_utc
@@ -1231,6 +1231,12 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     predbat.soc_kw = START_SOC_KWH
     predbat.pv_forecast_minute = forecast_pv
     predbat.pv_forecast_minute10 = p10_pv
+    # Open-Meteo gives this model a forecast and a monthly P10 ratio but no P90 series, so the
+    # pv90 (upside) scenario runs on the same PV as nominal - its upside comes from load_scaling90
+    # alone. This must be assigned explicitly on every sampled day: one PredBat instance is reused
+    # for the whole year (see AnnualRun), so leaving it to calculate_plan()'s fallback would pin
+    # every later day's "upside" to the first sampled day's solar profile.
+    predbat.pv_forecast_minute90 = dict(forecast_pv)
     predbat.calculate_plan(recompute=True, debug_mode=False, publish=False)
 
     # Swap in the actuals before costing. There is no forecast/actual split for load (only PV

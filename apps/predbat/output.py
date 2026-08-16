@@ -52,6 +52,17 @@ REASON_TEMPLATES = {
 }
 
 
+def yesterday_slot_is_exporting(slot_status):
+    """True when a historical ``predbat.status`` string (already lower-cased) represents export
+    activity for the "yesterday" plan reconstruction in ``calculate_yesterday()``.
+
+    Includes "cross-charging" explicitly - it genuinely straddles both sides of the fleet at once,
+    but as a string it contains "charging" and not "exporting", so a plain substring check on
+    "exporting" alone would silently drop the export half of a real cross-charging slot.
+    """
+    return "exporting" in slot_status or "cross-charging" in slot_status
+
+
 class Output:
     """Output and sensor publishing mixin.
 
@@ -1832,9 +1843,10 @@ class Output:
         battery_level_midnight = self.soc_kwh_history.get(self.minutes_now, 0)
         battery_change_hour = battery_level_now - battery_level_hour
         battery_change_midnight = battery_level_now - battery_level_midnight
-        rate_min = self.rate_min_forward.get(self.minutes_now, self.rate_min) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
-        rate_export_min = self.rate_export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        rate_forward = max(rate_min, 1.0, rate_export_min)
+        # Shared with the planner's own metric so the reported battery value matches the plan it
+        # reports on. This previously omitted the rate_max ceiling that battery_value_rate applies,
+        # which over-valued the battery here relative to the plan on flat or near-flat tariffs.
+        rate_forward = self.battery_value_rate(self.minutes_now)
         value_increase_hour = battery_change_hour * rate_forward * self.metric_battery_value_scaling
         value_increase_day = battery_change_midnight * rate_forward * self.metric_battery_value_scaling
 
@@ -2548,6 +2560,7 @@ class Output:
         """
         load_total_pred = 0
         load_total_pred_now = 0
+        load_total_pred_day = 0
         car_total_pred = 0
         car_total_actual = 0
         car_value_pred = 0
@@ -2556,7 +2569,7 @@ class Output:
         actual_total_today = 0
         import_ignored_load_pred = 0
         import_ignored_load_actual = 0
-        load_predict_stamp = {}
+        load_predict_day_stamp = {}
         load_actual_stamp = {}
         load_predict_data = {}
         total_forecast_value_pred = 0
@@ -2587,14 +2600,58 @@ class Output:
             load_value_pred += forecast_value_pred
             load_value_pred_raw += forecast_value_pred
 
-            # Ignore periods of import as assumed to be deliberate (battery charging periods overnight for example)
+            # Consistently-scaled prediction for THIS minute, applying load_scaling,
+            # load_scaling_dynamic, and manual_load_adjust the same way whether the minute is
+            # in the past or future. This feeds load_total_pred_day below, which is the sole
+            # source for load_energy_predicted's state/today/today_so_far/today_remaining/results
+            # (batpred#4496 follow-up). Using it consistently across the whole day is what makes
+            # that "predicted" total (and its chart) stay flat as minutes_now advances - it isn't
+            # meant to reflect what actually happened today, only the model's day-ahead forecast
+            # under today's scaling settings, so every bucket needs the same treatment regardless
+            # of whether it has elapsed yet.
+            manual_adjust_day = 0.0
+            if self.manual_load_adjust:
+                manual_adjust_day = self.manual_load_adjust.get(minute, 0) * step / float(self.plan_interval_minutes)
+                manual_adjust_day = max(manual_adjust_day, -load_value_pred)
+            scaling_dynamic_day = self.load_scaling_dynamic.get(minute, 1.0) if self.load_scaling_dynamic else 1.0
+            load_value_pred_day = (load_value_pred + manual_adjust_day) * self.load_scaling * scaling_dynamic_day
+
+            # For FUTURE minutes only, apply load_scaling, load_scaling_dynamic, and
+            # manual_load_adjust so the published today_remaining attribute matches
+            # step_data_history() (fetch.py), which the plan itself uses to build
+            # load_minutes_step as (value + load_extra) * scaling_dynamic * scale_fixed, where
+            # load_extra includes manual_load_adjust, scaling_dynamic is load_scaling_dynamic,
+            # and scale_fixed includes the flat load_scaling. load_scaling_dynamic carries
+            # saving-session/free-electricity-event scaling as well as any per-window override
+            # from rates_import_override/the manual API (e.g. a "power up" event) - a first pass
+            # at this fix (#4506) only applied the flat load_scaling and missed both of these,
+            # confirmed against a real follow-up report on issue #4496 where a 1.5x
+            # load_scaling_dynamic override for a 2-hour power-up event wasn't reflected in
+            # today_remaining at all.
+            #
+            # Minutes already elapsed today are deliberately left untouched here: load_total_pred
+            # and load_total_pred_now below feed the actual-vs-predicted divergence ratio, which
+            # compares actual consumption against the raw model, not an adjusted one.
+            if minute >= minutes_now:
+                load_value_pred += manual_adjust_day
+                load_value_pred_raw += manual_adjust_day
+
+                load_value_pred *= self.load_scaling * scaling_dynamic_day
+                load_value_pred_raw *= self.load_scaling * scaling_dynamic_day
+
+            # Track (but no longer exclude) periods where import exceeds raw load, assumed to
+            # include deliberate battery charging (overnight for example). The house's own load
+            # during that minute was still genuinely consumed regardless of how much extra was
+            # imported to charge the battery, so it stays in the actual/predicted totals - only
+            # the import beyond that load was going to the battery, not the load itself.
+            # Previously this zeroed the whole bucket's load out of both totals, which silently
+            # dropped real consumption on any install that routinely grid-charges overnight
+            # (batpred#4154, #2537).
             car_value_actual = load_value_today_raw - load_value_today
             car_value_pred = load_value_pred_raw - load_value_pred
             if minute < minutes_now and import_value_today >= load_value_today_raw:
-                import_ignored_load_actual += load_value_today
-                load_value_today = 0
-                import_ignored_load_pred += load_value_pred
-                load_value_pred = 0
+                import_ignored_load_actual += import_value_today - load_value_today_raw
+                import_ignored_load_pred += import_value_today - load_value_today_raw
 
             # Only count totals until now
             if minute < minutes_now:
@@ -2608,6 +2665,7 @@ class Output:
                 actual_total_today += load_value_pred
 
             load_total_pred += load_value_pred
+            load_total_pred_day += load_value_pred_day
             total_forecast_value_pred += forecast_value_pred
 
             load_predict_data[minute] = load_value_pred
@@ -2615,7 +2673,7 @@ class Output:
             # Store for charts
             minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute)
             stamp = minute_timestamp.strftime(TIME_FORMAT)
-            load_predict_stamp[stamp] = dp3(load_total_pred)
+            load_predict_day_stamp[stamp] = dp3(load_total_pred_day)
             load_actual_stamp[stamp] = dp3(actual_total_today)
 
         # Fetch yesterday's in-day adjustment factor from history
@@ -2718,8 +2776,8 @@ class Output:
                     "icon": "mdi:percent",
                 },
             )
-        load_so_far = self.filtered_today(load_predict_stamp, stamp=self.now_utc)
-        load_today = self.filtered_today(load_predict_stamp)
+        load_so_far = self.filtered_today(load_predict_day_stamp, stamp=self.now_utc)
+        load_today = self.filtered_today(load_predict_day_stamp)
         load_today_remaining = None
         if (load_so_far is not None) and (load_today is not None):
             load_today_remaining = load_today - load_so_far
@@ -2727,9 +2785,9 @@ class Output:
         if save:
             self.dashboard_item(
                 self.prefix + ".load_energy_predicted",
-                state=dp3(load_total_pred),
+                state=dp3(load_total_pred_day),
                 attributes={
-                    "results": self.filtered_times(load_predict_stamp),
+                    "results": self.filtered_times(load_predict_day_stamp),
                     "today": dp2(load_today) if load_today is not None else 0.0,
                     "today_so_far": dp2(load_so_far) if load_so_far is not None else 0.0,
                     "today_remaining": dp2(load_today_remaining) if load_today_remaining is not None else 0.0,
@@ -3136,7 +3194,10 @@ class Output:
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     real_minute = minute + slot_offset
 
-                    if "exporting" in slot_status:
+                    # Cross-charging genuinely straddles both sides - track it as both an exporting
+                    # and a charging slot (its name contains "charging" but not "exporting"), so
+                    # these are independent "if"s rather than "if/elif".
+                    if yesterday_slot_is_exporting(slot_status):
                         export_during_slot = slot_status
                         if export_start_minute is None:
                             export_start_minute = real_minute
@@ -3144,7 +3205,7 @@ class Output:
                                 export_start_minute -= 5
                             if charge_start_minute is not None:
                                 charge_end_minute = export_start_minute
-                    elif "charging" in slot_status:
+                    if "charging" in slot_status:
                         charge_during_slot = slot_status
                         if charge_start_minute is None:
                             charge_start_minute = real_minute
@@ -3159,7 +3220,7 @@ class Output:
                 if charge_end_minute is None and charge_start_minute is not None:
                     charge_end_minute = minute + self.plan_interval_minutes
 
-                if "exporting" in export_during_slot:
+                if yesterday_slot_is_exporting(export_during_slot):
                     # Assume exporting at this time
                     self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
                     if "freeze" in export_during_slot:

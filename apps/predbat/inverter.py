@@ -154,6 +154,18 @@ class Inverter:
         self.reserve_percent = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.reserve_percent_current = self.base.get_arg("battery_min_soc", default=4.0, index=self.id, required_unit="%")
         self.battery_scaling = self.base.get_arg("battery_scaling", default=1.0, index=self.id)
+        if not self.battery_scaling or self.battery_scaling <= 0:
+            # A parsed value of exactly 0 (or negative) isn't safe to interpret either way - it could
+            # be a flaky/unavailable API response (e.g. Solis Cloud API returning batteryHealthSoh: 0
+            # during an outage) or a genuinely unhealthy battery, and asserting either "fully healthy"
+            # (1.0) or "no capacity" (0) would be guessing. Retain the last value that was actually
+            # read as valid, rather than inventing one; only fall back to 1.0 if nothing valid has
+            # ever been read for this inverter.
+            last_known = self.base.get_arg("battery_scaling_last_known", default=1.0, index=self.id)
+            self.log("Warn: Inverter {} battery_scaling read as {} which is not a valid scaling factor, retaining last known value {} for this cycle".format(self.id, self.battery_scaling, last_known))
+            self.battery_scaling = last_known
+        else:
+            self.base.set_arg("battery_scaling_last_known", self.battery_scaling, index=self.id)
         self.battery_scaling_config = self.battery_scaling
 
         self.reserve_max = 100
@@ -1140,7 +1152,11 @@ class Inverter:
                 else:
                     search_range = range(99, 85, -1)
 
-                # Find 100% end points
+                # Find 100% end points. The exact-match checks below ("Charging" / "Exporting",
+                # "Discharging") deliberately exclude "Cross-charging" minutes - during genuine
+                # cross-charging another inverter is simultaneously drawing/feeding power at the
+                # same time, so this inverter's battery_power reading isn't a clean single-inverter
+                # charge/discharge sample and would corrupt the learned curve if included.
                 for data_point in search_range:
                     for minute in range(1, min_len):
                         # Start trigger is when the SoC just increased above the data point
@@ -1831,12 +1847,18 @@ class Inverter:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
                 if "charge_rate_percent" in self.base.args:
                     self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
-                if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", new_rate)
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} charge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/charge_rate", payload=new_rate)
+
+        # Re-assert the timed current register on every call, not just when charge_rate itself
+        # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
+        # the pattern used for the charge window time registers in adjust_charge_window(): call
+        # every cycle and let write_and_poll_value()'s own read-compare decide whether a write is
+        # actually needed, which is a no-op when nothing has drifted.
+        if not self.rest_data and self.inv_output_charge_control == "current":
+            self.set_current_from_power("charge", new_rate)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
@@ -1869,12 +1891,18 @@ class Inverter:
                     self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
                 if "discharge_rate_percent" in self.base.args:
                     self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
-                if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", new_rate)
 
             if notify and self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} discharge rate changes to {}W at {}".format(self.id, new_rate, self.base.time_now_str()))
             self.mqtt_message(topic="set/discharge_rate", payload=new_rate)
+
+        # Re-assert the timed current register on every call, not just when discharge_rate itself
+        # changes - it's a separate register that can drift/reset independently (#4415). Mirrors
+        # the pattern used for the charge window time registers in adjust_charge_window(): call
+        # every cycle and let write_and_poll_value()'s own read-compare decide whether a write is
+        # actually needed, which is a no-op when nothing has drifted.
+        if not self.rest_data and self.inv_output_charge_control == "current":
+            self.set_current_from_power("discharge", new_rate)
 
     def adjust_battery_target(self, soc, isCharging=False, isExporting=False):
         """
@@ -2499,13 +2527,18 @@ class Inverter:
         if force_export:
             target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
-                if "raw" in self.rest_data and "invertor" in self.rest_data["raw"] and "discharge_target_soc_1" in self.rest_data["raw"]["invertor"]:
-                    current = self.rest_data["raw"]["invertor"]["discharge_target_soc_1"]
-                    try:
-                        current = float(current)
-                    except (ValueError, TypeError) as e:
-                        current = None
-
+                # AC Coupled inverters don't have a working Discharge_Target_SOC_1 register - GivTCP
+                # still reports a write as successful, but it never persists between cycles, so the
+                # caller sees a permanent mismatch and rewrites indefinitely (#4517). Confirmed
+                # against GivEnergy's own firmware archive (github.com/DJBenson/giv-firmware): "AC
+                # Coupled" is a single product line with exactly two firmware releases ever published
+                # (D212-A212, A214-D214) - not an early/late generational split the way Hybrid has
+                # Gen1/2/3 - so there's no newer AC-coupled variant this would need to keep working for.
+                inverter_model = self.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+                if inverter_model == "Ac":
+                    self.log("Inverter {} is AC Coupled, discharge target register not supported, export target not written".format(self.id))
+                else:
+                    current = self.rest_readDischargeTarget()
                     if current is None:
                         self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
                     elif current != target_soc:
@@ -2700,7 +2733,12 @@ class Inverter:
 
     def set_current_from_power(self, direction, power):
         """
-        Set the timed charge/discharge current setting by converting power to current
+        Set the timed charge/discharge current setting by converting power to current.
+
+        Called on every adjust_charge_rate()/adjust_discharge_rate() invocation, not just when
+        the power target itself changes - this register can drift or get reset independently
+        (#4415). write_and_poll_value() already no-ops when the live value already matches, so
+        this is cheap when nothing has drifted.
         """
         new_current = round(power / self.battery_voltage, self.inv_current_dp)
         self.write_and_poll_value(f"timed_{direction}_current", self.base.get_arg(f"timed_{direction}_current", indirect=False, index=self.id), new_current, fuzzy=1)
@@ -2811,10 +2849,17 @@ class Inverter:
             self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
 
             # Start discharge or discharge freeze
-            if target_soc == self.soc_percent or freeze:
+            # Only the caller's explicit freeze request should invoke discharge_freeze_service -
+            # reaching the target by ordinary export (target_soc == self.soc_percent with no
+            # freeze) is not a deliberate freeze, it just means there's nothing left to discharge,
+            # so it belongs with the "target already at/above current SoC" stop case below.
+            # Conflating the two used to fire discharge_freeze_service (and any automation wired
+            # to it) whenever export naturally reached its target, regardless of set_export_freeze
+            # (batpred#4464).
+            if freeze:
                 if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge", extra_data=extra_data):
                     self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
-            elif target_soc > self.soc_percent:
+            elif target_soc >= self.soc_percent:
                 self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge")
             else:
                 self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
@@ -3380,10 +3425,45 @@ class Inverter:
         self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
         return False
 
+    def rest_readDischargeTarget(self):
+        """
+        Read GivTCP's currently applied discharge target percent, or None if it can't be read.
+
+        Mirrors rest_setDischargeTarget()'s own preference order: Control.Discharge_Target_SOC_1 is
+        GivTCP's synchronous write-time signal, updated the moment a write is accepted, so it's
+        checked first. raw.invertor.discharge_target_soc_1 is a fallback for GivTCP setups where
+        Control doesn't expose the key - but on its own it's unreliable as a "did this actually
+        change" signal, since it only refreshes on GivTCP's separate background self_run poll cycle,
+        not synchronously with any write. A caller that reads raw.invertor alone to decide whether a
+        write is even needed can end up re-writing every cycle on hardware where that field never
+        catches up (#4421, #4517).
+        """
+        if not isinstance(self.rest_data, dict):
+            return None
+        try:
+            result = int(float(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None)))
+        except (ValueError, TypeError):
+            result = None
+        if result is None:
+            try:
+                result = int(float(self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None)))
+            except (ValueError, TypeError):
+                result = None
+        return result
+
     def rest_setDischargeTarget(self, target):
         """
         Configure discharge to percent via REST
         """
+
+        def to_int(value):
+            """GivTCP reports these as strings, so coerce before comparing or a successful write
+            reads back as '4' and never matches the int target."""
+            try:
+                return int(float(value))
+            except (ValueError, TypeError):
+                return None
+
         target = int(target)
         url = self.rest_api + "/setDischargeTarget"
         data = {"dischargeToPercent": target, "slot": 1}
@@ -3391,14 +3471,21 @@ class Inverter:
 
         for retry in range(INVERTER_MAX_RETRY_REST):
             r = self.rest_postCommand(url, json=data)
+            # GivTCP's write handler updates Control.Discharge_Target_SOC_1 synchronously the
+            # moment it accepts the command (confirmed against GivTCP's own source - write.py's
+            # setDischargeTarget() calls updateControlCache() straight after the Modbus write), so
+            # it's checked first. raw.invertor.discharge_target_soc_1 is kept as a fallback, but on
+            # its own it's an unreliable signal: it only refreshes on GivTCP's separate background
+            # self_run poll cycle, which can be tens of seconds away, not synchronous with this
+            # POST at all (#4421). A short settle delay still helps for the much smaller residual
+            # gap - the physical inverter itself taking a moment to apply the write, which a
+            # same-moment self_run poll could otherwise briefly overwrite Control with a stale read
+            # of.
+            self.sleep(1)
             self.rest_data = self.rest_runAll(self.rest_data)
-            # GivTCP reports the raw registers as strings, so coerce before comparing or a
-            # successful write reads back as '4' and never matches the int target
-            result = self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None)
-            try:
-                result = int(float(result))
-            except (ValueError, TypeError):
-                result = None
+            result = to_int(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None))
+            if result != target:
+                result = to_int(self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None))
             if result == target:
                 self.count_register_writes += 1
                 self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))

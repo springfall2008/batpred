@@ -392,7 +392,11 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
-    if not can_modify_history:
+    # The glitch filter below is the only code here that writes to history, and it only runs for
+    # backwards incrementing data, so that is the only case worth copying for. Copying regardless
+    # cost ~150k deepcopy calls on a plan cycle for the two calculate_yesterday calls alone, neither
+    # of which asks for the filter. can_modify_history stays the caller's explicit opt-out on top.
+    if clean_increment and backwards and not can_modify_history:
         history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
@@ -989,67 +993,86 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
+def clone_windows(windows):
+    """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
+
+    Window dicts never hold nested mutable values, so copying each dict is equivalent to
+    copy.deepcopy(windows) here but far cheaper - deepcopy's generic recursive walk measured
+    ~275us per call on a typical export_window, this is a few us.
+    """
+    return [w.copy() for w in windows]
+
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows
+
+    This runs on every simulation (see Prediction.run_prediction and run_prediction_kernel), so it
+    sits in front of the C++ kernel on the hot path and only does the work that can change something:
+
+    - only export windows that are enabled (limit < 100) can clip anything, so they are collected
+      once and the function returns immediately when there are none
+    - only charge windows that are enabled (limit > 0) can be clipped, so a disabled one
+      short-circuits instead of being scanned against every export window
+
+    Clipping is a single pass. Export windows are processed in start order, so when a charge window
+    is split the head segment it emits ends at the current export window's start and no later export
+    window can reach back into it - which is what the previous "clip again" pass over the whole
+    window list existed to catch. The sort is kept even though callers already provide sorted
+    windows, so correctness does not depend on that.
+
+    See run_intersect_window_tests, which pins this behaviour with hand-written cases and compares
+    the result against a naive reference implementation over randomised window layouts.
     """
-    clip_again = True
+    # Enabled export windows only - the sole candidates for clipping anything
+    export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_limit_best[n] < 100.0)
+    if not export_active:
+        # Rebuild the windows rather than passing the caller's dicts back, so the returned windows
+        # carry exactly the same keys (and are as freshly owned) as on the clipping path below
+        return list(charge_limit_best), [{"start": w["start"], "end": w["end"], "average": w["average"]} for w in charge_window_best]
+
+    new_limit_best = []
+    new_window_best = []
 
     # For each charge window
-    while clip_again:
-        clip_again = False
-        new_limit_best = []
-        new_window_best = []
-        for window_n in range(len(charge_limit_best)):
-            window = charge_window_best[window_n]
-            start = window["start"]
-            end = window["end"]
-            average = window["average"]
-            limit = charge_limit_best[window_n]
-            clipped = False
+    for window_n in range(len(charge_limit_best)):
+        window = charge_window_best[window_n]
+        start = window["start"]
+        end = window["end"]
+        average = window["average"]
+        limit = charge_limit_best[window_n]
+        clipped = False
 
-            # For each discharge window
-            for dwindow_n in range(len(export_limit_best)):
-                dwindow = export_window_best[dwindow_n]
-                dlimit = export_limit_best[dwindow_n]
-                dstart = dwindow["start"]
-                dend = dwindow["end"]
+        if limit <= 0.0:
+            # A disabled charge window can never be clipped; rebuild it exactly as the clipping
+            # path below would have done, so the returned dicts are equivalent either way
+            new_window_best.append({"start": start, "end": end, "average": average})
+            new_limit_best.append(limit)
+            continue
 
-                # Overlapping window with enabled discharge?
-                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
-                    if dstart <= start:
-                        if start != dend:
-                            start = dend
-                            clipped = True
-                    elif dend >= end:
-                        if end != dstart:
-                            end = dstart
-                            clipped = True
-                    else:
-                        # Two segments
-                        if (dstart - start) >= 5:
-                            new_window = {}
-                            new_window["start"] = start
-                            new_window["end"] = dstart
-                            new_window["average"] = average
-                            new_window_best.append(new_window)
-                            new_limit_best.append(limit)
+        # For each enabled discharge window, in start order
+        for dstart, dend in export_active:
+            # Overlapping window?
+            if (dstart < end) and (dend >= start):
+                if dstart <= start:
+                    if start != dend:
                         start = dend
                         clipped = True
-                        if (end - start) >= 5:
-                            clip_again = True
+                elif dend >= end:
+                    if end != dstart:
+                        end = dstart
+                        clipped = True
+                else:
+                    # Two segments - emit the head now, carry on clipping the tail
+                    if (dstart - start) >= 5:
+                        new_window_best.append({"start": start, "end": dstart, "average": average})
+                        new_limit_best.append(limit)
+                    start = dend
+                    clipped = True
 
-            if not clipped or ((end - start) >= 5):
-                new_window = {}
-                new_window["start"] = start
-                new_window["end"] = end
-                new_window["average"] = average
-                new_window_best.append(new_window)
-                new_limit_best.append(limit)
-
-        if clip_again:
-            charge_window_best = new_window_best.copy()
-            charge_limit_best = new_limit_best.copy()
+        if not clipped or ((end - start) >= 5):
+            new_window_best.append({"start": start, "end": end, "average": average})
+            new_limit_best.append(limit)
 
     return new_limit_best, new_window_best
 

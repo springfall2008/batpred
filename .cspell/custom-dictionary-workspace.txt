@@ -25,6 +25,7 @@ armhf
 armv
 ASHP
 asyncio
+atfork
 authoriser
 autodocstring
 autoflake
@@ -51,6 +52,7 @@ byok
 cadata
 calib
 Cantarell
+CDLL
 cdn
 Cerbo
 cexxxx
@@ -77,6 +79,7 @@ corruptplans
 cprofile
 creds
 crosscharge
+ctypes
 customauthorizer
 customisation
 Customise
@@ -103,6 +106,8 @@ dend
 denorm
 derate
 derating
+desync
+desynced
 devcontainer
 devcontainers
 dexport
@@ -232,6 +237,7 @@ invname
 isinstance
 isoformat
 isort
+itemsize
 itemtype
 ivtime
 jedlix
@@ -293,11 +299,13 @@ misdetect
 misdetected
 misdetecting
 misdetection
+mispairing
 Mixergy
 mkdocs
 mlugg
 Modbus
 mogons
+monkeypatched
 monokai
 Mosquitto
 mpan
@@ -373,6 +381,7 @@ preseeded
 prevs
 protobuf
 psum
+pthread
 pvbat
 pvenergytotal
 pvlib
@@ -389,6 +398,8 @@ pytz
 randn
 rarr
 reactivepower
+readback
+readbacks
 recp
 redownload
 Referer
@@ -416,6 +427,7 @@ sapm
 saverestore
 savez
 scalarstring
+scalings
 searr
 securetoken
 Segoe
@@ -434,7 +446,12 @@ sigencloud
 sigenergy
 sigenstor
 Slee
+slugified
+slugifies
+slugify
+slugifying
 snakeviz
+snprintf
 socb
 socketloop
 socs
@@ -461,6 +478,7 @@ stdlib
 stepline
 Stromligning
 strptime
+strtod
 Strømligning
 subclassing
 submessage
@@ -478,6 +496,7 @@ temperation
 Teslemetry
 testname
 thirdparty
+threadpool
 timea
 timeb
 timec
@@ -501,11 +520,17 @@ treforsiphone
 treforsouthwell
 tunables
 twinx
+typecode
+typecodes
 tzfile
 tzpath
 unconfigured
+undiscounted
 unnormalised
 unparseable
+unpickled
+unpickles
+unpushed
 unsmoothed
 unstaged
 urlsafe
@@ -516,10 +541,14 @@ venv
 Victron
 visibilitychange
 waf
+waitpid
 Wallbox
 weblink
 welink
 Werror
+WEXITSTATUS
+WIFEXITED
+WNOHANG
 workmode
 writeonly
 wrongsha

@@ -286,10 +286,14 @@ This will remove the need for a DNS lookup of the IP address every time Predbat 
 
 If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as you have CPUs in your system.
 
+Predbat batches each group of simulations into a single call to the C++ prediction kernel, which then
+spreads them across this many threads. Results do not depend on the thread count - the same plan is
+produced at any setting - so this only trades CPU for planning time.
+
 Valid values are:
 
 - 'auto' - Use the same number of threads as your CPU count
-- '0' - Don't use threads - disabled
+- '0' - Clamped up to a single kernel thread, i.e. each batch is simulated serially
 - 'N' - Use N threads, recommended values are between 2 and 8
 
 ```yaml
@@ -686,6 +690,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 - `solis_control_enable` - Enable/disable control commands (default: `true`, set to `false` for monitoring only)
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
+- `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). Only used to compute the `battery_capacity` sensor; the max charge/discharge power sensors and `battery_rate_max` use the live measured voltage automatically and don't need this set. Without it, `battery_capacity` is still published but estimated from the live measured voltage instead, and flagged unreliable (a `reliable: false` attribute, plus a log warning) since that value drifts with charge state - set this option for an accurate, stable figure. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
 
 #### Important notes (Solis)
 
@@ -1531,7 +1536,13 @@ NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware ca
 
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast, and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
 By default, Predbat will use the central (PV50) estimate and apply to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
-You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.
+You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.<BR>
+The 90% (best case) estimate is also used by default, controlled by **switch.predbat_calculate_pv90_plan** (On by default, and hidden behind
+**switch.predbat_performance_tweaks**). Its weighting is **input_number.predbat_pv_metric90_weight** (expert mode, defaulting to 0.15). Weighting the 90%
+estimate makes Predbat price in a chance of a better-than-forecast day, which makes it somewhat less willing to charge from the grid. Simulating the extra
+scenario costs planning time, so if your machine is struggling you can turn On **switch.predbat_performance_tweaks** to reveal the switch and turn it Off -
+while it is Off no PV90 scenario is simulated at all.
+See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
 Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
 this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
@@ -1542,7 +1553,8 @@ See also [PV configuration options in Home Assistant](customisation.md#solar-pv-
 ## Forecast.solar Solar Forecast
 
 The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
-Predbat Solar calibration can use past data to improve this information and provide the 10% data.
+Predbat Solar calibration can use past data to improve this information and provide both the 10% and the 90% data, each derived from the central forecast
+and capped so neither can exceed what your array can physically produce.
 
 You can create one or more rooftops by providing a list of the data for each one, they will be summed up automatically.
 

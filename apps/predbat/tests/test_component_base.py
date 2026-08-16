@@ -361,6 +361,50 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
     return asyncio.run(run_test())
 
 
+def test_component_base_set_arg_auto(my_predbat):
+    """
+    Test ComponentBase.set_arg_auto() (issue #4494 follow-up, PR #4500 review): warns once when
+    it overwrites a key the user had explicitly set in apps.yaml, otherwise behaves exactly like
+    set_arg() - auto-discovery always wins either way, this only makes the override discoverable.
+    """
+    print("\n*** Test: ComponentBase.set_arg_auto warns once on apps.yaml override ***")
+
+    base = MockBase()
+    base.args_from_apps_yaml = {"battery_scaling": [0.9]}
+    base.apps_yaml_override_warned = set()
+    set_calls = {}
+    base.set_arg = lambda arg, value: set_calls.__setitem__(arg, value)
+
+    component = TestComponent(base)
+
+    # apps.yaml had a different value - warn once, auto-discovered value still applied
+    component.set_arg_auto("battery_scaling", ["sensor.predbat_battery_soh"])
+    assert set_calls.get("battery_scaling") == ["sensor.predbat_battery_soh"], "Auto-discovered value should be applied"
+    assert any("apps.yaml sets 'battery_scaling: [0.9]'" in msg for msg in base.log_messages), "Should warn about the override"
+
+    # Second call for the same key must not repeat the warning
+    component.set_arg_auto("battery_scaling", ["sensor.predbat_battery_soh"])
+    warn_count = sum(1 for msg in base.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Warning should not repeat, got {warn_count}"
+
+    # A key never present in apps.yaml at all - no warning, behaves like plain set_arg
+    component.set_arg_auto("num_inverters", 1)
+    assert set_calls.get("num_inverters") == 1, "Should still set the value for an unconfigured key"
+    assert not any("num_inverters" in msg for msg in base.log_messages), "Should not warn for a key the user never configured"
+
+    # Base with no args_from_apps_yaml snapshot at all (e.g. component created outside
+    # PredBat.initialize(), as in most unit tests) must not raise, and must not warn
+    bare_base = MockBase()
+    bare_set_calls = {}
+    bare_base.set_arg = lambda arg, value: bare_set_calls.__setitem__(arg, value)
+    bare_component = TestComponent(bare_base)
+    bare_component.set_arg_auto("battery_scaling", ["sensor.predbat_battery_soh"])
+    assert bare_set_calls.get("battery_scaling") == ["sensor.predbat_battery_soh"], "Should still work without an apps_yaml snapshot"
+
+    print("PASS: set_arg_auto warns once on a genuine override, stays silent otherwise, and is safe without a snapshot")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
@@ -372,6 +416,7 @@ def test_component_base_all(my_predbat):
         ("exception_handling", test_component_base_exception_handling, "Component handles exceptions with backoff"),
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
+        ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
     ]
 
     failed = []
