@@ -100,6 +100,7 @@ from tests.test_web_annual import (
 )
 from tests.test_window import run_window_sort_tests, run_intersect_window_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
+from tests.test_window_selection import run_window_selection_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
@@ -429,6 +430,7 @@ def main():
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
+        ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),

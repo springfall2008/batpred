@@ -66,6 +66,38 @@ def slots_around(target_slots, slot_lengths):
     return slot_choices
 
 
+def select_window_candidates(entries, price_selected, allow_freeze, accept=None):
+    """
+    Ordered, deduplicated list of (window_n, freeze) that a price threshold makes available.
+
+    entries is a [price, window_n, freeze] list for one side of the search, in the order the
+    optimiser considers them. A window is taken when its price passes price_selected, its freeze
+    flag is allowed by allow_freeze, it has not already been taken, and accept (when given) passes
+    it. Only taken windows count as seen, so a window that accept rejects is offered again if it
+    appears later - which is what the capped scan this replaces did.
+
+    The result is deliberately unbounded: capping at max_slots is the caller slicing the first
+    max_slots off the front. That equivalence holds because the cap in the original scan was
+    monotonic - once reached, nothing further was ever taken - and it is what lets one scan per
+    price threshold serve every slot count the search tries. test_window_selection pins it against
+    a reference implementation of the original capped loop.
+    """
+    chosen = []
+    seen = set()
+    for price, window_n, freeze in entries:
+        if not price_selected(price):
+            continue
+        if freeze and not allow_freeze:
+            continue
+        if window_n in seen:
+            continue
+        if accept is not None and not accept(window_n):
+            continue
+        seen.add(window_n)
+        chosen.append((window_n, freeze))
+    return chosen
+
+
 MASK_64 = (1 << 64) - 1
 
 
@@ -409,6 +441,27 @@ class Plan:
         # depends on charge_mods/best_limits_reset and changes from trial to trial.
         hit_charge_cache = {}
         hit_car_cache = {}  # (start, end) -> does this window hit a car charging slot
+        export_allowed_cache = {}  # window_n -> is this export window usable at all
+
+        def export_window_allowed(window_n):
+            """Whether an export window may be exported at all, ignoring charge window collisions.
+
+            Car charging and iboost collisions depend only on the window's own fixed geometry, so
+            like hit_charge_cache above the answer holds for the life of the call. The charge window
+            collision is deliberately not folded in here - that one depends on charge_mods and so
+            changes from trial to trial.
+            """
+            allowed = export_allowed_cache.get(window_n)
+            if allowed is None:
+                window = export_window[window_n]
+                if not self.car_charging_from_battery and self.hit_car_window(window["start"], window["end"], cache=hit_car_cache):
+                    allowed = False
+                elif not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, window["start"], window["end"]) >= 0):
+                    allowed = False
+                else:
+                    allowed = True
+                export_allowed_cache[window_n] = allowed
+            return allowed
 
         # Start loop of trials
         for loop_price in all_prices:
@@ -418,6 +471,49 @@ class Plan:
                     if self.debug_enable:
                         self.log("Skipping price {} as level score {} is not within 20% of best {}".format(loop_price, this_level_score, best_level_score))
                     continue
+
+            # Which windows a price threshold makes available depends only on the threshold and the
+            # freeze flag - not on the slot counts swept below, and not on coarse vs fine. So each
+            # side is scanned once per (threshold, freeze) here and every slot count is served by
+            # slicing that one list, rather than rescanning price_set_* inside the four nested slot
+            # loops. That scan was the hottest loop left in planning: ~900 rescans of a few hundred
+            # entries per threshold, for at most a couple of dozen distinct answers.
+            #
+            # Slicing is exactly what capping did - see select_window_candidates - and slot counts at
+            # or above the candidate count all select the same windows, so they collapse onto one
+            # cache entry rather than one per entry in the slot length list.
+            charge_candidates = {}
+            export_candidates = {}
+            charge_selection_cache = {}
+            export_selection_cache = {}
+
+            def charge_selection_for(max_slots, allow_freeze, loop_price=loop_price):
+                """Charge windows this price threshold selects, capped at max_slots"""
+                candidates = charge_candidates.get(allow_freeze)
+                if candidates is None:
+                    candidates = select_window_candidates(price_set_charge, lambda price: loop_price >= price, allow_freeze)
+                    charge_candidates[allow_freeze] = candidates
+                count = min(max_slots, len(candidates))
+                entry = charge_selection_cache.get((count, allow_freeze))
+                if entry is None:
+                    taken = candidates[:count]
+                    entry = ([window_n for window_n, _ in taken], dict(taken))
+                    charge_selection_cache[(count, allow_freeze)] = entry
+                return entry
+
+            def export_selection_for(max_slots, allow_freeze, loop_price=loop_price):
+                """Export windows this price threshold selects, capped at max_slots"""
+                candidates = export_candidates.get(allow_freeze)
+                if candidates is None:
+                    candidates = select_window_candidates(price_set_export, lambda price: loop_price < price, allow_freeze, accept=export_window_allowed)
+                    export_candidates[allow_freeze] = candidates
+                count = min(max_slots, len(candidates))
+                entry = export_selection_cache.get((count, allow_freeze))
+                if entry is None:
+                    taken = candidates[:count]
+                    entry = ([window_n for window_n, _ in taken], dict(taken))
+                    export_selection_cache[(count, allow_freeze)] = entry
+                return entry
 
             for coarse in [True, False] if enable_coarse_fine else [False]:
                 if not enable_coarse_fine:
@@ -434,58 +530,21 @@ class Plan:
                 charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
-                # Which charge windows the price threshold selects depends only on loop_price (fixed here),
-                # max_charge_slots and try_charge_freeze - not on either of the export loops it is nested
-                # inside, so without this it is rebuilt identically once per (max_export_slots,
-                # try_export_freeze) pair. That scan was the single hottest loop in planning, ~52M
-                # iterations on a heavy scenario. Memoised rather than hoisted so the iteration order, and
-                # with it every tie-break in the search below, is untouched.
-                #
-                # Sharing the cached objects between iterations is safe because neither is mutated after it
-                # is built: all_n is copied into pred_item, and charge_mods is only ever read.
-                charge_selection_cache = {}
-
                 for max_charge_slots in charge_slot_choices:
                     for max_export_slots in export_slot_choices:
                         for try_charge_freeze in charge_freeze_options:
                             for try_export_freeze in export_freeze_options:
-                                all_d = []
-                                count_d = 0
-                                export_mods = {}  # window_n -> freeze flag, for export windows modified from the reset limits
-
-                                charge_selection = charge_selection_cache.get((max_charge_slots, try_charge_freeze))
-                                if charge_selection is None:
-                                    all_n = []
-                                    count_c = 0
-                                    charge_mods = {}  # window_n -> freeze flag, for charge windows modified from the reset limits
-                                    for price, window_n, freeze in price_set_charge:
-                                        if loop_price >= price:
-                                            if not (freeze and not try_charge_freeze) and count_c < max_charge_slots and (window_n not in charge_mods):
-                                                all_n.append(window_n)
-                                                charge_mods[window_n] = freeze
-                                                count_c += 1
-                                    charge_selection_cache[(max_charge_slots, try_charge_freeze)] = (all_n, charge_mods)
-                                else:
-                                    all_n, charge_mods = charge_selection
-
-                                for price, window_n, freeze in price_set_export:
-                                    if loop_price < price:
-                                        # For prices above threshold try export
-                                        if freeze and not try_export_freeze:
-                                            pass
-                                        elif count_d < max_export_slots and (window_n not in export_mods):
-                                            if not self.car_charging_from_battery and self.hit_car_window(export_window[window_n]["start"], export_window[window_n]["end"], cache=hit_car_cache):
-                                                pass
-                                            elif not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, export_window[window_n]["start"], export_window[window_n]["end"]) >= 0):
-                                                pass
-                                            else:
-                                                all_d.append(window_n)
-                                                export_mods[window_n] = freeze
-                                                count_d += 1
+                                # all_n is copied into pred_item below and charge_mods is only ever read,
+                                # so both cached objects can be shared between trials as they stand. The
+                                # export pair can be pruned just below, so it is copied on write.
+                                all_n, charge_mods = charge_selection_for(max_charge_slots, try_charge_freeze)
+                                all_d, export_mods = export_selection_for(max_export_slots, try_export_freeze)
 
                                 # Remove export hitting charge windows if this is disabled
                                 if not self.calculate_export_oncharge:
-                                    for window_n in all_d[:]:
+                                    pruned_all_d = None
+                                    pruned_export_mods = None
+                                    for window_n in all_d:
                                         hit_charge = hit_charge_cache.get(window_n)
                                         if hit_charge is None:
                                             hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
@@ -499,8 +558,14 @@ class Plan:
                                                 # Only remove if it doesn't remove the charge window entirely
                                                 if not (export_window[window_n]["start"] <= self.charge_window_best[hit_charge]["start"] and export_window[window_n]["end"] >= self.charge_window_best[hit_charge]["end"]):
                                                     # Dropping the modification restores the reset value (100.0) for this window
-                                                    export_mods.pop(window_n, None)
-                                                    all_d.remove(window_n)
+                                                    if pruned_all_d is None:
+                                                        pruned_all_d = all_d[:]
+                                                        pruned_export_mods = dict(export_mods)
+                                                    pruned_export_mods.pop(window_n, None)
+                                                    pruned_all_d.remove(window_n)
+                                    if pruned_all_d is not None:
+                                        all_d = pruned_all_d
+                                        export_mods = pruned_export_mods
 
                                 # Skip this one as it's the same as selected already
                                 try_hash = reset_sum
