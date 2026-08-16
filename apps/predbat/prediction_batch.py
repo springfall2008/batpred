@@ -22,14 +22,8 @@ until it has read the matching handle. The four fan-outs in plan.py satisfy this
 byte-identical plan comparison is what keeps it that way.
 """
 
-from operator import itemgetter
-
 from const import PREDICT_STEP
-from prediction_kernel import BatchJob, kernel_supported, run_prediction_kernel_batch
-
-# Pulls (start, end) from a window dict; used to build the prediction cache key without a Python
-# level loop over every window
-window_bounds = itemgetter("start", "end")
+from prediction_kernel import BatchJob, kernel_supported, run_prediction_kernel_batch, window_bound_tuple
 
 
 def prediction_cache_key(charge_limit, charge_window, export_limits, export_window, pv_scenario, end_record, step):
@@ -39,13 +33,18 @@ def prediction_cache_key(charge_limit, charge_window, export_limits, export_wind
     different keys depending on which path reached it. Built as one tuple hash to keep the per-window
     hashing in C rather than looping in Python, which matters because it runs on every simulation
     with a few hundred windows.
+
+    The window bound tuples come from the identity-keyed cache in prediction_kernel, so a fan-out
+    that varies only the limits derives them once rather than once per simulation. That cache is kept
+    honest by set_window_start/set_window_end invalidating it; run_window_cache_tests replays a full
+    plan with VALIDATE_WINDOW_CACHE on to prove no mutation escapes them.
     """
     return hash(
         (
             tuple(charge_limit),
-            tuple(map(window_bounds, charge_window)),
+            window_bound_tuple(charge_window),
             tuple(export_limits),
-            tuple(map(window_bounds, export_window)),
+            window_bound_tuple(export_window),
             pv_scenario,
             end_record,
             step,

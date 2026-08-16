@@ -389,6 +389,126 @@ def int32_array(values):
     return (ctypes.c_int32 * len(backing)).from_buffer(backing)
 
 
+# ---------------------------------------------------------------------------
+# Window bounds cache
+#
+# A search re-runs thousands of simulations over the same charge/export windows, changing only the
+# limits. The start/end bounds handed to the kernel are therefore identical call after call, but
+# were re-derived from the window dicts every time - measured as the largest single block of Python
+# time in a plan. They are cached here, keyed on the identity of the window list.
+#
+# CORRECTNESS: the cache is only sound while no window's start or end changes underneath it. Every
+# such mutation must call invalidate_window_cache() - route them through the set_window_start() and
+# set_window_end() helpers below rather than assigning window["start"] or window["end"] directly.
+# The prediction path does not need them: _prepare_export applies a trial start copy-on-write, to a
+# window dict and list of its own, so nothing the cache has seen is touched. run_window_cache_tests replays a full plan with VALIDATE_WINDOW_CACHE on, which
+# re-derives the bounds on every hit and fails on any stale entry, so a missed invalidation is a
+# test failure rather than a silently wrong plan.
+#
+# Entries pin their window list (so a freed list cannot have its id() reused by a later
+# allocation, which would alias to the wrong entry) and the cache is bounded, so a caller that
+# never repeats a list - a forked pool worker, which unpickles fresh lists every call - thrashes
+# harmlessly within the bound instead of growing without limit.
+# ---------------------------------------------------------------------------
+WINDOW_CACHE_MAX = 16
+VALIDATE_WINDOW_CACHE = False
+WINDOW_CACHE_ENABLED = True
+_WINDOW_BOUNDS_CACHE = {}
+
+
+def disable_window_cache():
+    """Turn the window bounds cache off in this process - used as the pool worker initialiser.
+
+    A worker unpickles fresh window lists on every call, so it can never hit the cache; leaving it
+    on there only pays the failed lookup. Measured at ~3% of a pooled plan.
+    """
+    global WINDOW_CACHE_ENABLED
+    WINDOW_CACHE_ENABLED = False
+    _WINDOW_BOUNDS_CACHE.clear()
+
+
+def invalidate_window_cache():
+    """Drop all cached window bounds - must be called whenever a window's start or end changes"""
+    _WINDOW_BOUNDS_CACHE.clear()
+
+
+def set_window_start(window, start):
+    """Set a window's start time, invalidating any cached bounds derived from it.
+
+    Use this instead of assigning window["start"] directly - see the window bounds cache notes
+    above for why a bare assignment is unsafe.
+    """
+    if window["start"] != start:
+        window["start"] = start
+        _WINDOW_BOUNDS_CACHE.clear()
+
+
+def set_window_end(window, end):
+    """Set a window's end time, invalidating any cached bounds derived from it - see set_window_start"""
+    if window["end"] != end:
+        window["end"] = end
+        _WINDOW_BOUNDS_CACHE.clear()
+
+
+def _window_cache_entry(window_list):
+    """Return the cache entry [window_list, starts, ends, bounds_tuple] for a window list.
+
+    The derived fields start as None and are filled in on first use, so a caller that only wants
+    the hash tuple never pays to build the ctypes arrays, and vice versa.
+    """
+    key = id(window_list)
+    entry = _WINDOW_BOUNDS_CACHE.get(key)
+    # The window count is part of the hit condition, not just the identity: a list that grows or
+    # shrinks in place keeps its id(), and run_prediction_kernel passes n_charge/n_export from
+    # len(window_list) alongside these arrays. A stale shorter array would then be read past its end
+    # by the C kernel - a memory-safety failure rather than merely a wrong plan. Bare start/end
+    # writes are handled by set_window_start/set_window_end instead; nothing on the planning path
+    # resizes a window list today, so this is a guard against the class rather than a live fix.
+    if entry is not None and entry[0] is window_list and entry[4] == len(window_list):
+        if VALIDATE_WINDOW_CACHE:
+            _validate_entry(window_list, entry)
+        return entry
+    if len(_WINDOW_BOUNDS_CACHE) >= WINDOW_CACHE_MAX:
+        _WINDOW_BOUNDS_CACHE.clear()
+    entry = [window_list, None, None, None, len(window_list)]
+    _WINDOW_BOUNDS_CACHE[key] = entry
+    return entry
+
+
+def window_bound_arrays(window_list):
+    """Return (start_array, end_array) as ctypes int32 arrays for a window list, cached by identity.
+
+    The returned arrays are shared with other callers and must not be modified.
+    """
+    if not WINDOW_CACHE_ENABLED:
+        return int32_array([window["start"] for window in window_list]), int32_array([window["end"] for window in window_list])
+    entry = _window_cache_entry(window_list)
+    if entry[1] is None:
+        entry[1] = int32_array([window["start"] for window in window_list])
+        entry[2] = int32_array([window["end"] for window in window_list])
+    return entry[1], entry[2]
+
+
+def window_bound_tuple(window_list):
+    """Return a tuple of (start, end) pairs for a window list, cached by identity (prediction cache key)"""
+    if not WINDOW_CACHE_ENABLED:
+        return tuple([(window["start"], window["end"]) for window in window_list])
+    entry = _window_cache_entry(window_list)
+    if entry[3] is None:
+        entry[3] = tuple([(window["start"], window["end"]) for window in window_list])
+    return entry[3]
+
+
+def _validate_entry(window_list, entry):
+    """Re-derive the bounds and raise if the cached entry is stale (VALIDATE_WINDOW_CACHE only)"""
+    starts = [window["start"] for window in window_list]
+    ends = [window["end"] for window in window_list]
+    if entry[1] is not None and (starts != list(entry[1]) or ends != list(entry[2])):
+        raise AssertionError("Stale window bounds cache (arrays): a window changed without invalidate_window_cache().\n  starts cached {} actual {}\n  ends   cached {} actual {}".format(list(entry[1]), starts, list(entry[2]), ends))
+    if entry[3] is not None and tuple(zip(starts, ends)) != entry[3]:
+        raise AssertionError("Stale window bounds cache (tuple): a window changed without invalidate_window_cache().\n  cached {}\n  actual {}".format(entry[3], tuple(zip(starts, ends))))
+
+
 def kernel_context_free(handle):
     """Free a kernel context by handle (used as a weakref finaliser)"""
     if KERNEL_LIB and handle:
@@ -774,11 +894,9 @@ def run_prediction_kernel(pred, charge_limit, charge_window, export_window, expo
     # The window fields keep their list comprehensions - map(itemgetter(...)) measured *slower* here at these
     # list lengths, the per-item call overhead outweighing what the comprehension costs.
     scenario.charge_limit = double_array(charge_limit)
-    scenario.charge_start = int32_array([window["start"] for window in charge_window])
-    scenario.charge_end = int32_array([window["end"] for window in charge_window])
+    scenario.charge_start, scenario.charge_end = window_bound_arrays(charge_window)
     scenario.export_limits = double_array(export_limits)
-    scenario.export_start = int32_array([window["start"] for window in export_window])
-    scenario.export_end = int32_array([window["end"] for window in export_window])
+    scenario.export_start, scenario.export_end = window_bound_arrays(export_window)
     # A cached run discards the per-minute SoC series (see the `if not cache` block below), so the
     # buffer is not allocated and the kernel is told to skip filling it. That skips a round_py per
     # step, which is snprintf+strtod and the single most expensive thing in the kernel's hot loop -

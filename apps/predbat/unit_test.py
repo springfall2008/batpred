@@ -100,7 +100,7 @@ from tests.test_web_annual import (
     test_web_annual_terminal_state,
     test_web_annual_validation_error_preserves_input,
 )
-from tests.test_window import run_window_sort_tests, run_intersect_window_tests
+from tests.test_window import run_window_sort_tests, run_intersect_window_tests, run_clone_windows_tests, run_window_cache_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
@@ -276,6 +276,18 @@ def run_annual_integration_isolated(my_predbat):
     return test_annual_integration(create_predbat())
 
 
+def run_window_cache_tests_isolated(my_predbat):
+    """Run the window bounds cache tests against a freshly created instance.
+
+    my_predbat is unused, for the same reason run_annual_integration_isolated ignores it: the last
+    test in the group replays a full calculate_plan with the cache validator on, and the shared
+    instance carries whatever planning state earlier tests left behind - enough that calculate_plan
+    raises on it before the cache is ever exercised. A fresh instance is loaded from a debug dump
+    inside the test so the replay is deterministic wherever it runs in the suite.
+    """
+    return run_window_cache_tests(create_predbat())
+
+
 def create_predbat():
     my_predbat = PredBat()
     my_predbat.states = {}
@@ -433,6 +445,8 @@ def main():
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
         ("intersect_window", run_intersect_window_tests, "Intersect window tests", False),
+        ("clone_windows", run_clone_windows_tests, "Clone windows tests", False),
+        ("window_cache", run_window_cache_tests_isolated, "Window bounds cache tests", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
