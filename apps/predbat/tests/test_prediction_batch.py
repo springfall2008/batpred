@@ -24,6 +24,7 @@ import random
 
 import prediction_batch
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10
+from plan import resolve_batch_threads
 from prediction import Prediction
 from prediction_kernel import create_kernel_context
 from tests.test_kernel_parity import apply_random_scenario, kernel_available, make_step_data, make_windows, restore_scenario_state, snapshot_scenario_state
@@ -511,9 +512,42 @@ def test_batch_results_match_their_own_job(my_predbat):
     return failed
 
 
+def test_batch_thread_count_resolution():
+    """Check how the threads setting maps onto kernel lanes, returns True on failure.
+
+    'auto' takes the core count uncapped. A cap was measured and rejected: on a fast machine the
+    curve is flat and peaks slightly below the core count, but with each job made eight times dearer
+    - how a machine where the kernel dominates behaves - it stops turning over, and a cap of 4 then
+    costs 10.7% against 1.3% for no cap at all. The zero and one cases both mean serial, which is what
+    annual.py and the benchmark harness rely on.
+    """
+    print("**** Running batch thread count resolution tests ****")
+    failed = False
+    cases = [
+        ("auto", 2, 2, "auto follows the core count"),
+        ("auto", 16, 16, "auto is not capped"),
+        ("auto", 64, 64, "auto is not capped on a large machine either"),
+        ("auto", 0, 1, "a nonsense core count still leaves one usable lane"),
+        (0, 32, 1, "0 means serial"),
+        (1, 32, 1, "1 means serial"),
+        (2, 32, 2, "an explicit value is honoured"),
+        (12, 32, 12, "an explicit value above the core count is honoured"),
+    ]
+    for threads, cores, expected, why in cases:
+        got = resolve_batch_threads(threads, cores)
+        if got != expected:
+            print("ERROR: threads={} cores={} gave {} lanes, expected {} ({})".format(threads, cores, got, expected, why))
+            failed = True
+
+    if not failed:
+        print("Batch thread count resolution tests passed")
+    return failed
+
+
 def run_prediction_batch_tests(my_predbat):
     """Run every batched prediction test, returns True on failure"""
     failed = test_export_trial_does_not_mutate_caller_window(my_predbat)
+    failed |= test_batch_thread_count_resolution()
     failed |= test_batch_state_exists_without_a_base(my_predbat)
 
     available, required_failure = kernel_available()

@@ -25,6 +25,7 @@ armhf
 armv
 ASHP
 asyncio
+atfork
 authoriser
 autodocstring
 autoflake
@@ -380,6 +381,7 @@ preseeded
 prevs
 protobuf
 psum
+pthread
 pvbat
 pvenergytotal
 pvlib
@@ -537,10 +539,14 @@ venv
 Victron
 visibilitychange
 waf
+waitpid
 Wallbox
 weblink
 welink
 Werror
+WEXITSTATUS
+WIFEXITED
+WNOHANG
 workmode
 writeonly
 wrongsha
