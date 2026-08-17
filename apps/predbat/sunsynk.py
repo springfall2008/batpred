@@ -35,6 +35,7 @@ from sunsynk_const import (
     SUNSYNK_DEBUG_MAX_CHARS,
     SUNSYNK_DEBUG_REDACT_KEYS,
     SUNSYNK_PAGE_SIZE,
+    SUNSYNK_MAX_DISCOVERY_PAGES,
     SUNSYNK_TELEMETRY,
     SUNSYNK_ENERGY,
     SUNSYNK_TELEMETRY_NEGATE,
@@ -334,30 +335,57 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     async def get_device_list(self):
         """Discover every inverter on the account, honouring the serial filter.
 
-        Stops once a page comes back empty or the running serial count reaches the
-        server-reported `total`. It does NOT stop merely because a page returned fewer
-        than SUNSYNK_PAGE_SIZE entries: the endpoint's real pagination behaviour is
-        unverified (no test account exists yet - see the VERIFY@SPIKE notes in
-        sunsynk_const.py), and a short page is not proof there is no next one. When
-        `total` is itself absent, it defaults to the count collected so far so the loop
-        still terminates after that page rather than spinning.
+        Stops on the first of three signals: an empty page, a page that contributes no
+        serial not already seen, or the running unique-serial count reaching the
+        server-reported `total`. The middle signal is the important one - it is what
+        actually bounds the loop, because neither of the other two can be trusted alone:
+        the endpoint's real pagination behaviour is unverified (no test account exists
+        yet - see the VERIFY@SPIKE notes in sunsynk_const.py), a page can be non-empty
+        yet carry no `sn` on any entry, and `total` is entirely server-controlled with
+        no sanity check possible on this side. Without the no-new-serials check, either
+        of those alone can spin the loop forever against a malformed or hostile response
+        (confirmed empirically: an all-missing-`sn` page and a `total` in the millions
+        both hung or made millions of calls under the previous, `total`-only version of
+        this method).
+
+        Serials are deduplicated - overlapping pages must not inflate device_list, which
+        would otherwise fan out to duplicated per-cycle polling - but the returned order
+        is first-seen order, not sorted, because a later task's automatic_config builds
+        per-inverter arg lists positionally from this list.
+
+        Bounded by SUNSYNK_MAX_DISCOVERY_PAGES regardless of any of the above, purely as
+        defence in depth against a `total` that is corrupt or never satisfied even though
+        every page keeps contributing genuinely new serials. Hitting that cap is logged
+        so a real account with more inverters than the cap allows is diagnosable rather
+        than silently truncated.
         """
         serials = []
-        page = 1
-        while True:
+        seen = set()
+        for page in range(1, SUNSYNK_MAX_DISCOVERY_PAGES + 1):
             params = {"page": str(page), "limit": str(SUNSYNK_PAGE_SIZE), "type": "-2", "status": "-1"}
             data = await self._get("inverter_list", params=params)
             infos = data.get("infos") or []
             if not infos:
                 break
+            new_serials = 0
             for info in infos:
                 serial = info.get("sn")
-                if serial:
-                    serials.append(str(serial))
+                if not serial:
+                    continue
+                serial = str(serial)
+                if serial not in seen:
+                    seen.add(serial)
+                    serials.append(serial)
+                    new_serials += 1
+            if new_serials == 0:
+                # A page that adds nothing new can never close the gap to `total`, however
+                # large that gap is reported to be - continuing would spin indefinitely.
+                break
             total = int(self._as_float(data.get("total"), len(serials)))
             if len(serials) >= total:
                 break
-            page += 1
+        else:
+            self.log(f"Warn: Sunsynk device discovery stopped after the {SUNSYNK_MAX_DISCOVERY_PAGES}-page safety cap with {len(serials)} serial(s) found; the account may hold more inverters than were discovered")
         if self.inverter_sn_filter:
             wanted = {str(sn).lower() for sn in self.inverter_sn_filter}
             serials = [sn for sn in serials if sn.lower() in wanted]
@@ -432,6 +460,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         charge_volts = self._as_float(charge_volts)
         if charge_volts <= 0:
             return 0.0
+        # VERIFY@SPIKE — this rounds to the nearest whole cell assuming every pack charges
+        # to (close enough to) LIFEPO4_CHARGE_VOLTS_PER_CELL. It is exact for a target that
+        # is itself an exact multiple of 3.55V/cell, but a legitimate pack charged to a
+        # different per-cell target - e.g. 24 cells at 3.45V/cell = 82.8V - rounds to 23
+        # cells instead of 24, silently giving a nominal voltage (and therefore capacity and
+        # battery_rate_max) about 4% wrong. See sunsynk_const.py for the full note; no live
+        # hardware has confirmed the real spread of charge targets in use.
         cells = round(charge_volts / LIFEPO4_CHARGE_VOLTS_PER_CELL)
         if cells <= 0:
             return 0.0
