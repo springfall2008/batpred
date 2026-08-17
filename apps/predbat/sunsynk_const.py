@@ -17,6 +17,9 @@ from a Sunsynk source. All component logic imports from this module so a
 correction needs no downstream edits.
 """
 
+import base64
+import os
+
 SUNSYNK_REGIONS = {
     "sunsynk": {"host": "https://api.sunsynk.net", "source": "sunsynk"},
     "inteless": {"host": "https://pv.inteless.com", "source": "elinter"},
@@ -187,3 +190,74 @@ SUNSYNK_DEBUG_MAX_CHARS = 20000
 # Body keys redacted from debug traces: these carry credentials or bearer tokens and
 # the logs are routinely pasted into issue reports.
 SUNSYNK_DEBUG_REDACT_KEYS = ("password", "access_token", "refresh_token", "token", "Authorization", "sign")
+
+
+def _read_tlv(data, offset):
+    """Read one DER tag-length-value at offset, returning (tag, value, next_offset)."""
+    tag = data[offset]
+    offset += 1
+    length = data[offset]
+    offset += 1
+    if length & 0x80:
+        count = length & 0x7F
+        length = int.from_bytes(data[offset : offset + count], "big")
+        offset += count
+    return tag, data[offset : offset + length], offset + length
+
+
+def parse_rsa_public_key(der_bytes):
+    """Extract (modulus, exponent) from a DER SubjectPublicKeyInfo RSA public key.
+
+    Sunsynk's /anonymous/publicKey returns the key base64-encoded with no PEM armour,
+    so it is decoded and walked directly: SEQUENCE { AlgorithmIdentifier, BIT STRING {
+    RSAPublicKey SEQUENCE { INTEGER modulus, INTEGER exponent } } }. Raises ValueError
+    on anything that is not that structure rather than returning a bogus key — a
+    silently wrong modulus would encrypt the password to something unrecoverable.
+    """
+    if not der_bytes:
+        raise ValueError("Sunsynk public key response was empty")
+    tag, spki, _ = _read_tlv(der_bytes, 0)
+    if tag != 0x30:
+        raise ValueError("Sunsynk public key is not a DER SEQUENCE")
+    tag, _algorithm, offset = _read_tlv(spki, 0)
+    if tag != 0x30:
+        raise ValueError("Sunsynk public key has no AlgorithmIdentifier")
+    tag, bit_string, _ = _read_tlv(spki, offset)
+    if tag != 0x03:
+        raise ValueError("Sunsynk public key has no BIT STRING")
+    # The BIT STRING's first byte counts unused trailing bits and is always 0 here.
+    tag, rsa_key, _ = _read_tlv(bit_string[1:], 0)
+    if tag != 0x30:
+        raise ValueError("Sunsynk public key BIT STRING is not an RSAPublicKey")
+    tag, modulus, offset = _read_tlv(rsa_key, 0)
+    if tag != 0x02:
+        raise ValueError("Sunsynk public key has no modulus")
+    tag, exponent, _ = _read_tlv(rsa_key, offset)
+    if tag != 0x02:
+        raise ValueError("Sunsynk public key has no exponent")
+    return int.from_bytes(modulus, "big"), int.from_bytes(exponent, "big")
+
+
+def rsa_encrypt_pkcs1v15(public_key_b64, plaintext):
+    """RSA-encrypt plaintext with PKCS#1 v1.5 type-2 padding, returning base64 ciphertext.
+
+    This replaces a `cryptography` dependency, which would add a Rust-built binary wheel
+    to every architecture the add-on targets. Only public-key encryption happens here —
+    there is no private key and no secret-dependent branch, so the usual cautions about
+    hand-rolled crypto (timing side channels, padding oracles) do not apply.
+    """
+    modulus, exponent = parse_rsa_public_key(base64.b64decode(public_key_b64))
+    size = (modulus.bit_length() + 7) // 8
+    message = plaintext.encode("utf-8")
+    # PKCS#1 v1.5 needs 3 framing bytes and at least 8 padding bytes.
+    if len(message) > size - 11:
+        raise ValueError(f"Sunsynk password is too long for a {size * 8} bit key")
+    needed = size - len(message) - 3
+    padding = bytearray()
+    # Padding must be non-zero: a zero byte would be read as the message separator and
+    # truncate the password. Rejection-sample until enough non-zero bytes are collected.
+    while len(padding) < needed:
+        padding.extend(byte for byte in os.urandom(needed) if byte)
+    block = b"\x00\x02" + bytes(padding[:needed]) + b"\x00" + message
+    cipher = pow(int.from_bytes(block, "big"), exponent, modulus)
+    return base64.b64encode(cipher.to_bytes(size, "big")).decode("ascii")
