@@ -286,10 +286,14 @@ This will remove the need for a DNS lookup of the IP address every time Predbat 
 
 If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as you have CPUs in your system.
 
+Predbat batches each group of simulations into a single call to the C++ prediction kernel, which then
+spreads them across this many threads. Results do not depend on the thread count - the same plan is
+produced at any setting - so this only trades CPU for planning time.
+
 Valid values are:
 
 - 'auto' - Use the same number of threads as your CPU count
-- '0' - Don't use threads - disabled
+- '0' - Clamped up to a single kernel thread, i.e. each batch is simulated serially
 - 'N' - Use N threads, recommended values are between 2 and 8
 
 ```yaml
@@ -686,6 +690,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 - `solis_control_enable` - Enable/disable control commands (default: `true`, set to `false` for monitoring only)
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
+- `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). Only used to compute the `battery_capacity` sensor; the max charge/discharge power sensors and `battery_rate_max` use the live measured voltage automatically and don't need this set. Without it, `battery_capacity` is still published but estimated from the live measured voltage instead, and flagged unreliable (a `reliable: false` attribute, plus a log warning) since that value drifts with charge state - set this option for an accurate, stable figure. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
 
 #### Important notes (Solis)
 
@@ -1148,19 +1153,6 @@ Controls the way Predbat models your inverter, this does not change the way it i
 During a force export period if the generated solar exceeds the inverter limit or the export limit then the inverter will scale back the export rate.
 If this setting is `true` then the inverter is able to charge the battery from excess PV while still in Force Export mode.
 If this setting is `false` then the inverter will not charge the battery and the excess PV will be lost.
-
-This is a different question to **inverter_can_freeze_export** below - it's specifically about PV exceeding the inverter/export limit during *active* Force Export, not about whether Freeze Export can hold the battery flat at all.
-
-### **inverter_can_freeze_export**
-
-Global setting, defaults to `true`.
-
-Controls the way Predbat models your inverter, this does not change the way it is controlled.
-
-Freeze Export is meant to disable battery charging entirely so all solar is exported. Some inverters (e.g. certain "Feed-in First" work modes) cannot be commanded into a state where charging is disabled at all - they keep charging the battery from any available surplus PV regardless of the mode requested.
-
-If this setting is `true` (the default) Predbat assumes Freeze Export genuinely holds the battery flat, and will offer it as a distinct option in the plan.
-If this setting is `false`, Predbat assumes your inverter can't actually achieve that - Freeze Export would behave identically to Idle - so it stops offering Freeze Export in the plan at all, rather than showing a `FrzExp` slot that wouldn't achieve anything different from doing nothing.
 
 ## Controlling the Inverter
 

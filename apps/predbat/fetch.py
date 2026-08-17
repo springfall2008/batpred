@@ -976,9 +976,7 @@ class Fetch:
         # Replicate and scan import rates
         if import_rates:
             self.rate_scan(import_rates, print=False)
-            self.rate_max_base = self.rate_max  # True peak rate before saving sessions / overrides inflate it
-            self.rate_min_base = self.rate_min  # True off-peak rate before free sessions / overrides deflate it
-            self.rate_import_base, _ = self.rate_replicate(import_rates.copy(), {}, is_import=True)  # True import rates, gap-filled but without IO/saving/override distortion
+            self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -1837,6 +1835,23 @@ class Fetch:
 
         return dp2(rate_min), dp2(rate_max), dp2(rate_average), rate_min_minute, rate_max_minute
 
+    def rate_base_min_max(self, rates):
+        """
+        Gap-fill `rates` into a "base" import curve (replicated, but without IO-slot/saving-session/
+        override distortion) and work out its true min/max.
+
+        Must scan the gap-filled curve, not the raw input: some tariffs (e.g. a fixed day/night
+        product fetched with a short forward window - #4544) only have the currently-active segment
+        in the raw data at fetch time, so a scan taken before replication can miss a cheaper/dearer
+        segment that hasn't started yet and lock in the wrong "true" min/max for the rest of the day.
+        rate_add_io_slots() then stamps IOG/SmartFlex dispatch slots with that stale value instead of
+        the tariff's real off-peak price. Mirrors how rate_export_base is already built downstream of
+        rate_replicate() on the export side.
+        """
+        rate_base, _ = self.rate_replicate(rates.copy(), {}, is_import=True)
+        rate_min_base, rate_max_base, _, _, _ = self.rate_minmax(rate_base)
+        return rate_base, rate_min_base, rate_max_base
+
     def rate_min_forward_calc(self, rates):
         """
         Work out lowest rate from time forwards
@@ -2396,7 +2411,6 @@ class Fetch:
         self.inverter_clock_skew_discharge_start = self.get_arg("inverter_clock_skew_discharge_start", 0)
         self.inverter_clock_skew_discharge_end = self.get_arg("inverter_clock_skew_discharge_end", 0)
         self.inverter_can_charge_during_export = self.get_arg("inverter_can_charge_during_export", True)
-        self.inverter_can_freeze_export = self.get_arg("inverter_can_freeze_export", True)
 
         # Log clock skew
         if self.inverter_clock_skew_start != 0 or self.inverter_clock_skew_end != 0:
