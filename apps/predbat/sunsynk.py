@@ -57,6 +57,12 @@ from sunsynk_const import (
     TOU_FILLER_TIMES,
     FREEZE_EXPORT_SOC,
     SUNSYNK_SETTLE_POLLS,
+    SUNSYNK_STORAGE_MODULE,
+    SUNSYNK_CACHE_STATIC,
+    SUNSYNK_CACHE_CONFIG,
+    SUNSYNK_CACHE_RATINGS,
+    SUNSYNK_CACHE_CONTROL,
+    SUNSYNK_RESTORE_MAX_CONTROL,
     encode_setting,
     rsa_encrypt_pkcs1v15,
 )
@@ -1017,3 +1023,86 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
+
+    async def load_cache(self, name):
+        """Load one cache file, returning {} when absent or unreadable."""
+        try:
+            data = await self.storage.load(SUNSYNK_STORAGE_MODULE, name)
+        except Exception as error:
+            self.log(f"Warn: Sunsynk could not load cache {name}: {error}")
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    async def save_cache(self, name, data):
+        """Save one cache file, tolerating a storage failure."""
+        try:
+            await self.storage.save(SUNSYNK_STORAGE_MODULE, name, data)
+        except Exception as error:
+            self.log(f"Warn: Sunsynk could not save cache {name}: {error}")
+
+    async def save_static(self):
+        """Persist discovery results, which change only when the hardware does."""
+        await self.save_cache(SUNSYNK_CACHE_STATIC, {"device_list": self.device_list, "device_detail": self.device_detail})
+
+    async def save_config(self):
+        """Persist the last-read settings object, the baseline for read-modify-write."""
+        await self.save_cache(SUNSYNK_CACHE_CONFIG, {"device_settings": self.device_settings})
+
+    async def save_ratings(self):
+        """Persist derived ratings so automatic_config can map args at startup."""
+        await self.save_cache(SUNSYNK_CACHE_RATINGS, {"device_rated_power": self.device_rated_power})
+
+    async def save_control(self):
+        """Persist the applied-payload cache used for write change detection."""
+        await self.save_cache(SUNSYNK_CACHE_CONTROL, {"applied_payload": self.applied_payload})
+
+    async def restore_state(self):
+        """Restore cached state at startup and seed each tier's clock from its file age.
+
+        Telemetry is deliberately not cached: the live tier polls every few minutes, Home
+        Assistant already retains the last published value of every entity, and
+        publish_data only writes a sensor when it has a value — so a failed poll leaves
+        the previous reading in place rather than overwriting it.
+        """
+        if self._cache_restored:
+            return
+        self._cache_restored = True
+
+        static = await self.load_cache(SUNSYNK_CACHE_STATIC)
+        if static:
+            self.device_list = static.get("device_list", []) or []
+            self.device_detail = static.get("device_detail", {}) or {}
+            age = await self.storage.age(SUNSYNK_STORAGE_MODULE, SUNSYNK_CACHE_STATIC)
+            if age is not None:
+                self.mark_refreshed("static", age)
+
+        config = await self.load_cache(SUNSYNK_CACHE_CONFIG)
+        if config:
+            self.device_settings = config.get("device_settings", {}) or {}
+            age = await self.storage.age(SUNSYNK_STORAGE_MODULE, SUNSYNK_CACHE_CONFIG)
+            if age is not None:
+                self.mark_refreshed("config", age)
+
+        ratings = await self.load_cache(SUNSYNK_CACHE_RATINGS)
+        if ratings:
+            self.device_rated_power = ratings.get("device_rated_power", {}) or {}
+
+        # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
+        # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
+        control_age = await self.storage.age(SUNSYNK_STORAGE_MODULE, SUNSYNK_CACHE_CONTROL)
+        if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
+            control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
+            self.applied_payload = control.get("applied_payload", {}) or {}
+        elif control_age is not None:
+            self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
+
+    def tier_expired(self, tier, ttl_minutes):
+        """Return True if a tier has never run or is older than its TTL."""
+        last = self._tier_refreshed.get(tier)
+        if last is None:
+            return True
+        return (time.time() - last) / 60.0 >= ttl_minutes
+
+    def mark_refreshed(self, tier, age_minutes=0.0):
+        """Record that a tier just refreshed, or seed its clock from a cache age."""
+        self._tier_refreshed[tier] = time.time() - (age_minutes * 60.0)
