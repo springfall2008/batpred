@@ -1194,9 +1194,9 @@ class Inverter:
                             # Find a period where charging was at full rate and the SoC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) >= 0):
+                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
                                     break
-                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) <= 0):
+                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -1242,8 +1242,10 @@ class Inverter:
 
                                     break
                                 else:
-                                    # Store data
-                                    total_power += abs(battery_power.get(minute, 0))
+                                    # Store data for this minute of the period, so total_power/total_count
+                                    # below is the mean power across the whole SoC step rather than the
+                                    # reading at the single minute the step was triggered on
+                                    total_power += abs(battery_power.get(target_minute, 0))
                                     total_count += 1
                 if final_curve:
                     # Average the data points
