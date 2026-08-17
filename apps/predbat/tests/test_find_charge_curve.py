@@ -462,8 +462,8 @@ def test_find_charge_curve_averages_power_across_period(my_predbat):
     charge_curve = inv.find_charge_curve(discharge=False)
     if not charge_curve:
         print("ERROR: No charge curve found from tapering power data")
+        remove_test_history_data(my_predbat)
         return True
-
     print("Charge curve found: {}".format(charge_curve))
 
     low = [value for soc, value in charge_curve.items() if 86 <= soc <= 91]
