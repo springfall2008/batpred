@@ -156,6 +156,7 @@ from tests.test_deye_oauth import run_deye_oauth_tests
 from tests.test_deye_control import run_deye_control_tests
 from tests.test_deye_publish import run_deye_publish_tests
 from tests.test_deye_storage import run_deye_storage_tests
+from tests.test_sunsynk_const import run_sunsynk_const_tests
 from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_open_meteo import run_open_meteo_tests
@@ -433,6 +434,7 @@ def main():
         ("deye_control", run_deye_control_tests, "DEYE control-logic tests", False),
         ("deye_publish", run_deye_publish_tests, "DEYE publish/config tests", False),
         ("deye_storage", run_deye_storage_tests, "DEYE storage persistence tests", False),
+        ("sunsynk_const", run_sunsynk_const_tests, "Sunsynk constants tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),

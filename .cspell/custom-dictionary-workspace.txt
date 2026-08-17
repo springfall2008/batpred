@@ -117,6 +117,7 @@ digestmod
 dimport
 dischargeenergytotal
 dischargefreeze
+Dischg
 diverter
 dlimit
 dnoregion
@@ -127,6 +128,7 @@ dwindow
 eauth
 Eddi
 elif
+elinter
 EMEA
 emqx
 emszzzz
@@ -151,6 +153,7 @@ enphaseenergy
 Enpower
 entrez
 epod
+etoday
 etok
 euids
 EVDC
@@ -226,6 +229,7 @@ idxs
 iflux
 importlimit
 inday
+inteless
 INTELLI
 intelligentdevice
 interp
@@ -459,6 +463,8 @@ sofar
 SolarEdge
 solarman
 solarnet
+solarsynk
+solarsynkv
 Solax
 solaxcloud
 solaxmodbus
@@ -485,6 +491,7 @@ substep
 sunspec
 sunsynk
 supabase
+synkctl
 syscmd
 tabindex
 tasmota
@@ -535,6 +542,7 @@ unstaged
 urlsafe
 useid
 userinterface
+Vallery
 varh
 venv
 Victron
