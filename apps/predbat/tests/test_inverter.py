@@ -18,6 +18,26 @@ from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST
 from inverter import Inverter, DISCHARGE_TARGET_UNSUPPORTED_MODELS
+from config import INVERTER_DEF
+
+
+def test_foxess_support_discharge_freeze_matches_foxcloud():
+    """
+    FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods - "feed-in
+    first"/freeze export does not hold SoC flat on either, PV above the export limit still charges the
+    battery instead of being clipped (#4207). FoxCloud's entry was already correctly False; FoxESS's was
+    left True, so execute.py's fetch_inverter_data() never disabled set_export_freeze/set_export_freeze_only
+    for modbus users, letting the planner offer a freeze option that couldn't actually do anything on the
+    real inverter.
+    """
+    failed = False
+    if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] is not False:
+        print("ERROR: FoxESS support_discharge_freeze should be False, got {}".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"]))
+        failed = True
+    if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] != INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]:
+        print("ERROR: FoxESS support_discharge_freeze ({}) should match FoxCloud ({}) - same hardware, different connection method".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"], INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]))
+        failed = True
+    return failed
 
 
 def dummy_sleep(seconds):
@@ -2539,6 +2559,7 @@ def run_inverter_tests(my_predbat_dummy):
 
     failed = False
     print("**** Running Inverter tests ****")
+    failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")
