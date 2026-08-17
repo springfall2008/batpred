@@ -168,27 +168,31 @@ def test_ml_training_runs_at_production_scale(my_predbat=None):
 
 
 def test_training_does_not_copy_the_dataset_per_epoch(my_predbat=None):
-    """Training must not hold whole extra copies of the feature matrix
+    """Training must not hold the feature matrix it would otherwise materialise
 
-    Drawing a full epoch of samples in one gather materialises a second matrix the size of
-    the dataset, and at the epoch boundary the previous one is still bound, so two live at
-    once. Gathering per batch keeps the working set to a batch. The budget is expressed
-    against the dataset size so it holds whatever history the fixture carries.
+    Every feature row is five sliding windows over five short channels plus time features,
+    so consecutive rows overlap in all but one value and a materialised matrix stores each
+    reading roughly LOOKBACK_STEPS times over. Assembling each batch from window views
+    keeps the working set to a batch. The budget is expressed against the size that matrix
+    would have been, so it holds whatever history the fixture carries.
     """
     print("\n=== Testing training working set ===")
     failed = 0
 
     val_mae, growth, samples, elapsed = measure_training(epochs=2)
     matrix_mb = samples * TOTAL_FEATURES * 4 / 1e6
-    budget = matrix_mb * 2.5
+    # Materialising the matrix costs it once for the dataset and again for the epoch
+    # gather, which put growth above 2x. Assembling per batch leaves the optimiser state
+    # and gradients as the largest items, well under it.
+    budget = matrix_mb * 2.0
 
-    print("dataset ~{:.1f} MB, growth {:.1f} MB ({:.2f}x), {:.1f}s".format(matrix_mb, growth, growth / matrix_mb, elapsed))
+    print("notional matrix ~{:.1f} MB, growth {:.1f} MB ({:.2f}x), {:.1f}s".format(matrix_mb, growth, growth / matrix_mb, elapsed))
 
     if growth > budget:
-        print("ERROR: growth {:.1f} MB exceeds {:.1f} MB ({:.1f}x the dataset) - the dataset is being copied per epoch".format(growth, budget, budget / matrix_mb))
+        print("ERROR: growth {:.1f} MB exceeds {:.1f} MB ({:.1f}x the notional matrix) - the matrix is being materialised".format(growth, budget, budget / matrix_mb))
         failed += 1
     else:
-        print("✓ working set within {:.1f}x the dataset".format(budget / matrix_mb))
+        print("✓ working set within {:.1f}x the notional matrix".format(budget / matrix_mb))
 
     if val_mae is None or not np.isfinite(val_mae):
         print("ERROR: training did not produce a usable result: {}".format(val_mae))
