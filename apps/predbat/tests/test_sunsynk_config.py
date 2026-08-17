@@ -12,7 +12,9 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from unittest.mock import patch
 from config import INVERTER_DEF, APPS_SCHEMA
 from components import COMPONENT_LIST
+from sunsynk_const import SUNSYNK_TTL_STATIC
 from tests.test_sunsynk_api import MockSunsynk
+from tests.test_sunsynk_publish import PublishingSunsynk
 from tests.test_infra import run_async as run_async_local
 
 
@@ -27,6 +29,80 @@ class ConfigSunsynk(MockSunsynk):
     def set_arg(self, key, value):
         """Record an arg assignment."""
         self.args_set[key] = value
+
+
+class RunSunsynk(PublishingSunsynk):
+    """PublishingSunsynk that also records set_arg, for driving run() end to end.
+
+    PublishingSunsynk supplies the Home Assistant entity surface - dashboard_item plus a
+    get_state_wrapper that reads back whatever was published - which is what makes it
+    possible to drive run() with control enabled and ONLY the transport patched. That is
+    the altitude the schedule-clobbering bugs lived at: every earlier run() test patched
+    apply_schedule itself, so no test ever exercised run() with a real apply_settings
+    underneath and the unplanned first-cycle write went unnoticed through nine reviews.
+    """
+
+    def __init__(self, **kwargs):
+        """Set up the recorder alongside the publishing double."""
+        super().__init__(**kwargs)
+        self.args_set = {}
+
+    def set_arg(self, key, value):
+        """Record an arg assignment."""
+        self.args_set[key] = value
+
+
+def _live_plan_entities(s, sn="INV1"):
+    """Seed the control entities with an in-flight 02:00-05:00 charge to 90%, as HA would hold it.
+
+    Home Assistant retains Predbat's control entities across a Predbat restart, so this is
+    exactly the state a 03:00 restart finds mid-charge.
+    """
+    s.published[s._control_name("number", sn, "battery_schedule_reserve")] = {"state": 10, "attributes": {}}
+    s.published[s._control_name("switch", sn, "battery_schedule_charge_enable")] = {"state": "on", "attributes": {}}
+    s.published[s._control_name("select", sn, "battery_schedule_charge_start_time")] = {"state": "02:00:00", "attributes": {}}
+    s.published[s._control_name("select", sn, "battery_schedule_charge_end_time")] = {"state": "05:00:00", "attributes": {}}
+    s.published[s._control_name("number", sn, "battery_schedule_charge_soc")] = {"state": 90, "attributes": {}}
+    s.published[s._control_name("number", sn, "battery_schedule_charge_power")] = {"state": 3000, "attributes": {}}
+
+
+def _transport(s, posts, settings=None):
+    """Return (fake_get, fake_post) covering every endpoint run() touches.
+
+    Patching only these two leaves discovery, the tier refreshes, the control-entity
+    round trip and the whole apply_settings read-modify-write as the real code.
+    """
+    baseline = settings if settings is not None else {"sn": "INV1", "sysWorkMode": "2", "peakAndVallery": "0", "batteryLowCap": "20", "sellTime1": "01:00", "cap1": "80", "time1on": True, "mondayOn": False}
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Serve discovery, static detail, telemetry and the settings baseline."""
+        if endpoint_key == "inverter_list":
+            return {"infos": [{"sn": "INV1"}], "total": 1}
+        if endpoint_key == "inverter_detail":
+            return {"ratePower": 8000}
+        if endpoint_key == "battery":
+            return {"soc": 50, "power": -100, "capacity": 280, "chargeVolt": 56.8, "maxChargeCurrentLimit": 100, "etodayChg": 1.0, "etodayDischg": 1.0}
+        if endpoint_key == "grid":
+            return {"pac": 100, "etodayFrom": 2.0, "etodayTo": 1.0}
+        if endpoint_key == "load":
+            return {"totalPower": 400, "dailyUsed": 5.0}
+        if endpoint_key == "input":
+            return {"pac": 1200, "etoday": 8.0}
+        if endpoint_key == "settings_read":
+            return dict(baseline)
+        return {}
+
+    async def fake_post(endpoint_key, sn=None, body=None):
+        """Record every write the component attempts, reporting a successful empty payload."""
+        posts.append((endpoint_key, sn, body))
+        return {}
+
+    return fake_get, fake_post
+
+
+async def _fake_token():
+    """Stand in for a successful login; the auth path has its own tests."""
+    return True
 
 
 def test_inverter_def_registered():
@@ -435,6 +511,235 @@ def test_refresh_config_saves_when_any_read_succeeds():
     assert not failed, "test_refresh_config_saves_when_any_read_succeeds"
 
 
+def test_run_writes_nothing_before_the_write_button_is_pressed():
+    """Two ticks from cold with control enabled and no plan must never reach the inverter.
+
+    Only the transport is patched, so this drives run() -> apply_schedule -> apply_settings
+    for real. Before the control_active gate, tick 2 posted a complete settings object built
+    from entities Predbat had never written: sellTime1..6 overwritten with the filler times,
+    cap1..6 forced to 20, peakAndVallery flipped on, every weekend day-flag turned on and
+    sysWorkMode rewritten - wiping the user's own time-of-use programme on first startup,
+    before Predbat had any plan at all. deye.py gates exactly this on control_active;
+    Sunsynk kept the attribute but dropped the gate.
+    """
+    failed = False
+    s = RunSunsynk(control_enable=True)
+    posts = []
+    fake_get, fake_post = _transport(s, posts)
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        run_async_local(s.run(0, True))
+        run_async_local(s.run(0, False))
+    if posts:
+        print(f"ERROR: run() wrote to the inverter with no plan and no write-button press: {posts}")
+        failed = True
+    if s.control_active:
+        print(f"ERROR: control_active should stay empty until the write button is pressed, got {s.control_active}")
+        failed = True
+    assert not failed, "test_run_writes_nothing_before_the_write_button_is_pressed"
+
+
+def test_run_first_cycle_preserves_a_live_plan_in_the_control_entities():
+    """A restart mid-charge must republish the live plan, not an empty schedule.
+
+    dashboard_item reaches set_state_wrapper, so seeding local_schedule from
+    _empty_schedule() on the first cycle and publishing it back OVERWRITES Predbat's live
+    plan in Home Assistant. Traced at 03:00 inside a 02:00-05:00 charge to 90%: afterwards
+    charge_enable was off, the window was 00:00:00 -> 00:00:00 and the reserve 0, so the
+    charge stopped until Predbat replanned. The first cycle must READ the entities instead.
+    """
+    failed = False
+    s = RunSunsynk(control_enable=True)
+    _live_plan_entities(s)
+    posts = []
+    fake_get, fake_post = _transport(s, posts)
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        run_async_local(s.run(0, True))
+    expected = {
+        s._control_name("switch", "INV1", "battery_schedule_charge_enable"): "on",
+        s._control_name("select", "INV1", "battery_schedule_charge_start_time"): "02:00:00",
+        s._control_name("select", "INV1", "battery_schedule_charge_end_time"): "05:00:00",
+        s._control_name("number", "INV1", "battery_schedule_charge_soc"): 90,
+        s._control_name("number", "INV1", "battery_schedule_reserve"): 10,
+    }
+    for entity, want in expected.items():
+        got = s.published.get(entity, {}).get("state")
+        if got != want:
+            print(f"ERROR: the first cycle overwrote {entity}: {got!r}, expected {want!r}")
+            failed = True
+    if s.local_schedule.get("INV1", {}).get("charge", {}).get("soc") != 90:
+        print(f"ERROR: local_schedule did not pick up the live plan: {s.local_schedule.get('INV1')}")
+        failed = True
+    assert not failed, "test_run_first_cycle_preserves_a_live_plan_in_the_control_entities"
+
+
+def test_run_writes_once_the_write_button_has_been_pressed():
+    """The control_active gate must not make the component inert once Predbat is driving it.
+
+    The write button is Predbat's normal "apply the schedule" action, so pressing it both
+    writes and marks the inverter as one Predbat now controls; a later tick whose plan has
+    genuinely changed must then write again without another press.
+    """
+    failed = False
+    s = RunSunsynk(control_enable=True)
+    _live_plan_entities(s)
+    posts = []
+    fake_get, fake_post = _transport(s, posts)
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "fetch_token", side_effect=_fake_token):
+        run_async_local(s.run(0, True))
+        run_async_local(s.switch_event(s._control_name("switch", "INV1", "battery_schedule_charge_write"), "turn_on"))
+        if len(posts) != 1:
+            print(f"ERROR: the write button should have produced exactly one write, got {posts}")
+            failed = True
+        # Predbat replans and moves the charge window; the next tick must carry that through.
+        s.published[s._control_name("select", "INV1", "battery_schedule_charge_start_time")] = {"state": "01:00:00", "attributes": {}}
+        run_async_local(s.run(0, False))
+    if len(posts) != 2:
+        print(f"ERROR: a changed plan after the write button should write again, got {len(posts)} write(s): {posts}")
+        failed = True
+    elif "01:00" not in str(posts[-1][2]):
+        print(f"ERROR: the second write did not carry the new 01:00 window: {posts[-1][2]}")
+        failed = True
+    assert not failed, "test_run_writes_once_the_write_button_has_been_pressed"
+
+
+def test_run_defers_startup_when_the_first_telemetry_poll_fails():
+    """A first cycle with the telemetry endpoints down must not be reported as a success.
+
+    automatic_config() runs on the first cycle ONLY, so a first tick that returns True with
+    no telemetry permanently loses soc_max, battery_rate_max and every energy arg for the
+    whole session, behind a single log warning. Returning False leaves ComponentBase's
+    `first` flag set so the whole startup path is retried on its backoff.
+    """
+    failed = False
+    s = RunSunsynk(control_enable=False)
+    s.automatic = True
+    configured = []
+
+    async def fake_device_list():
+        """Discovery works; only telemetry is down."""
+        s.device_list = ["INV1"]
+        return ["INV1"]
+
+    async def fake_device_data(sn):
+        """Every telemetry endpoint is briefly unavailable."""
+        return {}
+
+    async def fake_detail(sn):
+        """Static detail is fine, so only telemetry is missing."""
+        return {"ratePower": 8000}
+
+    async def fake_settings(sn):
+        """The settings read is fine, so only telemetry is missing."""
+        return {"sn": sn, "batteryLowCap": "10"}
+
+    async def fake_automatic_config():
+        """Record an automatic_config that must not run without telemetry."""
+        configured.append(True)
+
+    with (
+        patch.object(s, "fetch_token", side_effect=_fake_token),
+        patch.object(s, "get_device_list", side_effect=fake_device_list),
+        patch.object(s, "fetch_device_detail", side_effect=fake_detail),
+        patch.object(s, "fetch_device_data", side_effect=fake_device_data),
+        patch.object(s, "fetch_settings", side_effect=fake_settings),
+        patch.object(s, "automatic_config", side_effect=fake_automatic_config),
+    ):
+        result = run_async_local(s.run(0, True))
+    if result is not False:
+        print(f"ERROR: a first cycle with no telemetry should return False, got {result!r}")
+        failed = True
+    if configured:
+        print("ERROR: automatic_config ran on a first cycle that had no telemetry at all")
+        failed = True
+    assert not failed, "test_run_defers_startup_when_the_first_telemetry_poll_fails"
+
+
+def test_refresh_static_keeps_known_inverters_on_a_failed_discovery():
+    """A transient discovery failure must not empty device_list or poison the cache.
+
+    This tier re-runs every 8 hours in a long-lived process. Assigning the empty result
+    unconditionally, then marking the tier fresh and saving, wrote {'device_list': []} to
+    disk and stamped it fresh - taking a working component down until the next success and
+    across the next restart. Absence of a result is not a result (deye.py refuses the same).
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1", "INV2"]
+    saved = []
+
+    async def fake_discovery_fails():
+        """Simulate the discovery endpoint returning nothing this cycle."""
+        s.device_list = []
+        return []
+
+    async def fake_save_cache(name, data):
+        """Record any cache write."""
+        saved.append(name)
+
+    with patch.object(s, "get_device_list", side_effect=fake_discovery_fails), patch.object(s, "save_cache", side_effect=fake_save_cache):
+        run_async_local(s.refresh_static())
+    if s.device_list != ["INV1", "INV2"]:
+        print(f"ERROR: a failed discovery wiped device_list, got {s.device_list}")
+        failed = True
+    if saved:
+        print(f"ERROR: a failed discovery wrote the cache: {saved}")
+        failed = True
+    if not s.tier_expired("static", SUNSYNK_TTL_STATIC):
+        print("ERROR: a failed discovery marked the static tier fresh, so it will not retry for a full TTL")
+        failed = True
+    assert not failed, "test_refresh_static_keeps_known_inverters_on_a_failed_discovery"
+
+
+def test_run_isolates_one_inverters_failure_from_the_rest():
+    """One inverter raising must not cost the others their poll, nor skip the publish step.
+
+    Without per-serial isolation a single exception on INV1 aborts the whole tick: INV2 is
+    never polled, publish_data() never runs and update_success_timestamp() is never called,
+    so components.is_alive() reports the whole component down over one bad inverter.
+    """
+    failed = False
+    s = RunSunsynk(control_enable=True)
+    s.device_list = ["INV1", "INV2"]
+    s.mark_refreshed("static")
+    polled = []
+    published = []
+
+    async def fake_device_data(sn):
+        """INV1's telemetry endpoint raises; INV2's is fine."""
+        if sn == "INV1":
+            raise ValueError("simulated telemetry failure")
+        polled.append(sn)
+        s.device_values[sn] = {"soc": 50}
+        return {"soc": 50}
+
+    async def fake_settings(sn):
+        """INV1's settings read raises; INV2's is fine."""
+        if sn == "INV1":
+            raise ValueError("simulated settings failure")
+        return {"sn": sn, "batteryLowCap": "10"}
+
+    async def fake_publish_data():
+        """Record that the publish step still ran."""
+        published.append(True)
+
+    with (
+        patch.object(s, "fetch_device_data", side_effect=fake_device_data),
+        patch.object(s, "fetch_settings", side_effect=fake_settings),
+        patch.object(s, "publish_data", side_effect=fake_publish_data),
+    ):
+        result = run_async_local(s.run(0, False))
+    if polled != ["INV2"]:
+        print(f"ERROR: INV2 was not polled after INV1 failed, polled={polled}")
+        failed = True
+    if not published:
+        print("ERROR: publish_data was skipped because one inverter failed")
+        failed = True
+    if result is not True:
+        print(f"ERROR: a tick where one of two inverters failed should still complete, got {result!r}")
+        failed = True
+    assert not failed, "test_run_isolates_one_inverters_failure_from_the_rest"
+
+
 def run_sunsynk_config_tests(my_predbat):
     """Run all Sunsynk configuration tests."""
     failed = False
@@ -449,6 +754,12 @@ def run_sunsynk_config_tests(my_predbat):
         ("run_login_failure", test_run_returns_false_on_login_failure),
         ("run_no_inverters", test_run_returns_false_with_no_inverters),
         ("run_publishes_every_tick", test_run_publishes_schedule_every_tick_not_only_first),
+        ("run_no_write_before_button", test_run_writes_nothing_before_the_write_button_is_pressed),
+        ("run_first_cycle_preserves_plan", test_run_first_cycle_preserves_a_live_plan_in_the_control_entities),
+        ("run_writes_after_button", test_run_writes_once_the_write_button_has_been_pressed),
+        ("run_defers_without_telemetry", test_run_defers_startup_when_the_first_telemetry_poll_fails),
+        ("refresh_static_keeps_devices", test_refresh_static_keeps_known_inverters_on_a_failed_discovery),
+        ("run_isolates_inverter_failure", test_run_isolates_one_inverters_failure_from_the_rest),
         ("refresh_config_logs_external_changes", test_refresh_config_logs_external_changes),
         ("refresh_config_skips_save_on_total_failure", test_refresh_config_skips_save_when_every_read_fails),
         ("refresh_config_saves_on_partial_success", test_refresh_config_saves_when_any_read_succeeds),

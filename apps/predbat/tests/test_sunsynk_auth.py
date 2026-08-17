@@ -9,6 +9,7 @@
 """Tests for Sunsynk login: the pure-Python RSA helper and the three auth methods."""
 
 import base64
+import time
 from unittest.mock import patch
 from sunsynk_const import parse_rsa_public_key, rsa_encrypt_pkcs1v15
 from tests.test_sunsynk_api import MockSunsynk
@@ -265,19 +266,88 @@ def test_oauth_method_skips_login_entirely():
 
 
 def test_debug_trace_redacts_credentials():
-    """Debug tracing never writes a password or bearer token to the log."""
+    """Debug tracing never writes a password or bearer token to the log, at any nesting depth.
+
+    The flat case is the request side. The NESTED case is the one that mattered and the one
+    a top-level-only redact() missed: _request traces the whole {code, msg, success, data}
+    response envelope, and the login response carries access_token/refresh_token one level
+    down inside `data`, so a Sunsynk bearer token - full control of the user's inverter -
+    was logged verbatim. api_debug defaults to True specifically so testers paste raw
+    traffic into GitHub issues, and docs/components.md promises "with credentials redacted".
+    A list of envelopes is covered too, since a Sunsynk `data` is as often a list as a dict.
+    """
     failed = False
     s = MockSunsynk()
     s.debug_api("POST", "token", {"username": "test@example.com", "password": "hunter2", "sign": "abc123", "access_token": "tok-abc"})
+    s.debug_api("<-", "token", {"code": 0, "msg": "Success", "success": True, "data": {"access_token": "nested-tok", "refresh_token": "nested-ref", "expires_in": 3600, "user": {"email": "test@example.com", "password": "nested-pw"}}})
+    s.debug_api("<-", "inverter_list", {"success": True, "data": {"infos": [{"sn": "INV1", "token": "list-tok"}]}})
     joined = " ".join(str(m) for m in s.log_messages)
-    for secret in ("hunter2", "tok-abc", "abc123"):
+    for secret in ("hunter2", "tok-abc", "abc123", "nested-tok", "nested-ref", "nested-pw", "list-tok"):
         if secret in joined:
             print(f"ERROR: {secret!r} leaked into the debug log")
             failed = True
     if "test@example.com" not in joined:
         print("ERROR: non-secret fields should still be traced")
         failed = True
+    if "INV1" not in joined or "3600" not in joined:
+        print("ERROR: non-secret nested fields should survive redaction so the trace stays useful")
+        failed = True
     assert not failed, "test_debug_trace_redacts_credentials"
+
+
+def test_run_refreshes_an_expired_oauth_token():
+    """An expired injected token must be refreshed before the cycle polls anything.
+
+    fetch_token() for oauth only reports whether a token is held, and nothing ever called
+    check_and_refresh_oauth_token(): token_expires_at and token_hash were accepted, plumbed
+    into _init_oauth and then dead. docs/inverter-setup.md says the platform "injects and
+    refreshes" the token, so an expired one broke every call until the process restarted.
+    """
+    failed = False
+    s = MockSunsynk(auth_method="oauth")
+    s.token_expires_at = 0  # expired, so _token_needs_refresh() is True
+    refreshes = []
+
+    async def fake_do_refresh():
+        """Stand in for the oauth-refresh edge function, installing a fresh token."""
+        refreshes.append(1)
+        s.access_token = "refreshed-token"
+        s.token_expires_at = time.time() + 3600
+        return True
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """No inverters, so the cycle stops straight after discovery."""
+        return {}
+
+    with patch.object(s, "_do_refresh", side_effect=fake_do_refresh), patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.run(0, True))
+    if not refreshes:
+        print("ERROR: run() never attempted an OAuth refresh for an expired injected token")
+        failed = True
+    assert not failed, "test_run_refreshes_an_expired_oauth_token"
+
+
+def test_run_stops_when_the_oauth_token_needs_reauthorisation():
+    """A token the edge function says needs re-authorisation stops the cycle before any polling."""
+    failed = False
+    s = MockSunsynk(auth_method="oauth")
+    s.oauth_failed = True  # the edge function already reported needs_reauth
+    calls = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Record any poll, which must not happen with a dead token."""
+        calls.append(endpoint_key)
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        result = run_async_local(s.run(0, True))
+    if calls:
+        print(f"ERROR: the cycle kept polling with a token that needs re-authorisation: {calls}")
+        failed = True
+    if result is not False:
+        print(f"ERROR: run() should return False when the OAuth token cannot be refreshed, got {result!r}")
+        failed = True
+    assert not failed, "test_run_stops_when_the_oauth_token_needs_reauthorisation"
 
 
 def run_sunsynk_auth_tests(my_predbat):
@@ -293,6 +363,8 @@ def run_sunsynk_auth_tests(my_predbat):
         ("legacy_login_plaintext", test_legacy_login_sends_plaintext_and_skips_public_key),
         ("no_plaintext_fallback", test_rsa_login_never_falls_back_to_plaintext),
         ("oauth_skips_login", test_oauth_method_skips_login_entirely),
+        ("oauth_run_refreshes", test_run_refreshes_an_expired_oauth_token),
+        ("oauth_run_stops_on_reauth", test_run_stops_when_the_oauth_token_needs_reauthorisation),
         ("debug_redaction", test_debug_trace_redacts_credentials),
     ]:
         try:

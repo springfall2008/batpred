@@ -81,7 +81,6 @@ def test_each_tier_saves_to_its_own_file():
     s.device_list = ["INV1"]
     s.device_detail = {"INV1": {"ratePower": 8000}}
     s.device_settings = {"INV1": {"batteryLowCap": "10"}}
-    s.device_capacity = {"INV1": 14.3}
     s.device_rated_power = {"INV1": 8000.0}
     s.applied_payload = {"INV1": {"sysWorkMode": "1"}}
     run_async_local(s.save_static())

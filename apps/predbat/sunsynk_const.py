@@ -82,9 +82,6 @@ TOU_FIELD = {
     "grid_charge": "time{n}on",
 }
 
-# Slot fields Predbat does NOT own and must preserve verbatim from the read.
-TOU_FIELD_PRESERVED = ["genTime{n}on", "sellTime{n}Volt"]
-
 SUNSYNK_DAY_FIELDS = ["mondayOn", "tuesdayOn", "wednesdayOn", "thursdayOn", "fridayOn", "saturdayOn", "sundayOn"]
 
 # Top-level settings keys Predbat owns.
@@ -143,7 +140,6 @@ SUNSYNK_TELEMETRY_NEGATE = ()
 
 # Fields used to derive ratings rather than published directly.
 SUNSYNK_CAPACITY_AH_FIELD = "capacity"  # battery realtime, amp-hours
-SUNSYNK_PACK_VOLTAGE_FIELD = "voltage"  # battery realtime, live pack volts
 SUNSYNK_CHARGE_VOLT_FIELD = "chargeVolt"  # battery realtime, BMS charge target
 SUNSYNK_MAX_CHARGE_CURRENT_FIELD = "maxChargeCurrentLimit"  # battery realtime, amps
 SUNSYNK_RATED_POWER_FIELD = "ratePower"  # inverter detail, watts
