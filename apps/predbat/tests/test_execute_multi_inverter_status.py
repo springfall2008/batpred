@@ -13,7 +13,7 @@ resolver that replaced execute_plan()'s previous "whichever inverter is processe
 overwrite, which silently hid genuine cross-inverter disagreement (e.g. real cross-charging).
 """
 
-from execute import resolve_multi_inverter_status
+from execute import build_status_extra, resolve_multi_inverter_status
 
 
 def test_multi_inverter_status(my_predbat):
@@ -96,6 +96,64 @@ def test_multi_inverter_status(my_predbat):
     result = resolve_multi_inverter_status({0: "Charging"}, "Calibration")
     if result != "Calibration":
         print("  ERROR: expected 'Calibration' to override a stale core state left by an earlier inverter, got {!r}".format(result))
+        failed = True
+
+    failed |= test_build_status_extra()
+
+    return failed
+
+
+def test_build_status_extra():
+    """Verify the per-inverter status detail text only labels segments when inverters disagree.
+
+    #4466 began labelling every segment with that inverter's own state so a mixed fleet could be
+    read. The label is redundant when the whole fleet agrees, because the headline status the detail
+    is appended to already says it - a single-inverter export showed
+    "Exporting target Exporting 19%-5%" in v8.48.4.
+    """
+    failed = False
+    print("**** Testing build_status_extra ****")
+
+    print("Test: no inverter recorded a detail segment - empty text")
+    result = build_status_extra([])
+    if result != "":
+        print("  ERROR: expected '' with no segments, got {!r}".format(result))
+        failed = True
+
+    print("Test: single inverter exporting - no repeated label (regression, GH v8.48.4)")
+    result = build_status_extra([(0, "target", "Exporting", "19%-5%")])
+    if result != " target 19%-5%":
+        print("  ERROR: expected ' target 19%-5%', got {!r}".format(result))
+        failed = True
+
+    print("Test: single inverter freeze exporting - uses its own lead word, still unlabelled")
+    result = build_status_extra([(0, "current SoC", "Freeze exporting", "19%")])
+    if result != " current SoC 19%":
+        print("  ERROR: expected ' current SoC 19%', got {!r}".format(result))
+        failed = True
+
+    print("Test: multiple inverters all in the same state - joined, still unlabelled")
+    result = build_status_extra([(0, "target", "Charging", "50%-80%"), (1, "target", "Charging", "60%-80%")])
+    if result != " target 50%-80% / 60%-80%":
+        print("  ERROR: expected ' target 50%-80% / 60%-80%', got {!r}".format(result))
+        failed = True
+
+    print("Test: inverters in different states - every segment labelled so the fleet can be read")
+    result = build_status_extra([(0, "target", "Charging", "90%-100.0%"), (1, "target", "Hold charging", "100%-100.0%")])
+    if result != " target Charging 90%-100.0% / Hold charging 100%-100.0%":
+        print("  ERROR: expected labelled mixed-fleet text, got {!r}".format(result))
+        failed = True
+
+    print("Test: cross-charging (charge and export at once) - labelled, as the headline says neither")
+    result = build_status_extra([(0, "target", "Charging", "50%-80%"), (1, "target", "Exporting", "50%-5%")])
+    if result != " target Charging 50%-80% / Exporting 50%-5%":
+        print("  ERROR: expected labelled cross-charging text, got {!r}".format(result))
+        failed = True
+
+    print("Test: only a non-zero inverter recorded a segment - separator used, no lead word")
+    result = build_status_extra([(1, "target", "Exporting", "19%-5%")])
+    if result != " / 19%-5%":
+        print("  ERROR: expected ' / 19%-5%', got {!r}".format(result))
         failed = True
 
     return failed

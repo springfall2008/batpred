@@ -72,6 +72,31 @@ def resolve_multi_inverter_status(status_per_inverter, current_status):
     return current_status
 
 
+def build_status_extra(status_extra_parts):
+    """Assemble the per-inverter status detail text recorded during execute_plan().
+
+    Each entry is ``(inverter_id, lead, label, detail)``: ``lead`` is the introductory word used by the
+    first inverter ("target"/"current SoC"), ``label`` is that inverter's own core charge/export state
+    and ``detail`` the SoC figures.
+
+    The per-inverter ``label`` only carries information when the fleet's inverters actually disagree.
+    #4466 added it so a mixed fleet could be read at all, but emitting it unconditionally repeated the
+    headline status on every system whose inverters agree - a single-inverter install showed
+    "Exporting target Exporting 19%-5%". Labels are therefore dropped when every segment carries the
+    same one, restoring the pre-#4466 text for a single inverter and for any fleet acting in unison,
+    and kept when they differ.
+    """
+    if not status_extra_parts:
+        return ""
+    show_labels = len({label for _, _, label, _ in status_extra_parts}) > 1
+    status_extra = ""
+    for inverter_id, lead, label, detail in status_extra_parts:
+        # Only the first inverter introduces the text; the rest are appended after a separator.
+        status_extra += " {}".format(lead) if inverter_id == 0 else " /"
+        status_extra += " {} {}".format(label, detail) if show_labels else " {}".format(detail)
+    return status_extra
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -81,7 +106,9 @@ class Execute:
     """
 
     def execute_plan(self):
-        status_extra = ""  # extra status text added to Predbat notifications
+        # Per-inverter detail segments, assembled into the status text after the headline status is
+        # resolved - see build_status_extra() for why they can't be concatenated inline.
+        status_extra_parts = []
         status_hold_car = ""  # car hold status text
         status_hold_iboost = ""  # iBoost hold status text
         status_freeze_export = ""  # freeze export during demand status text
@@ -249,8 +276,7 @@ class Execute:
 
                             status = "Freeze charging"
                             status_per_inverter[inverter.id] = status
-                            status_extra += " target" if inverter.id == 0 else " /"  # Append multi-inverter target SoC's together
-                            status_extra += " {} {}%".format(status, inverter.soc_percent)
+                            status_extra_parts.append((inverter.id, "target", status, "{}%".format(inverter.soc_percent)))  # Append multi-inverter target SoC's together
                             self.log("Inverter {} Freeze charging with SoC {}%".format(inverter.id, inverter.soc_percent))
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
@@ -295,8 +321,7 @@ class Execute:
                                 status_per_inverter[inverter.id] = status
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
-                            status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {} {}%-{}%".format(status, inverter.soc_percent, inv_target_soc_percent)
+                            status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inv_target_soc_percent)))  # append multi-inverter target SoC's together
 
                         if not self.set_discharge_during_charge and resetPause:
                             # Do we discharge discharge during charge
@@ -432,8 +457,7 @@ class Execute:
 
                         status = "Exporting"
                         status_per_inverter[inverter.id] = status
-                        status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                        status_extra += " {} {}%-{}%".format(status, inverter.soc_percent, int(target))
+                        status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, int(target))))  # append multi-inverter target SoC's together
                         # Immediate export mode
                     else:
                         inverter.adjust_force_export(False)
@@ -453,8 +477,8 @@ class Execute:
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
                             status_per_inverter[inverter.id] = status
-                            status_extra += " current SoC" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {} {}%".format(status, inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
+                            # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
+                            status_extra_parts.append((inverter.id, "current SoC", status, "{}%".format(inverter.soc_percent)))  # append multi-inverter target SoC's together
                             isExporting = True
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
                             self.isExporting_Target = int(target)
@@ -462,8 +486,7 @@ class Execute:
                             status = "Hold exporting"
                             status_per_inverter[inverter.id] = status
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
-                            status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {} {}%-{}%".format(status, inverter.soc_percent, inverter.soc_percent)
+                            status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inverter.soc_percent)))  # append multi-inverter target SoC's together
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
@@ -691,6 +714,7 @@ class Execute:
         # Resolve the headline status across all inverters rather than leaving whichever inverter was
         # processed last to silently win.
         status = resolve_multi_inverter_status(status_per_inverter, status)
+        status_extra = build_status_extra(status_extra_parts)
 
         # Set the charge/discharge status information
         self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))
