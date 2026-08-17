@@ -41,12 +41,30 @@ def test_parse_rsa_public_key():
 
 
 def test_parse_rsa_public_key_rejects_rubbish():
-    """A body that is not a DER key raises rather than returning a bogus modulus."""
+    """A body that is not a DER key raises rather than returning a bogus modulus.
+
+    The near-full-length truncations (``[:-1]``, ``[:-2]``, ``[:-3]``) are here because a
+    truncation that only clips the last one to three bytes of the exponent still parses
+    every earlier TLV correctly, so it exercises a different failure path from an
+    early/gross truncation: without a bounds check in ``_read_tlv``, Python's silent
+    slice truncation lets these "succeed" with a corrupted exponent (0, 1 or 256 for
+    this key) instead of raising — and an exponent of 1 would send the password
+    effectively unencrypted.
+    """
     failed = False
-    for name, payload in (("empty", b""), ("not a sequence", b"\x02\x01\x05"), ("truncated", base64.b64decode(SUNSYNK_TEST_PUBLIC_KEY)[:20])):
+    full_key = base64.b64decode(SUNSYNK_TEST_PUBLIC_KEY)
+    cases = [
+        ("empty", b""),
+        ("not a sequence", b"\x02\x01\x05"),
+        ("truncated", full_key[:20]),
+        ("truncated by 1 byte", full_key[:-1]),
+        ("truncated by 2 bytes", full_key[:-2]),
+        ("truncated by 3 bytes", full_key[:-3]),
+    ]
+    for name, payload in cases:
         try:
-            parse_rsa_public_key(payload)
-            print(f"ERROR: {name} was accepted as a public key")
+            modulus, exponent = parse_rsa_public_key(payload)
+            print(f"ERROR: {name} was accepted as a public key (modulus={hex(modulus)}, exponent={exponent})")
             failed = True
         except (ValueError, IndexError):
             pass

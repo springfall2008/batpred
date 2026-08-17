@@ -193,15 +193,27 @@ SUNSYNK_DEBUG_REDACT_KEYS = ("password", "access_token", "refresh_token", "token
 
 
 def _read_tlv(data, offset):
-    """Read one DER tag-length-value at offset, returning (tag, value, next_offset)."""
+    """Read one DER tag-length-value at offset, returning (tag, value, next_offset).
+
+    Raises ValueError if the tag/length header or the declared value would read past
+    the end of ``data``. Python slicing truncates silently instead of raising, so
+    without this check a truncated DER key would "parse" successfully with a
+    corrupted trailing field — see ``parse_rsa_public_key`` for why that matters.
+    """
+    if offset + 2 > len(data):
+        raise ValueError("Sunsynk DER TLV header runs past the end of the data")
     tag = data[offset]
     offset += 1
     length = data[offset]
     offset += 1
     if length & 0x80:
         count = length & 0x7F
+        if offset + count > len(data):
+            raise ValueError("Sunsynk DER TLV long-form length runs past the end of the data")
         length = int.from_bytes(data[offset : offset + count], "big")
         offset += count
+    if offset + length > len(data):
+        raise ValueError("Sunsynk DER TLV declares more data than is present")
     return tag, data[offset : offset + length], offset + length
 
 
