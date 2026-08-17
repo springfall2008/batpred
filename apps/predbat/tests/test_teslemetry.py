@@ -1082,6 +1082,21 @@ def test_teslemetry_inverter_def_tesla():
         assert key in tesla, "TESLA INVERTER_DEF missing key {}".format(key)
 
 
+def test_foxess_support_discharge_freeze_matches_foxcloud():
+    """
+    FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods - "feed-in
+    first"/freeze export does not hold SoC flat on either, PV above the export limit still charges the
+    battery instead of being clipped (#4207). FoxCloud's entry was already correctly False; FoxESS's was
+    left True, so execute.py's fetch_inverter_data() never disabled set_export_freeze/set_export_freeze_only
+    for modbus users, letting the planner offer a freeze option that couldn't actually do anything on the
+    real inverter.
+    """
+    from config import INVERTER_DEF
+
+    assert INVERTER_DEF["FoxESS"]["support_discharge_freeze"] is False
+    assert INVERTER_DEF["FoxESS"]["support_discharge_freeze"] == INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]
+
+
 def test_teslemetry_component_registry_config():
     """Component registry exposes the automatic arg, can_restart, and the schema accepts teslemetry_automatic."""
     from components import COMPONENT_LIST
@@ -1946,6 +1961,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_backup_reserve_drift_correction_refreshes_cache_and_reasserts()
     test_teslemetry_backup_reserve_drift_correction_no_spurious_resend_when_matching()
     test_teslemetry_inverter_def_tesla()
+    test_foxess_support_discharge_freeze_matches_foxcloud()
     test_teslemetry_component_registry_config()
     test_teslemetry_site_info_publishes_rate_and_limit()
     test_teslemetry_site_info_limit_kw_normalised()
