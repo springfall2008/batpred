@@ -44,6 +44,16 @@ SUNSYNK_RETRIES = 3
 SUNSYNK_PAGE_SIZE = 10
 SUNSYNK_CLIENT_ID = "csp-web"
 
+# Hard ceiling on inverter-list discovery pages (SunsynkAPI.get_device_list), independent
+# of the server-reported `total` field and of whether each page keeps contributing serials
+# not seen before. `total` is entirely server-controlled and never otherwise sanity-checked,
+# so a corrupt or absurd value must not be able to hammer the API indefinitely. At
+# SUNSYNK_PAGE_SIZE per page this covers 5000 inverters - far beyond any real installation -
+# while bounding the worst case to hundreds rather than millions of HTTP calls. Hitting it
+# is logged as a warning so a genuinely large account is diagnosable rather than silently
+# truncated.
+SUNSYNK_MAX_DISCOVERY_PAGES = 500
+
 TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
 
@@ -143,6 +153,15 @@ SUNSYNK_BATTERY_LOW_CAP_FIELD = "batteryLowCap"  # settings, percent floor
 # target, so an amp-hour capacity can become kWh. Same derivation deye.py uses.
 LIFEPO4_CHARGE_VOLTS_PER_CELL = 3.55
 LIFEPO4_NOMINAL_VOLTS_PER_CELL = 3.2
+
+# VERIFY@SPIKE — cell-count rounding in SunsynkAPI.nominal_pack_voltage assumes every real
+# pack is charged to (close enough to) 3.55V/cell that round(chargeVolt / 3.55) recovers the
+# true cell count. It is exact for the values tested (56.8, 85.2, 113.6V) because those are
+# exact multiples of 3.55, but a legitimate pack charged to a different per-cell target -
+# e.g. 24 cells at 3.45V/cell = 82.8V - rounds to 23 cells instead of 24, silently giving a
+# nominal voltage, capacity and battery_rate_max about 4% wrong. No live hardware has
+# confirmed the real spread of charge targets in use. The remote tester should compare the
+# derived battery_capacity against the battery's actual rated kWh before trusting it.
 
 # Refresh cadence per class of state, in minutes. ComponentBase ticks run() every 60
 # seconds; these are the maximum ages a cached tier may reach before it is re-polled.

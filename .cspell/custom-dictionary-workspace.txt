@@ -337,6 +337,7 @@ nordpool
 noreferrer
 nosc
 nosuchrun
+notsn
 nrgheat
 numpy
 OCPP
@@ -446,6 +447,7 @@ sess
 setattr
 setdefault
 SFMB
+SIGALRM
 sigcloud
 sigen
 sigencloud

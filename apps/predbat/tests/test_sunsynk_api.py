@@ -10,12 +10,13 @@
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import asyncio
+import signal
 import aiohttp
 import pytz
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
 from sunsynk import SunsynkAPI
-from sunsynk_const import SUNSYNK_REGIONS, SUNSYNK_ENDPOINTS, SUNSYNK_RETRIES
+from sunsynk_const import SUNSYNK_REGIONS, SUNSYNK_ENDPOINTS, SUNSYNK_RETRIES, SUNSYNK_MAX_DISCOVERY_PAGES
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
@@ -547,6 +548,165 @@ def test_battery_reserve_min_from_settings():
     assert not failed, "test_battery_reserve_min_from_settings"
 
 
+class _HardTimeout(Exception):
+    """Raised when a guarded coroutine exceeds its hard wall-clock timeout."""
+
+
+def _run_with_hard_timeout(coro, seconds=5):
+    """Run coro to completion, or raise _HardTimeout after `seconds` of wall-clock time.
+
+    An asyncio-level timeout (``asyncio.wait_for``) cannot be trusted to catch a runaway
+    ``while``/``for`` loop that only ever awaits mocked coroutines resolving with no real
+    suspension: each ``await`` completes synchronously without handing control back to the
+    event loop's own scheduler, so a ``call_later`` timeout callback never gets a chance to
+    run - confirmed empirically against a tight loop shaped exactly like the bug this guards
+    against, which hung indefinitely under ``asyncio.wait_for`` but was caught in ~2 seconds
+    by ``SIGALRM``. SIGALRM is a genuine OS-level interrupt that CPython checks between
+    bytecode instructions, so it fires even inside a loop that never truly yields.
+    """
+
+    def _handler(signum, frame):
+        """Convert the SIGALRM into a Python exception so pytest-free assertions can catch it."""
+        raise _HardTimeout(f"operation exceeded its {seconds}s hard timeout - suspected infinite loop")
+
+    old_handler = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(seconds)
+    try:
+        return run_async_local(coro)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
+def test_get_device_list_terminates_when_serials_are_missing():
+    """A page whose entries never carry `sn` must not spin the discovery loop forever.
+
+    Regression test for Finding 1: driven against the pre-fix method, a page that is
+    non-empty but contributes no usable serial let `len(serials)` sit at 0 forever while
+    `total` stayed above it, so the loop never terminated (observed: millions of calls
+    within seconds, hard-interrupted rather than finishing).
+    """
+    failed = False
+    s = MockSunsynk()
+    calls = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return an unbounded-looking total whose entries never carry an `sn` field."""
+        calls.append(1)
+        return {"total": 10, "infos": [{"notsn": "X"}, {"notsn": "Y"}]}
+
+    devices = None
+    with patch.object(s, "_get", side_effect=fake_get):
+        try:
+            devices = _run_with_hard_timeout(s.get_device_list())
+        except _HardTimeout as error:
+            print(f"ERROR: {error}")
+            failed = True
+    if devices is not None and devices != []:
+        print(f"ERROR: expected no serials when none carry 'sn', got {devices}")
+        failed = True
+    if len(calls) > 5:
+        print(f"ERROR: expected the loop to give up quickly once a page adds nothing new, made {len(calls)} calls")
+        failed = True
+    assert not failed, "test_get_device_list_terminates_when_serials_are_missing"
+
+
+def test_get_device_list_deduplicates_repeated_pages():
+    """A server that resends the same page must not inflate the device list with duplicates.
+
+    Regression test for Finding 3: driven against the pre-fix method, unconditional
+    ``serials.append`` on every page meant a repeated page kept adding the same two
+    serials forever (bounded only by `total`), rather than being recognised as no new
+    progress and stopped.
+    """
+    failed = False
+    s = MockSunsynk()
+    calls = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return the identical two-serial page for every requested page number."""
+        calls.append(1)
+        return {"total": 10, "infos": [{"sn": "INV1"}, {"sn": "INV2"}]}
+
+    devices = None
+    with patch.object(s, "_get", side_effect=fake_get):
+        try:
+            devices = _run_with_hard_timeout(s.get_device_list())
+        except _HardTimeout as error:
+            print(f"ERROR: {error}")
+            failed = True
+    if devices is not None and devices != ["INV1", "INV2"]:
+        print(f"ERROR: expected exactly the two unique serials with no duplicates, got {devices}")
+        failed = True
+    if len(calls) > 5:
+        print(f"ERROR: expected the loop to stop quickly once a repeated page adds nothing new, made {len(calls)} calls")
+        failed = True
+    assert not failed, "test_get_device_list_deduplicates_repeated_pages"
+
+
+def test_get_device_list_bogus_total_is_bounded_by_page_cap():
+    """A hugely inflated `total` must not be trusted past the discovery page cap.
+
+    Regression test for Finding 2: driven against the pre-fix method, a `total` of
+    5,000,000 with every page genuinely contributing two new serials (so the "no new
+    progress" guard alone cannot help) ran 2,500,000 calls before it happened to satisfy
+    `len(serials) >= total`. A hard page cap is defence in depth against a `total` that
+    is corrupt or simply never reachable.
+    """
+    failed = False
+    s = MockSunsynk()
+    calls = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return two brand-new serials per page against an absurd, unreachable total."""
+        page = int((params or {}).get("page", 1))
+        calls.append(page)
+        return {"total": 5000000, "infos": [{"sn": f"INV{page}-A"}, {"sn": f"INV{page}-B"}]}
+
+    devices = None
+    with patch.object(s, "_get", side_effect=fake_get):
+        try:
+            devices = _run_with_hard_timeout(s.get_device_list())
+        except _HardTimeout as error:
+            print(f"ERROR: {error}")
+            failed = True
+    if devices is not None and len(calls) > SUNSYNK_MAX_DISCOVERY_PAGES:
+        print(f"ERROR: expected discovery to stop at the {SUNSYNK_MAX_DISCOVERY_PAGES}-page cap, made {len(calls)} calls")
+        failed = True
+    if devices is not None and len(devices) != len(calls) * 2:
+        print(f"ERROR: expected {len(calls) * 2} serials from {len(calls)} pages, got {len(devices) if devices is not None else None}")
+        failed = True
+    assert not failed, "test_get_device_list_bogus_total_is_bounded_by_page_cap"
+
+
+def test_fetch_device_detail_never_clears_a_known_rated_power():
+    """A previously-known rated power survives both an omitted field and a failed refetch."""
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 5000.0
+
+    async def fake_get_no_field(endpoint_key, sn=None, params=None):
+        """Return inverter detail that omits the rated-power field entirely."""
+        return {"model": "SUN-5K"}
+
+    with patch.object(s, "_get", side_effect=fake_get_no_field):
+        run_async_local(s.fetch_device_detail("INV1"))
+    if s.device_rated_power.get("INV1") != 5000.0:
+        print(f"ERROR: omitting ratePower cleared the known rating, got {s.device_rated_power.get('INV1')}")
+        failed = True
+
+    async def fake_get_failure(endpoint_key, sn=None, params=None):
+        """Simulate a failed fetch, which _get coerces to {}."""
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get_failure):
+        run_async_local(s.fetch_device_detail("INV1"))
+    if s.device_rated_power.get("INV1") != 5000.0:
+        print(f"ERROR: a failed fetch cleared the known rating, got {s.device_rated_power.get('INV1')}")
+        failed = True
+    assert not failed, "test_fetch_device_detail_never_clears_a_known_rated_power"
+
+
 def run_sunsynk_api_tests(my_predbat):
     """Run all Sunsynk API tests."""
     failed = False
@@ -571,6 +731,10 @@ def run_sunsynk_api_tests(my_predbat):
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),
+        ("device_list_no_serials_terminates", test_get_device_list_terminates_when_serials_are_missing),
+        ("device_list_deduplicates", test_get_device_list_deduplicates_repeated_pages),
+        ("device_list_bogus_total_bounded", test_get_device_list_bogus_total_is_bounded_by_page_cap),
+        ("device_detail_preserves_rated_power", test_fetch_device_detail_never_clears_a_known_rated_power),
     ]:
         try:
             if fn():
