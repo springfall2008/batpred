@@ -306,6 +306,59 @@ def test_create_dataset_skips_gaps_in_the_history(my_predbat=None):
     return failed
 
 
+def test_windowed_features_indexes_like_an_array(my_predbat=None):
+    """The dataset must answer the indexing an array would, not just the batch case
+
+    Training only ever gathers with an index array, but the object stands in for the feature
+    matrix everywhere else - diagnostics, tests, anything reaching for a single row - so a
+    scalar index must give one row rather than raising.
+    """
+    print("\n=== Testing WindowedFeatures indexing ===")
+    failed = 0
+
+    load, pv, temp, imp, exp = _synthetic_history(days=5)
+    now = datetime(2026, 8, 17, 12, 0, 0, tzinfo=timezone.utc)
+    predictor = LoadPredictor(learning_rate=0.001)
+    X_train, y_train, weights, X_val, y_val = predictor._create_dataset(load, now, pv_minutes=pv, temp_minutes=temp, import_rates=imp, export_rates=exp, validation_holdout_hours=24)
+
+    if X_train is None:
+        print("ERROR: no dataset built")
+        return failed + 1
+
+    try:
+        row = X_train[0]
+    except Exception as exc:
+        print("ERROR: scalar index raised {}: {}".format(type(exc).__name__, exc))
+        return failed + 1
+
+    if np.shape(row) != (TOTAL_FEATURES,):
+        print("ERROR: scalar index gave shape {}, expected ({},)".format(np.shape(row), TOTAL_FEATURES))
+        failed += 1
+    else:
+        print("✓ scalar index gives a single row")
+
+    batch = X_train[np.array([0, 1])]
+    if not np.array_equal(batch[0], row):
+        print("ERROR: scalar and array indexing disagree on row 0")
+        failed += 1
+    else:
+        print("✓ scalar and array indexing agree")
+
+    if X_train.dtype != np.dtype(np.float32):
+        print("ERROR: dtype is {}, expected a float32 dtype".format(X_train.dtype))
+        failed += 1
+    else:
+        print("✓ dtype reports float32")
+
+    if X_train.shape != (len(X_train), TOTAL_FEATURES):
+        print("ERROR: shape {} disagrees with len {}".format(X_train.shape, len(X_train)))
+        failed += 1
+    else:
+        print("✓ shape agrees with len")
+
+    return failed
+
+
 def run_ml_memory_tests(my_predbat=None):
     """Run all ML training memory tests"""
     print("\n" + "=" * 80)
@@ -319,6 +372,7 @@ def run_ml_memory_tests(my_predbat=None):
     failed += test_create_dataset_output_is_stable(my_predbat)
     failed += test_fitted_statistics_are_accurate_on_large_datasets(my_predbat)
     failed += test_create_dataset_skips_gaps_in_the_history(my_predbat)
+    failed += test_windowed_features_indexes_like_an_array(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

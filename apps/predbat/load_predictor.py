@@ -93,7 +93,7 @@ class WindowedFeatures:
     @property
     def dtype(self):
         """Element type of the assembled rows."""
-        return np.float32
+        return np.dtype(np.float32)
 
     def __array__(self, dtype=None, copy=None):
         """Materialise every row, for diagnostics and tests.
@@ -127,8 +127,14 @@ class WindowedFeatures:
             yield self._assemble(self.targets[start : start + block], buffer)
 
     def __getitem__(self, indices):
-        """Return the normalised feature rows for the given sample indices."""
-        target_chunks = self.targets[indices]
+        """Return the normalised feature rows for the given sample indices.
+
+        Accepts anything that indexes the target array. A scalar gives one row back as a
+        1-D array, matching what indexing the matrix this replaces would have returned.
+        """
+        target_chunks = np.atleast_1d(self.targets[indices])
+        scalar = np.ndim(self.targets[indices]) == 0
+
         rows = len(target_chunks)
         if self._scratch is None or len(self._scratch) < rows:
             self._scratch = np.empty((rows, TOTAL_FEATURES), dtype=np.float32)
@@ -136,7 +142,7 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             batch -= self.mean
             batch /= self.std
-        return batch
+        return batch[0] if scalar else batch
 
 
 def relu(x):

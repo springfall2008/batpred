@@ -26,6 +26,7 @@ armv
 ASHP
 asyncio
 atfork
+atleast
 authoriser
 autodocstring
 autoflake
