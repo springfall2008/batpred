@@ -5810,6 +5810,10 @@ scenarios:
       export_limit_kw: 4.34
       hybrid: false
       inverter_limit_kw: 5.54
+    iog:
+      enabled: true
+      run_slots: 5
+      run_start_minute: 1130
     load:
       base_kw: 0.243
       daily_kwh: 18.65
@@ -11744,6 +11748,10 @@ scenarios:
       export_limit_kw: 2.57
       hybrid: false
       inverter_limit_kw: 3.38
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.415
       daily_kwh: 26.25
@@ -17567,6 +17575,10 @@ scenarios:
       export_limit_kw: 0.93
       hybrid: false
       inverter_limit_kw: 4.39
+    iog:
+      enabled: true
+      run_slots: 9
+      run_start_minute: 95
     load:
       base_kw: 0.5
       daily_kwh: 6.61
@@ -23384,6 +23396,10 @@ scenarios:
       export_limit_kw: 0.47
       hybrid: false
       inverter_limit_kw: 7.19
+    iog:
+      enabled: true
+      run_slots: 9
+      run_start_minute: 160
     load:
       base_kw: 0.204
       daily_kwh: 5.59
@@ -29215,6 +29231,10 @@ scenarios:
       export_limit_kw: 0.06
       hybrid: true
       inverter_limit_kw: 3.18
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.42
       daily_kwh: 29.72
@@ -35132,6 +35152,10 @@ scenarios:
       export_limit_kw: 6.83
       hybrid: true
       inverter_limit_kw: 8.8
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.46
       daily_kwh: 16.21
@@ -40987,6 +41011,10 @@ scenarios:
       export_limit_kw: 2.11
       hybrid: true
       inverter_limit_kw: 3.59
+    iog:
+      enabled: true
+      run_slots: 3
+      run_start_minute: 1190
     load:
       base_kw: 0.228
       daily_kwh: 48.45
@@ -46885,6 +46913,10 @@ scenarios:
       export_limit_kw: 0.3
       hybrid: true
       inverter_limit_kw: 5.24
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.134
       daily_kwh: 27.83
@@ -52756,6 +52788,10 @@ scenarios:
       export_limit_kw: 0.78
       hybrid: true
       inverter_limit_kw: 3.14
+    iog:
+      enabled: true
+      run_slots: 7
+      run_start_minute: 745
     load:
       base_kw: 0.26
       daily_kwh: 49.96
@@ -58570,6 +58606,10 @@ scenarios:
       export_limit_kw: 2.34
       hybrid: true
       inverter_limit_kw: 5.04
+    iog:
+      enabled: true
+      run_slots: 4
+      run_start_minute: 75
     load:
       base_kw: 0.322
       daily_kwh: 32.21
@@ -64442,6 +64482,10 @@ scenarios:
       export_limit_kw: 2.93
       hybrid: true
       inverter_limit_kw: 5.97
+    iog:
+      enabled: true
+      run_slots: 6
+      run_start_minute: 570
     load:
       base_kw: 0.114
       daily_kwh: 17.49
@@ -70303,6 +70347,10 @@ scenarios:
       export_limit_kw: 3.71
       hybrid: false
       inverter_limit_kw: 6.31
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.352
       daily_kwh: 13.31
@@ -76182,6 +76230,10 @@ scenarios:
       export_limit_kw: 5.34
       hybrid: true
       inverter_limit_kw: 5.36
+    iog:
+      enabled: true
+      run_slots: 9
+      run_start_minute: 910
     load:
       base_kw: 0.376
       daily_kwh: 26.71
@@ -82001,6 +82053,10 @@ scenarios:
       export_limit_kw: 4.92
       hybrid: true
       inverter_limit_kw: 7.39
+    iog:
+      enabled: true
+      run_slots: 9
+      run_start_minute: 240
     load:
       base_kw: 0.152
       daily_kwh: 44.12
@@ -87916,6 +87972,10 @@ scenarios:
       export_limit_kw: 1.16
       hybrid: true
       inverter_limit_kw: 4.53
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.221
       daily_kwh: 38.03
@@ -93782,6 +93842,10 @@ scenarios:
       export_limit_kw: 2.31
       hybrid: true
       inverter_limit_kw: 2.63
+    iog:
+      enabled: true
+      run_slots: 2
+      run_start_minute: 665
     load:
       base_kw: 0.196
       daily_kwh: 35.66
@@ -99593,6 +99657,10 @@ scenarios:
       export_limit_kw: 2.17
       hybrid: false
       inverter_limit_kw: 2.54
+    iog:
+      enabled: true
+      run_slots: 4
+      run_start_minute: 580
     load:
       base_kw: 0.354
       daily_kwh: 37.0
@@ -105469,6 +105537,10 @@ scenarios:
       export_limit_kw: 2.69
       hybrid: false
       inverter_limit_kw: 3.81
+    iog:
+      enabled: true
+      run_slots: 5
+      run_start_minute: 855
     load:
       base_kw: 0.144
       daily_kwh: 29.31
@@ -111286,6 +111358,10 @@ scenarios:
       export_limit_kw: 6.06
       hybrid: true
       inverter_limit_kw: 9.64
+    iog:
+      enabled: true
+      run_slots: 7
+      run_start_minute: 1345
     load:
       base_kw: 0.283
       daily_kwh: 13.23
@@ -117101,6 +117177,10 @@ scenarios:
       export_limit_kw: 5.43
       hybrid: true
       inverter_limit_kw: 5.45
+    iog:
+      enabled: false
+      run_slots: 0
+      run_start_minute: 0
     load:
       base_kw: 0.338
       daily_kwh: 18.02

@@ -50,6 +50,15 @@ IBOOST_PROBABILITY = 0.4          # fraction of scenarios running an immersion b
 LOAD_SCALING_SEED_SALT = 0x10AD5
 LOAD_SCALING_MIN = 0.2
 LOAD_SCALING_MAX = 2.0
+# Octopus Intelligent (IOG) planned-dispatch windows, again on their own rng stream. Without these no
+# generated scenario ever sets io_adjusted, so the IOG charge-skew code in sort_window_by_price_combined
+# (see plan.py) has no random-suite coverage - every scenario takes the same path whether it is present
+# or not. One contiguous run per enabled scenario is enough to exercise both ends of the skew: the
+# earliest slots (discounted) and the latest (penalised).
+IOG_SEED_SALT = 0x10641           # keeps the IOG draws off the main rng sequence
+IOG_PROBABILITY = 0.5             # fraction of scenarios that get an IOG dispatch run
+IOG_RUN_SLOTS_MIN = 2             # shortest dispatch run: 1 hour
+IOG_RUN_SLOTS_MAX = 12            # longest dispatch run: 6 hours
 CLOCK_STEP_MINUTES = 5            # predbat runs on a 5 minute cadence, so start times are multiples of 5
 RATE_HISTORY_DAYS = 3             # days of past + future rates to generate
 RATE_FUTURE_DAYS = 2
@@ -345,6 +354,23 @@ def generate_random_scenario(scenario_id, seed):
             slots.append({"start": start, "end": start + 30, "kwh": round(car_rng.uniform(0.0, 3.5), 3)})
         car_slots.append(slots)
 
+    # --- Octopus Intelligent (IOG) dispatch windows ---
+    # Own rng stream, see the car block above - regenerating an existing seed leaves every other field
+    # bit-identical and only adds this block. Without it no generated scenario ever sets io_adjusted,
+    # so the IOG charge-skew code in sort_window_by_price_combined (plan.py) has no random-suite
+    # coverage at all - every scenario takes the same path whether that code exists or not.
+    iog_rng = random.Random(seed ^ IOG_SEED_SALT)
+    iog_enabled = iog_rng.random() < IOG_PROBABILITY
+    iog_run_start_minute = 0
+    iog_run_slots = 0
+    if iog_enabled:
+        # One contiguous run of half-hour dispatch slots, wrapped inside the day - long enough to
+        # exercise both ends of the skew gradient (earliest slots discounted, latest penalised).
+        # start_minute + run_slots is all expand_io_adjusted needs to reconstruct the run, so unlike
+        # the day-profile arrays above nothing further is stored in "data".
+        iog_run_slots = iog_rng.randint(IOG_RUN_SLOTS_MIN, IOG_RUN_SLOTS_MAX)
+        iog_run_start_minute = iog_rng.randrange(0, MINUTES_PER_DAY, CLOCK_STEP_MINUTES)
+
     # --- Load scaling ---
     # Own rng stream, see the car block above. Sorted so that load_scaling90 <= load_scaling <=
     # load_scaling10, which is the order the planner requires: PV90 is the sunny, light load future
@@ -393,6 +419,11 @@ def generate_random_scenario(scenario_id, seed):
                 "num_cars": num_cars,
                 "battery_kwh": car_battery_kwh,
                 "slots": car_slots,
+            },
+            "iog": {
+                "enabled": iog_enabled,
+                "run_start_minute": iog_run_start_minute,
+                "run_slots": iog_run_slots,
             },
             "battery": {
                 "soc_max_kwh": soc_max_kwh,
@@ -506,6 +537,42 @@ def expand_rates(day_profile, minutes_now=0, end_minute=None):
     for minute in range(start, end + 1):
         idx = minute % MINUTES_PER_DAY
         result[minute] = day_profile[idx]
+    return result
+
+
+def expand_io_adjusted(run_start_minute, run_slots, minutes_now=0, end_minute=None):
+    """Expand one daily-recurring IOG dispatch run into a predbat io_adjusted dict.
+
+    Mirrors expand_rates, but sparse and built from the run's (start, slot count) rather than a
+    precomputed profile: self.io_adjusted only ever carries True entries for Octopus Intelligent
+    planned-dispatch minutes (see fetch.py/octopus.py), and callers use io_adjusted.get(minute,
+    False), so minutes that are not dispatched are simply absent here. The run recurs at the same
+    clock time every day, the same way the rate/PV/load day profiles do.
+
+    Args:
+        run_start_minute: minute-of-day (0-1439) the dispatch run starts
+        run_slots: number of contiguous half-hour dispatch slots in the run (0 = no run)
+        minutes_now: current minutes since midnight (used to anchor today)
+        end_minute: minimum end minute to cover; defaults to RATE_FUTURE_DAYS * MINUTES_PER_DAY
+
+    Returns:
+        dict[int, bool]
+    """
+    if run_slots <= 0:
+        return {}
+
+    day_minutes = set()
+    for slot_n in range(run_slots):
+        slot_start = (run_start_minute + slot_n * 30) % MINUTES_PER_DAY
+        for offset in range(30):
+            day_minutes.add((slot_start + offset) % MINUTES_PER_DAY)
+
+    result = {}
+    start = -RATE_HISTORY_DAYS * MINUTES_PER_DAY
+    end = max(RATE_FUTURE_DAYS * MINUTES_PER_DAY, end_minute if end_minute is not None else 0)
+    for minute in range(start, end + 1):
+        if (minute % MINUTES_PER_DAY) in day_minutes:
+            result[minute] = True
     return result
 
 
@@ -652,6 +719,16 @@ def apply_scenario_to_predbat(my_predbat, scenario):
 
     my_predbat.rate_import = expand_rates(data["rate_import_day"], minutes_now, end_minute=minutes_now + forecast_minutes)
     my_predbat.rate_export = expand_rates(data["rate_export_day"], minutes_now, end_minute=minutes_now + forecast_minutes)
+
+    # --- Octopus Intelligent (IOG) dispatch windows ---
+    # Scenario files written before this existed carry no "iog" entry; those run without any
+    # IOG-adjusted windows, exactly as before - matches self.io_adjusted's own default of {}.
+    iog = params.get("iog", {"enabled": False})
+    if iog.get("enabled"):
+        my_predbat.io_adjusted = expand_io_adjusted(iog["run_start_minute"], iog["run_slots"], minutes_now, end_minute=minutes_now + forecast_minutes)
+    else:
+        my_predbat.io_adjusted = {}
+
     my_predbat.load_minutes = expand_load_minutes(data["load_day_kwh"], minutes_now=minutes_now)
     my_predbat.load_minutes_age = 14       # 14 days of history are populated
     my_predbat.days_previous = [1]         # always read exactly 1 day back; avoids template config variance
