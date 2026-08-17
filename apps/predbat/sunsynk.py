@@ -990,11 +990,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         if not sn:
             self.log(f"Warn: Sunsynk could not resolve an inverter for {entity_id}")
             return
-        # The write button forces an apply; everything else updates state and lets the
-        # normal diff-gated write in run() pick it up.
+        # The write button is NOT forced. Predbat presses this on every cycle as its
+        # normal "apply the schedule" action (INVERTER_DEF time_button_press), not only
+        # when the plan actually changed, so force=True here would bypass the
+        # applied-payload change-detection gate on every single cycle. deye.py hit this
+        # exact bug first: PR #4371 (commit 3e1de759) measured 40 button presses
+        # producing 36 byte-identical control orders over two hours on a live site once
+        # the button forced the write. Unforced, the applied-payload cache in
+        # apply_settings is the single source of truth for whether a write is needed;
+        # do not reintroduce force=True here.
         if str(entity_id).endswith("battery_schedule_charge_write"):
             if self._to_bool(value):
-                await self.apply_schedule(sn, force=True)
+                await self.apply_schedule(sn)
             return
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
