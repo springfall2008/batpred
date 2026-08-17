@@ -2230,6 +2230,8 @@ def run_execute_tests(my_predbat):
         set_export_window=True,
         soc_kw=100,
         assert_status="Exporting",
+        # A fleet acting in unison must not repeat the headline status on every segment (v8.48.4 regression)
+        assert_status_extra=" target 100%-0% / 100%-0%",
         car_slot=charge_window_best_slot,
         car_charging_from_battery=True,
         assert_force_export=True,
@@ -2256,6 +2258,32 @@ def run_execute_tests(my_predbat):
         assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
         assert_immediate_soc_target=0,
     )
+    if failed:
+        return failed
+
+    # Single-inverter status text (v8.48.4 regression): every other case in this module runs two
+    # inverters, so the single-inverter rendering had no end-to-end coverage at all and shipped
+    # showing the headline status twice - "Exporting target Exporting 19%-5%".
+    two_inverters = my_predbat.inverters
+    my_predbat.inverters = [two_inverters[0]]
+    my_predbat.args["num_inverters"] = 1
+    failed |= run_execute_test(
+        my_predbat,
+        "single_inverter_export_status",
+        export_window_best=export_window_best,
+        export_limits_best=export_limits_best,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Exporting",
+        assert_status_extra=" target 100%-0%",
+        assert_force_export=True,
+        assert_discharge_start_time_minutes=my_predbat.minutes_now,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 60 + 1,
+        assert_immediate_soc_target=0,
+    )
+    my_predbat.inverters = two_inverters
+    my_predbat.args["num_inverters"] = 2
     if failed:
         return failed
 
