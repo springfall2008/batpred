@@ -233,7 +233,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """Perform one API call, returning the response's `data` payload, or None on failure.
 
         Retries transport errors and non-200 responses with backoff, and treats a
-        body-level auth failure as a token refresh followed by exactly one retry.
+        body-level auth failure as a token refresh followed by exactly one retry. That
+        retry is earned by the refresh and is independent of the transport-attempt
+        budget: even if the auth failure arrives on the LAST transport attempt, the
+        retry after a successful refresh still happens rather than being discarded.
 
         Failure is None, NOT {} — a successful call can legitimately carry no data (the
         settings write is one), so {} would be ambiguous between "worked, nothing to
@@ -251,20 +254,28 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         anonymous = endpoint_key in ("public_key", "token", "token_legacy")
         headers = {"Accept": "application/json", "Content-Type": "application/json"} if anonymous else self._auth_headers()
         refreshed = False
+        attempt = 0
 
-        for attempt in range(SUNSYNK_RETRIES):
+        # A `while attempt < SUNSYNK_RETRIES` loop, not `for attempt in range(...)`: `attempt`
+        # counts only transport-level failures (non-200 / exception) below. The auth-refresh
+        # branch further down deliberately does NOT touch it, so a refresh earns its retry
+        # even when it lands on what would have been the final transport attempt. `refreshed`
+        # still caps this to at most one extra pass, so total work stays bounded.
+        while attempt < SUNSYNK_RETRIES:
             self.debug_api(method, url, body if body is not None else params)
             try:
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.request(method, url, headers=headers, params=params, json=body) as response:
                         if response.status != 200:
                             self.log(f"Warn: Sunsynk {method} {path} returned HTTP {response.status}")
-                            await asyncio.sleep(2**attempt)
+                            attempt += 1
+                            await asyncio.sleep(2 ** (attempt - 1))
                             continue
                         payload = await response.json(content_type=None)
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
                 self.log(f"Warn: Sunsynk {method} {path} failed: {error}")
-                await asyncio.sleep(2**attempt)
+                attempt += 1
+                await asyncio.sleep(2 ** (attempt - 1))
                 continue
 
             self.debug_api("<-", url, payload if isinstance(payload, dict) else {"data": payload})
