@@ -195,6 +195,7 @@ from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
 from tests.test_ml_memory import run_ml_memory_tests
+from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
@@ -553,6 +554,8 @@ def main():
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
         # ML training memory: dataset construction, normalisation dtype and statistics accuracy
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),
+        # Production-scale ML training harness against a captured history fixture
+        ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
     ]
 

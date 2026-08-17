@@ -187,6 +187,7 @@ generationpower
 geserial
 geseriale
 getall
+getrusage
 Ginlong
 GivEnergy
 givtcp
@@ -277,6 +278,7 @@ luxpower
 markdownlint
 matplotlib
 maximise
+maxrss
 maxsoc
 mbuhansen
 mdlrc
@@ -423,6 +425,7 @@ rstrip
 rtol
 rtype
 ruamel
+RUSAGE
 Rvrt
 sapm
 saverestore
