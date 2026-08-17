@@ -480,6 +480,7 @@ solisx
 sourcery
 Southwell
 sparkline
+spki
 springfall
 starthour
 startminute
@@ -545,6 +546,7 @@ unpickles
 unpushed
 unsmoothed
 unstaged
+urandom
 urlsafe
 useid
 userinterface
