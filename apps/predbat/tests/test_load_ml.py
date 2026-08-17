@@ -449,6 +449,7 @@ def _test_dataset_with_pv():
 
     # Create dataset with PV data
     X_train, y_train, train_weights, X_val, y_val = predictor._create_dataset(load_data, now_utc, pv_minutes=pv_data, time_decay_days=7)
+    X_train = np.asarray(X_train)  # inspecting feature blocks by column needs the assembled rows
 
     # Should have valid samples
     assert X_train is not None, "Training X should not be None"
@@ -490,6 +491,7 @@ def _test_dataset_with_temp():
 
     # Create dataset with temperature data
     X_train, y_train, train_weights, X_val, y_val = predictor._create_dataset(load_data, now_utc, temp_minutes=temp_data, time_decay_days=7)
+    X_train = np.asarray(X_train)  # inspecting feature blocks by column needs the assembled rows
 
     # Should have valid samples
     assert X_train is not None, "Training X should not be None"

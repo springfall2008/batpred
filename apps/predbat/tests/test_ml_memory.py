@@ -196,7 +196,8 @@ def test_create_dataset_output_is_stable(my_predbat=None):
     # A checksum over the feature matrix catches any change in row content or ordering.
     # Recorded from the list-of-rows construction this replaced; if numpy ever changes its
     # summation this may need re-recording, but it must not move for a refactor.
-    checksum = float(np.sum(X_train.astype(np.float64)))
+    # X_train assembles rows on demand; materialise it explicitly for the checksum
+    checksum = float(np.sum(np.asarray(X_train).astype(np.float64)))
     expected_checksum = 12977609.094096
     if abs(checksum - expected_checksum) > abs(expected_checksum) * 1e-9:
         print("ERROR: feature matrix changed - checksum {:.6f}, expected {:.6f}".format(checksum, expected_checksum))
