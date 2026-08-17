@@ -726,7 +726,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """Compare two settings payloads for change detection."""
         return dict(a or {}) == dict(b or {})
 
-    async def apply_settings(self, sn, schedule, current_soc, force=False, settings_fresh=False):
+    async def apply_settings(self, sn, schedule, current_soc, force=False):
         """Read, modify and write the settings object for one inverter.
 
         Returns True if a write was performed. The owned-field diff is checked FIRST,
@@ -739,13 +739,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         empty: without a fresh baseline there is no way to build a payload that preserves
         every field Predbat does not own.
 
-        settings_fresh tells this call that refresh_config already read this inverter's
-        settings earlier in the SAME run() tick (the config tier polls on its own TTL, not
-        on plan changes), so device_settings is already as fresh as another read would be.
-        Without this, a tick where the config tier happens to fire AND a genuine plan
-        change lands would pay for the settings read twice - the exact "unconditional read
-        path" shape that measured ~1440 GETs/day/inverter against an undocumented,
-        rate-limited API in an earlier revision of this component.
+        Deliberately always reads immediately before a write rather than reusing a cached
+        baseline, even one read moments earlier in the same tick by refresh_config: that
+        cache can be stale in a way nothing here can detect - fetch_settings only updates
+        device_settings on a SUCCESSFUL read, so a failed per-serial config-tier poll (one
+        inverter offline, one timeout) leaves the old baseline in place with no signal
+        that it did not just refresh, and restore_state seeds device_settings from the
+        config cache with no age bound at all (unlike the control cache's
+        SUNSYNK_RESTORE_MAX_CONTROL). Reusing it would risk writing a stale
+        batteryLowCap/installer setting straight back to the battery - on the one call in
+        this component that changes what the battery actually does, not just what Predbat
+        thinks it asked for. The extra reads this costs are bounded by the change-detection
+        gate above (never more than once per genuine plan change) and are worth it for
+        that guarantee.
         """
         if not self.control_enable:
             return False
@@ -763,17 +769,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # Only reached on a genuine change (or force=True). Re-read immediately before
         # writing so the race with the Sunsynk phone app is as small as possible, and so
         # unowned fields - and the SOC floor the clamp above used a possibly-stale value
-        # for - carry the newest values. Skipped when settings_fresh says refresh_config
-        # already paid for that read a few calls earlier in this same tick.
+        # for - carry the newest values.
         previous_settings = dict(self.device_settings.get(sn, {}))
-        if settings_fresh and previous_settings:
-            settings = previous_settings
-        else:
-            settings = await self.fetch_settings(sn)
-            if not settings:
-                self.log(f"Warn: Sunsynk {sn} settings read failed, skipping the write (no baseline to modify)")
-                return False
-            self.note_external_change(sn, previous_settings, settings)
+        settings = await self.fetch_settings(sn)
+        if not settings:
+            self.log(f"Warn: Sunsynk {sn} settings read failed, skipping the write (no baseline to modify)")
+            return False
+        self.note_external_change(sn, previous_settings, settings)
 
         payload = self.build_settings_payload(sn, schedule, current_soc, now_minutes)
         if not payload:
@@ -976,9 +978,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return not current
         return current
 
+    @staticmethod
+    def _empty_schedule():
+        """Return a fresh, disabled schedule shape - the single source of truth for its defaults.
+
+        Used everywhere a schedule needs to be seeded from nothing (a control event for an
+        inverter local_schedule has not seen yet, and run()'s first-cycle seed): kept as one
+        helper rather than a literal repeated at each call site, so adding or renaming a
+        field cannot silently diverge between copies.
+        """
+        return {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}}
+
     def update_local_schedule(self, sn, entity_id, value):
         """Apply one control-entity change to the locally held schedule."""
-        schedule = self.local_schedule.setdefault(sn, {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}})
+        schedule = self.local_schedule.setdefault(sn, self._empty_schedule())
         leaf = str(entity_id).split(f"_sunsynk_{sn.lower()}_", 1)[-1]
         if leaf == "battery_schedule_reserve":
             schedule["reserve"] = int(self._as_float(value, 0))
@@ -997,18 +1010,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
-    async def apply_schedule(self, sn, force=False, settings_fresh=False):
-        """Apply the locally held schedule for one inverter.
-
-        settings_fresh is passed straight through to apply_settings - see there for why
-        it exists. It defaults to False so a control-entity event (which is not tied to
-        any run() tick) always gets its own fresh read.
-        """
+    async def apply_schedule(self, sn, force=False):
+        """Apply the locally held schedule for one inverter."""
         schedule = self.local_schedule.get(sn)
         if not schedule:
             return False
         current_soc = int(self._as_float(self.device_values.get(sn, {}).get("soc"), 0))
-        return await self.apply_settings(sn, schedule, current_soc, force=force, settings_fresh=settings_fresh)
+        return await self.apply_settings(sn, schedule, current_soc, force=force)
 
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right inverter and apply it."""
@@ -1172,15 +1180,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         if not devices:
             self.log("Warn: Sunsynk automatic_config found no inverters")
             return
-        self.set_arg("inverter_type", ["SunsynkCloud" for _ in devices])
-        self.set_arg("num_inverters", len(devices))
-        self.set_arg("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
-        self.set_arg("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
-        self.set_arg("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
-        self.set_arg("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
-        self.set_arg("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
+        self.set_arg_auto("inverter_type", ["SunsynkCloud" for _ in devices])
+        self.set_arg_auto("num_inverters", len(devices))
+        self.set_arg_auto("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
+        self.set_arg_auto("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
+        self.set_arg_auto("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
+        self.set_arg_auto("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
+        self.set_arg_auto("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
         if not self.automatic_ignore_pv:
-            self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
+            self.set_arg_auto("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
 
         # Only map an arg when EVERY inverter reports the underlying value. An arg aimed at
         # a sensor that is never published is worse than an absent arg, which the user can
@@ -1189,37 +1197,37 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             if leaf == "pv_today" and self.automatic_ignore_pv:
                 continue
             if all(leaf in self.device_energy.get(sn, {}) for sn in self.device_list):
-                self.set_arg(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
             else:
                 self.log(f"Warn: Sunsynk not every inverter reports {leaf}, it must be set manually in apps.yaml")
 
         if all(self.battery_capacity(sn) > 0 for sn in self.device_list):
-            self.set_arg("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
+            self.set_arg_auto("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
         else:
             self.log("Warn: Sunsynk no battery capacity available for every inverter, soc_max must be set manually in apps.yaml")
         if all(self.battery_rate_max(sn) > 0 for sn in self.device_list):
-            self.set_arg("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
+            self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
             self.log("Warn: Sunsynk no battery charge-current limit available, battery_rate_max must be set manually in apps.yaml")
         if all(self.device_rated_power.get(sn, 0.0) > 0 for sn in self.device_list):
-            self.set_arg("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
+            self.set_arg_auto("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
         else:
             self.log("Warn: Sunsynk no ratePower reported, inverter_limit must be set manually in apps.yaml")
         if all(self.battery_reserve_min(sn) > 0 for sn in self.device_list):
-            self.set_arg("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
+            self.set_arg_auto("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
 
-        self.set_arg("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
-        self.set_arg("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
-        self.set_arg("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
-        self.set_arg("charge_limit", [self._control_name("number", sn, "battery_schedule_charge_soc") for sn in devices])
-        self.set_arg("charge_rate", [self._control_name("number", sn, "battery_schedule_charge_power") for sn in devices])
-        self.set_arg("scheduled_charge_enable", [self._control_name("switch", sn, "battery_schedule_charge_enable") for sn in devices])
-        self.set_arg("discharge_start_time", [self._control_name("select", sn, "battery_schedule_export_start_time") for sn in devices])
-        self.set_arg("discharge_end_time", [self._control_name("select", sn, "battery_schedule_export_end_time") for sn in devices])
-        self.set_arg("discharge_target_soc", [self._control_name("number", sn, "battery_schedule_export_soc") for sn in devices])
-        self.set_arg("discharge_rate", [self._control_name("number", sn, "battery_schedule_export_power") for sn in devices])
-        self.set_arg("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
-        self.set_arg("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
+        self.set_arg_auto("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
+        self.set_arg_auto("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
+        self.set_arg_auto("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
+        self.set_arg_auto("charge_limit", [self._control_name("number", sn, "battery_schedule_charge_soc") for sn in devices])
+        self.set_arg_auto("charge_rate", [self._control_name("number", sn, "battery_schedule_charge_power") for sn in devices])
+        self.set_arg_auto("scheduled_charge_enable", [self._control_name("switch", sn, "battery_schedule_charge_enable") for sn in devices])
+        self.set_arg_auto("discharge_start_time", [self._control_name("select", sn, "battery_schedule_export_start_time") for sn in devices])
+        self.set_arg_auto("discharge_end_time", [self._control_name("select", sn, "battery_schedule_export_end_time") for sn in devices])
+        self.set_arg_auto("discharge_target_soc", [self._control_name("number", sn, "battery_schedule_export_soc") for sn in devices])
+        self.set_arg_auto("discharge_rate", [self._control_name("number", sn, "battery_schedule_export_power") for sn in devices])
+        self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
+        self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
     async def refresh_static(self):
         """Re-discover inverters and refresh their static detail."""
@@ -1231,14 +1239,35 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self.save_ratings()
 
     async def refresh_config(self):
-        """Re-read the settings object for every inverter."""
+        """Re-read the settings object for every inverter, logging any change made outside Predbat.
+
+        Captures each inverter's previous baseline BEFORE the read: apply_settings only
+        re-reads on a genuine plan change, so this poll is where nearly every externally
+        made change (the phone app, the installer) is first observed, and fetch_settings
+        overwrites device_settings[sn] in place - after the call there would be nothing
+        left to compare against. The design spec names this logging as the mitigation for
+        the read-modify-write race with other clients that a single whole-object write
+        endpoint cannot otherwise avoid.
+
+        The cache is only re-saved when at least one inverter's read actually succeeded
+        (mirrors deye.py's refresh_config), so a tick where every read fails does not
+        re-stamp a days-stale on-disk cache as fresh - which would otherwise make
+        restore_state skip the config tier for a full TTL after a restart while running
+        on stale settings.
+        """
+        got_any = False
         for sn in self.device_list:
+            previous = dict(self.device_settings.get(sn, {}))
             settings = await self.fetch_settings(sn)
+            if settings:
+                got_any = True
+                self.note_external_change(sn, previous, settings)
             # Track whether the inverter has caught up with the last write. Latency of a
             # few minutes is normal; persistent divergence is worth surfacing.
             self.note_settle(sn, settings)
         self.mark_refreshed("config")
-        await self.save_config()
+        if got_any:
+            await self.save_config()
 
     async def refresh_live(self):
         """Poll telemetry for every inverter."""
@@ -1268,12 +1297,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         if not self.device_list:
             self.log("Warn: Sunsynk found no inverters on this account")
             return False
-        # Remembered so the control loop below can tell apply_settings its baseline is
-        # already fresh - see the settings_fresh parameter on apply_settings/apply_schedule
-        # for why that matters: without it, a tick where the config tier happens to fire AND
-        # a genuine plan change lands would read the settings object twice.
-        config_refreshed_now = self.tier_expired("config", SUNSYNK_TTL_CONFIG)
-        if config_refreshed_now:
+        if self.tier_expired("config", SUNSYNK_TTL_CONFIG):
             await self.refresh_config()
         if self.tier_expired("live", SUNSYNK_TTL_LIVE):
             await self.refresh_live()
@@ -1282,12 +1306,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             if first:
                 # Seed the control entities before Predbat reads them, so the first plan
                 # does not act on entities that do not exist yet.
-                self.local_schedule.setdefault(sn, {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}})
-                await self.publish_schedule_settings_ha(sn)
+                self.local_schedule.setdefault(sn, self._empty_schedule())
             else:
                 await self.get_schedule_settings_ha(sn)
-                if await self.apply_schedule(sn, settings_fresh=config_refreshed_now):
+                if await self.apply_schedule(sn):
                     await self.save_control()
+            # Published every tick, not just first: this is Predbat's control surface and
+            # must keep reflecting local_schedule as it changes, matching deye.py's run().
+            await self.publish_schedule_settings_ha(sn)
 
         await self.publish_data()
         if first and self.automatic:
