@@ -111,6 +111,37 @@ def test_build_tou_slots_idle_is_still_six_distinct():
     assert not failed, "test_build_tou_slots_idle_is_still_six_distinct"
 
 
+def test_build_tou_slots_zero_length_window_has_no_effect():
+    """An enabled window whose start equals end must not become an unterminated action slot.
+
+    _window_active already refuses to treat a zero-length window as active. build_tou_slots
+    must apply the same guard to its own segment boundaries: without it, an enable event
+    that arrives before the time fields (both still the "00:00:00" default) adds an action
+    segment at 00:00 with no matching return-to-self-use segment, producing a multi-hour
+    full-power grid-charge/export slot even though _active_state correctly reports the
+    window inactive. Two shapes are checked: literally equal strings, and strings that are
+    only equal once seconds are normalised away ("02:00:00" vs "02:00").
+    """
+    failed = False
+    s = MockSunsynk()
+    cases = [
+        _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "00:00:00", "end": "00:00:00"}),
+        _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "02:00"}),
+    ]
+    for schedule in cases:
+        slots = s.build_tou_slots(schedule, current_soc=40)
+        if any(slot["grid_charge"] for slot in slots):
+            print(f"ERROR: a zero-length window produced a grid-charge slot: {slots}")
+            failed = True
+        if any(slot["soc"] == 95 for slot in slots):
+            print(f"ERROR: a zero-length window's target SOC leaked into a slot: {slots}")
+            failed = True
+        if len(slots) != TOU_SLOT_COUNT or len({slot["time"] for slot in slots}) != TOU_SLOT_COUNT:
+            print(f"ERROR: a zero-length window broke the six-distinct-slots invariant: {slots}")
+            failed = True
+    assert not failed, "test_build_tou_slots_zero_length_window_has_no_effect"
+
+
 def test_active_window_drives_the_global_mode():
     """The top-level mode follows the window active NOW, not a static precedence.
 
@@ -119,6 +150,7 @@ def test_active_window_drives_the_global_mode():
     """
     failed = False
     s = MockSunsynk()
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(
         reserve=10,
         charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"},
@@ -163,6 +195,7 @@ def test_payload_renders_indexed_fields_and_types():
     """Slots become sellTimeN/capN/timeNon with the right wire types."""
     failed = False
     s = MockSunsynk()
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
     for n in range(1, TOU_SLOT_COUNT + 1):
@@ -221,13 +254,22 @@ def test_payload_preserves_unowned_settings():
 
 
 def test_payload_clamps_to_the_inverter_soc_floor():
-    """No slot may ask for less than the installer-set floor the inverter reports."""
+    """No slot may ask for less than the installer-set floor the inverter reports.
+
+    current_soc=0 (not e.g. 40) is deliberate: with soc=5 and reserve=0, a current_soc
+    above 5 makes derive_control_state fall through to hold_charge (target 5 is not above
+    current_soc, so it isn't actually "charging" yet) and the slot holds at the reserve
+    (0), not at the requested 5 - so the clamp would be exercised on the reserve, not on
+    the genuine sub-floor charge target the test name promises. current_soc=0 makes 5 a
+    real charge target (5 > current_soc and 5 > reserve), so the clamp raising 5 -> 20 is
+    the one actually under test.
+    """
     failed = False
     s = MockSunsynk()
     s.device_settings["INV1"] = {"batteryLowCap": "20"}
     # Predbat's control entities start at 0 and only reach real values once written.
     schedule = _schedule(reserve=0, charge={"enable": True, "soc": 5, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
-    payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
+    payload = s.build_settings_payload("INV1", schedule, current_soc=0, now_minutes=3 * 60)
     for n in range(1, TOU_SLOT_COUNT + 1):
         value = int(payload[TOU_FIELD["soc"].format(n=n)])
         if value < 20:
@@ -239,10 +281,29 @@ def test_payload_clamps_to_the_inverter_soc_floor():
     assert not failed, "test_payload_clamps_to_the_inverter_soc_floor"
 
 
+def test_build_settings_payload_returns_empty_without_a_baseline():
+    """No settings have ever been read for this serial, so there is nothing to modify.
+
+    build_settings_payload is a public producer, not just an apply_settings helper, so the
+    guard against posting an owned-keys-only payload (which would drop every installer
+    setting Predbat does not own) belongs here rather than only in apply_settings's caller
+    logic - the same reasoning as the SOC clamp living at the API boundary.
+    """
+    failed = False
+    s = MockSunsynk()
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
+    if payload != {}:
+        print(f"ERROR: expected {{}} with no baseline, got {len(payload)} key(s): {sorted(payload)}")
+        failed = True
+    assert not failed, "test_build_settings_payload_returns_empty_without_a_baseline"
+
+
 def test_payloads_equal_ignores_nothing_material():
     """Change detection sees a real difference and ignores an identical rewrite."""
     failed = False
     s = MockSunsynk()
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     first = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
     same = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
@@ -286,6 +347,111 @@ def test_apply_settings_skips_an_unchanged_payload():
         print(f"ERROR: force=True should have written again, total writes {len(posts)}")
         failed = True
     assert not failed, "test_apply_settings_skips_an_unchanged_payload"
+
+
+def test_apply_settings_noop_ticks_perform_no_io():
+    """Once applied, repeating the same plan costs zero GETs and zero POSTs.
+
+    The owned-field diff is computed BEFORE any network call, from only the schedule,
+    current_soc, now_minutes and the cached battery_reserve_min(sn) - so a no-op tick
+    never touches the network, not even a settings read. Only the first (baseline-setting)
+    write may cost a GET and a POST.
+    """
+    failed = False
+    s = MockSunsynk()
+    gets = []
+    posts = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Record each read and return a minimal settings object."""
+        gets.append(endpoint_key)
+        return {"sn": "INV1", "batteryLowCap": "10"}
+
+    async def fake_post(endpoint_key, sn=None, body=None):
+        """Record each write."""
+        posts.append(endpoint_key)
+        return {"msg": "Success"}
+
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post):
+        run_async_local(s.apply_settings("INV1", schedule, current_soc=40))
+        gets_after_first, posts_after_first = len(gets), len(posts)
+        for _ in range(5):
+            run_async_local(s.apply_settings("INV1", schedule, current_soc=40))
+    if gets_after_first != 1 or posts_after_first != 1:
+        print(f"ERROR: the first write should cost exactly one GET and one POST, got {gets_after_first} GET(s), {posts_after_first} POST(s)")
+        failed = True
+    if len(gets) != gets_after_first:
+        print(f"ERROR: 5 no-op ticks made {len(gets) - gets_after_first} extra GET(s)")
+        failed = True
+    if len(posts) != posts_after_first:
+        print(f"ERROR: 5 no-op ticks made {len(posts) - posts_after_first} extra POST(s)")
+        failed = True
+    assert not failed, "test_apply_settings_noop_ticks_perform_no_io"
+
+
+def test_apply_settings_changed_plan_performs_one_get_and_one_post():
+    """A genuine change in the plan costs exactly one read and one write, not more."""
+    failed = False
+    s = MockSunsynk()
+    gets = []
+    posts = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Record each read and return a minimal settings object."""
+        gets.append(endpoint_key)
+        return {"sn": "INV1", "batteryLowCap": "10"}
+
+    async def fake_post(endpoint_key, sn=None, body=None):
+        """Record each write."""
+        posts.append(endpoint_key)
+        return {"msg": "Success"}
+
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    changed = _schedule(reserve=10, charge={"enable": True, "soc": 80, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post):
+        run_async_local(s.apply_settings("INV1", schedule, current_soc=40))
+        run_async_local(s.apply_settings("INV1", changed, current_soc=40))
+    if len(gets) != 2:
+        print(f"ERROR: expected exactly 2 GETs total (one per genuine change), got {len(gets)}")
+        failed = True
+    if len(posts) != 2:
+        print(f"ERROR: expected exactly 2 POSTs total (one per genuine change), got {len(posts)}")
+        failed = True
+    assert not failed, "test_apply_settings_changed_plan_performs_one_get_and_one_post"
+
+
+def test_apply_settings_ignores_a_volatile_unowned_field():
+    """A field that changes on every read (e.g. a server timestamp) must not force a write.
+
+    The owned-field diff decides whether to read and write at all; it never sees baseline
+    fields at all, so a value the cloud rewrites every poll cannot make a whole-payload
+    comparison perpetually disagree with itself the way it would if the diff gate compared
+    the full read-modify-write result including unowned fields.
+    """
+    failed = False
+    s = MockSunsynk()
+    posts = []
+    tick = [0]
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a settings object whose 'lastUpdate' field changes on every read."""
+        tick[0] += 1
+        return {"sn": "INV1", "batteryLowCap": "10", "lastUpdate": str(tick[0])}
+
+    async def fake_post(endpoint_key, sn=None, body=None):
+        """Record each write."""
+        posts.append(endpoint_key)
+        return {"msg": "Success"}
+
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post):
+        for _ in range(5):
+            run_async_local(s.apply_settings("INV1", schedule, current_soc=40))
+    if len(posts) != 1:
+        print(f"ERROR: a volatile unowned field triggered {len(posts)} writes for an unchanged plan, expected 1")
+        failed = True
+    assert not failed, "test_apply_settings_ignores_a_volatile_unowned_field"
 
 
 def test_apply_settings_fails_closed_without_a_read():
@@ -339,6 +505,39 @@ def test_apply_settings_respects_control_enable():
     assert not failed, "test_apply_settings_respects_control_enable"
 
 
+def test_apply_settings_skips_when_the_payload_is_empty():
+    """apply_settings must not post a payload that build_settings_payload refused to build.
+
+    build_settings_payload returns {} when there is no baseline to modify. This is
+    contrived here via a direct patch (the normal fail-closed read check makes it
+    otherwise unreachable through apply_settings's own flow), specifically to prove the
+    caller-side guard exists too and does not depend on that other check alone.
+    """
+    failed = False
+    s = MockSunsynk()
+    posts = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a minimal settings object, as if the read genuinely succeeded."""
+        return {"sn": "INV1", "batteryLowCap": "10"}
+
+    async def fake_post(endpoint_key, sn=None, body=None):
+        """Record each write, which must not happen here."""
+        posts.append(endpoint_key)
+        return {"msg": "Success"}
+
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post), patch.object(s, "build_settings_payload", return_value={}):
+        applied = run_async_local(s.apply_settings("INV1", schedule, current_soc=40))
+    if applied:
+        print("ERROR: apply_settings reported success while posting nothing")
+        failed = True
+    if posts:
+        print(f"ERROR: wrote {posts} despite build_settings_payload refusing to build one")
+        failed = True
+    assert not failed, "test_apply_settings_skips_when_the_payload_is_empty"
+
+
 def test_apply_settings_reports_a_failed_write():
     """A failed write is detected and does not update the applied-payload cache.
 
@@ -382,6 +581,39 @@ def test_apply_settings_reports_a_failed_write():
     assert not failed, "test_apply_settings_reports_a_failed_write"
 
 
+def test_note_settle_normalises_wire_types_before_comparing():
+    """A read-back that renders bools as strings must not be treated as a mismatch.
+
+    Sunsynk hands per-slot grid-charge flags back as strings ("true"/"false", "1"/"0") as
+    plausibly as bare booleans - SUNSYNK_FALSE_STRINGS exists precisely because of this.
+    note_settle must decode both sides through encode_setting before comparing, or a
+    healthy inverter whose read-back happens to render as a string warns forever and
+    settle_count never resets.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    applied = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
+    s.applied_payload["INV1"] = applied
+
+    # Same state, but every bool rendered as a string the way a real read-back might.
+    string_settings = {key: (("true" if value else "false") if isinstance(value, bool) else value) for key, value in applied.items()}
+    s.note_settle("INV1", string_settings)
+    if s.settle_count.get("INV1", 0) != 0:
+        print(f"ERROR: a string-rendered but otherwise identical read-back was treated as a mismatch, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+
+    # A genuine mismatch must still be detected.
+    real_mismatch = dict(applied)
+    real_mismatch[SUNSYNK_WORKMODE_FIELD] = "9"
+    s.note_settle("INV1", real_mismatch)
+    if s.settle_count.get("INV1", 0) != 1:
+        print(f"ERROR: a genuine mismatch was not counted, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+    assert not failed, "test_note_settle_normalises_wire_types_before_comparing"
+
+
 def test_external_changes_are_logged():
     """A setting changed outside Predbat is reported, not silently overwritten."""
     failed = False
@@ -414,16 +646,23 @@ def run_sunsynk_control_tests(my_predbat):
         ("tou_slots_shape", test_build_tou_slots_shape),
         ("tou_slots_seconds", test_build_tou_slots_seconds_are_dropped),
         ("tou_slots_idle", test_build_tou_slots_idle_is_still_six_distinct),
+        ("tou_slots_zero_length_window", test_build_tou_slots_zero_length_window_has_no_effect),
         ("active_window_mode", test_active_window_drives_the_global_mode),
         ("midnight_wrap", test_window_active_handles_midnight_wrap),
         ("payload_field_types", test_payload_renders_indexed_fields_and_types),
         ("payload_preserves", test_payload_preserves_unowned_settings),
         ("payload_soc_floor", test_payload_clamps_to_the_inverter_soc_floor),
+        ("payload_no_baseline_is_empty", test_build_settings_payload_returns_empty_without_a_baseline),
         ("payloads_equal", test_payloads_equal_ignores_nothing_material),
         ("apply_skips_unchanged", test_apply_settings_skips_an_unchanged_payload),
+        ("apply_noop_ticks_no_io", test_apply_settings_noop_ticks_perform_no_io),
+        ("apply_changed_one_get_one_post", test_apply_settings_changed_plan_performs_one_get_and_one_post),
+        ("apply_ignores_volatile_field", test_apply_settings_ignores_a_volatile_unowned_field),
         ("apply_fails_closed", test_apply_settings_fails_closed_without_a_read),
         ("apply_control_enable", test_apply_settings_respects_control_enable),
+        ("apply_skips_empty_payload", test_apply_settings_skips_when_the_payload_is_empty),
         ("apply_failed_write", test_apply_settings_reports_a_failed_write),
+        ("note_settle_normalises_types", test_note_settle_normalises_wire_types_before_comparing),
         ("external_changes", test_external_changes_are_logged),
     ]:
         try:
