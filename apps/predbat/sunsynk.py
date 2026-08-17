@@ -34,6 +34,17 @@ from sunsynk_const import (
     SUNSYNK_AUTH_ERROR_MARKERS,
     SUNSYNK_DEBUG_MAX_CHARS,
     SUNSYNK_DEBUG_REDACT_KEYS,
+    SUNSYNK_PAGE_SIZE,
+    SUNSYNK_TELEMETRY,
+    SUNSYNK_ENERGY,
+    SUNSYNK_TELEMETRY_NEGATE,
+    SUNSYNK_CAPACITY_AH_FIELD,
+    SUNSYNK_CHARGE_VOLT_FIELD,
+    SUNSYNK_MAX_CHARGE_CURRENT_FIELD,
+    SUNSYNK_RATED_POWER_FIELD,
+    SUNSYNK_BATTERY_LOW_CAP_FIELD,
+    LIFEPO4_CHARGE_VOLTS_PER_CELL,
+    LIFEPO4_NOMINAL_VOLTS_PER_CELL,
     rsa_encrypt_pkcs1v15,
 )
 
@@ -311,3 +322,140 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         data payload, so only None can distinguish a failed write from a successful one.
         """
         return await self._request("POST", endpoint_key, sn=sn, body=body)
+
+    @staticmethod
+    def _as_float(value, default=0.0):
+        """Coerce an API value to float, tolerating strings and nulls."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    async def get_device_list(self):
+        """Discover every inverter on the account, honouring the serial filter.
+
+        Stops once a page comes back empty or the running serial count reaches the
+        server-reported `total`. It does NOT stop merely because a page returned fewer
+        than SUNSYNK_PAGE_SIZE entries: the endpoint's real pagination behaviour is
+        unverified (no test account exists yet - see the VERIFY@SPIKE notes in
+        sunsynk_const.py), and a short page is not proof there is no next one. When
+        `total` is itself absent, it defaults to the count collected so far so the loop
+        still terminates after that page rather than spinning.
+        """
+        serials = []
+        page = 1
+        while True:
+            params = {"page": str(page), "limit": str(SUNSYNK_PAGE_SIZE), "type": "-2", "status": "-1"}
+            data = await self._get("inverter_list", params=params)
+            infos = data.get("infos") or []
+            if not infos:
+                break
+            for info in infos:
+                serial = info.get("sn")
+                if serial:
+                    serials.append(str(serial))
+            total = int(self._as_float(data.get("total"), len(serials)))
+            if len(serials) >= total:
+                break
+            page += 1
+        if self.inverter_sn_filter:
+            wanted = {str(sn).lower() for sn in self.inverter_sn_filter}
+            serials = [sn for sn in serials if sn.lower() in wanted]
+        self.device_list = serials
+        return serials
+
+    async def fetch_device_detail(self, sn):
+        """Fetch static inverter detail, capturing the rated power for inverter_limit."""
+        data = await self._get("inverter_detail", sn=sn)
+        if not data:
+            return {}
+        self.device_detail[sn] = data
+        rated = self._as_float(data.get(SUNSYNK_RATED_POWER_FIELD))
+        # Only overwrite a known rating — a payload that omits it must not clear it.
+        if rated > 0:
+            self.device_rated_power[sn] = rated
+        return data
+
+    async def fetch_device_data(self, sn):
+        """Poll the four realtime endpoints and flatten them onto Predbat's sensor leaves."""
+        responses = {}
+        for endpoint in ("battery", "grid", "load", "input"):
+            params = {"sn": sn, "lan": "en"} if endpoint == "battery" else {"sn": sn}
+            responses[endpoint] = await self._get(endpoint, sn=sn, params=params)
+
+        values = {}
+        for leaf, (endpoint, field) in SUNSYNK_TELEMETRY.items():
+            payload = responses.get(endpoint) or {}
+            if field not in payload or payload[field] is None:
+                continue
+            value = self._as_float(payload[field])
+            if leaf in SUNSYNK_TELEMETRY_NEGATE:
+                value = -value
+            # Preserve integers as integers so SOC publishes as 62 rather than 62.0.
+            values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
+        # Ratings inputs are kept raw on device_values so the derivations below can read them.
+        battery = responses.get("battery") or {}
+        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_MAX_CHARGE_CURRENT_FIELD):
+            if field in battery and battery[field] is not None:
+                values[field] = self._as_float(battery[field])
+        self.device_values[sn] = values
+
+        energy = {}
+        for leaf, (endpoint, field) in SUNSYNK_ENERGY.items():
+            payload = responses.get(endpoint) or {}
+            # Absent counters stay absent: an arg pointing at a sensor that is never
+            # published is worse than an absent arg, which the user can fill in themselves.
+            if field in payload and payload[field] is not None:
+                energy[leaf] = self._as_float(payload[field])
+        self.device_energy[sn] = energy
+        return values
+
+    async def fetch_settings(self, sn):
+        """Read the whole settings object, which is both config and the write baseline."""
+        data = await self._get("settings_read", sn=sn)
+        if data:
+            self.device_settings[sn] = data
+        return data
+
+    def nominal_pack_voltage(self, charge_volts):
+        """Infer the pack's nominal voltage from its BMS charge target.
+
+        Sunsynk reports battery capacity in amp-hours, so a voltage is needed to reach kWh.
+        A LiFePO4 stack charges to about 3.55V per cell and sits at about 3.2V nominal, so
+        the cell count follows from the charge target and the nominal voltage from that.
+        Returns 0 when neither an override nor a charge target is available — a wrong
+        soc_max is worse than none, because Predbat would plan against a battery that
+        does not exist.
+        """
+        if self.battery_nominal_voltage > 0:
+            return self.battery_nominal_voltage
+        charge_volts = self._as_float(charge_volts)
+        if charge_volts <= 0:
+            return 0.0
+        cells = round(charge_volts / LIFEPO4_CHARGE_VOLTS_PER_CELL)
+        if cells <= 0:
+            return 0.0
+        return cells * LIFEPO4_NOMINAL_VOLTS_PER_CELL
+
+    def battery_capacity(self, sn):
+        """Return the usable battery capacity in kWh, or 0 when it cannot be derived."""
+        values = self.device_values.get(sn, {})
+        amp_hours = self._as_float(values.get(SUNSYNK_CAPACITY_AH_FIELD))
+        volts = self.nominal_pack_voltage(values.get(SUNSYNK_CHARGE_VOLT_FIELD))
+        if amp_hours <= 0 or volts <= 0:
+            return 0.0
+        return amp_hours * volts / 1000.0
+
+    def battery_rate_max(self, sn):
+        """Return the maximum charge rate in watts, or 0 when it cannot be derived."""
+        values = self.device_values.get(sn, {})
+        amps = self._as_float(values.get(SUNSYNK_MAX_CHARGE_CURRENT_FIELD))
+        volts = self.nominal_pack_voltage(values.get(SUNSYNK_CHARGE_VOLT_FIELD))
+        if amps <= 0 or volts <= 0:
+            return 0.0
+        return amps * volts
+
+    def battery_reserve_min(self, sn):
+        """Return the inverter's own SOC floor as a percent, or 0 when unknown."""
+        settings = self.device_settings.get(sn, {})
+        return int(self._as_float(settings.get(SUNSYNK_BATTERY_LOW_CAP_FIELD)))

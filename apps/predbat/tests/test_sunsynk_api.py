@@ -376,6 +376,177 @@ def test_request_real_transport_exception_exhausts_retries_returns_none():
     assert not failed, "test_request_real_transport_exception_exhausts_retries_returns_none"
 
 
+def test_get_device_list_pages_and_filters():
+    """Discovery pages through /inverters and honours the serial filter."""
+    failed = False
+    s = MockSunsynk(inverter_sn=["INV1"])
+    calls = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return two pages of inverters, one of which is filtered out."""
+        calls.append((endpoint_key, dict(params or {})))
+        if endpoint_key != "inverter_list":
+            return {}
+        page = int((params or {}).get("page", 1))
+        if page == 1:
+            return {"total": 3, "infos": [{"sn": "INV1"}, {"sn": "INV2"}]}
+        return {"total": 3, "infos": [{"sn": "INV3"}]}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        devices = run_async_local(s.get_device_list())
+    if devices != ["INV1"]:
+        print(f"ERROR: expected ['INV1'] after filtering, got {devices}")
+        failed = True
+    if len(calls) < 2:
+        print(f"ERROR: expected pagination, only {len(calls)} call(s) made")
+        failed = True
+    assert not failed, "test_get_device_list_pages_and_filters"
+
+
+def test_get_device_list_unfiltered_returns_all():
+    """With no filter, every discovered serial is registered."""
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a single page of two inverters."""
+        return {"total": 2, "infos": [{"sn": "INV1"}, {"sn": "INV2"}]}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        devices = run_async_local(s.get_device_list())
+    if devices != ["INV1", "INV2"]:
+        print(f"ERROR: expected both serials, got {devices}")
+        failed = True
+    assert not failed, "test_get_device_list_unfiltered_returns_all"
+
+
+def test_fetch_device_data_maps_telemetry_and_energy():
+    """Telemetry from four endpoints is flattened onto the Predbat sensor leaves."""
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a realistic payload for each realtime endpoint."""
+        if endpoint_key == "battery":
+            return {"soc": 62, "power": -1500, "voltage": 51.2, "temp": 21.5, "capacity": 280, "chargeVolt": 56.8, "maxChargeCurrentLimit": 100, "etodayChg": 7.4, "etodayDischg": 5.1}
+        if endpoint_key == "grid":
+            return {"pac": 430, "etodayFrom": 3.2, "etodayTo": 1.1}
+        if endpoint_key == "load":
+            return {"totalPower": 900, "dailyUsed": 12.6}
+        if endpoint_key == "input":
+            return {"pac": 2100, "etoday": 9.8}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", 430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
+        if values.get(leaf) != expect:
+            print(f"ERROR: telemetry {leaf} = {values.get(leaf)}, expected {expect}")
+            failed = True
+    energy = s.device_energy.get("INV1", {})
+    for leaf, expect in (("pv_today", 9.8), ("import_today", 3.2), ("export_today", 1.1), ("load_today", 12.6), ("battery_charge_today", 7.4), ("battery_discharge_today", 5.1)):
+        if energy.get(leaf) != expect:
+            print(f"ERROR: energy {leaf} = {energy.get(leaf)}, expected {expect}")
+            failed = True
+    assert not failed, "test_fetch_device_data_maps_telemetry_and_energy"
+
+
+def test_fetch_device_data_absent_fields_are_not_invented():
+    """A model that omits a counter leaves it absent rather than publishing a zero."""
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return a battery payload with no energy counters at all."""
+        if endpoint_key == "battery":
+            return {"soc": 50, "power": 0}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    energy = s.device_energy.get("INV1", {})
+    for leaf in ("battery_charge_today", "pv_today", "import_today"):
+        if leaf in energy:
+            print(f"ERROR: {leaf} was invented as {energy[leaf]} when the API omitted it")
+            failed = True
+    if s.device_values.get("INV1", {}).get("soc") != 50:
+        print("ERROR: present fields should still be mapped")
+        failed = True
+    assert not failed, "test_fetch_device_data_absent_fields_are_not_invented"
+
+
+def test_nominal_pack_voltage_variants():
+    """Pack voltage is inferred from the BMS charge target across common stack sizes."""
+    failed = False
+    s = MockSunsynk()
+    # 16 cells -> 51.2V nominal, 24 -> 76.8V, 32 -> 102.4V.
+    for charge_volts, expect in ((56.8, 51.2), (85.2, 76.8), (113.6, 102.4)):
+        got = s.nominal_pack_voltage(charge_volts)
+        if abs(got - expect) > 0.5:
+            print(f"ERROR: chargeVolt {charge_volts} gave {got}V nominal, expected about {expect}V")
+            failed = True
+    # No charge target and no override means no guess.
+    if s.nominal_pack_voltage(0) != 0:
+        print("ERROR: a missing charge target must not produce a guessed voltage")
+        failed = True
+    # The explicit override wins.
+    s.battery_nominal_voltage = 48.0
+    if s.nominal_pack_voltage(0) != 48.0:
+        print("ERROR: sunsynk_battery_nominal_voltage override was ignored")
+        failed = True
+    assert not failed, "test_nominal_pack_voltage_variants"
+
+
+def test_battery_capacity_amp_hours_to_kwh():
+    """Amp-hour capacity becomes kWh using the inferred pack voltage."""
+    failed = False
+    s = MockSunsynk()
+    s.device_values["INV1"] = {"capacity": 280, "chargeVolt": 56.8}
+    # 280Ah at 51.2V nominal = 14.336 kWh.
+    capacity = s.battery_capacity("INV1")
+    if abs(capacity - 14.336) > 0.05:
+        print(f"ERROR: capacity {capacity} kWh, expected about 14.34")
+        failed = True
+    # Without a voltage there must be no guess — a wrong soc_max is worse than none.
+    s.device_values["INV2"] = {"capacity": 280}
+    if s.battery_capacity("INV2") != 0:
+        print(f"ERROR: capacity guessed without a pack voltage: {s.battery_capacity('INV2')}")
+        failed = True
+    assert not failed, "test_battery_capacity_amp_hours_to_kwh"
+
+
+def test_battery_rate_max_from_charge_current():
+    """The charge-current limit becomes a watt rate using the same pack voltage."""
+    failed = False
+    s = MockSunsynk()
+    s.device_values["INV1"] = {"maxChargeCurrentLimit": 100, "chargeVolt": 56.8}
+    # 100A at 51.2V = 5120W.
+    rate = s.battery_rate_max("INV1")
+    if abs(rate - 5120) > 50:
+        print(f"ERROR: battery_rate_max {rate}W, expected about 5120W")
+        failed = True
+    s.device_values["INV2"] = {"chargeVolt": 56.8}
+    if s.battery_rate_max("INV2") != 0:
+        print("ERROR: a missing current limit must not produce a guessed rate")
+        failed = True
+    assert not failed, "test_battery_rate_max_from_charge_current"
+
+
+def test_battery_reserve_min_from_settings():
+    """The inverter's own SOC floor is read from the settings object."""
+    failed = False
+    s = MockSunsynk()
+    s.device_settings["INV1"] = {"batteryLowCap": "14"}
+    if s.battery_reserve_min("INV1") != 14:
+        print(f"ERROR: reserve min {s.battery_reserve_min('INV1')}, expected 14")
+        failed = True
+    if s.battery_reserve_min("UNKNOWN") != 0:
+        print("ERROR: an unknown serial should report no floor, not crash")
+        failed = True
+    assert not failed, "test_battery_reserve_min_from_settings"
+
+
 def run_sunsynk_api_tests(my_predbat):
     """Run all Sunsynk API tests."""
     failed = False
@@ -392,6 +563,14 @@ def run_sunsynk_api_tests(my_predbat):
         ("request_real_refresh_on_final_attempt", test_request_real_auth_error_on_final_attempt_still_retries),
         ("request_real_non200_exhausts_retries", test_request_real_non200_exhausts_retries_returns_none),
         ("request_real_transport_exception_exhausts_retries", test_request_real_transport_exception_exhausts_retries_returns_none),
+        ("device_list_paging", test_get_device_list_pages_and_filters),
+        ("device_list_unfiltered", test_get_device_list_unfiltered_returns_all),
+        ("telemetry_mapping", test_fetch_device_data_maps_telemetry_and_energy),
+        ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
+        ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
+        ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
+        ("battery_rate_max", test_battery_rate_max_from_charge_current),
+        ("battery_reserve_min", test_battery_reserve_min_from_settings),
     ]:
         try:
             if fn():
