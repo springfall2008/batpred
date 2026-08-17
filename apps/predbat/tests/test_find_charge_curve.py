@@ -407,7 +407,7 @@ def create_tapering_power_history_data(my_predbat, num_days=7):
         hour = timestamp.hour
         minute_of_hour = timestamp.minute
 
-        if 2 <= hour < 5:
+        if 2 <= hour < 6:
             session_minute = (hour - 2) * 60 + minute_of_hour
             soc = min(98, 80 + session_minute // step_minutes)
             charge_rate = 2600
