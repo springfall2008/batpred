@@ -292,3 +292,64 @@ def run_currency_unit_tests(my_predbat, web):
         my_predbat.num_cars = original_num_cars
 
     return failed
+
+
+class FakeImageRequest:
+    """A minimal aiohttp-request stand-in exposing only ``match_info``."""
+
+    def __init__(self, filename=None):
+        """Store the route parameter a handler will read."""
+        self.match_info = {} if filename is None else {"filename": filename}
+
+
+def run_web_logo_image_tests(my_predbat):
+    """Unit tests for the local logo image route (issue #4562).
+
+    The Predbat logo used to be fetched from raw.githubusercontent.com on every page
+    load, so a GitHub outage or rate limit left the dashboard hanging for ~15s. The
+    images now ship alongside the app and are served locally, with no network
+    dependency at all.
+    """
+    failed = 0
+    print("**** Running web logo image tests ****")
+
+    web = make_web(my_predbat)
+
+    print("Test: each bundled logo file is served with the right content type")
+    expected_content_types = {
+        "bat_logo.svg": "image/svg+xml",
+        "bat_logo_light.png": "image/png",
+        "bat_logo_dark.png": "image/png",
+    }
+    for filename, content_type in expected_content_types.items():
+        response = asyncio.run(web.html_logo_image(FakeImageRequest(filename)))
+        if response.status != 200:
+            print(f"  ERROR: {filename} should serve with status 200, got {response.status}")
+            failed += 1
+        if response.content_type != content_type:
+            print(f"  ERROR: {filename} should serve as {content_type}, got {response.content_type}")
+            failed += 1
+        if not response.body:
+            print(f"  ERROR: {filename} should have a non-empty body")
+            failed += 1
+
+    print("Test: an unknown or missing filename 404s rather than leaking the app directory")
+    for request in [FakeImageRequest("predbat.py"), FakeImageRequest("../predbat.py"), FakeImageRequest()]:
+        response = asyncio.run(web.html_logo_image(request))
+        if response.status != 404:
+            print(f"  ERROR: request for {request.match_info} should 404, got {response.status}")
+            failed += 1
+
+    print("Test: the page header no longer depends on GitHub for the logo")
+    from web_helper import get_header_html
+
+    header = get_header_html("Test", False, "./dash", [], "v1.0", "")
+    if "githubusercontent" in header:
+        print("  ERROR: the page header should not reference githubusercontent.com any more")
+        failed += 1
+    if "./images/bat_logo" not in header:
+        print("  ERROR: the page header should reference the local logo route")
+        failed += 1
+
+    print("**** Web logo image tests completed ****")
+    return failed
