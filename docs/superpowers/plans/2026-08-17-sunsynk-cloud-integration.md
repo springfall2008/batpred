@@ -872,7 +872,9 @@ class MockSunsynk(SunsynkAPI):
         self.base.args = {"user_id": "test-sunsynk-1"}
         self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         self.base.minutes_now = 0  # local minutes-since-midnight; tests set this for time-aware control
-        self._init_oauth(auth_method if auth_method == "oauth" else "password", "test-token", None, "sunsynk")
+        # Straight through, like the component: _init_oauth owns self.auth_method, so
+        # collapsing the modes here would hide password_legacy from fetch_token.
+        self._init_oauth(auth_method, "test-token", None, "sunsynk")
 
     def log(self, message):
         """Capture logs."""
@@ -1286,8 +1288,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Sunsynk auth_method 'password_legacy' sends your password in plaintext over TLS. It exists for regions still on the pre-2025 login; prefer 'password' where it works.")
         if not self.control_enable:
             self.log("Info: Sunsynk control is disabled (sunsynk_control_enable is false); monitoring only. The write format has not been confirmed against live hardware.")
-        # OAuthMixin owns the injected-token path; the self-hosted paths manage their own.
-        self._init_oauth("oauth" if self.auth_method == "oauth" else "password", key, token_expires_at, "sunsynk")
+        # Pass auth_method STRAIGHT THROUGH, exactly as deye.py does. _init_oauth owns
+        # self.auth_method (`self.auth_method = auth_method or "api_key"`, oauth_mixin.py),
+        # so collapsing the three modes to two here would rewrite "password_legacy" to
+        # "password" and make the plaintext login silently unreachable — fetch_token would
+        # take the RSA branch for a user who deliberately asked for the legacy one.
+        # _init_oauth leaves access_token None for every non-oauth value, which is right
+        # for both self-hosted modes: they obtain their token in fetch_token.
+        self._init_oauth(auth_method=self.auth_method, key=key, token_expires_at=token_expires_at, provider_name="sunsynk")
+        # _init_oauth resets token_hash to "" (see oauth_mixin.py), so a configured value
+        # must be applied AFTER it, exactly as fox.py and deye.py do — otherwise the
+        # Predbat.com SaaS refresh dedup keyed on it breaks.
         self.token_hash = token_hash
 
     @property
@@ -4024,46 +4035,35 @@ Nobody on the project has a Sunsynk account, so this task is what makes remote v
 
 - [ ] **Step 1: Append the CLI entry point**
 
-At the end of `apps/predbat/sunsynk.py` (the `fox.py` pattern — add `import argparse` and `from mock_base import MockBase` to the imports):
+At the end of `apps/predbat/sunsynk.py`, following **deye.py's harness pattern** (`deye.py:1435`) — add `import argparse` and `from mock_base import MockBase` to the imports.
+
+`MockBase` is the *base object* a component is constructed around, **not** a mixin. Do not inherit
+from it: that would put `ComponentBase` ahead of `MockBase` in the MRO, so `get_state_wrapper` and
+`dashboard_item` would resolve to `ComponentBase`'s versions and hit an unset `self.base`. Building
+the component around a `MockBase()` instance also gives the documented standalone behaviour — its
+`components` is None, so `ComponentBase.storage` resolves to None and the disk cache is skipped.
 
 ```python
-class SunsynkCLI(SunsynkAPI, MockBase):
-    """Standalone Sunsynk client for command-line diagnostics, with no Predbat around it."""
-
-    def __init__(self, username, password, region, auth_method):
-        """Build a usable client without the component lifecycle."""
-        MockBase.__init__(self)
-        self.prefix = "predbat"
-        self.username = username
-        self.password = password
-        self.region = region
-        self.auth_method = auth_method
-        self.control_enable = True
-        self.automatic = False
-        self.automatic_ignore_pv = False
-        self.inverter_sn_filter = []
-        self.battery_nominal_voltage = 0.0
-        self.device_list = []
-        self.device_detail = {}
-        self.device_values = {}
-        self.device_settings = {}
-        self.device_rated_power = {}
-        self.local_schedule = {}
-        self.applied_payload = {}
-        self.settle_count = {}
-        self._tier_refreshed = {}
-        self._cache_restored = True
-        self._soc_floor_warned = set()
-        self._init_oauth("password", "", None, "sunsynk")
-
-    def log(self, message, quiet=True):
-        """Print rather than routing through Predbat's logger."""
-        print(message)
+def _build_sunsynk(mock_base, args):  # pragma: no cover
+    """Construct a SunsynkAPI around a MockBase for standalone command-line use."""
+    client = SunsynkAPI(mock_base)
+    client.initialize(
+        username=args.username,
+        password=args.password,
+        region=args.region,
+        auth_method=args.auth_method,
+        # The CLI is the verification tool, so control is on — but run_cli still asks
+        # before it sends anything to a real inverter.
+        control_enable=True,
+        automatic=False,
+    )
+    return client
 
 
-async def run_cli(args):
+async def run_cli(args):  # pragma: no cover
     """Log in, dump what the account exposes, and optionally round-trip one write."""
-    client = SunsynkCLI(args.username, args.password, args.region, args.auth_method)
+    mock_base = MockBase()
+    client = _build_sunsynk(mock_base, args)
     print(f"Region {args.region} -> {client.base_url} (source={client.source}), auth={args.auth_method}")
     if not await client.fetch_token():
         print("Login FAILED. If your region still serves the older login, retry with --auth-method password_legacy.")
