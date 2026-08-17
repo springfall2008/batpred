@@ -247,12 +247,192 @@ def test_run_first_cycle_polls_and_publishes():
         patch.object(s, "fetch_settings", side_effect=fake_settings),
         patch.object(s, "publish_data", side_effect=fake_publish),
     ):
-        run_async_local(s.run(0, True))
+        result = run_async_local(s.run(0, True))
     for step in ("restore", "discover", "telemetry", "publish"):
         if step not in calls:
             print(f"ERROR: first cycle never did {step}; calls were {calls}")
             failed = True
+    # ComponentBase.start() only clears its startup "first" flag and reaches the normal
+    # 60-second cadence when run() returns something truthy; a regression back to an
+    # implicit `None` here would strand the component in an ever-growing backoff without
+    # this assertion ever noticing, since every step above still runs either way.
+    if result is not True:
+        print(f"ERROR: run() should return True on a completed first cycle, got {result!r}")
+        failed = True
     assert not failed, "test_run_first_cycle_polls_and_publishes"
+
+
+def test_run_returns_false_on_login_failure():
+    """A failed login must not be reported as a completed cycle, or ComponentBase would clear 'first' anyway."""
+    failed = False
+    s = ConfigSunsynk()
+
+    async def fake_restore():
+        """No-op restore."""
+        return None
+
+    async def fake_token_fail():
+        """Simulate a login failure."""
+        return False
+
+    with patch.object(s, "restore_state", side_effect=fake_restore), patch.object(s, "fetch_token", side_effect=fake_token_fail):
+        result = run_async_local(s.run(0, True))
+    if result is not False:
+        print(f"ERROR: run() should return False after a login failure, got {result!r}")
+        failed = True
+    assert not failed, "test_run_returns_false_on_login_failure"
+
+
+def test_run_returns_false_with_no_inverters():
+    """An account with nothing discovered must not be reported as a completed cycle."""
+    failed = False
+    s = ConfigSunsynk()
+
+    async def fake_restore():
+        """No-op restore."""
+        return None
+
+    async def fake_token():
+        """Successful login."""
+        return True
+
+    async def fake_device_list_empty():
+        """Discovery finds nothing."""
+        s.device_list = []
+        return []
+
+    with (
+        patch.object(s, "restore_state", side_effect=fake_restore),
+        patch.object(s, "fetch_token", side_effect=fake_token),
+        patch.object(s, "get_device_list", side_effect=fake_device_list_empty),
+    ):
+        result = run_async_local(s.run(0, True))
+    if result is not False:
+        print(f"ERROR: run() should return False with no inverters discovered, got {result!r}")
+        failed = True
+    assert not failed, "test_run_returns_false_with_no_inverters"
+
+
+def test_run_publishes_schedule_every_tick_not_only_first():
+    """The control-entity readback must keep tracking local_schedule every tick, not only at startup."""
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1"]
+    s.local_schedule["INV1"] = {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}}
+    # Pre-mark every tier fresh so this non-first tick does not attempt a real network
+    # discovery/config/telemetry refresh - only the per-inverter publish loop is under test.
+    s.mark_refreshed("static")
+    s.mark_refreshed("config")
+    s.mark_refreshed("live")
+    published = []
+
+    async def fake_get_schedule(sn):
+        """Return the schedule unchanged."""
+        return s.local_schedule[sn]
+
+    async def fake_apply_schedule(sn):
+        """No plan change, nothing to write."""
+        return False
+
+    async def fake_publish_schedule(sn):
+        """Record each publish."""
+        published.append(sn)
+
+    async def fake_publish_data():
+        """No-op."""
+        return None
+
+    with (
+        patch.object(s, "get_schedule_settings_ha", side_effect=fake_get_schedule),
+        patch.object(s, "apply_schedule", side_effect=fake_apply_schedule),
+        patch.object(s, "publish_schedule_settings_ha", side_effect=fake_publish_schedule),
+        patch.object(s, "publish_data", side_effect=fake_publish_data),
+    ):
+        run_async_local(s.run(0, False))
+    if published != ["INV1"]:
+        print(f"ERROR: publish_schedule_settings_ha was not called on a non-first tick; published={published}")
+        failed = True
+    assert not failed, "test_run_publishes_schedule_every_tick_not_only_first"
+
+
+def test_refresh_config_logs_external_changes():
+    """refresh_config must observe a setting changed outside Predbat before it overwrites the baseline used to spot it.
+
+    apply_settings only re-reads settings on a genuine plan change, so the config tier is
+    where nearly every externally made change is first observed. If refresh_config does not
+    itself compare old vs new before fetch_settings overwrites device_settings in place,
+    the change is silently absorbed and the design spec's mitigation for the read-modify-
+    write race with the phone app never fires.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1"]
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
+
+    async def fake_settings(sn):
+        """Simulate the phone app having raised the floor since the last read."""
+        return {"sn": "INV1", "batteryLowCap": "40"}
+
+    with patch.object(s, "fetch_settings", side_effect=fake_settings):
+        run_async_local(s.refresh_config())
+    if not any("batteryLowCap" in str(m) and "outside Predbat" in str(m) for m in s.log_messages):
+        print(f"ERROR: external change to batteryLowCap was not logged; log_messages={s.log_messages}")
+        failed = True
+    assert not failed, "test_refresh_config_logs_external_changes"
+
+
+def test_refresh_config_skips_save_when_every_read_fails():
+    """A refresh where every inverter's settings read fails must not re-stamp the on-disk cache as fresh.
+
+    save_config()'s file mtime is what age_cache()/restore_state() use to seed the config
+    tier's clock after a restart. Saving unconditionally would re-stamp days-stale content
+    as fresh on every failed poll, and after a restart the tier would then be skipped for a
+    full TTL while running on stale settings.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1", "INV2"]
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
+    s.device_settings["INV2"] = {"sn": "INV2", "batteryLowCap": "10"}
+    saved = []
+
+    async def fake_settings_fail(sn):
+        """Simulate every settings read failing."""
+        return {}
+
+    async def fake_save_config():
+        """Record whether the cache was (re)written."""
+        saved.append(True)
+
+    with patch.object(s, "fetch_settings", side_effect=fake_settings_fail), patch.object(s, "save_config", side_effect=fake_save_config):
+        run_async_local(s.refresh_config())
+    if saved:
+        print("ERROR: save_config was called even though every settings read failed")
+        failed = True
+    assert not failed, "test_refresh_config_skips_save_when_every_read_fails"
+
+
+def test_refresh_config_saves_when_any_read_succeeds():
+    """A partial success (one inverter offline, one fine) still persists what was actually learned."""
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1", "INV2"]
+    saved = []
+
+    async def fake_settings_partial(sn):
+        """INV1 fails, INV2 succeeds."""
+        return {} if sn == "INV1" else {"sn": "INV2", "batteryLowCap": "10"}
+
+    async def fake_save_config():
+        """Record whether the cache was (re)written."""
+        saved.append(True)
+
+    with patch.object(s, "fetch_settings", side_effect=fake_settings_partial), patch.object(s, "save_config", side_effect=fake_save_config):
+        run_async_local(s.refresh_config())
+    if not saved:
+        print("ERROR: save_config was not called even though one inverter's read succeeded")
+        failed = True
+    assert not failed, "test_refresh_config_saves_when_any_read_succeeds"
 
 
 def run_sunsynk_config_tests(my_predbat):
@@ -266,6 +446,12 @@ def run_sunsynk_config_tests(my_predbat):
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),
+        ("run_login_failure", test_run_returns_false_on_login_failure),
+        ("run_no_inverters", test_run_returns_false_with_no_inverters),
+        ("run_publishes_every_tick", test_run_publishes_schedule_every_tick_not_only_first),
+        ("refresh_config_logs_external_changes", test_refresh_config_logs_external_changes),
+        ("refresh_config_skips_save_on_total_failure", test_refresh_config_skips_save_when_every_read_fails),
+        ("refresh_config_saves_on_partial_success", test_refresh_config_saves_when_any_read_succeeds),
     ]:
         try:
             if fn():
