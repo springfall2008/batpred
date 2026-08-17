@@ -175,6 +175,7 @@ fontweight
 Forestfire
 formaction
 formmethod
+foxcloud
 foxess
 foxesscloud
 freephase

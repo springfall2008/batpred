@@ -2067,7 +2067,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
-        "support_discharge_freeze": True,
+        # "Feed-in first"/freeze export mode does not hold SoC flat on FoxESS - PV above the
+        # export limit still charges the battery instead of being clipped (#4207) - matching
+        # FoxCloud's entry below, which was already correctly set False for the same hardware.
+        "support_discharge_freeze": False,
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
