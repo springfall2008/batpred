@@ -9,7 +9,10 @@
 """Tests for Sunsynk login: the pure-Python RSA helper and the three auth methods."""
 
 import base64
+from unittest.mock import patch
 from sunsynk_const import parse_rsa_public_key, rsa_encrypt_pkcs1v15
+from tests.test_sunsynk_api import MockSunsynk
+from tests.test_infra import run_async as run_async_local
 
 # A real 1024-bit RSA public key, DER SubjectPublicKeyInfo, base64 — the same shape
 # Sunsynk's /anonymous/publicKey returns (no PEM armour).
@@ -121,6 +124,162 @@ def test_rsa_encrypt_rejects_oversize_password():
     assert not failed, "test_rsa_encrypt_rejects_oversize_password"
 
 
+def test_password_login_uses_rsa_and_signs():
+    """The default method fetches a public key, encrypts the password and signs both calls."""
+    failed = False
+    s = MockSunsynk(auth_method="password")
+    seen = {}
+
+    async def fake_request(method, endpoint_key, sn=None, params=None, body=None):
+        """Record each auth call and return a plausible Sunsynk response."""
+        seen[endpoint_key] = {"method": method, "params": params, "body": body}
+        if endpoint_key == "public_key":
+            return SUNSYNK_TEST_PUBLIC_KEY
+        return {"access_token": "tok-abc", "refresh_token": "ref-abc", "expires_in": 3600}
+
+    with patch.object(s, "_request", side_effect=fake_request):
+        ok = run_async_local(s.fetch_token())
+    if not ok:
+        print("ERROR: fetch_token returned False")
+        failed = True
+    if "public_key" not in seen:
+        print("ERROR: the public key endpoint was never called")
+        failed = True
+    else:
+        params = seen["public_key"].get("params") or {}
+        for key in ("nonce", "source", "sign"):
+            if key not in params:
+                print(f"ERROR: public key request missing {key}")
+                failed = True
+    token_body = (seen.get("token") or {}).get("body") or {}
+    if token_body.get("password") == s.password:
+        print("ERROR: the plaintext password was sent on the RSA path")
+        failed = True
+    if not token_body.get("password"):
+        print("ERROR: no encrypted password in the token request")
+        failed = True
+    for key in ("nonce", "sign", "source", "client_id", "grant_type", "username"):
+        if key not in token_body:
+            print(f"ERROR: token request missing {key}")
+            failed = True
+    if s.access_token != "tok-abc":
+        print(f"ERROR: access token not stored, got {s.access_token!r}")
+        failed = True
+    assert not failed, "test_password_login_uses_rsa_and_signs"
+
+
+def test_legacy_login_sends_plaintext_and_skips_public_key():
+    """password_legacy posts once, with the plaintext password and no public-key call."""
+    failed = False
+    s = MockSunsynk(auth_method="password_legacy")
+    seen = {}
+
+    async def fake_request(method, endpoint_key, sn=None, params=None, body=None):
+        """Record each auth call and return a plausible Sunsynk response."""
+        seen[endpoint_key] = {"method": method, "params": params, "body": body}
+        return {"access_token": "tok-legacy", "refresh_token": "ref-legacy", "expires_in": 3600}
+
+    with patch.object(s, "_request", side_effect=fake_request):
+        ok = run_async_local(s.fetch_token())
+    if not ok:
+        print("ERROR: legacy fetch_token returned False")
+        failed = True
+    if "public_key" in seen:
+        print("ERROR: the legacy path fetched a public key")
+        failed = True
+    if "token_legacy" not in seen:
+        print("ERROR: the legacy token endpoint was not called")
+        failed = True
+    body = (seen.get("token_legacy") or {}).get("body") or {}
+    if body.get("password") != "hunter2":
+        print(f"ERROR: legacy password should be plaintext, got {body.get('password')!r}")
+        failed = True
+    if body.get("areaCode") != "sunsynk":
+        print(f"ERROR: legacy request missing areaCode, got {body.get('areaCode')!r}")
+        failed = True
+    if s.access_token != "tok-legacy":
+        print(f"ERROR: access token not stored, got {s.access_token!r}")
+        failed = True
+    assert not failed, "test_legacy_login_sends_plaintext_and_skips_public_key"
+
+
+def test_rsa_login_never_falls_back_to_plaintext():
+    """A failing public-key step must not downgrade to sending the plaintext password.
+
+    Auto-downgrade would turn any externally-triggerable failure of the public-key call
+    into a plaintext credential transmission. TLS-intercepting middleboxes are common,
+    and against one of those the RSA layer is the only thing protecting the password.
+    """
+    failed = False
+    s = MockSunsynk(auth_method="password")
+    seen = []
+
+    async def fake_request(method, endpoint_key, sn=None, params=None, body=None):
+        """Fail the public key call, and record anything sent afterwards."""
+        seen.append((endpoint_key, body))
+        if endpoint_key == "public_key":
+            return {}
+        return {"access_token": "tok-should-not-happen", "expires_in": 3600}
+
+    with patch.object(s, "_request", side_effect=fake_request):
+        ok = run_async_local(s.fetch_token())
+    if ok:
+        print("ERROR: fetch_token reported success after the public key call failed")
+        failed = True
+    for endpoint_key, body in seen:
+        if endpoint_key == "token_legacy":
+            print("ERROR: the RSA path fell back to the legacy endpoint")
+            failed = True
+        if body and body.get("password") == "hunter2":
+            print(f"ERROR: plaintext password sent to {endpoint_key}")
+            failed = True
+    if not any("legacy" in str(m).lower() for m in s.log_messages):
+        print("ERROR: no diagnostic pointing the user at password_legacy")
+        failed = True
+    assert not failed, "test_rsa_login_never_falls_back_to_plaintext"
+
+
+def test_oauth_method_skips_login_entirely():
+    """The Predbat.com path uses the injected token and never calls a login endpoint."""
+    failed = False
+    s = MockSunsynk(auth_method="oauth")
+    seen = []
+
+    async def fake_request(method, endpoint_key, sn=None, params=None, body=None):
+        """Record any call, which for this method should never happen."""
+        seen.append(endpoint_key)
+        return {}
+
+    with patch.object(s, "_request", side_effect=fake_request):
+        ok = run_async_local(s.fetch_token())
+    if not ok:
+        print("ERROR: oauth fetch_token should succeed with an injected token")
+        failed = True
+    if seen:
+        print(f"ERROR: oauth path called login endpoints: {seen}")
+        failed = True
+    if s.access_token != "test-token":
+        print(f"ERROR: injected token not used, got {s.access_token!r}")
+        failed = True
+    assert not failed, "test_oauth_method_skips_login_entirely"
+
+
+def test_debug_trace_redacts_credentials():
+    """Debug tracing never writes a password or bearer token to the log."""
+    failed = False
+    s = MockSunsynk()
+    s.debug_api("POST", "token", {"username": "test@example.com", "password": "hunter2", "sign": "abc123", "access_token": "tok-abc"})
+    joined = " ".join(str(m) for m in s.log_messages)
+    for secret in ("hunter2", "tok-abc", "abc123"):
+        if secret in joined:
+            print(f"ERROR: {secret!r} leaked into the debug log")
+            failed = True
+    if "test@example.com" not in joined:
+        print("ERROR: non-secret fields should still be traced")
+        failed = True
+    assert not failed, "test_debug_trace_redacts_credentials"
+
+
 def run_sunsynk_auth_tests(my_predbat):
     """Run all Sunsynk authentication tests."""
     failed = False
@@ -130,6 +289,11 @@ def run_sunsynk_auth_tests(my_predbat):
         ("encrypt_round_trip", test_rsa_encrypt_round_trip),
         ("encrypt_randomised", test_rsa_encrypt_is_randomised),
         ("encrypt_oversize", test_rsa_encrypt_rejects_oversize_password),
+        ("password_login_rsa", test_password_login_uses_rsa_and_signs),
+        ("legacy_login_plaintext", test_legacy_login_sends_plaintext_and_skips_public_key),
+        ("no_plaintext_fallback", test_rsa_login_never_falls_back_to_plaintext),
+        ("oauth_skips_login", test_oauth_method_skips_login_entirely),
+        ("debug_redaction", test_debug_trace_redacts_credentials),
     ]:
         try:
             if fn():
