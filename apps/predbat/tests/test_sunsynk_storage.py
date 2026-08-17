@@ -199,6 +199,11 @@ def test_restore_state_survives_a_raising_storage_and_retries_once_recovered():
     if s.device_list:
         print(f"ERROR: nothing should have been restored from a raising storage, got {s.device_list}")
         failed = True
+    # A REAL storage failure must still be visible in the log - only "no storage
+    # configured at all" (self.storage is None) is meant to go quiet.
+    if not any("Warn:" in message for message in s.log_messages):
+        print(f"ERROR: a raising storage backend produced no warnings at all: {s.log_messages}")
+        failed = True
 
     # Storage recovers (e.g. the next tick) - a later call on the SAME instance must still
     # be able to complete a real restore, not stay locked out by the earlier failure.
@@ -214,12 +219,17 @@ def test_restore_state_survives_a_raising_storage_and_retries_once_recovered():
     assert not failed, "test_restore_state_survives_a_raising_storage_and_retries_once_recovered"
 
 
-def test_restore_state_survives_storage_being_none_and_retries_once_recovered():
-    """No storage component at all - the normal standalone-CLI case - must not crash restore_state either.
+def test_restore_state_completes_silently_and_permanently_when_storage_is_absent():
+    """No storage component at all - the normal standalone-CLI case - must not crash restore_state,
+    must not warn, and must complete once rather than being retried on every later call.
 
     mock_base.py documents components as always None for a standalone run, so
     ComponentBase.storage resolves to None in that mode; this is not a hypothetical edge
-    case. Also confirms a later call succeeds once a real storage component is attached.
+    case, and it is a permanent, by-design condition rather than a transient storage
+    outage. Unlike a raising backend (see the raising-storage test above), it must not
+    flag _restore_had_error - doing so would leave _cache_restored perpetually False and
+    repeat the (now silent) no-op load/age calls on every retried first cycle forever,
+    which is exactly the "redo its work every tick" failure mode Fix 1 exists to avoid.
     """
     failed = False
     s = StoredSunsynk()
@@ -229,23 +239,74 @@ def test_restore_state_survives_storage_being_none_and_retries_once_recovered():
     except Exception as error:
         print(f"ERROR: restore_state raised with storage=None: {error}")
         failed = True
-    if s._cache_restored:
-        print("ERROR: restoring with no storage available must not be marked complete")
+    if any("Warn:" in message for message in s.log_messages):
+        print(f"ERROR: absent storage produced warnings: {s.log_messages}")
+        failed = True
+    if not s._cache_restored:
+        print("ERROR: a completed restore attempt with no storage available should still be marked complete, not retried forever")
         failed = True
     if s.device_list:
         print(f"ERROR: nothing should have been restored with no storage, got {s.device_list}")
         failed = True
 
-    s._storage = FakeStorage(ages={SUNSYNK_CACHE_STATIC: 1.0})
-    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"]}
+    # A second call must be a genuine no-op guarded by _cache_restored, not a repeat of the
+    # same (silent) work - confirmed by the log staying exactly as it was.
+    messages_before = list(s.log_messages)
     run_async_local(s.restore_state())
-    if s.device_list != ["INV1"]:
-        print(f"ERROR: restore did not succeed once storage became available, got {s.device_list}")
+    if s.log_messages != messages_before:
+        print(f"ERROR: a second call re-did work instead of being guarded, new messages: {s.log_messages[len(messages_before):]}")
         failed = True
-    if not s._cache_restored:
-        print("ERROR: a successful restore should mark the guard so it does not run again")
+    assert not failed, "test_restore_state_completes_silently_and_permanently_when_storage_is_absent"
+
+
+def test_cache_helpers_are_silent_when_storage_is_none():
+    """load_cache/save_cache/age_cache must not warn when there is simply no Storage component.
+
+    Driven directly (rather than via restore_state) so each helper's return value is
+    checked individually: {} from load_cache, None from age_cache, no exception from
+    save_cache, and critically - no "Warn:" log line, since absent storage is the normal,
+    by-design standalone-CLI condition, not a fault.
+    """
+    failed = False
+    s = StoredSunsynk()
+    s._storage = None
+    loaded = run_async_local(s.load_cache(SUNSYNK_CACHE_CONFIG))
+    try:
+        run_async_local(s.save_cache(SUNSYNK_CACHE_CONFIG, {"a": 1}))
+    except Exception as error:
+        print(f"ERROR: save_cache raised with storage=None: {error}")
         failed = True
-    assert not failed, "test_restore_state_survives_storage_being_none_and_retries_once_recovered"
+    age = run_async_local(s.age_cache(SUNSYNK_CACHE_CONFIG))
+    if loaded != {}:
+        print(f"ERROR: load_cache with no storage should return {{}}, got {loaded!r}")
+        failed = True
+    if age is not None:
+        print(f"ERROR: age_cache with no storage should return None, got {age!r}")
+        failed = True
+    if any("Warn:" in message for message in s.log_messages):
+        print(f"ERROR: absent storage produced warnings: {s.log_messages}")
+        failed = True
+    assert not failed, "test_cache_helpers_are_silent_when_storage_is_none"
+
+
+def test_cache_helpers_still_warn_on_a_real_storage_failure():
+    """A storage backend that actually raises must still warn - only 'no storage at all' goes quiet.
+
+    Regression guard for Fix 1: the broad except Exception in load_cache/save_cache/
+    age_cache is load-bearing for a transient real storage outage and must not be
+    silenced along with the "storage is None" case.
+    """
+    failed = False
+    s = StoredSunsynk()
+    s._storage = RaisingStorage()
+    run_async_local(s.load_cache(SUNSYNK_CACHE_CONFIG))
+    run_async_local(s.save_cache(SUNSYNK_CACHE_CONFIG, {"a": 1}))
+    run_async_local(s.age_cache(SUNSYNK_CACHE_CONFIG))
+    warn_count = sum(1 for message in s.log_messages if "Warn:" in message)
+    if warn_count < 3:
+        print(f"ERROR: expected a warning from each of load/save/age against a raising storage, got {warn_count}: {s.log_messages}")
+        failed = True
+    assert not failed, "test_cache_helpers_still_warn_on_a_real_storage_failure"
 
 
 def run_sunsynk_storage_tests(my_predbat):
@@ -258,7 +319,9 @@ def run_sunsynk_storage_tests(my_predbat):
         ("tier_expiry", test_tier_expiry_uses_the_seeded_clock),
         ("telemetry_not_cached", test_telemetry_is_not_cached),
         ("restore_survives_raising_storage", test_restore_state_survives_a_raising_storage_and_retries_once_recovered),
-        ("restore_survives_storage_none", test_restore_state_survives_storage_being_none_and_retries_once_recovered),
+        ("restore_storage_none_completes_silently", test_restore_state_completes_silently_and_permanently_when_storage_is_absent),
+        ("cache_helpers_silent_storage_none", test_cache_helpers_are_silent_when_storage_is_none),
+        ("cache_helpers_warn_on_real_failure", test_cache_helpers_still_warn_on_a_real_storage_failure),
     ]:
         try:
             if fn():

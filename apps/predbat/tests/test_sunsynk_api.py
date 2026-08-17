@@ -9,15 +9,18 @@
 """Tests for the Sunsynk Cloud API component (``sunsynk.py``)."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
+import argparse
 import asyncio
+import io
 import signal
 import aiohttp
 import pytz
+from contextlib import redirect_stdout
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
-from sunsynk import SunsynkAPI
+from sunsynk import SunsynkAPI, test_sunsynk_api as run_sunsynk_cli_once
 from sunsynk_const import SUNSYNK_REGIONS, SUNSYNK_ENDPOINTS, SUNSYNK_RETRIES, SUNSYNK_MAX_DISCOVERY_PAGES
-from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
+from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session, _make_mock_context
 
 
 class MockSunsynk(SunsynkAPI):
@@ -48,6 +51,11 @@ class MockSunsynk(SunsynkAPI):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        # Most recent body-level API failure message (the `msg` field only, never a
+        # credential) and whether the last discovery attempt actually reached the API -
+        # mirrors the two attributes initialize() sets on the real component.
+        self.last_api_error = ""
+        self.discovery_ok = None
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
@@ -419,6 +427,54 @@ def test_request_real_transport_exception_exhausts_retries_returns_none():
     assert not failed, "test_request_real_transport_exception_exhausts_retries_returns_none"
 
 
+def test_last_api_error_populated_on_body_level_failure_and_visible_after_fetch_token():
+    """Fix 2b: the API's own failure reason is captured so the CLI can show it verbatim.
+
+    Drives the real _request/fetch_token path (auth_method='password_legacy' to avoid
+    needing a real RSA public key) against a canned failure body shaped exactly like the
+    one a tester actually hit: {"code": 102, "msg": "Account or password error",
+    "data": null, "success": false}. Asserts last_api_error is empty beforehand, becomes
+    the API's msg during _request, and is still readable after fetch_token() reports the
+    login as failed - which is what lets the CLI print "Login failed: <reason>".
+    """
+    failed = False
+    s = MockSunsynk(auth_method="password_legacy")
+    if s.last_api_error != "":
+        print(f"ERROR: last_api_error should start empty, got {s.last_api_error!r}")
+        failed = True
+    session = _session_with_request(_mock_json_response(status=200, json_data={"code": 102, "msg": "Account or password error", "data": None, "success": False}))
+    with patch("sunsynk.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = session
+        ok = run_async_local(s.fetch_token())
+    if ok:
+        print("ERROR: fetch_token should report failure for a bad-credentials body")
+        failed = True
+    if s.last_api_error != "Account or password error":
+        print(f"ERROR: expected last_api_error 'Account or password error', got {s.last_api_error!r}")
+        failed = True
+    assert not failed, "test_last_api_error_populated_on_body_level_failure_and_visible_after_fetch_token"
+
+
+def test_last_api_error_never_holds_a_credential():
+    """The failure message is the API's `msg` field only - it must never echo the request body.
+
+    A body-level failure logs the request body too (see debug_api), so this specifically
+    checks last_api_error itself never contains the password that was sent, guarding
+    against a future change accidentally assigning the wrong side of the exchange to it.
+    """
+    failed = False
+    s = MockSunsynk(auth_method="password_legacy")
+    s.password = "correct-horse-battery-staple"
+    session = _session_with_request(_mock_json_response(status=200, json_data={"code": 102, "msg": "Account or password error", "data": None, "success": False}))
+    with patch("sunsynk.aiohttp.ClientSession") as mock_session_class:
+        mock_session_class.return_value = session
+        run_async_local(s.fetch_token())
+    if "correct-horse-battery-staple" in s.last_api_error:
+        print(f"ERROR: last_api_error leaked the password: {s.last_api_error!r}")
+        failed = True
+    assert not failed, "test_last_api_error_never_holds_a_credential"
+
+
 def test_get_device_list_pages_and_filters():
     """Discovery pages through /inverters and honours the serial filter."""
     failed = False
@@ -461,6 +517,48 @@ def test_get_device_list_unfiltered_returns_all():
         print(f"ERROR: expected both serials, got {devices}")
         failed = True
     assert not failed, "test_get_device_list_unfiltered_returns_all"
+
+
+def test_get_device_list_distinguishes_empty_account_from_failed_discovery():
+    """Fix 3: a genuinely empty account must be told apart from a discovery call that failed.
+
+    _get() coerces both a transport/API failure and a body carrying no `infos` at all to
+    a dict - but ONLY a real failure ever coerces all the way down to the empty dict {}
+    (_get's failure sentinel); a successful call against an empty account still returns
+    a non-empty dict with `total`/`infos` present, just empty. discovery_ok is the signal
+    the caller (refresh_static, and the CLI) uses to tell those apart - this directly
+    feeds the CLI's "logged in, but no inverters" vs "discovery failed" distinction.
+    """
+    failed = False
+
+    async def fake_get_empty_account(endpoint_key, sn=None, params=None):
+        """A successful call against an account with zero inverters."""
+        return {"total": 0, "infos": []}
+
+    s = MockSunsynk()
+    with patch.object(s, "_get", side_effect=fake_get_empty_account):
+        devices = run_async_local(s.get_device_list())
+    if devices != []:
+        print(f"ERROR: expected no devices for an empty account, got {devices}")
+        failed = True
+    if s.discovery_ok is not True:
+        print(f"ERROR: a successful-but-empty discovery call should set discovery_ok True, got {s.discovery_ok!r}")
+        failed = True
+
+    async def fake_get_failed_call(endpoint_key, sn=None, params=None):
+        """A failed call, as _get coerces it: the empty-dict failure sentinel."""
+        return {}
+
+    s2 = MockSunsynk()
+    with patch.object(s2, "_get", side_effect=fake_get_failed_call):
+        devices2 = run_async_local(s2.get_device_list())
+    if devices2 != []:
+        print(f"ERROR: expected no devices when discovery failed, got {devices2}")
+        failed = True
+    if s2.discovery_ok is not False:
+        print(f"ERROR: a failed discovery call should leave discovery_ok False, got {s2.discovery_ok!r}")
+        failed = True
+    assert not failed, "test_get_device_list_distinguishes_empty_account_from_failed_discovery"
 
 
 def test_fetch_device_data_maps_telemetry_and_energy():
@@ -749,6 +847,171 @@ def test_fetch_device_detail_never_clears_a_known_rated_power():
     assert not failed, "test_fetch_device_detail_never_clears_a_known_rated_power"
 
 
+class CLIMockSunsynk(MockSunsynk):
+    """MockSunsynk with storage forced absent, matching the real standalone CLI's environment.
+
+    ComponentBase.storage would otherwise resolve through self.base (a MagicMock here),
+    returning a truthy-but-useless mock rather than None, so load_cache/save_cache would
+    try to await a non-awaitable and raise. Forcing None matches mock_base.py's documented
+    behaviour (components is always None for a standalone run) and lets Fix 1 keep run()
+    and final() silent, exactly as they are for a real tester.
+    """
+
+    @property
+    def storage(self):
+        """No Storage component exists in a standalone CLI run."""
+        return None
+
+
+def _cli_args(auth_method="password_legacy", region="sunsynk", serial=None):
+    """Build the argparse.Namespace shape test_sunsynk_api()'s CLI expects from argparse."""
+    return argparse.Namespace(username="test@example.com", password="hunter2", region=region, auth_method=auth_method, serial=serial, dump_settings=False, write_test=False)
+
+
+def _routed_session_factory(canned):
+    """Return an aiohttp.ClientSession stand-in constructor that routes by URL suffix.
+
+    ``canned`` maps a URL path suffix (an entry from SUNSYNK_ENDPOINTS, with any {sn}
+    already substituted) to the mock response it should return. sunsynk.py's _request
+    opens a fresh ClientSession per attempt, so this hands out a fresh routed session on
+    every call - each one dispatches by matching the requested URL's suffix rather than
+    assuming a fixed call order, so a scripted run() sequence does not need to hard-code
+    exactly how many calls each stage makes.
+    """
+
+    def make_session(*args, **kwargs):
+        """Build one session whose .request(...) dispatches to the matching canned response."""
+
+        def pick(method, url, headers=None, params=None, json=None):
+            """Return the canned response's context manager for the matching endpoint."""
+            for suffix, response in canned.items():
+                if url.endswith(suffix):
+                    return _make_mock_context(response)
+            raise AssertionError(f"no canned response scripted for {method} {url}")
+
+        session = MagicMock()
+        session.request = MagicMock(side_effect=pick)
+
+        async def session_aenter(*_args):
+            """Support `async with aiohttp.ClientSession(...) as session`."""
+            return session
+
+        async def session_aexit(*_args):
+            """No-op session exit."""
+            return None
+
+        session.__aenter__ = session_aenter
+        session.__aexit__ = session_aexit
+        return session
+
+    return make_session
+
+
+def test_cli_reports_login_failure_with_the_api_reason():
+    """Fix 2 (bullet 1) + Fix 2b: bad credentials must be named as a login failure, with the reason.
+
+    This is the exact case the reporting tester hit: run() returns bare False and the old
+    CLI printed all three possible causes, leaving the user to dig through Warn: lines for
+    "Account or password error". The new CLI must say LOGIN outright and show that reason.
+    """
+    failed = False
+    client = CLIMockSunsynk(auth_method="password_legacy")
+    args = _cli_args(auth_method="password_legacy")
+    canned = {SUNSYNK_ENDPOINTS["token_legacy"]: _mock_json_response(status=200, json_data={"code": 102, "msg": "Account or password error", "data": None, "success": False})}
+
+    buffer = io.StringIO()
+    with patch("sunsynk._build_sunsynk", return_value=client), patch("sunsynk.aiohttp.ClientSession", side_effect=_routed_session_factory(canned)), redirect_stdout(buffer):
+        run_async_local(run_sunsynk_cli_once(args))
+    output = buffer.getvalue()
+
+    if "LOGIN FAILED" not in output:
+        print(f"ERROR: expected the CLI to name login as the failed stage:\n{output}")
+        failed = True
+    if "Account or password error" not in output:
+        print(f"ERROR: expected the API's own failure reason in the output:\n{output}")
+        failed = True
+    if "login failed, no inverters were discovered, or the first telemetry poll" in output:
+        print(f"ERROR: the old ambiguous three-in-one message should be gone:\n{output}")
+        failed = True
+    assert not failed, "test_cli_reports_login_failure_with_the_api_reason"
+
+
+def test_cli_reports_empty_account_and_mentions_serial_filter():
+    """Fix 2 (bullet 2) + Fix 3: login succeeding but discovery finding nothing is named explicitly.
+
+    Also covers the --serial pitfall this bullet calls out: a serial filter that matches
+    no discovered inverter is indistinguishable from a genuinely empty account unless the
+    CLI says so, so this drives it WITH --serial set to a serial the account does not have.
+    """
+    failed = False
+    client = CLIMockSunsynk(auth_method="password_legacy", inverter_sn=["ZZZZ"])
+    args = _cli_args(auth_method="password_legacy", serial="ZZZZ")
+    canned = {
+        SUNSYNK_ENDPOINTS["token_legacy"]: _mock_json_response(status=200, json_data={"success": True, "data": {"access_token": "tok-123"}}),
+        SUNSYNK_ENDPOINTS["inverter_list"]: _mock_json_response(status=200, json_data={"success": True, "data": {"total": 1, "infos": [{"sn": "OTHER1"}]}}),
+    }
+
+    buffer = io.StringIO()
+    with patch("sunsynk._build_sunsynk", return_value=client), patch("sunsynk.aiohttp.ClientSession", side_effect=_routed_session_factory(canned)), redirect_stdout(buffer):
+        run_async_local(run_sunsynk_cli_once(args))
+    output = buffer.getvalue()
+
+    if "LOGIN FAILED" in output:
+        print(f"ERROR: login succeeded, must not be reported as a login failure:\n{output}")
+        failed = True
+    if "no inverters" not in output.lower():
+        print(f"ERROR: expected the CLI to say the account returned no inverters:\n{output}")
+        failed = True
+    if "--serial" not in output or "ZZZZ" not in output:
+        print(f"ERROR: expected the CLI to mention the --serial filter that matched nothing:\n{output}")
+        failed = True
+    assert not failed, "test_cli_reports_empty_account_and_mentions_serial_filter"
+
+
+def test_cli_reports_telemetry_failure_naming_the_serials():
+    """Fix 2 (bullet 3): login and discovery both worked, only the telemetry poll came back empty.
+
+    Discovery finds INV1; static detail and settings both read successfully; all four
+    realtime telemetry endpoints then fail, so refresh_live()'s got_any stays False and
+    run() defers startup. The CLI must say discovery worked and name the serial(s) found,
+    not repeat the login/discovery messaging.
+    """
+    failed = False
+    client = CLIMockSunsynk(auth_method="password_legacy")
+    args = _cli_args(auth_method="password_legacy")
+    ok_token = _mock_json_response(status=200, json_data={"success": True, "data": {"access_token": "tok-123"}})
+    ok_one_inverter = _mock_json_response(status=200, json_data={"success": True, "data": {"total": 1, "infos": [{"sn": "INV1"}]}})
+    ok_detail = _mock_json_response(status=200, json_data={"success": True, "data": {"ratePower": 5000}})
+    ok_settings = _mock_json_response(status=200, json_data={"success": True, "data": {"batteryLowCap": "10"}})
+    fail_telemetry = _mock_json_response(status=200, json_data={"success": False, "msg": "inverter offline"})
+    canned = {
+        SUNSYNK_ENDPOINTS["token_legacy"]: ok_token,
+        SUNSYNK_ENDPOINTS["inverter_list"]: ok_one_inverter,
+        SUNSYNK_ENDPOINTS["inverter_detail"].format(sn="INV1"): ok_detail,
+        SUNSYNK_ENDPOINTS["settings_read"].format(sn="INV1"): ok_settings,
+        SUNSYNK_ENDPOINTS["battery"].format(sn="INV1"): fail_telemetry,
+        SUNSYNK_ENDPOINTS["grid"].format(sn="INV1"): fail_telemetry,
+        SUNSYNK_ENDPOINTS["load"].format(sn="INV1"): fail_telemetry,
+        SUNSYNK_ENDPOINTS["input"].format(sn="INV1"): fail_telemetry,
+    }
+
+    buffer = io.StringIO()
+    with patch("sunsynk._build_sunsynk", return_value=client), patch("sunsynk.aiohttp.ClientSession", side_effect=_routed_session_factory(canned)), redirect_stdout(buffer):
+        run_async_local(run_sunsynk_cli_once(args))
+    output = buffer.getvalue()
+
+    if "LOGIN FAILED" in output or "no inverters" in output.lower():
+        print(f"ERROR: login and discovery both worked, must not be reported as failed:\n{output}")
+        failed = True
+    if "telemetry" not in output.lower():
+        print(f"ERROR: expected the CLI to name the telemetry poll as the failed stage:\n{output}")
+        failed = True
+    if "INV1" not in output:
+        print(f"ERROR: expected the CLI to name the discovered serial(s):\n{output}")
+        failed = True
+    assert not failed, "test_cli_reports_telemetry_failure_naming_the_serials"
+
+
 def run_sunsynk_api_tests(my_predbat):
     """Run all Sunsynk API tests."""
     failed = False
@@ -778,6 +1041,12 @@ def run_sunsynk_api_tests(my_predbat):
         ("device_list_deduplicates", test_get_device_list_deduplicates_repeated_pages),
         ("device_list_bogus_total_bounded", test_get_device_list_bogus_total_is_bounded_by_page_cap),
         ("device_detail_preserves_rated_power", test_fetch_device_detail_never_clears_a_known_rated_power),
+        ("last_api_error_from_body_failure", test_last_api_error_populated_on_body_level_failure_and_visible_after_fetch_token),
+        ("last_api_error_no_credential_leak", test_last_api_error_never_holds_a_credential),
+        ("device_list_empty_vs_failed", test_get_device_list_distinguishes_empty_account_from_failed_discovery),
+        ("cli_login_failure_reason", test_cli_reports_login_failure_with_the_api_reason),
+        ("cli_empty_account_serial_hint", test_cli_reports_empty_account_and_mentions_serial_filter),
+        ("cli_telemetry_failure_names_serials", test_cli_reports_telemetry_failure_naming_the_serials),
     ]:
         try:
             if fn():
