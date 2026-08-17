@@ -839,12 +839,30 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         often as bare booleans (see SUNSYNK_FALSE_STRINGS), and a raw str() comparison would
         read that rendering difference as a permanent mismatch against a perfectly healthy
         inverter, so settle_count would never reset and the warning would fire forever.
+
+        Watches every field _owned_fields() reports except SUNSYNK_SERIAL_FIELD - sn is an
+        echo of the request, not a setting the inverter applies, so comparing it adds
+        nothing. This must stay the full owned set, not a hand-picked subset: a partial
+        apply of a field left out here (e.g. a per-slot power limit or a day flag) would
+        compare equal on everything checked and wrongly settle.
+
+        Only compared over keys actually present in settings, and settle_count is left
+        untouched (neither reset nor bumped) if none of them are. Nobody on this project has
+        a Sunsynk account to confirm every owned field is echoed back by a real /read - a key
+        missing from the read-back means "the API told us nothing about this field", not "the
+        inverter diverged", and treating absence as divergence would reintroduce exactly the
+        cry-wolf failure this docstring already warns about above: a perfectly healthy
+        inverter warned about forever because encode_setting(key, None) can never match what
+        was actually applied.
         """
         applied = self.applied_payload.get(sn)
         if not applied or not settings:
             return
-        owned = [SUNSYNK_WORKMODE_FIELD] + [TOU_FIELD[c].format(n=n) for n in range(1, TOU_SLOT_COUNT + 1) for c in ("time", "soc", "grid_charge")]
-        if all(encode_setting(key, settings.get(key)) == encode_setting(key, applied.get(key)) for key in owned):
+        owned = self._owned_fields() - {SUNSYNK_SERIAL_FIELD}
+        present = [key for key in owned if key in settings]
+        if not present:
+            return
+        if all(encode_setting(key, settings.get(key)) == encode_setting(key, applied.get(key)) for key in present):
             self.settle_count[sn] = 0
             return
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1

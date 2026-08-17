@@ -19,6 +19,7 @@ from sunsynk_const import (
     FREEZE_EXPORT_SOC,
     TOU_FIELD,
     TOU_SLOT_COUNT,
+    SUNSYNK_SETTLE_POLLS,
 )
 from tests.test_sunsynk_api import MockSunsynk
 from tests.test_infra import run_async as run_async_local
@@ -614,6 +615,152 @@ def test_note_settle_normalises_wire_types_before_comparing():
     assert not failed, "test_note_settle_normalises_wire_types_before_comparing"
 
 
+def _settled_baseline():
+    """Build an applied payload and matching MockSunsynk baseline for note_settle tests.
+
+    Returns (s, applied): a full owned+unowned payload from build_settings_payload, already
+    stashed as the last-applied payload, so callers only need to mutate a read-back copy of
+    it to exercise one field at a time.
+    """
+    s = MockSunsynk()
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
+    schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
+    applied = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
+    s.applied_payload["INV1"] = applied
+    return s, applied
+
+
+def _drive_to_warn(s, sn, settings):
+    """Call note_settle enough times to cross SUNSYNK_SETTLE_POLLS and return whether it warned."""
+    for _ in range(SUNSYNK_SETTLE_POLLS + 1):
+        s.note_settle(sn, settings)
+    return any("has not applied" in str(m) for m in s.log_messages)
+
+
+def test_note_settle_catches_a_divergent_power_field():
+    """A read-back that agrees on every slot time/soc/grid_charge but not sellTimeNPac must not settle.
+
+    This is the gap the code review found: note_settle used to hand-roll its own field list
+    (work mode plus slot time/soc/grid_charge only), so a partial apply that dropped the
+    per-slot power field would compare equal on every field it checked and settle_count
+    would wrongly reset to zero, never warning about a real divergence.
+    """
+    failed = False
+    s, applied = _settled_baseline()
+    divergent = dict(applied)
+    divergent[TOU_FIELD["power"].format(n=2)] = "9999"
+    warned = _drive_to_warn(s, "INV1", divergent)
+    if s.settle_count.get("INV1", 0) != SUNSYNK_SETTLE_POLLS + 1:
+        print(f"ERROR: a divergent sellTime2Pac was not counted as a mismatch, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+    if not warned:
+        print("ERROR: sustained sellTimeNPac divergence should eventually warn")
+        failed = True
+    assert not failed, "test_note_settle_catches_a_divergent_power_field"
+
+
+def test_note_settle_catches_a_divergent_solar_sell():
+    """A read-back that diverges only on solarSell must not settle."""
+    failed = False
+    s, applied = _settled_baseline()
+    divergent = dict(applied)
+    divergent[SUNSYNK_SOLAR_SELL_FIELD] = "9"
+    warned = _drive_to_warn(s, "INV1", divergent)
+    if s.settle_count.get("INV1", 0) != SUNSYNK_SETTLE_POLLS + 1:
+        print(f"ERROR: a divergent solarSell was not counted as a mismatch, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+    if not warned:
+        print("ERROR: sustained solarSell divergence should eventually warn")
+        failed = True
+    assert not failed, "test_note_settle_catches_a_divergent_solar_sell"
+
+
+def test_note_settle_catches_a_divergent_tou_enable():
+    """A read-back that diverges only on peakAndVallery (the TOU master enable) must not settle."""
+    failed = False
+    s, applied = _settled_baseline()
+    divergent = dict(applied)
+    divergent[SUNSYNK_TOU_ENABLE_FIELD] = "0"
+    warned = _drive_to_warn(s, "INV1", divergent)
+    if s.settle_count.get("INV1", 0) != SUNSYNK_SETTLE_POLLS + 1:
+        print(f"ERROR: a divergent peakAndVallery was not counted as a mismatch, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+    if not warned:
+        print("ERROR: sustained peakAndVallery divergence should eventually warn")
+        failed = True
+    assert not failed, "test_note_settle_catches_a_divergent_tou_enable"
+
+
+def test_note_settle_catches_a_divergent_day_flag():
+    """A read-back that diverges only on one of the seven day-enable flags must not settle."""
+    failed = False
+    s, applied = _settled_baseline()
+    divergent = dict(applied)
+    divergent[SUNSYNK_DAY_FIELDS[0]] = False
+    warned = _drive_to_warn(s, "INV1", divergent)
+    if s.settle_count.get("INV1", 0) != SUNSYNK_SETTLE_POLLS + 1:
+        print(f"ERROR: a divergent {SUNSYNK_DAY_FIELDS[0]} was not counted as a mismatch, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+    if not warned:
+        print(f"ERROR: sustained {SUNSYNK_DAY_FIELDS[0]} divergence should eventually warn")
+        failed = True
+    assert not failed, "test_note_settle_catches_a_divergent_day_flag"
+
+
+def test_note_settle_ignores_a_readback_missing_some_owned_keys():
+    """A read-back missing some owned fields, but agreeing on every one it does contain, must settle.
+
+    Sunsynk's read-back is not confirmed to echo every field Predbat writes - nobody on the
+    project has a real account to check against. A key absent from the read-back means "the
+    API told us nothing about this field", not "the inverter diverged", so it must not be
+    treated as a mismatch. Getting this wrong reintroduces the cry-wolf bug this component
+    already had once: warning every poll, forever, against a perfectly healthy inverter.
+    """
+    failed = False
+    s, applied = _settled_baseline()
+    # Drop every per-slot power field and every day flag from the read-back, as if the API
+    # simply never echoes them, while keeping everything else identical to what was applied.
+    partial = {key: value for key, value in applied.items() if key not in ({TOU_FIELD["power"].format(n=n) for n in range(1, TOU_SLOT_COUNT + 1)} | set(SUNSYNK_DAY_FIELDS))}
+    for _ in range(SUNSYNK_SETTLE_POLLS + 2):
+        s.note_settle("INV1", partial)
+    if s.settle_count.get("INV1", 0) != 0:
+        print(f"ERROR: a read-back missing unconfirmed fields should still settle to zero, settle_count={s.settle_count.get('INV1')}")
+        failed = True
+    if any("has not applied" in str(m) for m in s.log_messages):
+        print("ERROR: a read-back that agrees on everything it reports should never warn")
+        failed = True
+    assert not failed, "test_note_settle_ignores_a_readback_missing_some_owned_keys"
+
+
+def test_note_settle_leaves_the_counter_unchanged_when_readback_has_no_owned_keys():
+    """A read-back that reports none of Predbat's owned fields must not reset the counter to zero.
+
+    Zero owned keys present means Predbat learned nothing about whether its settings applied
+    - not that they applied. Resetting settle_count here would let a completely uninformative
+    read-back mask a genuine, ongoing divergence.
+    """
+    failed = False
+    s, applied = _settled_baseline()
+    # First establish a nonzero count with a genuine, detected mismatch.
+    mismatched = dict(applied)
+    mismatched[SUNSYNK_WORKMODE_FIELD] = "9"
+    s.note_settle("INV1", mismatched)
+    before = s.settle_count.get("INV1", 0)
+    if before != 1:
+        print(f"ERROR: setup failed to establish a nonzero settle_count, got {before}")
+        failed = True
+
+    # A read-back that only echoes the request's serial number - none of the fields Predbat
+    # actually owns and watches for.
+    empty_of_owned = {SUNSYNK_SERIAL_FIELD: "INV1"}
+    s.note_settle("INV1", empty_of_owned)
+    after = s.settle_count.get("INV1", 0)
+    if after != before:
+        print(f"ERROR: a read-back with no owned keys changed settle_count from {before} to {after}")
+        failed = True
+    assert not failed, "test_note_settle_leaves_the_counter_unchanged_when_readback_has_no_owned_keys"
+
+
 def test_external_changes_are_logged():
     """A setting changed outside Predbat is reported, not silently overwritten."""
     failed = False
@@ -663,6 +810,12 @@ def run_sunsynk_control_tests(my_predbat):
         ("apply_skips_empty_payload", test_apply_settings_skips_when_the_payload_is_empty),
         ("apply_failed_write", test_apply_settings_reports_a_failed_write),
         ("note_settle_normalises_types", test_note_settle_normalises_wire_types_before_comparing),
+        ("note_settle_catches_power_divergence", test_note_settle_catches_a_divergent_power_field),
+        ("note_settle_catches_solar_sell_divergence", test_note_settle_catches_a_divergent_solar_sell),
+        ("note_settle_catches_tou_enable_divergence", test_note_settle_catches_a_divergent_tou_enable),
+        ("note_settle_catches_day_flag_divergence", test_note_settle_catches_a_divergent_day_flag),
+        ("note_settle_ignores_missing_owned_keys", test_note_settle_ignores_a_readback_missing_some_owned_keys),
+        ("note_settle_keeps_count_when_readback_empty", test_note_settle_leaves_the_counter_unchanged_when_readback_has_no_owned_keys),
         ("external_changes", test_external_changes_are_logged),
     ]:
         try:
