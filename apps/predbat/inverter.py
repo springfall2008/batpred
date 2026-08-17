@@ -1492,10 +1492,23 @@ class Inverter:
             elif "charge_start_time" in self.base.args:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
+            elif self.rest_api:
+                # A REST data source (givtcp_rest) is configured but hasn't returned anything this
+                # cycle - genuinely transient (a fetch hiccup, or before the first poll on a fresh
+                # start, e.g. GivEnergy cloud "no devices"), so fall through to the same safe-defaults/
+                # retry-next-update handling below as a configured-but-currently-unusable value,
+                # rather than crashing the whole plan for something that should resolve itself.
+                charge_start_time = None
+                charge_end_time = None
             else:
-                self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
-                self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
-                raise ValueError
+                # Neither a REST API nor a charge_start_time config value is configured at all - a
+                # permanent setup gap, not something that will resolve on its own. Retrying every
+                # cycle forever would be misleading, so don't pretend to make a plan Predbat can't
+                # actually deliver (maintainer call on #4288/#4179 - see PR review discussion).
+                message = "Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id)
+                self.log(message)
+                self.base.record_status(message, had_errors=True)
+                raise ValueError(message)
 
             if charge_start_time is None or charge_end_time is None:
                 self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
