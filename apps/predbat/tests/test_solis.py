@@ -66,7 +66,6 @@ class MockSolisAPI(SolisAPI):
         # Cache structures
         self.cached_values = {}
         self.inverter_details = {}
-        self.storage_modes = {}
         self.parallel_battery_count = {}
         self.max_charge_current = {}
         self.max_discharge_current = {}
@@ -778,6 +777,30 @@ def test_solis_activated_with_api_key():
     return failed
 
 
+def test_initialize_attribute_parity_with_mock():
+    """Every attribute MockSolisAPI stubs must also be set by the real SolisAPI.initialize().
+
+    MockSolisAPI replaces __init__ wholesale, so an attribute added to the mock but forgotten in
+    the real initialize() passes every unit test here and then raises AttributeError against a
+    live inverter — which is exactly how capacity_voltage_warned shipped broken in #4502.
+    """
+    failed = False
+    # Attributes that exist only to drive the test harness and have no production counterpart.
+    test_only = {"_test_now_utc_exact", "log_messages", "dashboard_items", "read_and_write_cid_calls", "set_storage_mode_calls"}
+    component = _init_solis_component({"solis_api_key": "k", "solis_api_secret": "s"})
+    if component is None:
+        print("ERROR: Solis should activate with api_key + api_secret")
+        return True
+    mock_attrs = set(vars(MockSolisAPI()).keys()) - test_only
+    missing = sorted(attr for attr in mock_attrs if not hasattr(component, attr))
+    if missing:
+        print("ERROR: SolisAPI.initialize() does not set attributes stubbed by MockSolisAPI: {}".format(missing))
+        failed = True
+    if not failed:
+        print("PASSED: SolisAPI.initialize() sets every attribute MockSolisAPI stubs")
+    return failed
+
+
 def test_solis_activated_with_oauth_token():
     """Solis activates in OAuth mode when auth_method=oauth + access_token are configured (no api_key)."""
     failed = False
@@ -1018,6 +1041,7 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_not_activated_without_credentials()
         failed |= test_solis_activated_with_api_key()
         failed |= test_solis_activated_with_oauth_token()
+        failed |= test_initialize_attribute_parity_with_mock()
         failed |= asyncio.run(test_oauth_execute_request_refreshes_before_call())
         failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
