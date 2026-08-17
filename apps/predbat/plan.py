@@ -2158,15 +2158,7 @@ class Plan:
         export_step = 5
         export_step_large = 15
 
-        if not self.set_export_freeze or not self.inverter_can_freeze_export:
-            # inverter_can_freeze_export is a different question to inverter_can_charge_during_export
-            # (that one is specifically about PV exceeding the export/inverter limit during *active*
-            # force export - see its own docstring). Some inverters simply cannot be commanded into a
-            # state where battery charging is disabled at all - they charge from any available surplus
-            # PV regardless of mode, so Freeze Export never achieves anything distinct from idle on
-            # them. Offering it as a distinct plan option there is pointless and mislabels the plan
-            # (#4207/#4538 - originally gated on inverter_can_charge_during_export, corrected after
-            # springfall2008 pointed out that conflated two genuinely different things).
+        if not self.set_export_freeze:
             allow_freeze = False
 
         # loop on each export option
@@ -3088,10 +3080,8 @@ class Plan:
         """
         curr = self.currency_symbols[1]
 
-        # Freeze export slots only have an effect when export freeze is enabled, and only mean anything
-        # distinct from idle when the inverter can actually hold SoC flat - see optimise_export()'s
-        # matching gate (#4207/#4538) for why inverter_can_freeze_export rules it out too.
-        if not self.calculate_best_export or not self.set_export_freeze or not self.export_window_best or not self.inverter_can_freeze_export:
+        # Freeze export slots only have an effect when export freeze is enabled
+        if not self.calculate_best_export or not self.set_export_freeze or not self.export_window_best:
             return best_metric, best_cost, best_keep, best_cycle, best_carbon, best_import
 
         pv_forecast_minute_step = self.prediction.pv_forecast_minute_step

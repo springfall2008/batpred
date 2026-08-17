@@ -1154,19 +1154,6 @@ During a force export period if the generated solar exceeds the inverter limit o
 If this setting is `true` then the inverter is able to charge the battery from excess PV while still in Force Export mode.
 If this setting is `false` then the inverter will not charge the battery and the excess PV will be lost.
 
-This is a different question to **inverter_can_freeze_export** below - it's specifically about PV exceeding the inverter/export limit during *active* Force Export, not about whether Freeze Export can hold the battery flat at all.
-
-### **inverter_can_freeze_export**
-
-Global setting, defaults to `true`.
-
-Controls the way Predbat models your inverter, this does not change the way it is controlled.
-
-Freeze Export is meant to disable battery charging entirely so all solar is exported. Some inverters (e.g. certain "Feed-in First" work modes) cannot be commanded into a state where charging is disabled at all - they keep charging the battery from any available surplus PV regardless of the mode requested.
-
-If this setting is `true` (the default) Predbat assumes Freeze Export genuinely holds the battery flat, and will offer it as a distinct option in the plan.
-If this setting is `false`, Predbat assumes your inverter can't actually achieve that - Freeze Export would behave identically to Idle - so it stops offering Freeze Export in the plan at all, rather than showing a `FrzExp` slot that wouldn't achieve anything different from doing nothing.
-
 ## Controlling the Inverter
 
 There are a few different ways to control your inverter:
