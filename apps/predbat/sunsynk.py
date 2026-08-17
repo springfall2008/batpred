@@ -1332,9 +1332,16 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
 
 def _build_sunsynk(mock_base, args):  # pragma: no cover
-    """Construct a SunsynkAPI around a MockBase for standalone command-line use."""
-    client = SunsynkAPI(mock_base)
-    client.initialize(
+    """Construct a SunsynkAPI around a MockBase for standalone command-line use.
+
+    Passed into the constructor in a single call, matching deye.py's _build_deye:
+    ComponentBase.__init__ already calls initialize(**kwargs), so a separate follow-up
+    call to initialize() would re-run it a second time with the real args, printing a
+    duplicate "SunsynkAPI initialising" / "control is disabled" pair before the CLI has
+    even reported which region it is using.
+    """
+    return SunsynkAPI(
+        mock_base,
         username=args.username,
         password=args.password,
         region=args.region,
@@ -1344,7 +1351,6 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
         control_enable=True,
         automatic=False,
     )
-    return client
 
 
 async def run_cli(args):  # pragma: no cover
@@ -1358,7 +1364,6 @@ async def run_cli(args):  # pragma: no cover
     serials = [args.serial] if args.serial else await client.get_device_list()
     print(f"Inverters: {serials}")
     for sn in serials:
-        client.device_list = [sn]
         print(f"\n--- {sn} detail ---")
         print(json.dumps(await client.fetch_device_detail(sn), indent=2, default=str))
         print(f"\n--- {sn} telemetry ---")
@@ -1378,7 +1383,14 @@ async def run_cli(args):  # pragma: no cover
             payload = client.build_settings_payload(sn, schedule, current_soc=50)
             print(f"\n--- {sn} would write ---")
             print(json.dumps(payload, indent=2, default=str))
-            confirm = input("Send this to the inverter? [y/N] ")
+            # This is the only verification tool a remote tester has, so a closed/redirected
+            # stdin (SSH, CI, a container with no TTY) must not crash it with a raw
+            # traceback - EOFError and Ctrl-C both mean "no", cleanly.
+            try:
+                confirm = input("Send this to the inverter? [y/N] ")
+            except (EOFError, KeyboardInterrupt):
+                print("\nNo input available, nothing sent.")
+                continue
             if confirm.strip().lower() == "y":
                 await client.apply_settings(sn, schedule, current_soc=50, force=True)
                 print("Written. Re-reading in 60 seconds is the only way to confirm the dongle collected it.")
