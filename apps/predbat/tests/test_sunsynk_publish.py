@@ -50,11 +50,24 @@ def test_publish_data_emits_telemetry_and_ratings():
     failed = False
     s = PublishingSunsynk()
     s.device_list = ["INV1"]
-    s.device_values["INV1"] = {"soc": 62, "battery_power": -1500, "grid_power": 430, "load_power": 900, "pv_power": 2100, "temperature": 21.5, "capacity": 280, "chargeVolt": 56.8, "maxChargeCurrentLimit": 100}
+    s.device_values["INV1"] = {
+        "soc": 62,
+        "battery_power": -1500,
+        "grid_power": 430,
+        "load_power": 900,
+        "pv_power": 2100,
+        "temperature": 21.5,
+        "battery_voltage": 52.3,
+        "capacity": 280,
+        "chargeVolt": 56.8,
+        "maxChargeCurrentLimit": 100,
+    }
     s.device_energy["INV1"] = {"pv_today": 9.8, "import_today": 3.2}
     s.device_rated_power["INV1"] = 8000.0
+    # batteryLowCap makes battery_reserve_min derivable too, alongside capacity/rate_max/limit.
+    s.device_settings["INV1"] = {"batteryLowCap": "15"}
     run_async_local(s.publish_data())
-    for leaf in ("soc", "battery_power", "grid_power", "load_power", "pv_power", "temperature", "pv_today", "import_today", "battery_capacity", "battery_rate_max", "inverter_limit"):
+    for leaf in ("soc", "battery_power", "grid_power", "load_power", "pv_power", "temperature", "battery_voltage", "pv_today", "import_today", "battery_capacity", "battery_rate_max", "inverter_limit", "battery_reserve_min"):
         entity = s._sensor_name("INV1", leaf)
         if entity not in s.published:
             print(f"ERROR: {leaf} was not published")
@@ -73,11 +86,12 @@ def test_publish_data_omits_underivable_ratings():
     failed = False
     s = PublishingSunsynk()
     s.device_list = ["INV1"]
-    # No chargeVolt, so no pack voltage, so neither capacity nor rate is derivable.
+    # No chargeVolt, so no pack voltage, so neither capacity nor rate is derivable. No
+    # batteryLowCap in device_settings either, so the reserve-min floor is unknown too.
     s.device_values["INV1"] = {"soc": 50, "capacity": 280, "maxChargeCurrentLimit": 100}
     s.device_energy["INV1"] = {}
     run_async_local(s.publish_data())
-    for leaf in ("battery_capacity", "battery_rate_max", "inverter_limit"):
+    for leaf in ("battery_capacity", "battery_rate_max", "inverter_limit", "battery_reserve_min"):
         if s._sensor_name("INV1", leaf) in s.published:
             print(f"ERROR: {leaf} was published despite being underivable")
             failed = True
@@ -183,8 +197,23 @@ def test_control_events_update_the_local_schedule():
     assert not failed, "test_control_events_update_the_local_schedule"
 
 
-def test_write_button_forces_an_apply():
-    """Toggling the schedule-write switch forces a write even with no diff."""
+def test_write_button_applies_and_is_not_stored_as_schedule():
+    """The write button applies the schedule UNFORCED and stores no state of its own.
+
+    Predbat presses this switch on every cycle as its normal "apply the schedule" action
+    (INVERTER_DEF time_button_press), not only when the plan actually changed, so
+    force=True here would bypass apply_settings' applied-payload change-detection gate on
+    every cycle rather than just the cycles that need a write. deye.py hit this exact bug
+    first: PR #4371 (commit 3e1de759) measured 40 button presses producing 36
+    byte-identical control orders over two hours on a live site once the button forced the
+    write. Unforced, apply_settings' applied-payload cache is the single source of truth
+    for whether a write is needed - see test_write_button_writes_when_changed_and_suppresses_unchanged_repeats
+    below for proof the button still gets a real write through when one is actually due.
+    Do not reintroduce force=True on this path.
+
+    Its entity id contains "_charge_", so it must be handled before the direction matching
+    in update_local_schedule or it would be mistaken for a schedule field.
+    """
     failed = False
     s = PublishingSunsynk()
     s.device_list = ["INV1"]
@@ -198,10 +227,50 @@ def test_write_button_forces_an_apply():
 
     with patch.object(s, "apply_schedule", side_effect=fake_apply):
         run_async_local(s.switch_event(s._control_name("switch", "INV1", "battery_schedule_charge_write"), "turn_on"))
-    if applied != [("INV1", True)]:
-        print(f"ERROR: expected a forced apply for INV1, got {applied}")
+    if applied != [("INV1", False)]:
+        print(f"ERROR: expected an unforced apply for INV1, got {applied}")
         failed = True
-    assert not failed, "test_write_button_forces_an_apply"
+    if s.local_schedule.get("INV1", {}).get("charge", {}).get("start") != "02:00:00":
+        print(f"ERROR: the write button corrupted local_schedule: {s.local_schedule}")
+        failed = True
+    assert not failed, "test_write_button_applies_and_is_not_stored_as_schedule"
+
+
+def test_write_button_writes_when_changed_and_suppresses_unchanged_repeats():
+    """Unforced does not mean inert: the button still reaches the API through the real gate.
+
+    Drives switch_event -> apply_schedule -> apply_settings with nothing mocked below the
+    transport, so this is the actual gate the deye.py regression (PR #4371) was about, not
+    a stand-in. The first press has no applied_payload cached yet, so it must perform a
+    real settings read-modify-write. The second press, with nothing in the plan changed, is
+    exactly Predbat's routine per-cycle button press (INVERTER_DEF time_button_press) and
+    must NOT write again - two writes here would be the same 40-presses/36-orders bug.
+    """
+    failed = False
+    s = PublishingSunsynk()
+    s.device_list = ["INV1"]
+    s.device_values["INV1"] = {"soc": 50}
+    s.device_settings["INV1"] = {"batteryLowCap": "10", "sn": "INV1"}
+    s.local_schedule["INV1"] = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}}
+    posts = []
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Serve the settings baseline apply_settings reads before writing."""
+        return dict(s.device_settings.get(sn, {})) if endpoint_key == "settings_read" else {}
+
+    async def fake_post(endpoint_key, sn=None, body=None):
+        """Record a settings write and report success with no data payload."""
+        posts.append((endpoint_key, sn))
+        return {}
+
+    write_button = s._control_name("switch", "INV1", "battery_schedule_charge_write")
+    with patch.object(s, "_get", side_effect=fake_get), patch.object(s, "_post", side_effect=fake_post):
+        run_async_local(s.switch_event(write_button, "turn_on"))
+        run_async_local(s.switch_event(write_button, "turn_on"))
+    if posts != [("settings_set", "INV1")]:
+        print(f"ERROR: expected exactly one settings_set write for INV1, got {posts}")
+        failed = True
+    assert not failed, "test_write_button_writes_when_changed_and_suppresses_unchanged_repeats"
 
 
 def run_sunsynk_publish_tests(my_predbat):
@@ -215,7 +284,8 @@ def run_sunsynk_publish_tests(my_predbat):
         ("reserve_not_clamped", test_reserve_entity_is_not_clamped_to_the_floor),
         ("sn_from_entity", test_sn_from_entity_disambiguates_prefixes),
         ("control_events", test_control_events_update_the_local_schedule),
-        ("write_button", test_write_button_forces_an_apply),
+        ("write_button_unforced", test_write_button_applies_and_is_not_stored_as_schedule),
+        ("write_button_gate", test_write_button_writes_when_changed_and_suppresses_unchanged_repeats),
     ]:
         try:
             if fn():
