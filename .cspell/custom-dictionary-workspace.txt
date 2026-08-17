@@ -293,6 +293,8 @@ meterpower
 metricb
 metricmid
 microinverters
+middlebox
+middleboxes
 minb
 minmax
 minsoc
@@ -525,6 +527,7 @@ trapz
 Trefor
 treforsiphone
 treforsouthwell
+triggerable
 tunables
 twinx
 typecode
