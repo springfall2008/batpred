@@ -38,8 +38,6 @@ class MockSunsynk(SunsynkAPI):
         self.device_detail = {}
         self.device_values = {}
         self.device_settings = {}
-        self.device_capacity = {}
-        self.device_pack_voltage = {}
         self.device_energy = {}
         self.device_rated_power = {}
         self.battery_nominal_voltage = 0.0
@@ -47,7 +45,6 @@ class MockSunsynk(SunsynkAPI):
         self.applied_payload = {}
         self.settle_count = {}
         self.control_active = set()
-        self.cached_values = {}
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
@@ -339,6 +336,51 @@ def test_request_real_auth_error_on_final_attempt_still_retries():
         print(f"ERROR: expected 2 transport failures + 1 auth failure + 1 retry = 4 requests, got {len(sessions)}")
         failed = True
     assert not failed, "test_request_real_auth_error_on_final_attempt_still_retries"
+
+
+def test_request_real_oauth_auth_error_refreshes_through_the_edge_function():
+    """On the oauth path a body-level auth failure must refresh via handle_oauth_401.
+
+    fetch_token() has nothing to log in with in oauth mode - the token is injected by
+    Predbat.com - so it just reports that a (dead) token is still held and the retry goes
+    out with exactly the same bearer. Every other OAuthMixin component goes back
+    through the edge function on a 401-equivalent (deye.py's reauthenticate(), fox.py,
+    solis.py, teslemetry.py, kraken.py); this is that shape.
+    """
+    failed = False
+    s = MockSunsynk(auth_method="oauth")
+    responses = [
+        _mock_json_response(status=200, json_data={"success": False, "msg": "invalid token"}),
+        _mock_json_response(status=200, json_data={"success": True, "data": {"soc": 42}}),
+    ]
+    sessions = []
+
+    def session_factory(*args, **kwargs):
+        """Hand out one fresh mocked session per aiohttp.ClientSession(...) call."""
+        session = _session_with_request(responses.pop(0))
+        sessions.append(session)
+        return session
+
+    refreshes = []
+
+    async def fake_do_refresh():
+        """Stand in for the oauth-refresh edge function, installing a fresh token."""
+        refreshes.append(1)
+        s.access_token = "refreshed-token"
+        return True
+
+    with patch("sunsynk.aiohttp.ClientSession", side_effect=session_factory), patch.object(s, "_do_refresh", side_effect=fake_do_refresh):
+        result = run_async_local(s._request("GET", "battery", sn="INV1"))
+    if len(refreshes) != 1:
+        print(f"ERROR: expected exactly one edge-function refresh on the oauth path, got {len(refreshes)}")
+        failed = True
+    if result != {"soc": 42}:
+        print(f"ERROR: expected the retried response's data, got {result!r}")
+        failed = True
+    if len(sessions) == 2 and sessions[1].request.call_args.kwargs.get("headers", {}).get("Authorization") != "Bearer refreshed-token":
+        print(f"ERROR: the retry did not carry the refreshed token, got {sessions[1].request.call_args.kwargs.get('headers', {}).get('Authorization')!r}")
+        failed = True
+    assert not failed, "test_request_real_oauth_auth_error_refreshes_through_the_edge_function"
 
 
 def test_request_real_non200_exhausts_retries_returns_none():
@@ -721,6 +763,7 @@ def run_sunsynk_api_tests(my_predbat):
         ("request_real_failure_no_refresh", test_request_real_failure_body_returns_none_without_refresh),
         ("request_real_auth_refresh_retry", test_request_real_auth_error_triggers_single_refresh_and_retry),
         ("request_real_refresh_on_final_attempt", test_request_real_auth_error_on_final_attempt_still_retries),
+        ("request_real_oauth_refresh", test_request_real_oauth_auth_error_refreshes_through_the_edge_function),
         ("request_real_non200_exhausts_retries", test_request_real_non200_exhausts_retries_returns_none),
         ("request_real_transport_exception_exhausts_retries", test_request_real_transport_exception_exhausts_retries_returns_none),
         ("device_list_paging", test_get_device_list_pages_and_filters),

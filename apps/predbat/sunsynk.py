@@ -119,15 +119,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.device_detail = {}
         self.device_values = {}
         self.device_settings = {}
-        self.device_capacity = {}
-        self.device_pack_voltage = {}
         self.device_energy = {}
         self.device_rated_power = {}
         self.local_schedule = {}
         self.applied_payload = {}
         self.settle_count = {}
+        # Serials Predbat has actually been asked to drive, i.e. ones whose write button
+        # has been pressed at least once. run() only re-applies a schedule for these, so a
+        # startup cycle can never clobber an inverter before there is a plan to apply.
         self.control_active = set()
-        self.cached_values = {}
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
@@ -167,10 +167,21 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
     @staticmethod
     def redact(payload):
-        """Return payload with credential-bearing keys replaced, for safe logging."""
-        if not isinstance(payload, dict):
-            return payload
-        return {key: ("<redacted>" if key in SUNSYNK_DEBUG_REDACT_KEYS else value) for key, value in payload.items()}
+        """Return payload with credential-bearing keys replaced, for safe logging.
+
+        Recursive over dicts AND lists, exactly as deye.py's redact is. A top-level-only
+        rewrite is not enough: _request traces the whole {code, msg, success, data}
+        envelope, and the login response nests access_token/refresh_token one level down
+        inside `data`, so a Sunsynk bearer token — full control of the user's inverter —
+        was written to the log verbatim. api_debug defaults to True precisely so testers
+        paste raw traffic into GitHub issues, and docs/components.md promises that traffic
+        comes "with credentials redacted".
+        """
+        if isinstance(payload, dict):
+            return {key: ("<redacted>" if key in SUNSYNK_DEBUG_REDACT_KEYS else SunsynkAPI.redact(value)) for key, value in payload.items()}
+        if isinstance(payload, list):
+            return [SunsynkAPI.redact(value) for value in payload]
+        return payload
 
     def debug_api(self, direction, what, payload=None):
         """Trace one API request or response when api_debug is on, with secrets redacted."""
@@ -264,6 +275,23 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.log("Info: Sunsynk login succeeded")
         return True
 
+    async def reauthenticate(self, context):
+        """Obtain a fresh access token after an auth failure. Returns True if a retry is worth it.
+
+        The oauth path MUST go through handle_oauth_401(): in that mode the token is
+        injected by Predbat.com and fetch_token() has nothing to log in with, so it merely
+        reports that a token is still held — the retry would then go out carrying exactly
+        the same dead bearer and the component would stay broken until the process
+        restarted. Same shape as deye.py's reauthenticate(), and the same reactive refresh
+        every other OAuthMixin component performs (fox, solis, teslemetry, kraken).
+        """
+        if await self.handle_oauth_401():
+            return True
+        if self.auth_method == "oauth":
+            self.log(f"Warn: Sunsynk OAuth re-authentication failed on {context}")
+            return False
+        return await self.fetch_token()
+
     async def _request(self, method, endpoint_key, sn=None, params=None, body=None):
         """Perform one API call, returning the response's `data` payload, or None on failure.
 
@@ -317,7 +345,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             if self.is_auth_error_body(payload) and not anonymous and not refreshed:
                 refreshed = True
                 self.log(f"Info: Sunsynk {path} reported an auth failure, refreshing the token")
-                if await self.fetch_token():
+                if await self.reauthenticate(path):
                     headers = self._auth_headers()
                     continue
                 return None
@@ -691,7 +719,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 self._soc_floor_warned.add(sn)
                 self.log(f"Info: Sunsynk {sn} raising requested slot SOC to the inverter's {floor}% floor (batteryLowCap)")
 
-        payload = {SUNSYNK_SERIAL_FIELD: sn, SUNSYNK_WORKMODE_FIELD: active["work_mode"]}
+        # Every owned field goes through encode_setting, including the work mode: it is the
+        # single place that knows which fields Sunsynk wants bare and which quoted, so a
+        # field that bypasses it is a field whose encoding cannot be corrected in one place.
+        payload = {SUNSYNK_SERIAL_FIELD: sn, SUNSYNK_WORKMODE_FIELD: encode_setting(SUNSYNK_WORKMODE_FIELD, active["work_mode"])}
         payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1" if active["solar_sell"] else "0")
         payload[SUNSYNK_TOU_ENABLE_FIELD] = encode_setting(SUNSYNK_TOU_ENABLE_FIELD, "1")
         for day in SUNSYNK_DAY_FIELDS:
@@ -796,10 +827,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         return True
 
     def note_settle(self, sn, settings):
-        """Track how many cycles the inverter has disagreed with the last write.
+        """Track how many config-tier polls the inverter has disagreed with the last write for.
 
+        Counted in CONFIG-TIER POLLS, not in run() cycles: this is only called from
+        refresh_config, which runs on SUNSYNK_TTL_CONFIG (15 minutes), so
+        SUNSYNK_SETTLE_POLLS = 3 is about 45 minutes of divergence before the warning.
         A write is acknowledged by the cloud long before the dongle collects it, so
-        divergence within SUNSYNK_SETTLE_POLLS cycles is normal latency, not a failure.
+        divergence within that bound is normal latency, not a failure.
         Both sides are decoded through encode_setting before comparing: Sunsynk is known to
         hand the boolean fields (time{n}on) back as strings ("true"/"false", "1"/"0") as
         often as bare booleans (see SUNSYNK_FALSE_STRINGS), and a raw str() comparison would
@@ -815,7 +849,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
         if self.settle_count[sn] > SUNSYNK_SETTLE_POLLS:
-            self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} cycles; check the inverter is online in the Sunsynk app")
+            self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} settings polls; check the inverter is online in the Sunsynk app")
 
     def _owned_fields(self):
         """Return every settings key this component writes, so the rest can be watched."""
@@ -984,10 +1018,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     def _empty_schedule():
         """Return a fresh, disabled schedule shape - the single source of truth for its defaults.
 
-        Used everywhere a schedule needs to be seeded from nothing (a control event for an
-        inverter local_schedule has not seen yet, and run()'s first-cycle seed): kept as one
-        helper rather than a literal repeated at each call site, so adding or renaming a
-        field cannot silently diverge between copies.
+        Used where a schedule has to be seeded from nothing: a control event arriving for an
+        inverter local_schedule has not seen yet. Kept as one helper rather than a literal
+        repeated at each call site, so adding or renaming a field cannot silently diverge
+        between copies. run() deliberately does NOT seed from here - it reads the control
+        entities instead, whose per-field defaults produce exactly this shape when nothing
+        has been published yet, but which hold Predbat's live plan after a restart.
         """
         return {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}}
 
@@ -1037,6 +1073,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # do not reintroduce force=True here.
         if str(entity_id).endswith("battery_schedule_charge_write"):
             if self._to_bool(value):
+                # Predbat is now actively driving this inverter, so run() may re-apply its
+                # schedule from here on (see the control_active gate there). Marked on the
+                # press itself rather than on a successful write: a write that failed still
+                # means Predbat owns this inverter and the next tick should retry.
+                self.control_active.add(sn)
                 await self.apply_schedule(sn)
             return
         self.update_local_schedule(sn, entity_id, value)
@@ -1232,13 +1273,34 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
     async def refresh_static(self):
-        """Re-discover inverters and refresh their static detail."""
+        """Re-discover inverters and refresh their static detail. Returns True if discovery worked.
+
+        get_device_list() overwrites device_list with whatever discovery returned, which was
+        harmless while discovery only ran at startup — but this tier re-runs every 8 hours in
+        a long-lived process, and one transient failure must not take a working component
+        down until the next success. Assigning the empty result and then marking the tier
+        fresh and saving would additionally write {'device_list': []} to disk and stamp it
+        fresh, so a restart would restore nothing and skip re-discovery for a full TTL.
+        Absence of a result is not a result (deye.py refuses exactly this).
+        """
+        previous_devices = self.device_list
         await self.get_device_list()
+        if not self.device_list:
+            if previous_devices:
+                self.device_list = previous_devices
+                self.log(f"Warn: Sunsynk discovery returned no inverters, keeping the {len(previous_devices)} already known")
+            # Neither marked nor saved either way: an empty discovery must be retried on the
+            # next tick, not cached and then left alone for the next eight hours.
+            return False
         for sn in self.device_list:
-            await self.fetch_device_detail(sn)
+            try:
+                await self.fetch_device_detail(sn)
+            except Exception as error:
+                self.log(f"Warn: Sunsynk inverter detail failed for {sn}: {error}")
         self.mark_refreshed("static")
         await self.save_static()
         await self.save_ratings()
+        return True
 
     async def refresh_config(self):
         """Re-read the settings object for every inverter, logging any change made outside Predbat.
@@ -1251,8 +1313,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         the read-modify-write race with other clients that a single whole-object write
         endpoint cannot otherwise avoid.
 
-        The cache is only re-saved when at least one inverter's read actually succeeded
-        (mirrors deye.py's refresh_config), so a tick where every read fails does not
+        Returns True when at least one inverter's read succeeded. The cache is only re-saved
+        in that case (mirrors deye.py's refresh_config), so a tick where every read fails does not
         re-stamp a days-stale on-disk cache as fresh - which would otherwise make
         restore_state skip the config tier for a full TTL after a restart while running
         on stale settings.
@@ -1260,7 +1322,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         got_any = False
         for sn in self.device_list:
             previous = dict(self.device_settings.get(sn, {}))
-            settings = await self.fetch_settings(sn)
+            try:
+                settings = await self.fetch_settings(sn)
+            except Exception as error:
+                # One inverter's read raising must not cost the others theirs, nor abort
+                # the rest of the tick (publishing, the success timestamp).
+                self.log(f"Warn: Sunsynk settings read failed for {sn}: {error}")
+                continue
             if settings:
                 got_any = True
                 self.note_external_change(sn, previous, settings)
@@ -1270,12 +1338,27 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.mark_refreshed("config")
         if got_any:
             await self.save_config()
+        return got_any
 
     async def refresh_live(self):
-        """Poll telemetry for every inverter."""
+        """Poll telemetry for every inverter, reporting whether anything came back.
+
+        The tier clock is only started when a poll actually succeeded. Marking it
+        unconditionally would defeat run()'s first-cycle telemetry check: the retry after a
+        deferred startup would find the tier "fresh", skip the poll entirely and then run
+        automatic_config() with no telemetry after all — the very thing that check exists
+        to prevent. Mirrors deye.py's refresh_live.
+        """
+        got_any = False
         for sn in self.device_list:
-            await self.fetch_device_data(sn)
-        self.mark_refreshed("live")
+            try:
+                if await self.fetch_device_data(sn):
+                    got_any = True
+            except Exception as error:
+                self.log(f"Warn: Sunsynk telemetry poll failed for {sn}: {error}")
+        if got_any:
+            self.mark_refreshed("live")
+        return got_any
 
     async def run(self, seconds, first):
         """Main component tick: refresh by tier, publish, and apply any schedule change.
@@ -1288,6 +1371,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         in the ever-growing startup backoff (60s doubling to 128 minutes) forever, even
         though every cycle after the first was actually working.
         """
+        # The Predbat.com path holds an injected token with a real expiry, so it has to be
+        # refreshed before anything is polled with it - nothing else in this component ever
+        # would, and an expired token then breaks every call until the process restarts.
+        # Returns True immediately for the two self-hosted auth methods.
+        if not await self.check_and_refresh_oauth_token():
+            self.log("Warn: Sunsynk OAuth token is invalid and could not be refreshed, skipping this cycle")
+            return False
+
         if first:
             await self.restore_state()
             if not await self.fetch_token():
@@ -1301,23 +1392,48 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return False
         if self.tier_expired("config", SUNSYNK_TTL_CONFIG):
             await self.refresh_config()
+        live_ok = True
         if self.tier_expired("live", SUNSYNK_TTL_LIVE):
-            await self.refresh_live()
+            live_ok = await self.refresh_live()
 
         for sn in self.device_list:
-            if first:
-                # Seed the control entities before Predbat reads them, so the first plan
-                # does not act on entities that do not exist yet.
-                self.local_schedule.setdefault(sn, self._empty_schedule())
-            else:
+            # Read the control entities EVERY tick, the first one included. Home Assistant
+            # retains them across a Predbat restart, so on a restart they already hold the
+            # live plan; seeding local_schedule from _empty_schedule() and publishing that
+            # back would overwrite it (dashboard_item reaches set_state_wrapper) and cancel
+            # an in-flight charge until Predbat next replanned. get_schedule_settings_ha
+            # falls back to the disabled default per field, so a genuinely cold start still
+            # lands on exactly _empty_schedule()'s shape.
+            try:
                 await self.get_schedule_settings_ha(sn)
-                if await self.apply_schedule(sn):
-                    await self.save_control()
+            except Exception as error:
+                self.log(f"Warn: Sunsynk schedule read failed for {sn}: {error}")
+            # Only inverters Predbat has actually been asked to drive (write button pressed
+            # at least once) are re-applied here, matching deye.py's _reconcile_control: a
+            # startup cycle must never clobber an inverter before there is a plan. Without
+            # this gate the second tick posted a whole settings object built from entities
+            # Predbat had never written - wiping the user's own time-of-use programme.
+            if sn in self.control_active:
+                try:
+                    if await self.apply_schedule(sn):
+                        await self.save_control()
+                except Exception as error:
+                    self.log(f"Warn: Sunsynk schedule apply failed for {sn}: {error}")
             # Published every tick, not just first: this is Predbat's control surface and
             # must keep reflecting local_schedule as it changes, matching deye.py's run().
             await self.publish_schedule_settings_ha(sn)
 
         await self.publish_data()
+
+        if first and not live_ok:
+            # Startup has not really succeeded without telemetry: automatic_config() runs on
+            # the first cycle ALONE, so it would map only the args backed by cached ratings
+            # and permanently skip soc_max, battery_rate_max and the energy args for the
+            # whole session. Returning False leaves ComponentBase's `first` flag set, so the
+            # entire startup path is retried on its backoff until a poll comes back.
+            self.log("Warn: Sunsynk first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
+            return False
+
         if first and self.automatic:
             await self.automatic_config()
         self.update_success_timestamp()
