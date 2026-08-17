@@ -1161,11 +1161,11 @@ class LoadPredictor:
             # Recent data is sampled more often; old data still contributes but rarely.
             sampled_indices = np.random.choice(len(X_train_norm), size=n_epoch_samples, replace=True, p=sampling_probs)
             # Gather each batch as it is needed rather than materialising the whole epoch.
-            # n_epoch_samples is capped at MAX_BATCHES_PER_EPOCH * BATCH_SIZE, which exceeds
-            # any realistic dataset, so an epoch gather is a second copy of the whole feature
-            # matrix - and at the epoch boundary the previous one is still bound while the
-            # next is built, so two are live at once. The batches select the same rows in the
-            # same order, so training is unchanged.
+            # When n_epoch_samples is close to (or equals) len(X_train_norm), an epoch-wide gather
+            # duplicates most/all of the feature matrix, and at the epoch boundary the previous
+            # gathered array can still be bound while the next is built, so two large copies may
+            # be live at once. Slicing sampled_indices per batch keeps the working set to a batch
+            # while selecting the same rows in the same order, so training is unchanged.
             y_epoch = y_train_norm[sampled_indices]
 
             # Mini-batch training
