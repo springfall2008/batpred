@@ -420,6 +420,7 @@ Roboto
 rowspan
 rstart
 rstrip
+rtol
 rtype
 ruamel
 Rvrt

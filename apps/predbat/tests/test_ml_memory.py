@@ -253,6 +253,58 @@ def test_fitted_statistics_are_accurate_on_large_datasets(my_predbat=None):
     return failed
 
 
+def test_create_dataset_skips_gaps_in_the_history(my_predbat=None):
+    """Samples whose lookback window crosses a gap must be skipped, not half-written
+
+    Real history has gaps where the sensor stopped reporting. A sample spanning one cannot
+    be built, so the row is skipped - the dataset must stay dense and the targets must line
+    up with it.
+    """
+    print("\n=== Testing _create_dataset() with gaps ===")
+    failed = 0
+
+    load, pv, temp, imp, exp = _synthetic_history(days=6)
+    # Punch two holes in the load data, as a sensor dropout would
+    for minute in range(2 * 24 * 60, 2 * 24 * 60 + 600, 5):
+        load.pop(minute, None)
+    for minute in range(4 * 24 * 60, 4 * 24 * 60 + 300, 5):
+        load.pop(minute, None)
+
+    now = datetime(2026, 8, 17, 12, 0, 0, tzinfo=timezone.utc)
+    predictor = LoadPredictor(learning_rate=0.001)
+
+    result = predictor._create_dataset(load, now, pv_minutes=pv, temp_minutes=temp, import_rates=imp, export_rates=exp, validation_holdout_hours=24)
+    X_train, y_train, weights, X_val, y_val = result
+
+    if X_train is None:
+        print("ERROR: gaps caused the whole dataset to be discarded")
+        return failed + 1
+    print("✓ dataset still built with gaps present")
+
+    if X_train.shape[0] != y_train.shape[0]:
+        print("ERROR: {} feature rows but {} targets - skipped rows were still counted".format(X_train.shape[0], y_train.shape[0]))
+        failed += 1
+    elif X_train.shape[0] != weights.shape[0]:
+        print("ERROR: {} feature rows but {} weights".format(X_train.shape[0], weights.shape[0]))
+        failed += 1
+    else:
+        print("✓ {} rows, targets and weights all aligned".format(X_train.shape[0]))
+
+    if y_train.dtype != np.float32 or not np.all(np.isfinite(y_train)):
+        print("ERROR: targets are {} and finite={}".format(y_train.dtype, bool(np.all(np.isfinite(y_train)))))
+        failed += 1
+    else:
+        print("✓ targets are finite float32")
+
+    if not np.all(np.isfinite(X_train)):
+        print("ERROR: feature matrix has non-finite values - a skipped row was left unwritten")
+        failed += 1
+    else:
+        print("✓ every feature row fully written")
+
+    return failed
+
+
 def run_ml_memory_tests(my_predbat=None):
     """Run all ML training memory tests"""
     print("\n" + "=" * 80)
@@ -265,6 +317,7 @@ def run_ml_memory_tests(my_predbat=None):
     failed += test_normalisation_stays_float32(my_predbat)
     failed += test_create_dataset_output_is_stable(my_predbat)
     failed += test_fitted_statistics_are_accurate_on_large_datasets(my_predbat)
+    failed += test_create_dataset_skips_gaps_in_the_history(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

@@ -644,12 +644,12 @@ class LoadPredictor:
                     import_rate_lookback.append(chunked_import.get(lb_idx, 0.0))
                     export_rate_lookback.append(chunked_export.get(lb_idx, 0.0))
                 else:
-                    return None, None  # Gap in data - skip
+                    return None  # Gap in data - skip
 
             if len(lookback_values) != LOOKBACK_STEPS:
-                return None, None
+                return None
             if target_chunk_idx not in chunked_energy:
-                return None, None
+                return None
 
             target_value = chunked_energy[target_chunk_idx]
 
