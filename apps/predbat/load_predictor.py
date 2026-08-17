@@ -815,7 +815,7 @@ class LoadPredictor:
         return float(np.mean(errors)), float(np.mean(biases))
 
     @staticmethod
-    def _feature_mean_std(X, block=4096):
+    def _feature_mean_std(X, block=512):
         """
         Compute per-feature mean and std over row blocks, accumulating in float64.
 
@@ -827,7 +827,9 @@ class LoadPredictor:
 
         Args:
             X: Feature array, shape (samples, features)
-            block: Rows accumulated per pass
+            block: Rows accumulated per pass. The float64 deviation buffer is
+                   block * features * 8 bytes, so this bounds the working set: 512 rows of
+                   1,446 features is 5.9MB against 47.4MB at 4096.
 
         Returns:
             Tuple of (mean, std) as float32 arrays
@@ -842,7 +844,9 @@ class LoadPredictor:
         for start in range(0, rows, block):
             deviation = X[start : start + block].astype(np.float64)
             deviation -= mean
-            squares += np.square(deviation).sum(axis=0)
+            # Square into the deviation buffer rather than allocating a second one of the
+            # same size; the values are identical either way
+            squares += np.square(deviation, out=deviation).sum(axis=0)
         std = np.sqrt(squares / rows)
 
         return mean.astype(np.float32), std.astype(np.float32)
