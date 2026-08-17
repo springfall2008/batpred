@@ -35,6 +35,7 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from deye import DeyeAPI
+from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
@@ -278,6 +279,38 @@ COMPONENT_LIST = {
         # only a refresh dedup handle, so gating on it starts the component for an
         # instance that has no usable token and then fails on every API call.
         "required_or": ["app_id", "key"],
+        "phase": 1,
+    },
+    "sunsynk": {
+        "class": SunsynkAPI,
+        "name": "Sunsynk Cloud",
+        "event_filter": "predbat_sunsynk_",
+        "args": {
+            "username": {"required": False, "config": "sunsynk_username"},
+            "password": {"required": False, "config": "sunsynk_password"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as
+            # sunsynk_key; without this entry it is dropped and every call is rejected.
+            "key": {"required": False, "config": "sunsynk_key"},
+            "region": {"required": False, "default": "sunsynk", "config": "sunsynk_region"},
+            "auth_method": {"required": False, "default": "password", "config": "sunsynk_auth_method"},
+            "token_expires_at": {"required": False, "config": "sunsynk_token_expires_at"},
+            "token_hash": {"required": False, "config": "sunsynk_token_hash"},
+            "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "sunsynk_automatic_ignore_pv"},
+            # Off by default: the write format is inferred from third-party clients and
+            # has not been confirmed against live hardware. Monitoring needs no opt-in.
+            "control_enable": {"required": False, "default": False, "config": "sunsynk_control_enable"},
+            # Battery capacity arrives in amp-hours, so it needs a pack voltage to become
+            # kWh. Normally inferred from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "sunsynk_battery_nominal_voltage"},
+        },
+        # Gate activation on having at least one auth path — a username (self-hosted) OR
+        # an injected SaaS access token. Without this the component would start for every
+        # instance, since all individual args are optional to allow either auth mode.
+        "required_or": ["username", "key"],
         "phase": 1,
     },
     "enphase": {
