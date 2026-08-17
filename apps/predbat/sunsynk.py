@@ -46,6 +46,18 @@ from sunsynk_const import (
     SUNSYNK_BATTERY_LOW_CAP_FIELD,
     LIFEPO4_CHARGE_VOLTS_PER_CELL,
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
+    SUNSYNK_WORKMODE,
+    SUNSYNK_WORKMODE_FIELD,
+    SUNSYNK_SOLAR_SELL_FIELD,
+    SUNSYNK_TOU_ENABLE_FIELD,
+    SUNSYNK_SERIAL_FIELD,
+    SUNSYNK_DAY_FIELDS,
+    TOU_FIELD,
+    TOU_SLOT_COUNT,
+    TOU_FILLER_TIMES,
+    FREEZE_EXPORT_SOC,
+    SUNSYNK_SETTLE_POLLS,
+    encode_setting,
     rsa_encrypt_pkcs1v15,
 )
 
@@ -494,3 +506,256 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """Return the inverter's own SOC floor as a percent, or 0 when unknown."""
         settings = self.device_settings.get(sn, {})
         return int(self._as_float(settings.get(SUNSYNK_BATTERY_LOW_CAP_FIELD)))
+
+    def derive_control_state(self, schedule, current_soc):
+        """Map Predbat's schedule intent to a Sunsynk control state (see the spec's table).
+
+        Semantics are inherited from DEYE — the same registers sit behind both clouds —
+        but every wire value comes from SUNSYNK_WORKMODE, never from DEYE's enum.
+        """
+        reserve = int(schedule.get("reserve", 0))
+        charge = schedule.get("charge", {})
+        export = schedule.get("export", {})
+
+        if export.get("enable"):
+            export_soc = int(export.get("soc", FREEZE_EXPORT_SOC))
+            behaviour = "freeze_export" if export_soc >= FREEZE_EXPORT_SOC else "export"
+            slot_soc = FREEZE_EXPORT_SOC if export_soc >= FREEZE_EXPORT_SOC else export_soc
+            return {"behaviour": behaviour, "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": slot_soc, "power": int(export.get("power", 0))}
+
+        if charge.get("enable"):
+            charge_soc = int(charge.get("soc", 0))
+            if charge_soc > current_soc and charge_soc > reserve:
+                return {"behaviour": "charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
+            if charge_soc == reserve:
+                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+
+        return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+
+    @staticmethod
+    def _to_slot_time(value):
+        """Normalise a schedule time to the HH:MM Sunsynk's slots require.
+
+        The control entities carry HH:MM:SS because that is what Predbat writes (see
+        INVERTER_DEF charge_time_format), so the seconds are dropped here — at the one
+        point a schedule time becomes a slot time.
+        """
+        parts = str(value or "00:00").split(":")
+        if len(parts) < 2:
+            return "00:00"
+        try:
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        except ValueError:
+            return "00:00"
+
+    @staticmethod
+    def _hm_to_minutes(hm):
+        """Convert an HH:MM string to minutes since midnight (0 on bad input)."""
+        try:
+            parts = str(hm).split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+        except (ValueError, IndexError):
+            return 0
+
+    def _window_active(self, window, now_minutes):
+        """Return True if an enabled window covers now_minutes, handling a midnight wrap."""
+        if not window.get("enable") or not window.get("start") or not window.get("end"):
+            return False
+        start = self._hm_to_minutes(self._to_slot_time(window["start"]))
+        end = self._hm_to_minutes(self._to_slot_time(window["end"]))
+        if start == end:
+            return False
+        if start < end:
+            return start <= now_minutes < end
+        return now_minutes >= start or now_minutes < end
+
+    def _self_use_slot(self, start_time, reserve):
+        """Build a self-use slot holding at the reserve SOC."""
+        return {"time": start_time, "power": 0, "soc": int(reserve), "grid_charge": False}
+
+    def _action_slot(self, start_time, state):
+        """Build a slot realising a derived control state."""
+        return {"time": start_time, "power": int(state["power"]), "soc": int(state["slot_soc"]), "grid_charge": bool(state["grid_charge"])}
+
+    def build_tou_slots(self, schedule, current_soc):
+        """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
+
+        Slots are sequential intervals, so every start time must be distinct and ascending.
+        Segment boundaries are collected from a 00:00 self-use baseline plus each enabled
+        window's start (its action) and end (back to self-use), then padded with fillers
+        and trimmed to the earliest, most imminent TOU_SLOT_COUNT.
+        """
+        reserve = int(schedule.get("reserve", 0))
+        idle = {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None}
+        segments = {"00:00": dict(idle)}
+        for direction in ("charge", "export"):
+            window = schedule.get(direction, {})
+            if not (window.get("enable") and window.get("start") and window.get("end")):
+                continue
+            intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
+            intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
+            segments[self._to_slot_time(window["start"])] = self.derive_control_state(intent, current_soc)
+            segments.setdefault(self._to_slot_time(window["end"]), dict(idle))
+
+        slots = []
+        for start_time, state in sorted(segments.items(), key=lambda item: item[0]):
+            if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
+                slots.append(self._action_slot(start_time, state))
+            else:
+                slots.append(self._self_use_slot(start_time, reserve))
+
+        used = {slot["time"] for slot in slots}
+        for filler in TOU_FILLER_TIMES:
+            if len(slots) >= TOU_SLOT_COUNT:
+                break
+            if filler not in used:
+                slots.append(self._self_use_slot(filler, reserve))
+                used.add(filler)
+        return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
+
+    def _now_minutes(self):
+        """Return minutes since local midnight, for time-aware window selection."""
+        try:
+            return int(self.minutes_now)
+        except (TypeError, ValueError):
+            return 0
+
+    def _active_state(self, schedule, current_soc, now_minutes):
+        """Derive the control state for the window active at now_minutes, else idle.
+
+        Sunsynk has a single global work mode, so the top-level mode must follow the
+        window active RIGHT NOW rather than a static export-first precedence: otherwise
+        an export window enabled elsewhere in the day would pin the mode to selling-first
+        and block the charge window's grid charging.
+        """
+        reserve = int(schedule.get("reserve", 0))
+        charge = schedule.get("charge", {})
+        export = schedule.get("export", {})
+        intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
+        if self._window_active(export, now_minutes):
+            intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
+        elif self._window_active(charge, now_minutes):
+            intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
+        return self.derive_control_state(intent, current_soc)
+
+    def build_settings_payload(self, sn, schedule, current_soc, now_minutes=None):
+        """Build the full settings object to POST for one inverter.
+
+        Read-modify-write: start from the last-read settings so every field Predbat does
+        not own survives verbatim, then overwrite only the slots, mode and flags it does.
+        """
+        if now_minutes is None:
+            now_minutes = self._now_minutes()
+        slots = self.build_tou_slots(schedule, current_soc)
+        active = self._active_state(schedule, current_soc, now_minutes)
+
+        # Never ask the battery to go below the floor its own installer settings declare.
+        # Predbat's control entities start at 0 and only reach their real values once it
+        # has written them, so without this the first write of a cycle sends slot SOC 0 to
+        # a pack whose floor is 14%. Applied last so no caller can bypass it.
+        floor = self.battery_reserve_min(sn)
+        if floor > 0:
+            lifted = False
+            for slot in slots:
+                if slot["soc"] < floor:
+                    slot["soc"] = floor
+                    lifted = True
+            if lifted and sn not in self._soc_floor_warned:
+                self._soc_floor_warned.add(sn)
+                self.log(f"Info: Sunsynk {sn} raising requested slot SOC to the inverter's {floor}% floor (batteryLowCap)")
+
+        payload = dict(self.device_settings.get(sn, {}))
+        payload[SUNSYNK_SERIAL_FIELD] = sn
+        payload[SUNSYNK_WORKMODE_FIELD] = active["work_mode"]
+        payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1" if active["solar_sell"] else "0")
+        payload[SUNSYNK_TOU_ENABLE_FIELD] = encode_setting(SUNSYNK_TOU_ENABLE_FIELD, "1")
+        for day in SUNSYNK_DAY_FIELDS:
+            payload[day] = encode_setting(day, True)
+        for index, slot in enumerate(slots, start=1):
+            payload[TOU_FIELD["time"].format(n=index)] = encode_setting(TOU_FIELD["time"].format(n=index), slot["time"])
+            payload[TOU_FIELD["power"].format(n=index)] = encode_setting(TOU_FIELD["power"].format(n=index), slot["power"])
+            payload[TOU_FIELD["soc"].format(n=index)] = encode_setting(TOU_FIELD["soc"].format(n=index), slot["soc"])
+            payload[TOU_FIELD["grid_charge"].format(n=index)] = encode_setting(TOU_FIELD["grid_charge"].format(n=index), slot["grid_charge"])
+        return payload
+
+    def payloads_equal(self, a, b):
+        """Compare two settings payloads for change detection."""
+        return dict(a or {}) == dict(b or {})
+
+    async def apply_settings(self, sn, schedule, current_soc, force=False):
+        """Read, modify and write the settings object for one inverter.
+
+        Returns True if a write was performed. Fails closed: without a fresh read there is
+        no baseline to modify, so nothing is written rather than posting a payload that
+        would drop every field Predbat does not own.
+        """
+        if not self.control_enable:
+            return False
+
+        # Re-read immediately before writing so the race with the Sunsynk phone app is as
+        # small as possible, and so unowned fields carry the newest values.
+        previous_settings = dict(self.device_settings.get(sn, {}))
+        settings = await self.fetch_settings(sn)
+        if not settings:
+            self.log(f"Warn: Sunsynk {sn} settings read failed, skipping the write (no baseline to modify)")
+            return False
+        self.note_external_change(sn, previous_settings, settings)
+
+        payload = self.build_settings_payload(sn, schedule, current_soc)
+        previous = self.applied_payload.get(sn)
+        if previous and self.payloads_equal(previous, payload) and not force:
+            # Nothing changed, so do not churn the dongle. Track how long the read-back has
+            # disagreed; normal cloud-to-dongle latency is one to five minutes.
+            return False
+
+        # _post reports failure as None. A successful settings write carries no data
+        # payload, so {} means "written, nothing returned" and only None means failure.
+        response = await self._post("settings_set", sn=sn, body=payload)
+        if response is None:
+            self.log(f"Warn: Sunsynk {sn} settings write failed, the plan has not reached the inverter")
+            return False
+        self.applied_payload[sn] = payload
+        self.settle_count[sn] = 0
+        self.log(f"Info: Sunsynk {sn} settings written ({self._active_state(schedule, current_soc, self._now_minutes())['behaviour']})")
+        return True
+
+    def note_settle(self, sn, settings):
+        """Track how many cycles the inverter has disagreed with the last write.
+
+        A write is acknowledged by the cloud long before the dongle collects it, so
+        divergence within SUNSYNK_SETTLE_POLLS cycles is normal latency, not a failure.
+        """
+        applied = self.applied_payload.get(sn)
+        if not applied or not settings:
+            return
+        owned = [SUNSYNK_WORKMODE_FIELD] + [TOU_FIELD[c].format(n=n) for n in range(1, TOU_SLOT_COUNT + 1) for c in ("time", "soc", "grid_charge")]
+        if all(str(settings.get(key)) == str(applied.get(key)) for key in owned):
+            self.settle_count[sn] = 0
+            return
+        self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
+        if self.settle_count[sn] > SUNSYNK_SETTLE_POLLS:
+            self.log(f"Warn: Sunsynk {sn} has not applied Predbat's settings after {self.settle_count[sn]} cycles; check the inverter is online in the Sunsynk app")
+
+    def _owned_fields(self):
+        """Return every settings key this component writes, so the rest can be watched."""
+        owned = {SUNSYNK_SERIAL_FIELD, SUNSYNK_WORKMODE_FIELD, SUNSYNK_SOLAR_SELL_FIELD, SUNSYNK_TOU_ENABLE_FIELD}
+        owned.update(SUNSYNK_DAY_FIELDS)
+        for n in range(1, TOU_SLOT_COUNT + 1):
+            owned.update(TOU_FIELD[concept].format(n=n) for concept in ("time", "power", "soc", "grid_charge"))
+        return owned
+
+    def note_external_change(self, sn, before, after):
+        """Log when someone else changed a setting Predbat does not own.
+
+        There is one whole-object write endpoint, so a race with the Sunsynk phone app is
+        unavoidable and last writer wins. Predbat cannot prevent it, but it can say so —
+        otherwise a user's app change silently disappearing into a read-modify-write looks
+        like the inverter losing settings by itself.
+        """
+        if not before or not after:
+            return
+        owned = self._owned_fields()
+        changed = [key for key, value in after.items() if key not in owned and key in before and str(before[key]) != str(value)]
+        if changed:
+            self.log(f"Info: Sunsynk {sn} settings changed outside Predbat since the last read: {', '.join(sorted(changed))}")
