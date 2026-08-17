@@ -116,6 +116,22 @@ def run_web_charts_tests(my_predbat):
         failed += 1
 
     # -------------------------------------------------------------------------
+    # daily_chart=False (Savings, BatteryDegradation, Tariff Comparison) computed width as
+    # window.innerWidth / 3 * 2 with no lower bound - on a phone-width HA Companion App webview
+    # (~400px) that renders a ~270px chart, too narrow to fit a title, dual Y-axis labels and a
+    # verbose legend without everything overlapping (#4561). daily_chart=True already has this
+    # floor; daily_chart=False needs the same one.
+    print("Test: render_chart(daily_chart=False) has the same minimum-width floor as daily_chart=True")
+    html_daily_true = web.render_chart(series_data, "%", "SoC Chart", now_str, tagname="chart_a", daily_chart=True)
+    html_daily_false = web.render_chart(series_data, "%", "Savings Chart", now_str, tagname="chart_b", daily_chart=False)
+    if "if (width < 600)" not in html_daily_true:
+        print("  ERROR: test setup assumption wrong - daily_chart=True no longer has the width floor")
+        failed += 1
+    if "if (width < 600)" not in html_daily_false:
+        print(f"  ERROR: render_chart(daily_chart=False) is missing the width < 600 floor that daily_chart=True has - narrow viewports get an unreadably small chart, got: {html_daily_false}")
+        failed += 1
+
+    # -------------------------------------------------------------------------
     print("Test: render_timeline_chart() targets a percent-unit tagname via getElementById, not a CSS id selector")
     timeline_data = [{"name": "Status", "entity_id": "sensor.x", "data": {"2026-07-23T10:00:00+00:00": "on"}}]
     html = web.render_timeline_chart(timeline_data, "chart_%", 7)
