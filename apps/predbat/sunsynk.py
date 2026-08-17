@@ -1025,11 +1025,16 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self._handle_control_event(entity_id, service)
 
     async def load_cache(self, name):
-        """Load one cache file, returning {} when absent or unreadable."""
+        """Load one cache file, returning {} when absent or unreadable.
+
+        Also flags an in-progress restore_state() attempt as incomplete via
+        _restore_had_error when a failure is caught here — see restore_state for why.
+        """
         try:
             data = await self.storage.load(SUNSYNK_STORAGE_MODULE, name)
         except Exception as error:
             self.log(f"Warn: Sunsynk could not load cache {name}: {error}")
+            self._restore_had_error = True
             return {}
         return data if isinstance(data, dict) else {}
 
@@ -1039,6 +1044,23 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             await self.storage.save(SUNSYNK_STORAGE_MODULE, name, data)
         except Exception as error:
             self.log(f"Warn: Sunsynk could not save cache {name}: {error}")
+
+    async def age_cache(self, name):
+        """Return the age in minutes of one cache file, or None when unavailable.
+
+        Fails soft exactly like load_cache/save_cache: storage being absent (self.storage
+        is None, the normal state for a standalone CLI run), raising, or the entry never
+        having been written are all reported as None rather than propagating. On an actual
+        failure this also flags an in-progress restore_state() attempt as incomplete via
+        _restore_had_error, so a transient storage outage is retried on a later call rather
+        than being silently marked done with nothing restored.
+        """
+        try:
+            return await self.storage.age(SUNSYNK_STORAGE_MODULE, name)
+        except Exception as error:
+            self.log(f"Warn: Sunsynk could not read cache age for {name}: {error}")
+            self._restore_had_error = True
+            return None
 
     async def save_static(self):
         """Persist discovery results, which change only when the hardware does."""
@@ -1063,23 +1085,37 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         Assistant already retains the last published value of every entity, and
         publish_data only writes a sensor when it has a value — so a failed poll leaves
         the previous reading in place rather than overwriting it.
+
+        _cache_restored is set only once this attempt has completed with no storage error,
+        not on entry. Every storage access below already fails soft via load_cache/
+        age_cache (they return {}/None rather than raising), so self.storage being None —
+        the normal state for a standalone CLI run — or a backend that raises on every call
+        cannot crash this method. But marking the guard unconditionally on entry would
+        still lock cache restoration out for the life of the process after a single bad
+        tick, since the guard is checked before any work happens and nothing would ever
+        clear it again. _restore_had_error tracks whether load_cache/age_cache actually hit
+        a storage failure during THIS attempt (as opposed to a cache simply not existing
+        yet, which is not an error), and the guard is only set when they did not — so a
+        later call, once storage recovers, tries again rather than silently doing nothing
+        forever. A successful attempt still sets the guard unconditionally, so restore can
+        never run twice and clobber live state with stale cached state.
         """
         if self._cache_restored:
             return
-        self._cache_restored = True
+        self._restore_had_error = False
 
         static = await self.load_cache(SUNSYNK_CACHE_STATIC)
         if static:
             self.device_list = static.get("device_list", []) or []
             self.device_detail = static.get("device_detail", {}) or {}
-            age = await self.storage.age(SUNSYNK_STORAGE_MODULE, SUNSYNK_CACHE_STATIC)
+            age = await self.age_cache(SUNSYNK_CACHE_STATIC)
             if age is not None:
                 self.mark_refreshed("static", age)
 
         config = await self.load_cache(SUNSYNK_CACHE_CONFIG)
         if config:
             self.device_settings = config.get("device_settings", {}) or {}
-            age = await self.storage.age(SUNSYNK_STORAGE_MODULE, SUNSYNK_CACHE_CONFIG)
+            age = await self.age_cache(SUNSYNK_CACHE_CONFIG)
             if age is not None:
                 self.mark_refreshed("config", age)
 
@@ -1089,12 +1125,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         # Bounded: restoring this asserts the inverter still holds what Predbat last wrote.
         # A redundant write is cheap; a skipped one lets the battery diverge from the plan.
-        control_age = await self.storage.age(SUNSYNK_STORAGE_MODULE, SUNSYNK_CACHE_CONTROL)
+        control_age = await self.age_cache(SUNSYNK_CACHE_CONTROL)
         if control_age is not None and control_age <= SUNSYNK_RESTORE_MAX_CONTROL:
             control = await self.load_cache(SUNSYNK_CACHE_CONTROL)
             self.applied_payload = control.get("applied_payload", {}) or {}
         elif control_age is not None:
             self.log(f"Info: Sunsynk control cache is {control_age:.1f} minutes old (limit {SUNSYNK_RESTORE_MAX_CONTROL}), forcing a rewrite")
+
+        if not self._restore_had_error:
+            self._cache_restored = True
 
     def tier_expired(self, tier, ttl_minutes):
         """Return True if a tier has never run or is older than its TTL."""

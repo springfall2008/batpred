@@ -22,19 +22,42 @@ class FakeStorage:
         self.ages = ages or {}
         self.saves = []
 
-    async def save(self, module, name, data):
-        """Record a save."""
-        self.files[name] = data
-        self.saves.append(name)
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record a save, mirroring the real Storage.save(module, filename, data, format, expiry) signature."""
+        self.files[filename] = data
+        self.saves.append(filename)
         return True
 
-    async def load(self, module, name, default=None):
-        """Return previously saved data, or the default."""
-        return self.files.get(name, default)
+    async def load(self, module, filename):
+        """Return previously saved data, or None when absent, mirroring Storage.load(module, filename).
 
-    async def age(self, module, name):
+        Deliberately has no ``default`` parameter: the real Storage.load() does not accept
+        one either, and an earlier round of this task passed ``default=None`` at the
+        sunsynk.py call site, which this fake's original, more permissive signature happily
+        accepted while the real component would have raised a TypeError. Keeping this
+        signature exact stops the fake from masking that class of bug again.
+        """
+        return self.files.get(filename)
+
+    async def age(self, module, filename):
         """Return the configured age in minutes, or None when never written."""
-        return self.ages.get(name)
+        return self.ages.get(filename)
+
+
+class RaisingStorage:
+    """Storage double whose every method raises, simulating a failing backend."""
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Raise to simulate a save failure."""
+        raise RuntimeError("simulated storage failure")
+
+    async def load(self, module, filename):
+        """Raise to simulate a load failure."""
+        raise RuntimeError("simulated storage failure")
+
+    async def age(self, module, filename):
+        """Raise to simulate an age-lookup failure."""
+        raise RuntimeError("simulated storage failure")
 
 
 class StoredSunsynk(MockSunsynk):
@@ -152,6 +175,80 @@ def test_telemetry_is_not_cached():
     assert not failed, "test_telemetry_is_not_cached"
 
 
+def test_restore_state_survives_a_raising_storage_and_retries_once_recovered():
+    """A storage backend that raises on every call must not crash restore_state.
+
+    Regression test: restore_state() used to call self.storage.age(...) directly, with no
+    try/except, so a raising storage backend propagated an unhandled exception out of the
+    method. Worse, _cache_restored was set True before that call, so component_base.py's
+    outer loop survived the crash but restore_state() permanently did nothing on every
+    later call - a single transient storage hiccup on first boot silently disabled cache
+    restoration for the life of the process. This asserts both halves of the fix: no crash,
+    and a later call (once storage recovers) still actually restores.
+    """
+    failed = False
+    s = StoredSunsynk()
+    s._storage = RaisingStorage()
+    try:
+        run_async_local(s.restore_state())
+    except Exception as error:
+        print(f"ERROR: restore_state raised with a failing storage backend: {error}")
+        failed = True
+    if s._cache_restored:
+        print("ERROR: a failed restore attempt must not be marked complete, or a transient storage failure locks restoration out forever")
+        failed = True
+    if s.device_list:
+        print(f"ERROR: nothing should have been restored from a raising storage, got {s.device_list}")
+        failed = True
+
+    # Storage recovers (e.g. the next tick) - a later call on the SAME instance must still
+    # be able to complete a real restore, not stay locked out by the earlier failure.
+    s._storage = FakeStorage(ages={SUNSYNK_CACHE_STATIC: 1.0})
+    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"]}
+    run_async_local(s.restore_state())
+    if s.device_list != ["INV1"]:
+        print(f"ERROR: restore did not succeed once storage recovered, got {s.device_list}")
+        failed = True
+    if not s._cache_restored:
+        print("ERROR: a successful restore should mark the guard so it does not run again")
+        failed = True
+    assert not failed, "test_restore_state_survives_a_raising_storage_and_retries_once_recovered"
+
+
+def test_restore_state_survives_storage_being_none_and_retries_once_recovered():
+    """No storage component at all - the normal standalone-CLI case - must not crash restore_state either.
+
+    mock_base.py documents components as always None for a standalone run, so
+    ComponentBase.storage resolves to None in that mode; this is not a hypothetical edge
+    case. Also confirms a later call succeeds once a real storage component is attached.
+    """
+    failed = False
+    s = StoredSunsynk()
+    s._storage = None
+    try:
+        run_async_local(s.restore_state())
+    except Exception as error:
+        print(f"ERROR: restore_state raised with storage=None: {error}")
+        failed = True
+    if s._cache_restored:
+        print("ERROR: restoring with no storage available must not be marked complete")
+        failed = True
+    if s.device_list:
+        print(f"ERROR: nothing should have been restored with no storage, got {s.device_list}")
+        failed = True
+
+    s._storage = FakeStorage(ages={SUNSYNK_CACHE_STATIC: 1.0})
+    s.storage.files[SUNSYNK_CACHE_STATIC] = {"device_list": ["INV1"]}
+    run_async_local(s.restore_state())
+    if s.device_list != ["INV1"]:
+        print(f"ERROR: restore did not succeed once storage became available, got {s.device_list}")
+        failed = True
+    if not s._cache_restored:
+        print("ERROR: a successful restore should mark the guard so it does not run again")
+        failed = True
+    assert not failed, "test_restore_state_survives_storage_being_none_and_retries_once_recovered"
+
+
 def run_sunsynk_storage_tests(my_predbat):
     """Run all Sunsynk storage tests."""
     failed = False
@@ -161,6 +258,8 @@ def run_sunsynk_storage_tests(my_predbat):
         ("control_restore_bounded", test_control_cache_restore_is_time_bounded),
         ("tier_expiry", test_tier_expiry_uses_the_seeded_clock),
         ("telemetry_not_cached", test_telemetry_is_not_cached),
+        ("restore_survives_raising_storage", test_restore_state_survives_a_raising_storage_and_retries_once_recovered),
+        ("restore_survives_storage_none", test_restore_state_survives_storage_being_none_and_retries_once_recovered),
     ]:
         try:
             if fn():
