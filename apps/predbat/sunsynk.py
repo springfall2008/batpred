@@ -131,6 +131,13 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        # The most recent body-level API failure message (the `msg` field only - see
+        # _request - never a credential), and whether the last discovery attempt actually
+        # reached the API. Both exist so the standalone CLI (test_sunsynk_api) can name
+        # precisely which stage failed instead of dumping all possibilities and pointing at
+        # the Warn: trace.
+        self.last_api_error = ""
+        self.discovery_ok = None
         if self.region not in SUNSYNK_REGIONS:
             self.log(f"Warn: Sunsynk unknown region '{self.region}', falling back to sunsynk")
             self.region = "sunsynk"
@@ -307,6 +314,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         Read callers go through _get, which coerces None to {} because they all want a
         dict; the write path uses the None directly to detect failure. Never raises, so
         every caller fails closed.
+
+        A body-level failure (HTTP 200 with `success: false`) also stamps self.last_api_error
+        with the response's own `msg`, so a caller such as the standalone CLI can report the
+        API's own reason rather than pointing the user at the Warn: trace.
         """
         path = SUNSYNK_ENDPOINTS[endpoint_key]
         if sn:
@@ -351,6 +362,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 return None
             if not isinstance(payload, dict) or not payload.get("success"):
                 message = payload.get("msg") if isinstance(payload, dict) else payload
+                # Captured here, not just logged: this is the ONLY place a body-level
+                # failure is known, so it is the only place that can hand the standalone
+                # CLI something better than "check the Warn: lines above". Always the
+                # response's own `msg`, never anything from the request we just sent, so a
+                # credential can never end up in it.
+                self.last_api_error = str(message) if message is not None else ""
                 self.log(f"Warn: Sunsynk {method} {path} was unsuccessful: {message}")
                 return None
             data = payload.get("data")
@@ -409,12 +426,28 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         every page keeps contributing genuinely new serials. Hitting that cap is logged
         so a real account with more inverters than the cap allows is diagnosable rather
         than silently truncated.
+
+        Also sets self.discovery_ok, so refresh_static() and the standalone CLI can tell
+        "the account genuinely has no inverters" apart from "the discovery call itself
+        failed". _get() coerces both a transport/API failure and a body with no `infos` at
+        all down to a dict, but only a real failure ever coerces all the way to the empty
+        dict {} (_get's own failure sentinel) - a successful call against an empty account
+        still returns a non-empty dict carrying `total`/`infos`, just with `infos` empty.
+        That distinction has to be made at THIS call site, before the two are folded
+        together by the `infos` check below - once infos is [] either way, nothing
+        downstream can tell them apart any more.
         """
         serials = []
         seen = set()
+        self.discovery_ok = False
         for page in range(1, SUNSYNK_MAX_DISCOVERY_PAGES + 1):
             params = {"page": str(page), "limit": str(SUNSYNK_PAGE_SIZE), "type": "-2", "status": "-1"}
             data = await self._get("inverter_list", params=params)
+            if not data:
+                # {} only ever means the call itself failed (see above) - discovery_ok
+                # stays False so this is never mistaken for "the account has none".
+                break
+            self.discovery_ok = True
             infos = data.get("infos") or []
             if not infos:
                 break
@@ -1117,8 +1150,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """Load one cache file, returning {} when absent or unreadable.
 
         Also flags an in-progress restore_state() attempt as incomplete via
-        _restore_had_error when a failure is caught here — see restore_state for why.
+        _restore_had_error when a REAL failure is caught here — see restore_state for why.
+        self.storage being None is checked first and returns silently, with no warning and
+        no _restore_had_error: it means there is simply no Storage component configured (the
+        normal state for a standalone CLI run, see mock_base.py), which is a permanent,
+        by-design condition rather than a transient fault worth retrying or warning about.
         """
+        if self.storage is None:
+            return {}
         try:
             data = await self.storage.load(SUNSYNK_STORAGE_MODULE, name)
         except Exception as error:
@@ -1128,7 +1167,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         return data if isinstance(data, dict) else {}
 
     async def save_cache(self, name, data):
-        """Save one cache file, tolerating a storage failure."""
+        """Save one cache file, tolerating a storage failure.
+
+        Silently does nothing when self.storage is None (no Storage component configured,
+        the normal state for a standalone CLI run) - there is nothing to warn about, only
+        a REAL save failure below is worth logging.
+        """
+        if self.storage is None:
+            return
         try:
             await self.storage.save(SUNSYNK_STORAGE_MODULE, name, data)
         except Exception as error:
@@ -1139,11 +1185,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         Fails soft exactly like load_cache/save_cache: storage being absent (self.storage
         is None, the normal state for a standalone CLI run), raising, or the entry never
-        having been written are all reported as None rather than propagating. On an actual
-        failure this also flags an in-progress restore_state() attempt as incomplete via
-        _restore_had_error, so a transient storage outage is retried on a later call rather
-        than being silently marked done with nothing restored.
+        having been written are all reported as None rather than propagating. Storage being
+        absent is a permanent, by-design condition, not a fault, so it returns silently and
+        leaves _restore_had_error untouched - unlike a REAL failure below, which still warns
+        and still flags _restore_had_error so a transient storage outage is retried on a
+        later call rather than being silently marked done with nothing restored.
         """
+        if self.storage is None:
+            return None
         try:
             return await self.storage.age(SUNSYNK_STORAGE_MODULE, name)
         except Exception as error:
@@ -1300,13 +1349,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         fresh and saving would additionally write {'device_list': []} to disk and stamp it
         fresh, so a restart would restore nothing and skip re-discovery for a full TTL.
         Absence of a result is not a result (deye.py refuses exactly this).
+
+        The warning distinguishes "the account really has none" from "the discovery call
+        itself failed" using get_device_list()'s discovery_ok flag (Fix 3) - both used to
+        read identically ("discovery returned no inverters"), which is misleading during a
+        genuine outage: the account has not changed, the API just could not be reached.
         """
         previous_devices = self.device_list
         await self.get_device_list()
         if not self.device_list:
             if previous_devices:
                 self.device_list = previous_devices
-                self.log(f"Warn: Sunsynk discovery returned no inverters, keeping the {len(previous_devices)} already known")
+                reason = "returned no inverters" if self.discovery_ok else "could not be reached"
+                self.log(f"Warn: Sunsynk discovery {reason}, keeping the {len(previous_devices)} already known")
             # Neither marked nor saved either way: an empty discovery must be retried on the
             # next tick, not cached and then left alone for the next eight hours.
             return False
@@ -1510,8 +1565,17 @@ async def test_sunsynk_api(args):  # pragma: no cover
     harmless settings round-trip afterwards, unchanged from before.
 
     run() returns False on a failed login, an empty device list, or (on first) a failed
-    telemetry poll, so that is reported explicitly rather than falling through into an
-    empty dump that would otherwise look like a healthy but empty account.
+    telemetry poll. The old version of this CLI printed all three possibilities and told
+    the user to go read the Warn: lines for which one actually happened - a real tester
+    hit exactly that and could not tell a bad password from an empty account. Diagnosing
+    precisely from the component's post-call state removes the guesswork:
+      - no access token -> login itself failed (see fetch_token/self.last_api_error).
+      - a token but no device_list -> login worked, discovery found nothing (or failed -
+        see self.discovery_ok, Fix 3).
+      - a device_list but run() still failed -> the first telemetry poll came back empty.
+    These three are exhaustive for the auth methods this CLI exposes (password,
+    password_legacy): check_and_refresh_oauth_token() only ever returns False for the
+    oauth flow, which --auth-method cannot select.
     """
     mock_base = MockBase()
     client = _build_sunsynk(mock_base, args)
@@ -1520,8 +1584,23 @@ async def test_sunsynk_api(args):  # pragma: no cover
     print("Calling run() once (read-only: login, discover, poll config/telemetry, publish)...")
     ok = await client.run(seconds=0, first=True)
     if not ok:
-        print("run() returned False: login failed, no inverters were discovered, or the first telemetry poll came back empty.")
-        print("Check the Warn: lines above for which stage failed. If your region still serves the older login, retry with --auth-method password_legacy.")
+        if not client.access_token:
+            print("\nLOGIN FAILED: no access token was returned.")
+            if client.last_api_error:
+                print(f"  Sunsynk said: {client.last_api_error}")
+            print("  Check --username/--password, check --region, and if this region may still serve")
+            print("  the older login, retry with --auth-method password_legacy.")
+        elif not client.device_list:
+            if client.discovery_ok:
+                print("\nLOGIN SUCCEEDED, but the account returned no inverters.")
+                if args.serial:
+                    print(f"  --serial {args.serial!r} was set - a filter matching nothing looks identical to an empty account; retry without --serial to check.")
+            else:
+                print("\nLOGIN SUCCEEDED, but the inverter-discovery call itself failed (the account may still have inverters).")
+                print("  Check the Warn: lines above for the transport/API error, and retry.")
+        else:
+            print(f"\nLOGIN and DISCOVERY both succeeded ({len(client.device_list)} inverter(s): {client.device_list}), but the first telemetry poll came back empty.")
+            print("  Check the Warn: lines above for which realtime endpoint failed.")
         await client.final()
         return
 
