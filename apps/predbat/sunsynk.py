@@ -1455,6 +1455,10 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
     call to initialize() would re-run it a second time with the real args, printing a
     duplicate "SunsynkAPI initialising" / "control is disabled" pair before the CLI has
     even reported which region it is using.
+
+    inverter_sn is passed straight through from --serial, exactly as deye.py's
+    _build_deye does, so a serial restricts discovery itself (run() -> refresh_static() ->
+    get_device_list()) rather than being trusted unverified after the fact.
     """
     return SunsynkAPI(
         mock_base,
@@ -1462,32 +1466,57 @@ def _build_sunsynk(mock_base, args):  # pragma: no cover
         password=args.password,
         region=args.region,
         auth_method=args.auth_method,
-        # The CLI is the verification tool, so control is on - but run_cli still asks
-        # before it sends anything to a real inverter.
+        inverter_sn=args.serial,
+        # The CLI is the verification tool, so control is on - but test_sunsynk_api still
+        # asks before it sends anything to a real inverter, and run() only ever calls
+        # apply_settings/apply_schedule for a serial already in control_active, which
+        # starts empty on every fresh CLI process - so the default path stays read-only.
         control_enable=True,
         automatic=False,
     )
 
 
-async def run_cli(args):  # pragma: no cover
-    """Log in, dump what the account exposes, and optionally round-trip one write."""
+async def test_sunsynk_api(args):  # pragma: no cover
+    """Run one read-only Sunsynk cycle via run(), then dump what it discovered.
+
+    Drives the exact orchestration a live install uses - login, the tiered static/
+    config/live refresh, publish_data, the control_active gate - rather than calling
+    fetch_token/get_device_list/fetch_device_detail/fetch_device_data/fetch_settings
+    individually, matching test_deye_api. Nobody on the project has a Sunsynk account, so
+    this CLI is the only tool a remote tester has, and run() is where the real behaviour
+    lives; a CLI that bypasses it cannot smoke-test what actually runs in production.
+
+    Read-only by default: control_enable only gates apply_settings/apply_schedule, and
+    run() only calls those for a serial already in control_active - empty here, since
+    nothing has pressed the write button in this process. --write-test opts into a single
+    harmless settings round-trip afterwards, unchanged from before.
+
+    run() returns False on a failed login, an empty device list, or (on first) a failed
+    telemetry poll, so that is reported explicitly rather than falling through into an
+    empty dump that would otherwise look like a healthy but empty account.
+    """
     mock_base = MockBase()
     client = _build_sunsynk(mock_base, args)
     print(f"Region {args.region} -> {client.base_url} (source={client.source}), auth={args.auth_method}")
-    if not await client.fetch_token():
-        print("Login FAILED. If your region still serves the older login, retry with --auth-method password_legacy.")
+
+    print("Calling run() once (read-only: login, discover, poll config/telemetry, publish)...")
+    ok = await client.run(seconds=0, first=True)
+    if not ok:
+        print("run() returned False: login failed, no inverters were discovered, or the first telemetry poll came back empty.")
+        print("Check the Warn: lines above for which stage failed. If your region still serves the older login, retry with --auth-method password_legacy.")
+        await client.final()
         return
-    serials = [args.serial] if args.serial else await client.get_device_list()
+
+    serials = client.device_list
     print(f"Inverters: {serials}")
     for sn in serials:
         print(f"\n--- {sn} detail ---")
-        print(json.dumps(await client.fetch_device_detail(sn), indent=2, default=str))
+        print(json.dumps(client.device_detail.get(sn, {}), indent=2, default=str))
         print(f"\n--- {sn} telemetry ---")
-        print(json.dumps(await client.fetch_device_data(sn), indent=2, default=str))
-        settings = await client.fetch_settings(sn)
+        print(json.dumps(client.device_values.get(sn, {}), indent=2, default=str))
         if args.dump_settings:
             print(f"\n--- {sn} settings ---")
-            print(json.dumps(settings, indent=2, default=str))
+            print(json.dumps(client.device_settings.get(sn, {}), indent=2, default=str))
         print(f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, rate_max={client.battery_rate_max(sn):.0f} W, floor={client.battery_reserve_min(sn)}%")
         if args.write_test:
             # A deliberately harmless schedule: a self-use day at the inverter's own floor.
@@ -1496,7 +1525,13 @@ async def run_cli(args):  # pragma: no cover
                 "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
                 "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
             }
+            # Built from whatever run() already read into device_settings; empty when the
+            # config-tier read failed for this serial, which build_settings_payload
+            # reports by returning {} rather than a partial, unowned-field-dropping payload.
             payload = client.build_settings_payload(sn, schedule, current_soc=50)
+            if not payload:
+                print(f"\nNo settings baseline for {sn} (run() did not read its settings), skipping --write-test.")
+                continue
             print(f"\n--- {sn} would write ---")
             print(json.dumps(payload, indent=2, default=str))
             # This is the only verification tool a remote tester has, so a closed/redirected
@@ -1511,8 +1546,11 @@ async def run_cli(args):  # pragma: no cover
                 await client.apply_settings(sn, schedule, current_soc=50, force=True)
                 print("Written. Re-reading in 60 seconds is the only way to confirm the dongle collected it.")
 
+    await client.final()
+    print("Done")
 
-def main():
+
+def main():  # pragma: no cover
     """Command-line entry point for Sunsynk diagnostics."""
     parser = argparse.ArgumentParser(description="Sunsynk Cloud API diagnostics")
     parser.add_argument("--username", required=True, help="Sunsynk Connect account e-mail")
@@ -1522,7 +1560,7 @@ def main():
     parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
     parser.add_argument("--dump-settings", action="store_true", help="Print the full settings object")
     parser.add_argument("--write-test", action="store_true", help="Build a harmless self-use payload and offer to send it")
-    asyncio.run(run_cli(parser.parse_args()))
+    asyncio.run(test_sunsynk_api(parser.parse_args()))
 
 
 if __name__ == "__main__":
