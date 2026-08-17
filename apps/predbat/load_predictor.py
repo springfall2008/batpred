@@ -611,14 +611,23 @@ class LoadPredictor:
         # Validation window: most recent chunks (chunk_idx 0 … validation_end_chunk-1)
         validation_end_chunk = validation_holdout_hours * 60 // CHUNK_MINUTES
 
-        X_train_list = []
+        # Preallocate the feature matrices and write each sample straight into its row. Holding
+        # a Python list of per-sample arrays and then copying it into np.array() keeps both
+        # alive at once, which for a three week window is an extra 70MB on top of the 66MB
+        # matrix. Rows are sized for the maximum possible sample count and the filled prefix is
+        # returned; samples are only skipped where the history has gaps, so the slack is small.
+        max_train_rows = max(max_chunk_idx - LOOKBACK_STEPS, 0)
+        max_val_rows = max(validation_end_chunk, 0)
+        X_train_all = np.empty((max_train_rows, TOTAL_FEATURES), dtype=np.float32)
+        X_val_all = np.empty((max_val_rows, TOTAL_FEATURES), dtype=np.float32)
+        train_rows = 0
+        val_rows = 0
         y_train_list = []
         weight_list = []
-        X_val_list = []
         y_val_list = []
 
-        def _build_sample(target_chunk_idx):
-            """Build one (features, target) sample centred on target_chunk_idx."""
+        def _build_sample(target_chunk_idx, out_row):
+            """Write one sample's features into out_row and return its target, or None on a gap."""
             lookback_start = target_chunk_idx + 1
             lookback_values = []
             pv_lookback_values = []
@@ -635,12 +644,12 @@ class LoadPredictor:
                     import_rate_lookback.append(chunked_import.get(lb_idx, 0.0))
                     export_rate_lookback.append(chunked_export.get(lb_idx, 0.0))
                 else:
-                    return None, None  # Gap in data - skip
+                    return None  # Gap in data - skip
 
             if len(lookback_values) != LOOKBACK_STEPS:
-                return None, None
+                return None
             if target_chunk_idx not in chunked_energy:
-                return None, None
+                return None
 
             target_value = chunked_energy[target_chunk_idx]
 
@@ -651,25 +660,22 @@ class LoadPredictor:
             day_of_year = target_time.timetuple().tm_yday
             time_features = self._create_time_features(minute_of_day, day_of_week, day_of_year)
 
-            features = np.concatenate(
-                [
-                    np.array(lookback_values, dtype=np.float32),
-                    np.array(pv_lookback_values, dtype=np.float32),
-                    np.array(temp_lookback_values, dtype=np.float32),
-                    np.array(import_rate_lookback, dtype=np.float32),
-                    np.array(export_rate_lookback, dtype=np.float32),
-                    time_features,
-                ]
-            )
-            return features, np.array([target_value], dtype=np.float32)
+            # Assigning the lists straight into row slices converts them in place, avoiding the
+            # five temporary arrays and the concatenated result this used to build per sample
+            offset = 0
+            for values in (lookback_values, pv_lookback_values, temp_lookback_values, import_rate_lookback, export_rate_lookback):
+                out_row[offset : offset + LOOKBACK_STEPS] = values
+                offset += LOOKBACK_STEPS
+            out_row[offset:] = time_features
+            return np.array([target_value], dtype=np.float32)
 
         # Training samples: all available chunks
         for target_chunk_idx in range(0, max_chunk_idx - LOOKBACK_STEPS):
-            features, target = _build_sample(target_chunk_idx)
-            if features is None:
+            target = _build_sample(target_chunk_idx, X_train_all[train_rows])
+            if target is None:
                 continue
 
-            X_train_list.append(features)
+            train_rows += 1
             y_train_list.append(target)
 
             # Time-decay weighting (older samples get lower weight)
@@ -678,23 +684,23 @@ class LoadPredictor:
 
         # Validation samples: most recent validation_end_chunk chunks
         for target_chunk_idx in range(0, validation_end_chunk):
-            features, target = _build_sample(target_chunk_idx)
-            if features is None:
+            target = _build_sample(target_chunk_idx, X_val_all[val_rows])
+            if target is None:
                 continue
-            X_val_list.append(features)
+            val_rows += 1
             y_val_list.append(target)
 
-        if not X_train_list:
+        if not train_rows:
             return None, None, None, None, None
 
-        X_train = np.array(X_train_list, dtype=np.float32)
+        X_train = X_train_all[:train_rows]
         y_train = np.array(y_train_list, dtype=np.float32)
         train_weights = np.array(weight_list, dtype=np.float32)
 
         # Normalize weights to sum to number of samples
         train_weights = train_weights * len(train_weights) / np.sum(train_weights)
 
-        X_val = np.array(X_val_list, dtype=np.float32) if X_val_list else None
+        X_val = X_val_all[:val_rows] if val_rows else None
         y_val = np.array(y_val_list, dtype=np.float32) if y_val_list else None
 
         return X_train, y_train, train_weights, X_val, y_val
@@ -808,6 +814,43 @@ class LoadPredictor:
 
         return float(np.mean(errors)), float(np.mean(biases))
 
+    @staticmethod
+    def _feature_mean_std(X, block=512):
+        """
+        Compute per-feature mean and std over row blocks, accumulating in float64.
+
+        np.mean/np.std on a float32 array accumulate in float32, which loses low bits on the
+        feature groups that sit far from zero, and np.std materialises the deviations array
+        internally - another full copy of a 66MB training matrix to produce 1,446 numbers.
+        Two passes over row blocks avoids both: no temporary larger than one block, and
+        float64 accumulators that match a float64 reference.
+
+        Args:
+            X: Feature array, shape (samples, features)
+            block: Rows accumulated per pass. The float64 deviation buffer is
+                   block * features * 8 bytes, so this bounds the working set: 512 rows of
+                   1,446 features is 5.9MB against 47.4MB at 4096.
+
+        Returns:
+            Tuple of (mean, std) as float32 arrays
+        """
+        rows = len(X)
+        total = np.zeros(X.shape[1], dtype=np.float64)
+        for start in range(0, rows, block):
+            total += X[start : start + block].sum(axis=0, dtype=np.float64)
+        mean = total / rows
+
+        squares = np.zeros(X.shape[1], dtype=np.float64)
+        for start in range(0, rows, block):
+            deviation = X[start : start + block].astype(np.float64)
+            deviation -= mean
+            # Square into the deviation buffer rather than allocating a second one of the
+            # same size; the values are identical either way
+            squares += np.square(deviation, out=deviation).sum(axis=0)
+        std = np.sqrt(squares / rows)
+
+        return mean.astype(np.float32), std.astype(np.float32)
+
     def _get_min_std_array(self, n_features):
         """
         Return the per-feature minimum std array used to prevent extreme normalization.
@@ -818,7 +861,10 @@ class LoadPredictor:
         Returns:
             numpy array of minimum std values, shape (n_features,)
         """
-        min_std = np.ones(n_features) * 1e-8  # Default fallback
+        # float32 to match the dataset and weights: a float64 minimum promotes the whole
+        # normalised feature matrix to float64 via np.maximum, doubling its size and running
+        # training in double precision against float32 weights
+        min_std = np.ones(n_features, dtype=np.float32) * 1e-8  # Default fallback
         if n_features == TOTAL_FEATURES:
             min_std[0:LOOKBACK_STEPS] = 0.01  # Load energy (kWh)
             min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01  # PV energy (kWh)
@@ -858,7 +904,7 @@ class LoadPredictor:
 
         self.log("ML Predictor: Normalization stats [{}] target(mean={:.4f} std={:.4f}) {}".format(label, self.target_mean if self.target_mean is not None else 0, self.target_std if self.target_std is not None else 0, " ".join(parts)))
 
-    def _normalize_features(self, X, fit=False, ema_alpha=0.0):
+    def _normalize_features(self, X, fit=False, ema_alpha=0.0, in_place=False):
         """
         Normalize features using z-score normalization with feature-specific minimum stds.
 
@@ -868,13 +914,17 @@ class LoadPredictor:
             ema_alpha: If > 0 and existing params exist, blend new stats with old via EMA
                        (new = alpha * new_stats + (1-alpha) * old_stats). Used during
                        fine-tuning to track feature distribution drift without sudden jumps.
+            in_place: If True, write the normalised values back into X instead of building a
+                      new array. A training feature matrix is around 66MB, and the caller
+                      keeps no use for the un-normalised values, so copying doubles the
+                      resident cost of a training pass for nothing. Only pass this when the
+                      caller is finished with the array it hands in.
 
         Returns:
             Normalized feature array
         """
         if fit:
-            self.feature_mean = np.mean(X, axis=0)
-            self.feature_std = np.std(X, axis=0)
+            self.feature_mean, self.feature_std = self._feature_mean_std(X)
 
             # Clamp std to per-feature minimums to prevent extreme normalization
             self.feature_std = np.maximum(self.feature_std, self._get_min_std_array(len(self.feature_std)))
@@ -882,8 +932,7 @@ class LoadPredictor:
 
         elif ema_alpha > 0 and self.feature_mean is not None and self.feature_std is not None:
             # EMA update: blend new statistics with existing to track distribution drift
-            new_mean = np.mean(X, axis=0)
-            new_std = np.std(X, axis=0)
+            new_mean, new_std = self._feature_mean_std(X)
 
             # Apply same min-std clamping to new stats before blending
             new_std = np.maximum(new_std, self._get_min_std_array(len(new_std)))
@@ -894,6 +943,11 @@ class LoadPredictor:
             self._log_normalization_stats(label="ema-update alpha={}".format(ema_alpha))
 
         if self.feature_mean is None or self.feature_std is None:
+            return X
+
+        if in_place:
+            X -= self.feature_mean
+            X /= self.feature_std
             return X
 
         return (X - self.feature_mean) / self.feature_std
@@ -1039,13 +1093,13 @@ class LoadPredictor:
         # On initial train: fit normalization from scratch
         # On fine-tune: apply EMA update to track distribution drift gradually
         if is_initial or not self.model_initialized:
-            X_train_norm = self._normalize_features(X_train, fit=True)
+            X_train_norm = self._normalize_features(X_train, fit=True, in_place=True)
             y_train_norm = self._normalize_targets(y_train, fit=True)
         else:
-            X_train_norm = self._normalize_features(X_train, fit=False, ema_alpha=norm_ema_alpha)
+            X_train_norm = self._normalize_features(X_train, fit=False, ema_alpha=norm_ema_alpha, in_place=True)
             y_train_norm = self._normalize_targets(y_train, fit=False)
             self.log("ML Predictor: Applied EMA normalization update (alpha={}) to track feature drift".format(norm_ema_alpha))
-        X_val_norm = self._normalize_features(X_val, fit=False)
+        X_val_norm = self._normalize_features(X_val, fit=False, in_place=True)
         y_val_norm = self._normalize_targets(y_val, fit=False)
 
         # Initialise weights if needed
