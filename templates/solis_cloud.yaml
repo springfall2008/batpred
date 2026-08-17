@@ -35,6 +35,15 @@ pred_bat:
   solis_automatic: true
   solis_control_enable: true
 
+  # Optional: your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per
+  # cell, NOT the live/resting battery voltage which varies with charge state). Needed for an
+  # accurate, stable battery_capacity sensor on batteries with a voltage other than the ~48V
+  # default. The max charge/discharge power sensors already use the live measured voltage
+  # automatically and don't need this set. Leave commented out and battery_capacity is still
+  # published, but estimated from the live voltage and flagged unreliable (reliable: false
+  # attribute, plus a log warning) since that value drifts with charge state - see soc_max below.
+  # solis_nominal_voltage: 512
+
   #
   # Inverter and battery sensors will be auto-configured from the Solis Cloud if solis_automatic is set to true and any entries in apps.yaml will be ignored
   #
@@ -50,7 +59,9 @@ pred_bat:
   # pv_power:
   #   - sensor.pv_power
 
-  # Right now Solis Cloud can't determine the battery capacity so set it here in kwh
+  # Solis Cloud does not report soc_max directly, so set it here in kwh (a sensor.*_battery_capacity
+  # entity is published for reference, most accurate once solis_nominal_voltage above is set, but
+  # it is not auto-bound to soc_max - set the value manually here)
   soc_max: 7.5
 
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter

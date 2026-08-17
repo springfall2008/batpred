@@ -29,6 +29,13 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+# GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
+# (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
+# reporter inverters, still repeating the write every cycle post-fix until added here.
+# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
+
 
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
@@ -1152,7 +1159,11 @@ class Inverter:
                 else:
                     search_range = range(99, 85, -1)
 
-                # Find 100% end points
+                # Find 100% end points. The exact-match checks below ("Charging" / "Exporting",
+                # "Discharging") deliberately exclude "Cross-charging" minutes - during genuine
+                # cross-charging another inverter is simultaneously drawing/feeding power at the
+                # same time, so this inverter's battery_power reading isn't a clean single-inverter
+                # charge/discharge sample and would corrupt the learned curve if included.
                 for data_point in search_range:
                     for minute in range(1, min_len):
                         # Start trigger is when the SoC just increased above the data point
@@ -1183,9 +1194,9 @@ class Inverter:
                             # Find a period where charging was at full rate and the SoC just drops below the data point
                             for target_minute in range(minute, min_len):
                                 this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) >= 0):
+                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
                                     break
-                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(minute, 0) < max_power_scaled or battery_power.get(minute, 0) <= 0):
+                                if discharge and (not ((predbat_status.get(target_minute, "") in ["Exporting", "Discharging"])) or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
                                     break
 
                                 if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
@@ -1231,8 +1242,10 @@ class Inverter:
 
                                     break
                                 else:
-                                    # Store data
-                                    total_power += abs(battery_power.get(minute, 0))
+                                    # Store data for this minute of the period, so total_power/total_count
+                                    # below is the mean power across the whole SoC step rather than the
+                                    # reading at the single minute the step was triggered on
+                                    total_power += abs(battery_power.get(target_minute, 0))
                                     total_count += 1
                 if final_curve:
                     # Average the data points
@@ -1479,10 +1492,23 @@ class Inverter:
             elif "charge_start_time" in self.base.args:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
+            elif self.rest_api:
+                # A REST data source (givtcp_rest) is configured but hasn't returned anything this
+                # cycle - genuinely transient (a fetch hiccup, or before the first poll on a fresh
+                # start, e.g. GivEnergy cloud "no devices"), so fall through to the same safe-defaults/
+                # retry-next-update handling below as a configured-but-currently-unusable value,
+                # rather than crashing the whole plan for something that should resolve itself.
+                charge_start_time = None
+                charge_end_time = None
             else:
-                self.log("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id))
-                self.base.record_status("Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id), had_errors=True)
-                raise ValueError
+                # Neither a REST API nor a charge_start_time config value is configured at all - a
+                # permanent setup gap, not something that will resolve on its own. Retrying every
+                # cycle forever would be misleading, so don't pretend to make a plan Predbat can't
+                # actually deliver (maintainer call on #4288/#4179 - see PR review discussion).
+                message = "Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id)
+                self.log(message)
+                self.base.record_status(message, had_errors=True)
+                raise ValueError(message)
 
             if charge_start_time is None or charge_end_time is None:
                 self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
@@ -2523,13 +2549,21 @@ class Inverter:
         if force_export:
             target_soc = int(self.reserve_percent)
             if self.rest_data and self.rest_v3:
-                current = self.rest_readDischargeTarget()
-                if current is None:
-                    self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
-                elif current != target_soc:
-                    self.rest_setDischargeTarget(target_soc)
+                # Some GivTCP inverter models don't have a working Discharge_Target_SOC_1 register -
+                # GivTCP still reports a write as successful, but it never persists between cycles, so
+                # the caller sees a permanent mismatch and rewrites indefinitely (#4517). See
+                # DISCHARGE_TARGET_UNSUPPORTED_MODELS above for what's confirmed vs inferred.
+                inverter_model = self.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+                if inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+                    self.log("Inverter {} is {}, discharge target register not supported, export target not written".format(self.id, inverter_model))
                 else:
-                    self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
+                    current = self.rest_readDischargeTarget()
+                    if current is None:
+                        self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
+                    elif current != target_soc:
+                        self.rest_setDischargeTarget(target_soc)
+                    else:
+                        self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
