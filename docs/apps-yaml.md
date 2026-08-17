@@ -814,6 +814,46 @@ When **deye_automatic** is set to `true`, Predbat will discover every battery in
 
 See [Components - DEYE Cloud API](components.md#deye-cloud-api-deye) for full details.
 
+### Sunsynk Cloud API
+
+**EXPERIMENTAL:** Nobody on the Predbat project has a Sunsynk account, so this integration's wire format is inferred from third-party open-source clients rather than documented, and every request/response is traced to the log by default so a tester can capture evidence for an issue report.
+
+Predbat includes support for Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect cloud API, providing direct cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required.
+
+#### Sunsynk Cloud Configuration
+
+Add your Sunsynk Connect account e-mail and password (the same login used by the Sunsynk phone app) to your `apps.yaml`:
+
+```yaml
+  sunsynk_username: 'you@example.com'
+  sunsynk_password: 'your-password'
+  sunsynk_region: 'sunsynk'
+  sunsynk_automatic: true
+  sunsynk_control_enable: false
+```
+
+**Note:** It's strongly recommended to store `sunsynk_username` and `sunsynk_password` in `secrets.yaml` and reference them as `!secret sunsynk_username` etc - see [Storing secrets](#storing-secrets).
+
+**Configuration options:**
+
+- `sunsynk_username` - Your Sunsynk Connect account e-mail address
+- `sunsynk_password` - Your Sunsynk Connect account password
+- `sunsynk_region` - The API region your account is registered in: `'sunsynk'` (default, `api.sunsynk.net`) or `'inteless'` (`pv.inteless.com`)
+- `sunsynk_auth_method` - The login flow: `'password'` (default, RSA-encrypted login), `'password_legacy'` (the pre-2025 plaintext login, opt-in for regions that still serve it) or `'oauth'` (Predbat.com injects and refreshes the token)
+- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
+- `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
+- `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
+- `sunsynk_control_enable` - Set to `true` to allow Predbat to write charge/export schedules to the inverter. Defaults to `false` - monitoring works immediately, but writes need this explicit opt-in until the wire format is confirmed against real hardware
+- `sunsynk_battery_nominal_voltage` - Optional override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target
+
+`sunsynk_auth_method: 'password'` never automatically falls back to `'password_legacy'` - if the RSA login fails, retry with `password_legacy` deliberately rather than have Predbat silently send your password in plaintext. `password_legacy` is still sent over TLS, but without the additional RSA encryption layer, so only choose it for a region whose API still serves the older login.
+
+Settings changes reach the inverter via the dongle's next poll, typically one to five minutes after Predbat writes them. Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is a single whole-object write endpoint, so the last writer wins.
+
+When **sunsynk_automatic** is set to `true`, Predbat will discover every inverter registered against your Sunsynk Connect account and automatically create and configure all required sensors and schedule control entities for each one - no manual entity configuration is required.
+
+See [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk) for full details, and [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the diagnostics CLI walkthrough.
+
 ### num_inverters
 
 The number of inverters you have. If you increase this above 1 you must provide multiple of each of the inverter entities

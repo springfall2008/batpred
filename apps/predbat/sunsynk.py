@@ -18,12 +18,14 @@ Three auth methods: ``password`` (RSA-encrypted login, the default), ``password_
 The RSA path never downgrades to the plaintext one — see ``fetch_token``.
 """
 
+import argparse
 import asyncio
 import hashlib
 import json
 import time
 import aiohttp
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from sunsynk_const import (
     SUNSYNK_REGIONS,
@@ -1327,3 +1329,73 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         await self.save_config()
         await self.save_ratings()
         await self.save_control()
+
+
+def _build_sunsynk(mock_base, args):  # pragma: no cover
+    """Construct a SunsynkAPI around a MockBase for standalone command-line use."""
+    client = SunsynkAPI(mock_base)
+    client.initialize(
+        username=args.username,
+        password=args.password,
+        region=args.region,
+        auth_method=args.auth_method,
+        # The CLI is the verification tool, so control is on - but run_cli still asks
+        # before it sends anything to a real inverter.
+        control_enable=True,
+        automatic=False,
+    )
+    return client
+
+
+async def run_cli(args):  # pragma: no cover
+    """Log in, dump what the account exposes, and optionally round-trip one write."""
+    mock_base = MockBase()
+    client = _build_sunsynk(mock_base, args)
+    print(f"Region {args.region} -> {client.base_url} (source={client.source}), auth={args.auth_method}")
+    if not await client.fetch_token():
+        print("Login FAILED. If your region still serves the older login, retry with --auth-method password_legacy.")
+        return
+    serials = [args.serial] if args.serial else await client.get_device_list()
+    print(f"Inverters: {serials}")
+    for sn in serials:
+        client.device_list = [sn]
+        print(f"\n--- {sn} detail ---")
+        print(json.dumps(await client.fetch_device_detail(sn), indent=2, default=str))
+        print(f"\n--- {sn} telemetry ---")
+        print(json.dumps(await client.fetch_device_data(sn), indent=2, default=str))
+        settings = await client.fetch_settings(sn)
+        if args.dump_settings:
+            print(f"\n--- {sn} settings ---")
+            print(json.dumps(settings, indent=2, default=str))
+        print(f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, rate_max={client.battery_rate_max(sn):.0f} W, floor={client.battery_reserve_min(sn)}%")
+        if args.write_test:
+            # A deliberately harmless schedule: a self-use day at the inverter's own floor.
+            schedule = {
+                "reserve": max(client.battery_reserve_min(sn), 10),
+                "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+                "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+            }
+            payload = client.build_settings_payload(sn, schedule, current_soc=50)
+            print(f"\n--- {sn} would write ---")
+            print(json.dumps(payload, indent=2, default=str))
+            confirm = input("Send this to the inverter? [y/N] ")
+            if confirm.strip().lower() == "y":
+                await client.apply_settings(sn, schedule, current_soc=50, force=True)
+                print("Written. Re-reading in 60 seconds is the only way to confirm the dongle collected it.")
+
+
+def main():
+    """Command-line entry point for Sunsynk diagnostics."""
+    parser = argparse.ArgumentParser(description="Sunsynk Cloud API diagnostics")
+    parser.add_argument("--username", required=True, help="Sunsynk Connect account e-mail")
+    parser.add_argument("--password", required=True, help="Sunsynk Connect account password")
+    parser.add_argument("--region", default="sunsynk", choices=sorted(SUNSYNK_REGIONS), help="API region")
+    parser.add_argument("--auth-method", default="password", choices=["password", "password_legacy"], help="Login flow: RSA-encrypted (default) or the pre-2025 plaintext one")
+    parser.add_argument("--serial", default=None, help="Restrict to one inverter serial")
+    parser.add_argument("--dump-settings", action="store_true", help="Print the full settings object")
+    parser.add_argument("--write-test", action="store_true", help="Build a harmless self-use payload and offer to send it")
+    asyncio.run(run_cli(parser.parse_args()))
+
+
+if __name__ == "__main__":
+    main()
