@@ -593,10 +593,21 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             window = schedule.get(direction, {})
             if not (window.get("enable") and window.get("start") and window.get("end")):
                 continue
+            start_time = self._to_slot_time(window["start"])
+            end_time = self._to_slot_time(window["end"])
+            if start_time == end_time:
+                # Mirrors the guard in _window_active: a zero-length window has no interval
+                # to act over. Compared on the NORMALISED times so "02:00:00" vs "02:00"
+                # is caught too. Without this, an enable event that arrives before the time
+                # fields (both still the "00:00:00" default) would add an action segment at
+                # 00:00 with no matching return-to-self-use segment - an unterminated,
+                # multi-hour full-power grid-charge/export slot even though _active_state
+                # correctly reports the window inactive.
+                continue
             intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
             intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
-            segments[self._to_slot_time(window["start"])] = self.derive_control_state(intent, current_soc)
-            segments.setdefault(self._to_slot_time(window["end"]), dict(idle))
+            segments[start_time] = self.derive_control_state(intent, current_soc)
+            segments.setdefault(end_time, dict(idle))
 
         slots = []
         for start_time, state in sorted(segments.items(), key=lambda item: item[0]):
@@ -639,14 +650,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             intent["charge"] = {"enable": True, "soc": charge.get("soc", 0), "power": charge.get("power", 0)}
         return self.derive_control_state(intent, current_soc)
 
-    def build_settings_payload(self, sn, schedule, current_soc, now_minutes=None):
-        """Build the full settings object to POST for one inverter.
+    def _owned_payload(self, sn, schedule, current_soc, now_minutes):
+        """Build only the fields Predbat owns, with ZERO network I/O.
 
-        Read-modify-write: start from the last-read settings so every field Predbat does
-        not own survives verbatim, then overwrite only the slots, mode and flags it does.
+        Pure in schedule, current_soc and now_minutes, plus the CACHED
+        battery_reserve_min(sn) - i.e. whatever settings were last read into
+        device_settings, not a fresh read - so apply_settings can call this on every tick
+        to check whether anything would actually change before paying for a real read. A
+        consequence: a floor change alone will not be noticed until the config tier next
+        refreshes device_settings for this serial (acceptable for an installer setting,
+        since build_settings_payload rebuilds and re-clamps against the fresh floor as
+        soon as a real read does happen - see apply_settings).
         """
-        if now_minutes is None:
-            now_minutes = self._now_minutes()
         slots = self.build_tou_slots(schedule, current_soc)
         active = self._active_state(schedule, current_soc, now_minutes)
 
@@ -665,9 +680,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 self._soc_floor_warned.add(sn)
                 self.log(f"Info: Sunsynk {sn} raising requested slot SOC to the inverter's {floor}% floor (batteryLowCap)")
 
-        payload = dict(self.device_settings.get(sn, {}))
-        payload[SUNSYNK_SERIAL_FIELD] = sn
-        payload[SUNSYNK_WORKMODE_FIELD] = active["work_mode"]
+        payload = {SUNSYNK_SERIAL_FIELD: sn, SUNSYNK_WORKMODE_FIELD: active["work_mode"]}
         payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1" if active["solar_sell"] else "0")
         payload[SUNSYNK_TOU_ENABLE_FIELD] = encode_setting(SUNSYNK_TOU_ENABLE_FIELD, "1")
         for day in SUNSYNK_DAY_FIELDS:
@@ -679,6 +692,27 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             payload[TOU_FIELD["grid_charge"].format(n=index)] = encode_setting(TOU_FIELD["grid_charge"].format(n=index), slot["grid_charge"])
         return payload
 
+    def build_settings_payload(self, sn, schedule, current_soc, now_minutes=None):
+        """Build the full settings object to POST for one inverter.
+
+        Read-modify-write: start from the last-read settings so every field Predbat does
+        not own survives verbatim, then overwrite only the slots, mode and flags it does.
+        Returns {} when self.device_settings holds no baseline for sn - a payload built
+        from an empty baseline would contain only the owned keys, and posting it would
+        drop every installer setting Predbat does not own. This is a public producer, not
+        just an apply_settings implementation detail, so the guard belongs here rather
+        than only in a caller - the same reasoning as the SOC clamp living at the API
+        boundary.
+        """
+        baseline = self.device_settings.get(sn)
+        if not baseline:
+            return {}
+        if now_minutes is None:
+            now_minutes = self._now_minutes()
+        payload = dict(baseline)
+        payload.update(self._owned_payload(sn, schedule, current_soc, now_minutes))
+        return payload
+
     def payloads_equal(self, a, b):
         """Compare two settings payloads for change detection."""
         return dict(a or {}) == dict(b or {})
@@ -686,15 +720,33 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     async def apply_settings(self, sn, schedule, current_soc, force=False):
         """Read, modify and write the settings object for one inverter.
 
-        Returns True if a write was performed. Fails closed: without a fresh read there is
-        no baseline to modify, so nothing is written rather than posting a payload that
-        would drop every field Predbat does not own.
+        Returns True if a write was performed. The owned-field diff is checked FIRST,
+        against _owned_payload (zero network I/O) and the owned subset of the last-applied
+        payload: a no-op tick therefore never touches the network at all, not even a
+        settings read - closing the race with the Sunsynk phone app tighter than reading
+        on every tick would, since now no read happens except immediately before an actual
+        write. Only when that diff (or force=True) says something would actually change
+        does this read the live settings, and it fails closed if that read comes back
+        empty: without a fresh baseline there is no way to build a payload that preserves
+        every field Predbat does not own.
         """
         if not self.control_enable:
             return False
 
-        # Re-read immediately before writing so the race with the Sunsynk phone app is as
-        # small as possible, and so unowned fields carry the newest values.
+        now_minutes = self._now_minutes()
+        owned = self._owned_payload(sn, schedule, current_soc, now_minutes)
+        applied = self.applied_payload.get(sn)
+        if applied and not force:
+            applied_owned = {key: applied.get(key) for key in owned}
+            if self.payloads_equal(owned, applied_owned):
+                # Nothing Predbat owns has changed, so skip the read entirely - there is
+                # nothing to write and therefore nothing to re-read a fresh baseline for.
+                return False
+
+        # Only reached on a genuine change (or force=True). Re-read immediately before
+        # writing so the race with the Sunsynk phone app is as small as possible, and so
+        # unowned fields - and the SOC floor the clamp above used a possibly-stale value
+        # for - carry the newest values.
         previous_settings = dict(self.device_settings.get(sn, {}))
         settings = await self.fetch_settings(sn)
         if not settings:
@@ -702,11 +754,9 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return False
         self.note_external_change(sn, previous_settings, settings)
 
-        payload = self.build_settings_payload(sn, schedule, current_soc)
-        previous = self.applied_payload.get(sn)
-        if previous and self.payloads_equal(previous, payload) and not force:
-            # Nothing changed, so do not churn the dongle. Track how long the read-back has
-            # disagreed; normal cloud-to-dongle latency is one to five minutes.
+        payload = self.build_settings_payload(sn, schedule, current_soc, now_minutes)
+        if not payload:
+            self.log(f"Warn: Sunsynk {sn} has no settings baseline to modify, skipping the write")
             return False
 
         # _post reports failure as None. A successful settings write carries no data
@@ -717,7 +767,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return False
         self.applied_payload[sn] = payload
         self.settle_count[sn] = 0
-        self.log(f"Info: Sunsynk {sn} settings written ({self._active_state(schedule, current_soc, self._now_minutes())['behaviour']})")
+        self.log(f"Info: Sunsynk {sn} settings written ({self._active_state(schedule, current_soc, now_minutes)['behaviour']})")
         return True
 
     def note_settle(self, sn, settings):
@@ -725,12 +775,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         A write is acknowledged by the cloud long before the dongle collects it, so
         divergence within SUNSYNK_SETTLE_POLLS cycles is normal latency, not a failure.
+        Both sides are decoded through encode_setting before comparing: Sunsynk is known to
+        hand the boolean fields (time{n}on) back as strings ("true"/"false", "1"/"0") as
+        often as bare booleans (see SUNSYNK_FALSE_STRINGS), and a raw str() comparison would
+        read that rendering difference as a permanent mismatch against a perfectly healthy
+        inverter, so settle_count would never reset and the warning would fire forever.
         """
         applied = self.applied_payload.get(sn)
         if not applied or not settings:
             return
         owned = [SUNSYNK_WORKMODE_FIELD] + [TOU_FIELD[c].format(n=n) for n in range(1, TOU_SLOT_COUNT + 1) for c in ("time", "soc", "grid_charge")]
-        if all(str(settings.get(key)) == str(applied.get(key)) for key in owned):
+        if all(encode_setting(key, settings.get(key)) == encode_setting(key, applied.get(key)) for key in owned):
             self.settle_count[sn] = 0
             return
         self.settle_count[sn] = self.settle_count.get(sn, 0) + 1
