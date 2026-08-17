@@ -537,6 +537,7 @@ typecodes
 tzfile
 tzpath
 unconfigured
+underivable
 undiscounted
 unnormalised
 unparseable

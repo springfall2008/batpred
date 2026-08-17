@@ -814,3 +814,199 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         changed = [key for key, value in after.items() if key not in owned and key in before and str(before[key]) != str(value)]
         if changed:
             self.log(f"Info: Sunsynk {sn} settings changed outside Predbat since the last read: {', '.join(sorted(changed))}")
+
+    def _sensor_name(self, sn, leaf):
+        """Return a namespaced Sunsynk sensor entity id."""
+        return f"sensor.{self.prefix}_sunsynk_{sn.lower()}_{leaf}"
+
+    def _control_name(self, domain, sn, leaf):
+        """Return a namespaced Sunsynk control entity id."""
+        return f"{domain}.{self.prefix}_sunsynk_{sn.lower()}_{leaf}"
+
+    async def publish_data(self):
+        """Publish monitoring sensors for each inverter."""
+        units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C", "battery_voltage": "V"}
+        for sn in self.device_list:
+            values = self.device_values.get(sn, {})
+            for leaf, unit in units.items():
+                if leaf in values:
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"Sunsynk {sn} {leaf.replace('_', ' ').title()}"}, app="sunsynk")
+
+            # Ratings are published only when actually derivable. An arg pointing at a
+            # sensor that never appears is worse than an absent arg, which the user can
+            # fill in via apps.yaml.
+            capacity = self.battery_capacity(sn)
+            if capacity > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_capacity"), state=round(capacity, 3), attributes={"unit_of_measurement": "kWh", "friendly_name": f"Sunsynk {sn} Battery Capacity"}, app="sunsynk")
+            rate_max = self.battery_rate_max(sn)
+            if rate_max > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_rate_max"), state=round(rate_max), attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Battery Rate Max"}, app="sunsynk")
+            rated_power = self.device_rated_power.get(sn, 0.0)
+            if rated_power > 0:
+                self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Inverter Limit"}, app="sunsynk")
+            floor = self.battery_reserve_min(sn)
+            if floor > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_reserve_min"), state=floor, attributes={"unit_of_measurement": "%", "friendly_name": f"Sunsynk {sn} Battery Reserve Min"}, app="sunsynk")
+
+            # Daily energy counters feed Predbat's load/import/export history learning.
+            # They reset at midnight; minute_data/clean_incrementing_reverse absorb that.
+            for leaf, value in self.device_energy.get(sn, {}).items():
+                self.dashboard_item(
+                    self._sensor_name(sn, leaf),
+                    state=value,
+                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": f"Sunsynk {sn} {leaf.replace('_', ' ').title()}"},
+                    app="sunsynk",
+                )
+
+    async def publish_schedule_settings_ha(self, sn):
+        """Publish the charge/export schedule control entities for one inverter."""
+        local = self.local_schedule.get(sn, {})
+        # Deliberately NOT clamped to the inverter floor. This entity is Predbat's control
+        # surface: it writes a value then reads it back to confirm (write_and_poll_value),
+        # so publishing anything other than what was written guarantees a mismatch and a
+        # retry storm. The floor is enforced at the API boundary in build_settings_payload.
+        self.dashboard_item(
+            self._control_name("number", sn, "battery_schedule_reserve"),
+            state=int(local.get("reserve", 0)),
+            attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"Sunsynk {sn} Battery Schedule Reserve", "icon": "mdi:gauge"},
+            app="sunsynk",
+        )
+        for direction in ("charge", "export"):
+            window = local.get(direction, {})
+            # HH:MM:SS to match INVERTER_DEF charge_time_format. Any other value makes
+            # Predbat replace these entities with its own dummies (inverter.py, the
+            # inv_charge_time_format != "HH:MM:SS" branch) and the window never arrives.
+            self.dashboard_item(
+                self._control_name("select", sn, f"battery_schedule_{direction}_start_time"),
+                state=window.get("start", "00:00:00"),
+                attributes={"friendly_name": f"Sunsynk {sn} {direction.title()} Start", "icon": "mdi:clock-outline"},
+                app="sunsynk",
+            )
+            self.dashboard_item(
+                self._control_name("select", sn, f"battery_schedule_{direction}_end_time"),
+                state=window.get("end", "00:00:00"),
+                attributes={"friendly_name": f"Sunsynk {sn} {direction.title()} End", "icon": "mdi:clock-outline"},
+                app="sunsynk",
+            )
+            self.dashboard_item(
+                self._control_name("number", sn, f"battery_schedule_{direction}_soc"),
+                state=int(window.get("soc", 0)),
+                attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": f"Sunsynk {sn} {direction.title()} SoC", "icon": "mdi:gauge"},
+                app="sunsynk",
+            )
+            self.dashboard_item(
+                self._control_name("number", sn, f"battery_schedule_{direction}_power"),
+                state=int(window.get("power", 0)),
+                attributes={"min": 0, "max": 20000, "step": 100, "unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} {direction.title()} Power", "icon": "mdi:flash"},
+                app="sunsynk",
+            )
+            self.dashboard_item(
+                self._control_name("switch", sn, f"battery_schedule_{direction}_enable"),
+                state="on" if window.get("enable") else "off",
+                attributes={"friendly_name": f"Sunsynk {sn} {direction.title()} Enable", "icon": "mdi:check-circle-outline"},
+                app="sunsynk",
+            )
+        self.dashboard_item(self._control_name("switch", sn, "battery_schedule_charge_write"), state="off", attributes={"friendly_name": f"Sunsynk {sn} Schedule Write", "icon": "mdi:content-save"}, app="sunsynk")
+
+    async def get_schedule_settings_ha(self, sn):
+        """Read the control entities into the schedule shape control derivation consumes.
+
+        Numeric casts route through _as_float so an entity legitimately reporting
+        "unknown"/"unavailable" — for instance right after a HA restart, before Predbat
+        republishes — falls back to 0 rather than raising and killing the control loop.
+        """
+        schedule = {"reserve": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_reserve"), default=0), 0))}
+        for direction in ("charge", "export"):
+            schedule[direction] = {
+                "enable": self.get_state_wrapper(self._control_name("switch", sn, f"battery_schedule_{direction}_enable"), default="off") == "on",
+                "start": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_start_time"), default="00:00:00"),
+                "end": self.get_state_wrapper(self._control_name("select", sn, f"battery_schedule_{direction}_end_time"), default="00:00:00"),
+                "soc": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_soc"), default=0), 0)),
+                "power": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, f"battery_schedule_{direction}_power"), default=0), 0)),
+            }
+        self.local_schedule[sn] = schedule
+        return schedule
+
+    def _sn_from_entity(self, entity_id):
+        """Extract the inverter serial from a Sunsynk entity id, or None if unresolvable.
+
+        Entity ids are always {domain}.{prefix}_sunsynk_{sn}_{leaf}, so the serial is
+        always followed by "_". Matching sn + "_" rather than a bare prefix keeps
+        prefix-colliding serials apart — an entity for INV11 must never route to INV1,
+        which would send a control write to the wrong inverter.
+        """
+        text = str(entity_id).lower()
+        for sn in self.device_list:
+            if f"_sunsynk_{sn.lower()}_" in text:
+                return sn
+        return None
+
+    @staticmethod
+    def _to_bool(value, current=False):
+        """Coerce a switch service or state to a boolean, keeping current when unknown."""
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("turn_on", "on", "true", "1"):
+            return True
+        if text in ("turn_off", "off", "false", "0"):
+            return False
+        if text == "toggle":
+            return not current
+        return current
+
+    def update_local_schedule(self, sn, entity_id, value):
+        """Apply one control-entity change to the locally held schedule."""
+        schedule = self.local_schedule.setdefault(sn, {"reserve": 0, "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}, "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}})
+        leaf = str(entity_id).split(f"_sunsynk_{sn.lower()}_", 1)[-1]
+        if leaf == "battery_schedule_reserve":
+            schedule["reserve"] = int(self._as_float(value, 0))
+            return
+        for direction in ("charge", "export"):
+            prefix = f"battery_schedule_{direction}_"
+            if not leaf.startswith(prefix):
+                continue
+            field = leaf[len(prefix) :]
+            window = schedule.setdefault(direction, {})
+            if field in ("start_time", "end_time"):
+                window[field.replace("_time", "")] = str(value)
+            elif field in ("soc", "power"):
+                window[field] = int(self._as_float(value, 0))
+            elif field == "enable":
+                window["enable"] = self._to_bool(value, window.get("enable", False))
+            return
+
+    async def apply_schedule(self, sn, force=False):
+        """Apply the locally held schedule for one inverter."""
+        schedule = self.local_schedule.get(sn)
+        if not schedule:
+            return False
+        current_soc = int(self._as_float(self.device_values.get(sn, {}).get("soc"), 0))
+        return await self.apply_settings(sn, schedule, current_soc, force=force)
+
+    async def _handle_control_event(self, entity_id, value):
+        """Route one control-entity event to the right inverter and apply it."""
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            self.log(f"Warn: Sunsynk could not resolve an inverter for {entity_id}")
+            return
+        # The write button forces an apply; everything else updates state and lets the
+        # normal diff-gated write in run() pick it up.
+        if str(entity_id).endswith("battery_schedule_charge_write"):
+            if self._to_bool(value):
+                await self.apply_schedule(sn, force=True)
+            return
+        self.update_local_schedule(sn, entity_id, value)
+        await self.publish_schedule_settings_ha(sn)
+
+    async def select_event(self, entity_id, value):
+        """Handle a select entity change."""
+        await self._handle_control_event(entity_id, value)
+
+    async def number_event(self, entity_id, value):
+        """Handle a number entity change."""
+        await self._handle_control_event(entity_id, value)
+
+    async def switch_event(self, entity_id, service):
+        """Handle a switch entity service call."""
+        await self._handle_control_event(entity_id, service)
