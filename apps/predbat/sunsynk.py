@@ -635,14 +635,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             export_soc = int(export.get("soc", FREEZE_EXPORT_SOC))
             behaviour = "freeze_export" if export_soc >= FREEZE_EXPORT_SOC else "export"
             slot_soc = FREEZE_EXPORT_SOC if export_soc >= FREEZE_EXPORT_SOC else export_soc
-            return {"behaviour": behaviour, "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": slot_soc, "power": int(export.get("power", 0))}
+            # Zero power IS the freeze: selling-first with no power holds the battery while
+            # surplus solar still exports.
+            power = 0 if behaviour == "freeze_export" else int(export.get("power", 0))
+            return {"behaviour": behaviour, "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": slot_soc, "power": power}
 
         if charge.get("enable"):
             charge_soc = int(charge.get("soc", 0))
             if charge_soc > current_soc and charge_soc > reserve:
                 return {"behaviour": "charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
             if charge_soc == reserve:
-                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+                # Zero power IS the freeze: the slot is enabled for grid charge but given no
+                # power, so the battery neither charges nor discharges and simply holds.
+                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": 0}
             return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
         return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
@@ -684,15 +689,21 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return start <= now_minutes < end
         return now_minutes >= start or now_minutes < end
 
-    def _self_use_slot(self, start_time, reserve):
-        """Build a self-use slot holding at the reserve SOC."""
-        return {"time": start_time, "power": 0, "soc": int(reserve), "grid_charge": False}
+    def _self_use_slot(self, start_time, reserve, self_use_power):
+        """Build a self-use slot holding at the reserve SOC.
+
+        self_use_power must NOT be zero. Zero power is how Sunsynk expresses a freeze - the
+        battery neither charges nor discharges - so a zero-power self-use slot would stop
+        the battery serving the house for the whole interval and push the load onto the
+        grid. Self-use slots cover most of the day, so this is the default state.
+        """
+        return {"time": start_time, "power": int(self_use_power), "soc": int(reserve), "grid_charge": False}
 
     def _action_slot(self, start_time, state):
         """Build a slot realising a derived control state."""
         return {"time": start_time, "power": int(state["power"]), "soc": int(state["slot_soc"]), "grid_charge": bool(state["grid_charge"])}
 
-    def build_tou_slots(self, schedule, current_soc):
+    def build_tou_slots(self, schedule, current_soc, self_use_power):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
 
         Slots are sequential intervals ("from this start until the next slot's start") and
@@ -732,14 +743,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
                 slots.append(self._action_slot(start_time, state))
             else:
-                slots.append(self._self_use_slot(start_time, reserve))
+                slots.append(self._self_use_slot(start_time, reserve, self_use_power))
 
         used = {slot["time"] for slot in slots}
         for filler in TOU_FILLER_TIMES:
             if len(slots) >= TOU_SLOT_COUNT:
                 break
             if filler not in used:
-                slots.append(self._self_use_slot(filler, reserve))
+                slots.append(self._self_use_slot(filler, reserve, self_use_power))
                 used.add(filler)
         return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
 
@@ -780,7 +791,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         since build_settings_payload rebuilds and re-clamps against the fresh floor as
         soon as a real read does happen - see apply_settings).
         """
-        slots = self.build_tou_slots(schedule, current_soc)
+        # Self-use slots get the inverter's full rating so the battery is free to serve
+        # whatever the house draws. Zero would freeze it (see _self_use_slot); if the rating
+        # is unknown, fall back to the largest slot power already on the inverter rather
+        # than write a freeze by accident.
+        self_use_power = int(self.inverter_limit(sn)) or self._existing_slot_power(sn)
+        if not self_use_power:
+            self.log(f"Warn: Sunsynk {sn} has no inverter rating and no existing slot power, so self-use slots would be written with zero power (a freeze); skipping the write")
+            return {}
+        slots = self.build_tou_slots(schedule, current_soc, self_use_power)
         active = self._active_state(schedule, current_soc, now_minutes)
 
         # Never ask the battery to go below the floor its own installer settings declare.
@@ -846,6 +865,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         payload = dict(baseline)
         payload.update(self._owned_payload(sn, schedule, current_soc, now_minutes))
         return payload
+
+    def _existing_slot_power(self, sn):
+        """Return the largest per-slot power already set on the inverter, or 0 if none.
+
+        Used only as a fallback for self-use slots when the inverter rating is unknown -
+        writing zero there would freeze the battery, so reusing whatever the installer
+        already had is strictly better than that.
+        """
+        settings = self.device_settings.get(sn, {})
+        powers = [self._as_float(settings.get(TOU_FIELD["power"].format(n=n))) for n in range(1, TOU_SLOT_COUNT + 1)]
+        return int(max(powers)) if powers and max(powers) > 0 else 0
 
     def payloads_equal(self, a, b):
         """Compare two settings payloads for change detection."""

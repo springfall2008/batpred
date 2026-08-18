@@ -35,6 +35,7 @@ def test_derive_control_state_table():
     """Each Predbat intent maps to the work mode and flags the spec's table requires."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     cases = [
         ("charge", _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000}), 50, ("charge", SUNSYNK_WORKMODE["zero_export_ct"], True, False, 90)),
         ("freeze_charge", _schedule(reserve=50, charge={"enable": True, "soc": 50, "power": 3000}), 50, ("freeze_charge", SUNSYNK_WORKMODE["zero_export_ct"], True, False, 50)),
@@ -56,8 +57,9 @@ def test_build_tou_slots_shape():
     """A charge window yields exactly 6 slots with distinct ascending times from 00:00."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
-    slots = s.build_tou_slots(schedule, current_soc=40)
+    slots = s.build_tou_slots(schedule, current_soc=40, self_use_power=8000)
     if len(slots) != TOU_SLOT_COUNT:
         print(f"ERROR: expected {TOU_SLOT_COUNT} slots, got {len(slots)}")
         failed = True
@@ -82,8 +84,9 @@ def test_build_tou_slots_seconds_are_dropped():
     """Entity times carry seconds (HH:MM:SS); slots must be HH:MM."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:30:00", "end": "05:45:00"})
-    times = [slot["time"] for slot in s.build_tou_slots(schedule, current_soc=40)]
+    times = [slot["time"] for slot in s.build_tou_slots(schedule, current_soc=40, self_use_power=8000)]
     for time_text in times:
         if len(time_text) != 5 or time_text.count(":") != 1:
             print(f"ERROR: slot time {time_text!r} is not HH:MM")
@@ -98,7 +101,8 @@ def test_build_tou_slots_idle_is_still_six_distinct():
     """An empty schedule still yields six distinct self-use slots."""
     failed = False
     s = MockSunsynk()
-    slots = s.build_tou_slots(_schedule(reserve=15), current_soc=50)
+    s.device_rated_power["INV1"] = 8000.0
+    slots = s.build_tou_slots(_schedule(reserve=15), current_soc=50, self_use_power=8000)
     times = [slot["time"] for slot in slots]
     if len(set(times)) != TOU_SLOT_COUNT:
         print(f"ERROR: idle schedule produced {len(set(times))} distinct times: {times}")
@@ -125,12 +129,13 @@ def test_build_tou_slots_zero_length_window_has_no_effect():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     cases = [
         _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "00:00:00", "end": "00:00:00"}),
         _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "02:00"}),
     ]
     for schedule in cases:
-        slots = s.build_tou_slots(schedule, current_soc=40)
+        slots = s.build_tou_slots(schedule, current_soc=40, self_use_power=8000)
         if any(slot["grid_charge"] for slot in slots):
             print(f"ERROR: a zero-length window produced a grid-charge slot: {slots}")
             failed = True
@@ -151,6 +156,7 @@ def test_active_window_drives_the_global_mode():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(
         reserve=10,
@@ -179,6 +185,7 @@ def test_window_active_handles_midnight_wrap():
     """A window running past midnight is active on both sides of it."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     window = {"enable": True, "start": "23:00", "end": "02:00"}
     for minutes, expect in ((23 * 60 + 30, True), (60, True), (12 * 60, False), (22 * 60, False)):
         got = s._window_active(window, minutes)
@@ -196,6 +203,7 @@ def test_payload_renders_indexed_fields_and_types():
     """Slots become sellTimeN/capN/timeNon with the right wire types."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
@@ -234,6 +242,7 @@ def test_payload_preserves_unowned_settings():
     """Read-modify-write leaves every field Predbat does not own exactly as it was."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {
         "sn": "INV1",
         "batteryShutdownCap": "5",
@@ -267,6 +276,7 @@ def test_payload_clamps_to_the_inverter_soc_floor():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"batteryLowCap": "20"}
     # Predbat's control entities start at 0 and only reach real values once written.
     schedule = _schedule(reserve=0, charge={"enable": True, "soc": 5, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
@@ -292,6 +302,7 @@ def test_build_settings_payload_returns_empty_without_a_baseline():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
     if payload != {}:
@@ -304,6 +315,7 @@ def test_payloads_equal_ignores_nothing_material():
     """Change detection sees a real difference and ignores an identical rewrite."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     first = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
@@ -323,6 +335,7 @@ def test_apply_settings_skips_an_unchanged_payload():
     """An unchanged plan does not re-post, so the dongle is not churned every cycle."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     posts = []
 
     async def fake_get(endpoint_key, sn=None, params=None):
@@ -360,6 +373,7 @@ def test_apply_settings_noop_ticks_perform_no_io():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     gets = []
     posts = []
 
@@ -395,6 +409,7 @@ def test_apply_settings_changed_plan_performs_one_get_and_one_post():
     """A genuine change in the plan costs exactly one read and one write, not more."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     gets = []
     posts = []
 
@@ -432,6 +447,7 @@ def test_apply_settings_ignores_a_volatile_unowned_field():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     posts = []
     tick = [0]
 
@@ -459,6 +475,7 @@ def test_apply_settings_fails_closed_without_a_read():
     """If the settings read fails, nothing is written — the write baseline is unknown."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     posts = []
 
     async def fake_get_empty(endpoint_key, sn=None, params=None):
@@ -486,6 +503,7 @@ def test_apply_settings_respects_control_enable():
     """With control disabled, the component derives but never writes."""
     failed = False
     s = MockSunsynk(control_enable=False)
+    s.device_rated_power["INV1"] = 8000.0
     posts = []
 
     async def fake_get(endpoint_key, sn=None, params=None):
@@ -516,6 +534,7 @@ def test_apply_settings_skips_when_the_payload_is_empty():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     posts = []
 
     async def fake_get(endpoint_key, sn=None, params=None):
@@ -548,6 +567,7 @@ def test_apply_settings_reports_a_failed_write():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
 
     async def fake_get(endpoint_key, sn=None, params=None):
         """Return a minimal settings object."""
@@ -593,6 +613,7 @@ def test_note_settle_normalises_wire_types_before_comparing():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     applied = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
@@ -623,6 +644,7 @@ def _settled_baseline():
     it to exercise one field at a time.
     """
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     applied = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
@@ -765,6 +787,7 @@ def test_external_changes_are_logged():
     """A setting changed outside Predbat is reported, not silently overwritten."""
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     before = {"sn": "INV1", "batteryLowCap": "10", "zeroExportPower": "20", "cap1": "50"}
     after = {"sn": "INV1", "batteryLowCap": "10", "zeroExportPower": "80", "cap1": "95"}
     s.note_external_change("INV1", before, after)
@@ -796,6 +819,7 @@ def test_solar_export_is_never_disabled():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
     charge = {"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"}
     export = {"enable": True, "soc": 20, "power": 3000, "start": "16:00:00", "end": "19:00:00"}
@@ -824,6 +848,7 @@ def test_non_export_states_use_limited_to_home():
     """
     failed = False
     s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
     charge = {"enable": True, "soc": 95, "power": 3000}
     cases = [
         ("charge", _schedule(reserve=10, charge=charge), 50, "zero_export_ct"),
@@ -845,6 +870,55 @@ def test_non_export_states_use_limited_to_home():
     assert not failed, "test_non_export_states_use_limited_to_home"
 
 
+def test_self_use_slots_are_never_zero_power():
+    """A zero-power self-use slot would freeze the battery for most of the day.
+
+    Zero power is how Sunsynk expresses a freeze - the battery neither charges nor
+    discharges. Self-use slots cover every interval Predbat is not actively charging or
+    exporting, so writing zero there would stop the battery serving the house and push the
+    load onto the grid as the DEFAULT state.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "20", "pvMaxLimit": "7000"}
+    sched = _schedule(reserve=20, charge={"enable": True, "soc": 90, "power": 3000, "start": "03:00:00", "end": "04:00:00"})
+    payload = s.build_settings_payload("INV1", sched, current_soc=38, now_minutes=22 * 60)
+    for n in range(1, TOU_SLOT_COUNT + 1):
+        power = int(payload[TOU_FIELD["power"].format(n=n)])
+        charging = payload[TOU_FIELD["grid_charge"].format(n=n)]
+        if not charging and power <= 0:
+            print(f"ERROR: self-use slot {n} at {payload[TOU_FIELD['time'].format(n=n)]} has power {power} - that freezes the battery")
+            failed = True
+    # The charge slot carries the requested charge power, not the self-use power.
+    charge_slots = [n for n in range(1, TOU_SLOT_COUNT + 1) if payload[TOU_FIELD["grid_charge"].format(n=n)]]
+    if not charge_slots or int(payload[TOU_FIELD["power"].format(n=charge_slots[0])]) != 3000:
+        print(f"ERROR: charge slot should carry 3000W, got {[payload[TOU_FIELD['power'].format(n=n)] for n in charge_slots]}")
+        failed = True
+    assert not failed, "test_self_use_slots_are_never_zero_power"
+
+
+def test_freeze_states_are_expressed_as_zero_power():
+    """Freeze charge and freeze export are expressed by zero slot power."""
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    freeze_charge = s.derive_control_state(_schedule(reserve=50, charge={"enable": True, "soc": 50, "power": 3000}), 50)
+    if freeze_charge["behaviour"] != "freeze_charge" or freeze_charge["power"] != 0:
+        print(f"ERROR: freeze_charge should have power 0, got {freeze_charge}")
+        failed = True
+    freeze_export = s.derive_control_state(_schedule(reserve=10, export={"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000}), 80)
+    if freeze_export["behaviour"] != "freeze_export" or freeze_export["power"] != 0:
+        print(f"ERROR: freeze_export should have power 0, got {freeze_export}")
+        failed = True
+    # A real export still carries its requested power.
+    real_export = s.derive_control_state(_schedule(reserve=10, export={"enable": True, "soc": 20, "power": 2500}), 80)
+    if real_export["power"] != 2500:
+        print(f"ERROR: a real export should keep its 2500W, got {real_export['power']}")
+        failed = True
+    assert not failed, "test_freeze_states_are_expressed_as_zero_power"
+
+
 def run_sunsynk_control_tests(my_predbat):
     """Run all Sunsynk control-logic tests."""
     failed = False
@@ -852,6 +926,8 @@ def run_sunsynk_control_tests(my_predbat):
         ("derive_state_table", test_derive_control_state_table),
         ("non_export_mode", test_non_export_states_use_limited_to_home),
         ("tou_slots_shape", test_build_tou_slots_shape),
+        ("self_use_never_zero", test_self_use_slots_are_never_zero_power),
+        ("freeze_zero_power", test_freeze_states_are_expressed_as_zero_power),
         ("tou_slots_seconds", test_build_tou_slots_seconds_are_dropped),
         ("tou_slots_idle", test_build_tou_slots_idle_is_still_six_distinct),
         ("tou_slots_zero_length_window", test_build_tou_slots_zero_length_window_has_no_effect),
