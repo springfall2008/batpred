@@ -55,14 +55,14 @@ the month-by-month table and chart.
 It is robust because it reads the real solar curve for the missing months instead of
 assuming the anchors implied it.
 
-### What this evidence does not cover
+### Confirmed against Agile and Cosy
 
-Three runs, two distinct system configurations, one location, one year, and one tariff:
-Octopus Intelligent Go. That tariff is nearly rate-flat across the year — monthly mean
-import 16.3p to 18.1p, export fixed at 15p — so **no rate seasonality was exercised at
-all**. Agile, whose winter price spikes are precisely the seasonality four anchors might
-miss, is untested. Closing that gap is the first implementation step, and the design
-keeps the door open for a rate term if the gap turns out to matter.
+The three runs above are all Octopus Intelligent Go, which is nearly rate-flat across the
+year, so they exercised no rate seasonality. Two further twelve month references were run
+to close that gap — Octopus Agile (monthly mean import 17.7p to 29.3p, a 66% spread) and
+Octopus Cosy — on an identical system, varying only the import tariff. A third Agile
+reference at `samples_per_month: 6` provides a lower-noise ground truth. See
+[Curve selection results](#curve-selection-results).
 
 ## Design
 
@@ -159,8 +159,9 @@ next to the search that planning runs; keeping all twelve buys three things:
    runs. Because it needs tariff data, it is attached in `run()` rather than inside the
    pure module, using the 15th of the month as the representative day — the planned path
    uses its first sampled day for the same purpose.
-3. If the Agile reference shows solar-affine cannot absorb rate seasonality, the
-   `+ c · mean_rate` term is already fetchable without redesigning the mode.
+3. It leaves a mean-rate regressor available without redesigning the mode. That term was
+   tested and rejected — see [Curve selection results](#curve-selection-results) — so this
+   is now the weakest of the three reasons, but the first two stand on their own.
 
 ### What `run()` does
 
@@ -205,8 +206,11 @@ the mode; excluding them would report a four month year. The `annual` block gain
 `"fast_mode": True` and `"months_interpolated"`, so a stored run can never be mistaken for
 a full one after the fact.
 
-A caveat states the measured accuracy rather than implying none: annual savings land
-within roughly 1.5%, individual months within roughly 12% typically and worse in the tails.
+A caveat states the measured accuracy rather than implying none. Interpolation itself
+contributes **under 1%** to annual savings, and individual months land within roughly 10-13%
+typically, worse in the tails. The caveat must not promise better than the underlying run
+delivers, though: on a high day-to-day variance tariff such as Agile the sampled anchors
+carry roughly 8-18% of their own error, which fast mode inherits and a full run has too.
 
 ### Web UI
 
@@ -225,20 +229,61 @@ within roughly 1.5%, individual months within roughly 12% typically and worse in
 downloads and headless Predbat construction are fixed overhead that does not shrink, so
 the realistic figure is **about 2.5× faster**, not a clean 3×. The docs should say 2.5×.
 
-## Selecting the curve
+## Curve selection results
 
-The first implementation step, before the default is fixed:
+Five twelve month references were scored: three Intelligent Go, one Cosy, one Agile, plus
+an Agile run at six samples per month as a lower-noise ground truth. **`solar_affine` is
+confirmed as the default and the mean-rate term is rejected.**
 
-1. Run fresh twelve month CLI references on **Agile import** and on **one banded tariff**
-   (Cosy or Flux), with the same system config, so the two tariff families are directly
-   comparable. Both APIs are reachable from the dev environment.
-2. Score every candidate — `solar_affine`, `linear`, `fourier`, and `solar_affine` plus a
-   mean-rate term — against those two references and the three Intelligent Go runs, on
-   annual cost, savings, and per-month error.
-3. If a rate term materially improves Agile, note that four anchors give four equations, so
-   a three-parameter fit has one degree of freedom spare and overfitting is a real risk that
-   the scoring must measure rather than assume away.
-4. Record the resulting table in this document and set `DEFAULT_BASIS` from it.
+### The rate term overfits and is rejected
+
+Scored against the noisy references, `solar_affine + mean_rate` looked like the winner: it
+halved Agile's annual error, from 16.4% to 8.9%. Leave-one-anchor-out cross-validation —
+fit on three anchors, predict the withheld fourth — shows why that was an illusion:
+
+| Reference | `linear` | `solar_affine` | `solar_affine + rate` |
+|---|---|---|---|
+| Agile (6 sample) | 54.7% | **37.6%** | 361.9% |
+| Cosy | 39.5% | **18.3%** | 50.9% |
+
+Four anchors against three parameters leaves one degree of freedom, and the model spends it
+fitting noise. Against the *clean* Agile reference it is also worse than plain
+`solar_affine` on the figure that matters: +3.62% savings error versus +0.09%. Its gain on
+noisy references was absorbing that noise, not modelling signal. The same cross-validation
+confirms `solar_affine` beats `linear` decisively on generalisation, matching its per-month
+advantage on all five references.
+
+Rates are still fetched for all twelve months, for the unavailable-month and export-credit
+reasons above — those stand on their own and do not depend on a rate regressor.
+
+### Fast mode's own error is very small
+
+Decomposing Agile's error against the six-sample reference separates what fast mode causes
+from what it inherits:
+
+| | System saving error | Predbat saving error |
+|---|---|---|
+| A. Full 12 months at 2 samples (**today's tool, no fast mode**) | −8.47% | +17.83% |
+| B. Fast mode from those same 2-sample anchors | −8.08% | +16.83% |
+| C. Fast mode from clean anchors (**curve error alone**) | **+0.09%** | **−0.73%** |
+
+Row C is the curve's actual contribution: **well under 1%**. Row B is indistinguishable
+from row A — fast mode inherits the sampling noise already present in the anchors rather
+than adding error of its own. The earlier reading, that "Agile breaks fast mode", was an
+artefact of scoring against a reference that was itself noisy.
+
+### Pre-existing finding: sampling noise on volatile tariffs
+
+Row A is not about fast mode at all and deserves separate attention: **today's twelve month
+WhatIf run is already 8–18% off on Agile** at the default two samples per month. Raising to
+six samples does not converge it — individual months still move by up to 218 p/day between
+the two runs, and June remains a large negative outlier in both. Agile's day-to-day price
+variance is simply too high for a handful of sampled days to characterise a month.
+
+This is a limitation of the existing sampling design, not of interpolation, and fixing it is
+out of scope here. It is recorded because it bounds what fast mode can be held to: on a
+volatile tariff, neither mode is accurate to better than roughly 10%, and the caveat text
+should not imply otherwise.
 
 The scoring harness is committed under `apps/predbat/tests/` so the curve can be
 re-validated when new reference runs appear, rather than living as a throwaway script. The
@@ -246,7 +291,7 @@ reference runs themselves are large and site-specific, so they are not committed
 one reduced fixture — months, scenarios and monthly PV only, no plans, no location — is
 committed per tariff family and asserts the chosen basis still beats the alternatives on it.
 The harness additionally accepts a directory of full reference runs via an environment
-variable and scores those when present, which is how the selection in step 2 is performed.
+variable and scores those when present, which is how the selection above was performed.
 Absent both, the test skips rather than failing, so a checkout without fixtures stays green.
 
 ## Testing
