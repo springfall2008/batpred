@@ -281,6 +281,22 @@ Sunsynk exposes six time-of-use slots as flat indexed fields. Slots are sequenti
 intervals — each runs from its own start time until the next slot's start — so all six
 start times must be distinct and ascending, the same constraint DEYE has.
 
+Since confirmed by Sunsynk's own documentation, "Avoiding conflicts in the System Mode
+timer": the six slots are sequential chronological intervals, each running until the next
+begins, and "Timers MUST be set chronologically from Timer 1 to Timer 6". Timer 6 is the
+only one permitted to roll over midnight and continue until Timer 1 restarts.
+
+The same article settles a question the API alone could not: a slot is an interval
+regardless of its grid-charge flag — the documented factory default runs all six timers as
+ranges with Grid Charge ticked on only two. That is what makes the filler padding work, since
+a filler slot with grid charge off still terminates the charge window before it. Had the
+opposite been true (only grid-charge-enabled slots being active), a Predbat charge window
+would never have handed over and would have grid-charged for 24 hours.
+
+An inverter can nonetheless be found sitting with all six slots at 00:00, which the API
+stores happily. That is an unconfigured default rather than a valid programme, so no
+conclusion about legal schedules follows from it.
+
 The component derives six ordered slots from Predbat's charge and export windows using
 the same segment-boundary approach as `deye.py`'s `build_tou_slots()`: start from a
 baseline self-use segment at `00:00`, add a segment at each enabled window's start and
