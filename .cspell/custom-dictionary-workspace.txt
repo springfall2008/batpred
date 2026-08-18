@@ -474,6 +474,7 @@ solisx
 sourcery
 Southwell
 sparkline
+Speshman
 springfall
 starthour
 startminute

@@ -374,6 +374,58 @@ def test_fetch_config_options(my_predbat):
     # Restore num_cars for any tests appended after this one
     mock_config.config["num_cars"] = 2
 
+    # Test 15: octopus_intelligent_limit_future_slots warns when octopus_intelligent_consider_full
+    # is off (#4482) - the switch would otherwise have nothing to act on, since
+    # load_octopus_slots() never zeroes out unneeded future slots without consider_full also on.
+    # Runs here, before the mocks are restored below, since it needs my_predbat.get_arg still
+    # pointed at mock_config to control octopus_intelligent_limit_future_slots/consider_full.
+    print("\n*** Test 15: octopus_intelligent_limit_future_slots warns without consider_full ***")
+
+    original_log = my_predbat.log
+    log_messages = []
+    my_predbat.log = lambda message: log_messages.append(message)
+
+    mock_config.config["octopus_intelligent_limit_future_slots"] = True
+    mock_config.config["octopus_intelligent_charging"] = True
+    mock_config.config["octopus_intelligent_consider_full"] = False
+
+    my_predbat.had_errors = False
+    my_predbat.fetch_config_options()
+
+    detailed_warnings = [msg for msg in log_messages if "has nothing to act on" in msg]
+    assert len(detailed_warnings) == 1, "Should log the detailed warning exactly once, got {}".format(len(detailed_warnings))
+    assert my_predbat.had_errors is True, "Missing consider_full with limit_future_slots on should flag had_errors via record_status"
+
+    # Turning on octopus_intelligent_consider_full should silence the warning
+    log_messages.clear()
+    mock_config.config["octopus_intelligent_consider_full"] = True
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    detailed_warnings = [msg for msg in log_messages if "has nothing to act on" in msg]
+    assert len(detailed_warnings) == 0, "Should not warn once octopus_intelligent_consider_full is on, got {}".format(detailed_warnings)
+    assert my_predbat.had_errors is False, "Should not flag had_errors once octopus_intelligent_consider_full is on"
+
+    # Switch off should also silence the warning even without consider_full configured
+    mock_config.config["octopus_intelligent_consider_full"] = False
+    mock_config.config["octopus_intelligent_limit_future_slots"] = False
+    log_messages.clear()
+    my_predbat.had_errors = False
+
+    my_predbat.fetch_config_options()
+
+    detailed_warnings = [msg for msg in log_messages if "has nothing to act on" in msg]
+    assert len(detailed_warnings) == 0, "Should not warn when octopus_intelligent_limit_future_slots is off, got {}".format(detailed_warnings)
+    assert my_predbat.had_errors is False, "Should not flag had_errors when octopus_intelligent_limit_future_slots is off"
+
+    my_predbat.log = original_log
+    my_predbat.had_errors = False
+    mock_config.config["octopus_intelligent_limit_future_slots"] = False
+    mock_config.config["octopus_intelligent_consider_full"] = False
+
+    print("✓ octopus_intelligent_limit_future_slots warning test passed")
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times
@@ -384,11 +436,11 @@ def test_fetch_config_options(my_predbat):
     my_predbat.expose_config = original_expose_config
     my_predbat.args = original_args
 
-    # Test 15: get_car_charging_planned resolves all 8 supported cars against the real
+    # Test 16: get_car_charging_planned resolves all 8 supported cars against the real
     # CONFIG_ITEMS/config_index (not the MockConfigProvider above) - this is the exact code path
     # that crashed with TypeError: float() argument must be a string or a real number, not
     # 'NoneType' when num_cars exceeded the number of car_charging_rate_N entities defined.
-    print("\n*** Test 15: get_car_charging_planned resolves all 8 cars via real config_index ***")
+    print("\n*** Test 16: get_car_charging_planned resolves all 8 cars via real config_index ***")
 
     original_num_cars = my_predbat.num_cars
     my_predbat.num_cars = 8
