@@ -146,13 +146,16 @@ SUNSYNK_ENERGY = {
 # battery -> house with PV at 0 W while the API reported power +484, so positive already
 # means discharging, matching DEYE and Predbat. No flip.
 #
-# grid_power is NOT confirmed. `pac` is the right FIELD - the app read 0 W at the same
-# moment the API did, while grid vip[0].power read -418 W and is evidently something else
-# (a CT or per-phase sense, not whole-house flow). The SIGN is untested: the only sample so
-# far was at night with the grid idle. DEYE reports grid positive when importing and so
-# negates; if Sunsynk matches, "grid_power" belongs here. Needs one daytime sample with
-# real import or export to settle.
-SUNSYNK_TELEMETRY_NEGATE = ()
+# grid_power's FIELD is confirmed - `pac` read 0 W at the same moment the app did, while
+# grid vip[0].power read -418 W and is evidently something else (a CT or per-phase sense,
+# not whole-house flow). Its SIGN is aligned with DEYE on the Deye-parity rule rather than
+# on direct evidence: every sample so far was at night with the grid idle, so 0 negates to
+# 0 and nothing distinguished the two. DEYE reports grid positive when importing and
+# negates to reach Predbat's negative-for-import convention, and Sunsynk is rebadged DEYE
+# hardware, so it is assumed to match. VERIFY@SPIKE - one daytime sample with real import
+# or export confirms or refutes it; if grid power comes back negative while importing,
+# remove "grid_power" here.
+SUNSYNK_TELEMETRY_NEGATE = ("grid_power",)
 
 # Fields used to derive ratings rather than published directly.
 SUNSYNK_CAPACITY_AH_FIELD = "capacity"  # battery realtime, amp-hours
@@ -164,18 +167,24 @@ SUNSYNK_BATTERY_LOW_CAP_FIELD = "batteryLowCap"  # settings, percent floor
 # 8000 with pvMaxLimit 7000, so using the rating alone would have Predbat plan a kilowatt
 # the inverter will never deliver.
 #
-# VERIFY@SPIKE — which app control this is. The Sunsynk app shows 7000 in TWO places with
-# an identical 500-16000W range: "Inverter Power Limiter" (System Mode) and "Export power
-# limiter" (Grid Settings). With one sample where both read 7000 they cannot be told apart,
-# and pvMaxLimit is the only settings field holding 7000. They may be one register shown
-# twice. Either way 7000 is a real cap on AC output, so it is safe to use for both
-# inverter_limit and export_limit until someone changes one value in the app and re-reads.
+# This is the INVERTER limit (confirmed by the system owner). The Sunsynk app surfaces the
+# same 7000 under two labels with an identical 500-16000W range - "Inverter Power Limiter"
+# (System Mode) and "Export power limiter" (Grid Settings) - and pvMaxLimit is the only
+# settings field holding 7000, so one register is evidently shown on both screens. It
+# therefore backs both inverter_limit and export_limit.
+#
+# Not to be confused with solarMaxSellPower (SUNSYNK_MAX_SOLAR_FIELD), a separate setting.
 SUNSYNK_POWER_LIMIT_FIELD = "pvMaxLimit"  # settings, watts
 
 # Grid import cap - "Import power limiter" in the app's Grid Settings. CONFIRMED live:
 # app 10350 W, settings importPower '10350'. Not consumed yet; recorded so the mapping is
 # not lost, since it bounds how fast Predbat can charge from the grid.
 SUNSYNK_IMPORT_LIMIT_FIELD = "importPower"  # settings, watts
+
+# "Max Solar Power" in the app - CONFIRMED live by the system owner: app 9200, settings
+# solarMaxSellPower '9200'. Recorded rather than consumed: it is a PV-side cap, not the AC
+# export cap Predbat's export_limit wants (see automatic_config for why that is left unset).
+SUNSYNK_MAX_SOLAR_FIELD = "solarMaxSellPower"  # settings, watts
 
 # Charge-current limit candidates, in priority order: the FIRST field with a positive value
 # wins. CONFIRMED live that a real system reports maxChargeCurrentLimit 0.0 while

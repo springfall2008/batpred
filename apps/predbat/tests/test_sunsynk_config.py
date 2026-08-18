@@ -750,6 +750,36 @@ def test_run_isolates_one_inverters_failure_from_the_rest():
     assert not failed, "test_run_isolates_one_inverters_failure_from_the_rest"
 
 
+def test_export_limit_is_never_auto_mapped():
+    """export_limit must be left to apps.yaml, because we cannot identify the real field.
+
+    The app's Export power limiter can sit below the inverter limit (a G98/G99 site is
+    commonly capped at 3.68kW behind a much larger inverter), but no settings field carrying
+    it could be identified. Guessing it from pvMaxLimit would be worse than leaving it:
+    set_arg_auto always beats apps.yaml, so a user who correctly set their real export cap
+    would have it silently replaced by the larger inverter limit.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1"]
+    s.device_values["INV1"] = {"soc": 50, "capacity": 200, "chargeVolt": 58.4, "chargeCurrentLimit": 216}
+    s.device_energy["INV1"] = {leaf: 1.0 for leaf in ("pv_today", "import_today", "export_today", "load_today", "battery_charge_today", "battery_discharge_today")}
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"batteryLowCap": "20", "pvMaxLimit": "7000"}
+    run_async_local(s.automatic_config())
+    if "export_limit" in s.args_set:
+        print(f"ERROR: export_limit was auto-mapped to {s.args_set['export_limit']}, which would override the user's apps.yaml value")
+        failed = True
+    # The inverter limit IS mapped, and reflects the app's power limiter rather than ratePower.
+    if "inverter_limit" not in s.args_set:
+        print("ERROR: inverter_limit should still be mapped")
+        failed = True
+    if s.inverter_limit("INV1") != 7000.0:
+        print(f"ERROR: inverter_limit should honour pvMaxLimit 7000, got {s.inverter_limit('INV1')}")
+        failed = True
+    assert not failed, "test_export_limit_is_never_auto_mapped"
+
+
 def run_sunsynk_config_tests(my_predbat):
     """Run all Sunsynk configuration tests."""
     failed = False
@@ -758,6 +788,7 @@ def run_sunsynk_config_tests(my_predbat):
         ("component_registered", test_component_registered),
         ("apps_schema", test_apps_schema_keys),
         ("automatic_config", test_automatic_config_maps_control_entities),
+        ("export_limit_not_mapped", test_export_limit_is_never_auto_mapped),
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),

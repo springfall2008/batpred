@@ -594,25 +594,6 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         limits = [value for value in (self.device_rated_power.get(sn, 0.0), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_POWER_LIMIT_FIELD))) if value > 0]
         return min(limits) if limits else 0.0
 
-    def export_limit(self, sn):
-        """Return the maximum export power in watts, or 0 when unknown.
-
-        Predbat's inverter.py defaults export_limit to 99999W - effectively unlimited - so
-        leaving this unmapped lets it plan an export the inverter will simply clip. The
-        Sunsynk app exposes an "Export power limiter" in Grid Settings, and a real system
-        had it at 7000W against a 8000W inverter.
-
-        Bounded by inverter_limit as well: the inverter cannot export more AC than it can
-        produce, whichever setting nominally allows it.
-
-        See SUNSYNK_POWER_LIMIT_FIELD - with one sample where the app's "Export power
-        limiter" and "Inverter Power Limiter" both read 7000 against an identical
-        500-16000W range, and pvMaxLimit the only settings field holding 7000, the two
-        cannot yet be told apart and may be one register surfaced twice.
-        """
-        limits = [value for value in (self.inverter_limit(sn), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_POWER_LIMIT_FIELD))) if value > 0]
-        return min(limits) if limits else 0.0
-
     def battery_reserve_min(self, sn):
         """Return the inverter's own SOC floor as a percent, or 0 when unknown."""
         settings = self.device_settings.get(sn, {})
@@ -993,9 +974,6 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             rated_power = self.inverter_limit(sn)
             if rated_power > 0:
                 self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Inverter Limit"}, app="sunsynk")
-            export_limit = self.export_limit(sn)
-            if export_limit > 0:
-                self.dashboard_item(self._sensor_name(sn, "export_limit"), state=export_limit, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Export Limit"}, app="sunsynk")
             floor = self.battery_reserve_min(sn)
             if floor > 0:
                 self.dashboard_item(self._sensor_name(sn, "battery_reserve_min"), state=floor, attributes={"unit_of_measurement": "%", "friendly_name": f"Sunsynk {sn} Battery Reserve Min"}, app="sunsynk")
@@ -1365,13 +1343,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
         else:
             self.log("Warn: Sunsynk no ratePower reported, inverter_limit must be set manually in apps.yaml")
-        # Without this Predbat falls back to an effectively unlimited export (inverter.py
-        # defaults export_limit to 99999W), so a system capped at 7kW would be planned as if
-        # it could export 9kW.
-        if all(self.export_limit(sn) > 0 for sn in self.device_list):
-            self.set_arg_auto("export_limit", [self._sensor_name(sn, "export_limit") for sn in devices])
-        else:
-            self.log("Warn: Sunsynk no export power limit available, export_limit must be set manually in apps.yaml")
+        # export_limit is deliberately NOT auto-mapped. The Sunsynk app has an "Export power
+        # limiter" in Grid Settings which can legitimately sit BELOW the inverter limit -
+        # a G98/G99 site is commonly capped at 3.68kW behind a much larger inverter - but no
+        # settings field could be identified that carries it: on the one system inspected the
+        # app showed 7000 for both the inverter and export limiters while pvMaxLimit was the
+        # only field holding 7000, so the two could not be told apart.
+        #
+        # Guessing it from pvMaxLimit would be worse than leaving it alone, because
+        # set_arg_auto always beats apps.yaml: a user who correctly set export_limit to their
+        # real 3.68kW cap would have it silently replaced by the inverter limit. Left unset,
+        # Predbat keeps its own default and the user's apps.yaml value is honoured.
+        self.log(
+            "Info: Sunsynk cannot identify the inverter's export power limiter from the settings object, so export_limit is left for apps.yaml. If your Export power limiter (app: Grid Settings) is lower than the inverter limit - a G98/G99 export cap, for instance - set export_limit manually."
+        )
         if all(self.battery_reserve_min(sn) > 0 for sn in self.device_list):
             self.set_arg_auto("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
 
