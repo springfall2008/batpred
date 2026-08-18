@@ -613,6 +613,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     def derive_control_state(self, schedule, current_soc):
         """Map Predbat's schedule intent to a Sunsynk control state (see the spec's table).
 
+        The work mode governs whether the BATTERY may export, and it is orthogonal to
+        solarSell, which governs whether surplus PV may. Confirmed on a live system that
+        exported 11.1 kWh in a day while sitting in "Limited to Home" with solarSell on, so
+        the mode does not gate solar.
+
+        Non-export states therefore use zero_export_ct ("Limited to Home"): the battery
+        serves the whole house, measured at the grid CT, without exporting. The stricter
+        zero_export_load ("Zero-Export + Limit To Load Only") measures at the inverter's own
+        output instead, so on a CT-clamp install it would stop the battery serving anything
+        not wired to the inverter, and the shortfall would come from the grid.
+
         Semantics are inherited from DEYE — the same registers sit behind both clouds —
         but every wire value comes from SUNSYNK_WORKMODE, never from DEYE's enum.
         """
@@ -629,12 +640,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         if charge.get("enable"):
             charge_soc = int(charge.get("soc", 0))
             if charge_soc > current_soc and charge_soc > reserve:
-                return {"behaviour": "charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
+                return {"behaviour": "charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
             if charge_soc == reserve:
-                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
-            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
-        return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+        return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
 
     @staticmethod
     def _to_slot_time(value):
