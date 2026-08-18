@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import os
 
 from web import WebInterface
 
@@ -339,6 +340,22 @@ def run_web_logo_image_tests(my_predbat):
         if response.status != 404:
             print(f"  ERROR: request for {request.match_info} should 404, got {response.status}")
             failed += 1
+
+    print("Test: a whitelisted filename whose file is genuinely absent on disk 404s cleanly")
+    # Regression for issue #4568: when an install has updated predbat.py before its self-updater has
+    # fetched these newly-added logo files (an old download.py running against a new release), the
+    # image genuinely won't exist yet. This should degrade to a missing image, not raise.
+    filename = "bat_logo_light.png"
+    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", filename)
+    moved_path = file_path + ".test_moved"
+    os.rename(file_path, moved_path)
+    try:
+        response = asyncio.run(web.html_logo_image(FakeImageRequest(filename)))
+        if response.status != 404:
+            print(f"  ERROR: {filename} missing from disk should 404, got {response.status}")
+            failed += 1
+    finally:
+        os.rename(moved_path, file_path)
 
     print("Test: the page header no longer depends on GitHub for the logo")
     from web_helper import get_header_html
