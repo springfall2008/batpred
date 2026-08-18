@@ -684,7 +684,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     def build_tou_slots(self, schedule, current_soc):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
 
-        Slots are sequential intervals, so every start time must be distinct and ascending.
+        Slots are sequential intervals ("from this start until the next slot's start") and
+        Sunsynk documents that they MUST be set chronologically, so every start is written
+        distinct and ascending. A slot is an interval whatever its grid-charge flag says,
+        which is what lets a filler slot terminate the charge window before it.
+
         Segment boundaries are collected from a 00:00 self-use baseline plus each enabled
         window's start (its action) and end (back to self-use), then padded with fillers
         and trimmed to the earliest, most imminent TOU_SLOT_COUNT.
