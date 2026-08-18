@@ -648,13 +648,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
                 # Zero power IS the freeze: the slot is enabled for grid charge but given no
                 # power, so the battery neither charges nor discharges and simply holds.
                 return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": 0}
-            # The battery is already at or above the requested target, so there is nothing
-            # to charge: this behaves exactly like self-use. Reporting zero power here is
-            # what makes build_tou_slots classify it as a self-use slot, which then writes
-            # the inverter's full power - it does NOT emit a zero-power (frozen) slot. A
-            # non-zero power would classify it as an action slot and needlessly constrain
-            # the battery while it is only being asked not to charge.
-            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+            # The battery is already at or above the requested target, so grid charge stays
+            # OFF - the charge is simply not triggered. The slot still carries Predbat's
+            # charge rate, because that is the rate it has chosen for this window; only the
+            # behaviour differs, not the power. Zero here would mean freeze, which is a
+            # different state, and the inverter's full rating would discard Predbat's rate.
+            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
         return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
 
