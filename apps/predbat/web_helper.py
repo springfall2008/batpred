@@ -6412,7 +6412,41 @@ def get_plan_renderer_js():
     }
 
     // Render plan table from JSON data
-    function renderPlanTable(jsonData, overrides, showDebug, editable) {
+    // Find the retained debug-history snapshot for a plan row's timestamp, or null if none
+    // qualifies. window.debugHistoryData is a small array ({id, timestamp, steps_back}) fetched
+    // separately (see fetchAndRenderPlan) - matched here by wall-clock time rather than threaded
+    // through the plan JSON itself, since the History/Yesterday plan is a reconstruction (fed
+    // yesterday's real PV/load through the same renderer as the live plan) and has no inherent
+    // relationship to when a snapshot happened to be captured; only the row's own real timestamp
+    // does.
+    //
+    // Snapshots are captured server-side with their timestamp floored to the plan's own slot grid
+    // (self.midnight_utc + N * plan_interval_minutes, see predbat.py's _capture_debug_history) -
+    // the same anchor and step output.py uses to build each row's own row.time - so a snapshot's
+    // timestamp is either an exact match for one row or it isn't a match at all. That also gives
+    // each snapshot at most one owning row for free: two rows can never both claim the same
+    // snapshot, since row times a plan_interval_minutes apart can never both equal the same
+    // floored capture instant.
+    const DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS = 1000; // guards only against sub-second formatting noise
+    function findNearestDebugSnapshot(rowTimeStr) {
+        if (!rowTimeStr || !window.debugHistoryData || !window.debugHistoryData.length) {
+            return null;
+        }
+        const rowTime = new Date(rowTimeStr).getTime();
+        if (isNaN(rowTime)) {
+            return null;
+        }
+        for (const snap of window.debugHistoryData) {
+            const snapTime = new Date(snap.timestamp).getTime();
+            if (isNaN(snapTime)) { continue; }
+            if (Math.abs(rowTime - snapTime) <= DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS) {
+                return snap;
+            }
+        }
+        return null;
+    }
+
+    function renderPlanTable(jsonData, overrides, showDebug, editable, showHistoryLinks) {
         try {
             if (!jsonData || !jsonData.rows) {
                 return '<p style="color:red;">No plan data available</p>';
@@ -6487,6 +6521,9 @@ def get_plan_renderer_js():
             if (jsonData.carbon_enable) {
                 html += th('co2_rate', 'CO2 g/kWh');
                 html += th('co2_total', 'CO2 kg');
+            }
+            if (showHistoryLinks) {
+                html += '<th><b>Debug</b></th>';
             }
             html += '</tr>';
 
@@ -6645,6 +6682,18 @@ def get_plan_renderer_js():
                     html += `<td id=total_carbon bgcolor=${row.carbon_color || '#FFFFFF'}>${row.total_carbon || ''}</td>`;
                 }
 
+                // Debug history snapshot link (History/Yesterday view only)
+                if (showHistoryLinks) {
+                    const snap = findNearestDebugSnapshot(row.time);
+                    if (snap) {
+                        const snapWhen = new Date(snap.timestamp);
+                        const snapLabel = isNaN(snapWhen.getTime()) ? snap.id : snapWhen.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                        html += `<td bgcolor=#FFFFFF><a href="./debug_history_download?id=${encodeURIComponent(snap.id)}">&#8681; ${snapLabel}</a></td>`;
+                    } else {
+                        html += '<td bgcolor=#FFFFFF></td>';
+                    }
+                }
+
                 html += '</tr>';
             }
 
@@ -6699,6 +6748,11 @@ def get_plan_renderer_js():
                 if (jsonData.carbon_enable) {
                     html += '<td></td>'; // Empty cell for carbon intensity
                     html += `<td bgcolor=#FFFFFF><b>${totals.total_carbon || ''}</b></td>`;
+                }
+
+                // Empty cell for the Debug history column
+                if (showHistoryLinks) {
+                    html += '<td></td>';
                 }
 
                 html += '</tr>';
@@ -7135,9 +7189,29 @@ def get_plan_renderer_js():
         }
     }
 
+    // Fetch the rolling debug-history snapshot index (small: at most a few dozen tiny
+    // entries) into window.debugHistoryData for the History/Yesterday view's Debug
+    // column. Called on initial load and whenever the user switches to that view,
+    // rather than on every 5s plan poll (fetchAndRenderPlan) - the underlying data only
+    // changes on an hours-long capture interval, so polling it that often would just be
+    // wasted requests for something that only matters while the Yesterday view is open.
+    async function loadDebugHistoryData() {
+        try {
+            const response = await fetch('./debug_history_list');
+            if (response.ok) {
+                window.debugHistoryData = await response.json();
+            }
+        } catch (error) {
+            console.error('Error fetching debug history list:', error);
+        }
+    }
+
     // Switch between plan views
     function switchView(view) {
         currentView = view;
+        if (view === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
 
         // Update button styling
         document.querySelectorAll('.view-button').forEach(btn => {
@@ -7199,7 +7273,11 @@ def get_plan_renderer_js():
 
         // Render table
         const editable = (currentView === 'plan');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable);
+        // Debug-history download links only make sense on the History/Yesterday view -
+        // its rows are entirely in the past, unlike the live Plan view which is mostly
+        // future predictions with no corresponding capture.
+        const showHistoryLinks = (currentView === 'yesterday');
+        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
 
         // Apply dark mode colors if needed
         updateTableColors();
@@ -7305,6 +7383,12 @@ def get_plan_renderer_js():
 
         // Initial render
         refreshPlan();
+
+        // Fetch the debug-history snapshot index once up front too, in case the page
+        // loads with currentView already set to 'yesterday' (e.g. restored state).
+        if (currentView === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
 
         // Set up polling every 5 seconds
         if (updateIntervalId) {
