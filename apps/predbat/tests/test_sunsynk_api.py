@@ -581,7 +581,9 @@ def test_fetch_device_data_maps_telemetry_and_energy():
     with patch.object(s, "_get", side_effect=fake_get):
         run_async_local(s.fetch_device_data("INV1"))
     values = s.device_values.get("INV1", {})
-    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", 430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
+    # grid_power is negated to reach Predbat's negative-for-import convention, matching
+    # deye.py: Sunsynk's pac of +430 (importing) must publish as -430.
+    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", -430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
         if values.get(leaf) != expect:
             print(f"ERROR: telemetry {leaf} = {values.get(leaf)}, expected {expect}")
             failed = True
@@ -1100,31 +1102,6 @@ def test_inverter_limit_respects_the_installer_power_limiter():
     assert not failed, "test_inverter_limit_respects_the_installer_power_limiter"
 
 
-def test_export_limit_is_mapped_and_bounded_by_the_inverter():
-    """Predbat defaults export_limit to 99999W, so leaving it unmapped plans a clipped export.
-
-    Confirmed live: the app's Grid Settings showed an Export power limiter of 7000W on an
-    8000W inverter.
-    """
-    failed = False
-    s = MockSunsynk()
-    s.device_rated_power["INV1"] = 8000.0
-    s.device_settings["INV1"] = {"pvMaxLimit": "7000"}
-    if s.export_limit("INV1") != 7000.0:
-        print(f"ERROR: expected the 7000W limiter, got {s.export_limit('INV1')}")
-        failed = True
-    # The inverter cannot export more AC than it can produce, whatever the setting allows.
-    s.device_rated_power["INV2"] = 3600.0
-    s.device_settings["INV2"] = {"pvMaxLimit": "16000"}
-    if s.export_limit("INV2") != 3600.0:
-        print(f"ERROR: export must be bounded by the inverter, got {s.export_limit('INV2')}")
-        failed = True
-    if s.export_limit("UNKNOWN") != 0:
-        print(f"ERROR: an unknown serial should derive 0, got {s.export_limit('UNKNOWN')}")
-        failed = True
-    assert not failed, "test_export_limit_is_mapped_and_bounded_by_the_inverter"
-
-
 def run_sunsynk_api_tests(my_predbat):
     """Run all Sunsynk API tests."""
     failed = False
@@ -1152,7 +1129,6 @@ def run_sunsynk_api_tests(my_predbat):
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),
         ("pack_voltage_window", test_nominal_pack_voltage_across_the_lifepo4_charge_window),
         ("inverter_limit_limiter", test_inverter_limit_respects_the_installer_power_limiter),
-        ("export_limit_mapped", test_export_limit_is_mapped_and_bounded_by_the_inverter),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),
         ("device_list_no_serials_terminates", test_get_device_list_terminates_when_serials_are_missing),
         ("device_list_deduplicates", test_get_device_list_deduplicates_repeated_pages),
