@@ -167,14 +167,16 @@ SUNSYNK_BATTERY_LOW_CAP_FIELD = "batteryLowCap"  # settings, percent floor
 # 8000 with pvMaxLimit 7000, so using the rating alone would have Predbat plan a kilowatt
 # the inverter will never deliver.
 #
-# This is the INVERTER limit (confirmed by the system owner). The Sunsynk app surfaces the
-# same 7000 under two labels with an identical 500-16000W range - "Inverter Power Limiter"
-# (System Mode) and "Export power limiter" (Grid Settings) - and pvMaxLimit is the only
-# settings field holding 7000, so one register is evidently shown on both screens. It
-# therefore backs both inverter_limit and export_limit.
+# The EXPORT limit. The Sunsynk app shows this same value under two labels with an identical
+# 500-16000W range - "Inverter Power Limiter" (System Mode) and "Export power limiter" (Grid
+# Settings) - which is why pvMaxLimit was the only field holding the 7000 both screens
+# displayed. Per Sunsynk's documentation (confirmed by the system owner) the control despite
+# its System Mode label caps EXPORT, not the inverter's AC output: the inverter can still
+# deliver its full ratePower to the house. So this backs export_limit, and inverter_limit
+# stays on ratePower.
 #
 # Not to be confused with solarMaxSellPower (SUNSYNK_MAX_SOLAR_FIELD), a separate setting.
-SUNSYNK_POWER_LIMIT_FIELD = "pvMaxLimit"  # settings, watts
+SUNSYNK_EXPORT_LIMIT_FIELD = "pvMaxLimit"  # settings, watts
 
 # Grid import cap - "Import power limiter" in the app's Grid Settings. CONFIRMED live:
 # app 10350 W, settings importPower '10350'. Not consumed yet; recorded so the mapping is

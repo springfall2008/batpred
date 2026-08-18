@@ -1071,35 +1071,40 @@ def test_nominal_pack_voltage_across_the_lifepo4_charge_window():
     assert not failed, "test_nominal_pack_voltage_across_the_lifepo4_charge_window"
 
 
-def test_inverter_limit_respects_the_installer_power_limiter():
-    """The installer's Inverter Power Limiter can cap the inverter below its rating.
+def test_inverter_limit_is_the_rating_and_export_limit_is_the_cap():
+    """pvMaxLimit caps EXPORT, not the inverter's output, despite its app label.
 
-    Confirmed live: ratePower 8000 with pvMaxLimit 7000. Using the rating alone would have
-    Predbat plan a kilowatt the inverter will never deliver.
+    Sunsynk's documentation confirms the "Inverter Power Limiter" control is an export cap,
+    which is why the app shows the same value on both the System Mode and Grid Settings
+    screens. The inverter can still deliver its full ratePower to the house, so reducing
+    inverter_limit by it would under-rate the inverter for self-consumption.
     """
     failed = False
     s = MockSunsynk()
     s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {"pvMaxLimit": "7000"}
-    if s.inverter_limit("INV1") != 7000.0:
-        print(f"ERROR: expected the lower of 8000/7000, got {s.inverter_limit('INV1')}")
+    if s.inverter_limit("INV1") != 8000.0:
+        print(f"ERROR: inverter_limit should be the 8000W rating, got {s.inverter_limit('INV1')}")
         failed = True
-    # A limiter above the rating must not raise the limit beyond what the hardware can do.
-    s.device_rated_power["INV2"] = 5000.0
+    if s.export_limit("INV1") != 7000.0:
+        print(f"ERROR: export_limit should be the 7000W cap, got {s.export_limit('INV1')}")
+        failed = True
+    # Export can never exceed what the inverter can produce, whatever the setting allows.
+    s.device_rated_power["INV2"] = 3600.0
     s.device_settings["INV2"] = {"pvMaxLimit": "16000"}
-    if s.inverter_limit("INV2") != 5000.0:
-        print(f"ERROR: rating must cap the limiter, got {s.inverter_limit('INV2')}")
+    if s.export_limit("INV2") != 3600.0:
+        print(f"ERROR: export must be bounded by the rating, got {s.export_limit('INV2')}")
         failed = True
-    # Either one alone is still usable.
+    # A G98 site: a 3.68kW export cap behind a much larger inverter must survive intact.
     s.device_rated_power["INV3"] = 8000.0
-    s.device_settings["INV3"] = {}
-    if s.inverter_limit("INV3") != 8000.0:
-        print(f"ERROR: rating alone should be used, got {s.inverter_limit('INV3')}")
+    s.device_settings["INV3"] = {"pvMaxLimit": "3680"}
+    if s.export_limit("INV3") != 3680.0 or s.inverter_limit("INV3") != 8000.0:
+        print(f"ERROR: G98 case wrong - export {s.export_limit('INV3')}, inverter {s.inverter_limit('INV3')}")
         failed = True
-    if s.inverter_limit("UNKNOWN") != 0:
-        print(f"ERROR: an unknown serial should derive 0, got {s.inverter_limit('UNKNOWN')}")
+    if s.inverter_limit("UNKNOWN") != 0 or s.export_limit("UNKNOWN") != 0:
+        print("ERROR: an unknown serial should derive 0 for both")
         failed = True
-    assert not failed, "test_inverter_limit_respects_the_installer_power_limiter"
+    assert not failed, "test_inverter_limit_is_the_rating_and_export_limit_is_the_cap"
 
 
 def run_sunsynk_api_tests(my_predbat):
@@ -1128,7 +1133,7 @@ def run_sunsynk_api_tests(my_predbat):
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
         ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),
         ("pack_voltage_window", test_nominal_pack_voltage_across_the_lifepo4_charge_window),
-        ("inverter_limit_limiter", test_inverter_limit_respects_the_installer_power_limiter),
+        ("inverter_limit_vs_export", test_inverter_limit_is_the_rating_and_export_limit_is_the_cap),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),
         ("device_list_no_serials_terminates", test_get_device_list_terminates_when_serials_are_missing),
         ("device_list_deduplicates", test_get_device_list_deduplicates_repeated_pages),
