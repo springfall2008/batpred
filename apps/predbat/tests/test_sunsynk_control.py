@@ -36,12 +36,12 @@ def test_derive_control_state_table():
     failed = False
     s = MockSunsynk()
     cases = [
-        ("charge", _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000}), 50, ("charge", SUNSYNK_WORKMODE["zero_export_load"], True, False, 90)),
-        ("freeze_charge", _schedule(reserve=50, charge={"enable": True, "soc": 50, "power": 3000}), 50, ("freeze_charge", SUNSYNK_WORKMODE["zero_export_load"], True, False, 50)),
-        ("hold_charge", _schedule(reserve=50, charge={"enable": True, "soc": 40, "power": 3000}), 50, ("hold_charge", SUNSYNK_WORKMODE["zero_export_load"], False, False, 50)),
+        ("charge", _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 3000}), 50, ("charge", SUNSYNK_WORKMODE["zero_export_ct"], True, False, 90)),
+        ("freeze_charge", _schedule(reserve=50, charge={"enable": True, "soc": 50, "power": 3000}), 50, ("freeze_charge", SUNSYNK_WORKMODE["zero_export_ct"], True, False, 50)),
+        ("hold_charge", _schedule(reserve=50, charge={"enable": True, "soc": 40, "power": 3000}), 50, ("hold_charge", SUNSYNK_WORKMODE["zero_export_ct"], False, False, 50)),
         ("export", _schedule(reserve=10, export={"enable": True, "soc": 20, "power": 3000}), 80, ("export", SUNSYNK_WORKMODE["selling_first"], False, True, 20)),
         ("freeze_export", _schedule(reserve=10, export={"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000}), 80, ("freeze_export", SUNSYNK_WORKMODE["selling_first"], False, True, FREEZE_EXPORT_SOC)),
-        ("idle", _schedule(reserve=15), 60, ("idle", SUNSYNK_WORKMODE["zero_export_load"], False, False, 15)),
+        ("idle", _schedule(reserve=15), 60, ("idle", SUNSYNK_WORKMODE["zero_export_ct"], False, False, 15)),
     ]
     for name, schedule, soc, expect in cases:
         result = s.derive_control_state(schedule, soc)
@@ -159,7 +159,7 @@ def test_active_window_drives_the_global_mode():
     )
     # 03:00 -> inside the charge window.
     payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
-    if payload[SUNSYNK_WORKMODE_FIELD] != SUNSYNK_WORKMODE["zero_export_load"]:
+    if payload[SUNSYNK_WORKMODE_FIELD] != SUNSYNK_WORKMODE["zero_export_ct"]:
         print(f"ERROR: at 03:00 expected zero_export_load, got {payload[SUNSYNK_WORKMODE_FIELD]}")
         failed = True
     # 17:00 -> inside the export window.
@@ -169,7 +169,7 @@ def test_active_window_drives_the_global_mode():
         failed = True
     # 12:00 -> neither window, so self-use.
     payload = s.build_settings_payload("INV1", schedule, current_soc=60, now_minutes=12 * 60)
-    if payload[SUNSYNK_WORKMODE_FIELD] != SUNSYNK_WORKMODE["zero_export_load"]:
+    if payload[SUNSYNK_WORKMODE_FIELD] != SUNSYNK_WORKMODE["zero_export_ct"]:
         print(f"ERROR: at 12:00 expected zero_export_load, got {payload[SUNSYNK_WORKMODE_FIELD]}")
         failed = True
     assert not failed, "test_active_window_drives_the_global_mode"
@@ -813,11 +813,44 @@ def test_solar_export_is_never_disabled():
     assert not failed, "test_solar_export_is_never_disabled"
 
 
+def test_non_export_states_use_limited_to_home():
+    """Every non-export state must use zero_export_ct, and only exporting uses selling_first.
+
+    The work mode gates whether the BATTERY exports; solarSell independently gates PV. A
+    live system exported 11.1 kWh in a day while in "Limited to Home" with solarSell on, so
+    the mode does not block solar. zero_export_load ("Limit To Load Only") measures at the
+    inverter's own output rather than the grid CT, so on a CT-clamp install it would stop
+    the battery serving loads not wired to the inverter and push them onto the grid.
+    """
+    failed = False
+    s = MockSunsynk()
+    charge = {"enable": True, "soc": 95, "power": 3000}
+    cases = [
+        ("charge", _schedule(reserve=10, charge=charge), 50, "zero_export_ct"),
+        ("freeze_charge", _schedule(reserve=50, charge={"enable": True, "soc": 50, "power": 3000}), 50, "zero_export_ct"),
+        ("hold_charge", _schedule(reserve=50, charge={"enable": True, "soc": 40, "power": 3000}), 50, "zero_export_ct"),
+        ("idle", _schedule(reserve=15), 60, "zero_export_ct"),
+        ("export", _schedule(reserve=10, export={"enable": True, "soc": 20, "power": 3000}), 80, "selling_first"),
+        ("freeze_export", _schedule(reserve=10, export={"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000}), 80, "selling_first"),
+    ]
+    for name, schedule, soc, expect in cases:
+        got = s.derive_control_state(schedule, soc)["work_mode"]
+        if got != SUNSYNK_WORKMODE[expect]:
+            print(f"ERROR: {name} derived work mode {got!r}, expected {expect} ({SUNSYNK_WORKMODE[expect]!r})")
+            failed = True
+    # zero_export_load is never written: it is a real mode, just not one Predbat should pick.
+    if SUNSYNK_WORKMODE["zero_export_load"] in {s.derive_control_state(sched, soc)["work_mode"] for _, sched, soc, _ in cases}:
+        print("ERROR: zero_export_load was derived for some state")
+        failed = True
+    assert not failed, "test_non_export_states_use_limited_to_home"
+
+
 def run_sunsynk_control_tests(my_predbat):
     """Run all Sunsynk control-logic tests."""
     failed = False
     for name, fn in [
         ("derive_state_table", test_derive_control_state_table),
+        ("non_export_mode", test_non_export_states_use_limited_to_home),
         ("tou_slots_shape", test_build_tou_slots_shape),
         ("tou_slots_seconds", test_build_tou_slots_seconds_are_dropped),
         ("tou_slots_idle", test_build_tou_slots_idle_is_still_six_distinct),
