@@ -69,7 +69,7 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION
 from component_base import ComponentBase
@@ -2808,14 +2808,12 @@ chart.render();
         """
         Return an apps.yaml reconstructed from the live in-memory settings (self.args).
 
-        Pass ?masked=1 to redact credential-like keys, matching create_debug_yaml's masking rule.
+        Defaults to masking credential-like keys (see mask_secret_args) so a direct or
+        copied request never leaks secrets without an explicit opt-in; pass ?masked=0
+        to download the full unmasked file.
         """
-        masked = request.query.get("masked", "0") == "1"
-        args_copy = copy.deepcopy(self.args)
-        if masked:
-            for key in args_copy:
-                if ("_key" in key.lower()) or ("password" in key.lower()):
-                    args_copy[key] = "xxx"
+        masked = request.query.get("masked", "1") != "0"
+        args_copy = mask_secret_args(self.args) if masked else copy.deepcopy(self.args)
         yaml = YAML()
         buf = StringIO()
         yaml.dump({ROOT_YAML_KEY: args_copy}, buf)
