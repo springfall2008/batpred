@@ -110,7 +110,7 @@ def test_debug_history(my_predbat):
         print("  ERROR: expected newest first, got {}".format([entry["id"] for entry in index]))
         failed = True
 
-    print("Test: two captures in the same calendar minute keep only the newer, deleting the older (regression - this used to reach the UI as two identically-named chart series and broke 'Deselect all', which keys off series name)")
+    print("Test: two captures in the same calendar minute keep only the newer, deleting the older (snapshot ids are floored to the minute, so two captures in the same minute would otherwise collide on the same id/filename in the index and download route)")
     minute_storage = FakeStorage()
     moment = datetime.datetime(2026, 8, 6, 8, 20, 0, tzinfo=datetime.timezone.utc)
     older_id = asyncio.run(capture_snapshot(minute_storage, sample_yaml_text("older"), moment, max_count=15))
