@@ -919,6 +919,38 @@ def test_freeze_states_are_expressed_as_zero_power():
     assert not failed, "test_freeze_states_are_expressed_as_zero_power"
 
 
+def test_hold_charge_behaves_as_self_use():
+    """A charge target at or below current SoC must not constrain or freeze the battery.
+
+    There is nothing to charge, so the slot should be an ordinary self-use one: no grid
+    charge, and the inverter's full power so the battery keeps serving the house. A
+    zero-power slot would freeze it; an action slot carrying the requested charge power
+    would needlessly cap it.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "20"}
+    # Target 40% with the battery already at 60% -> hold_charge.
+    state = s.derive_control_state(_schedule(reserve=20, charge={"enable": True, "soc": 40, "power": 3000}), 60)
+    if state["behaviour"] != "hold_charge":
+        print(f"ERROR: expected hold_charge, got {state['behaviour']}")
+        failed = True
+    if state["grid_charge"] or state["power"] != 0:
+        print(f"ERROR: hold_charge should not charge and should classify as self-use, got {state}")
+        failed = True
+    sched = _schedule(reserve=20, charge={"enable": True, "soc": 40, "power": 3000, "start": "03:00:00", "end": "04:00:00"})
+    payload = s.build_settings_payload("INV1", sched, current_soc=60, now_minutes=3 * 60 + 30)
+    for n in range(1, TOU_SLOT_COUNT + 1):
+        if payload[TOU_FIELD["grid_charge"].format(n=n)]:
+            print(f"ERROR: hold_charge produced a grid-charge slot at {payload[TOU_FIELD['time'].format(n=n)]}")
+            failed = True
+        if int(payload[TOU_FIELD["power"].format(n=n)]) != 8000:
+            print(f"ERROR: slot {n} power {payload[TOU_FIELD['power'].format(n=n)]}, expected the full 8000W rating")
+            failed = True
+    assert not failed, "test_hold_charge_behaves_as_self_use"
+
+
 def run_sunsynk_control_tests(my_predbat):
     """Run all Sunsynk control-logic tests."""
     failed = False
@@ -928,6 +960,7 @@ def run_sunsynk_control_tests(my_predbat):
         ("tou_slots_shape", test_build_tou_slots_shape),
         ("self_use_never_zero", test_self_use_slots_are_never_zero_power),
         ("freeze_zero_power", test_freeze_states_are_expressed_as_zero_power),
+        ("hold_charge_self_use", test_hold_charge_behaves_as_self_use),
         ("tou_slots_seconds", test_build_tou_slots_seconds_are_dropped),
         ("tou_slots_idle", test_build_tou_slots_idle_is_still_six_distinct),
         ("tou_slots_zero_length_window", test_build_tou_slots_zero_length_window_has_no_effect),
