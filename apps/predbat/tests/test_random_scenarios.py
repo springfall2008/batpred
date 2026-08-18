@@ -545,9 +545,9 @@ def expand_io_adjusted(run_start_minute, run_slots, minutes_now=0, end_minute=No
 
     Mirrors expand_rates, but sparse and built from the run's (start, slot count) rather than a
     precomputed profile: self.io_adjusted only ever carries True entries for Octopus Intelligent
-    planned-dispatch minutes (see fetch.py/octopus.py), and callers use io_adjusted.get(minute,
-    False), so minutes that are not dispatched are simply absent here. The run recurs at the same
-    clock time every day, the same way the rate/PV/load day profiles do.
+    planned-dispatch minutes (see apps/predbat/fetch.py and apps/predbat/octopus.py), and callers
+    use io_adjusted.get(minute, False), so minutes that are not dispatched are simply absent here.
+    The run recurs at the same clock time every day, the same way the rate/PV/load day profiles do.
 
     Args:
         run_start_minute: minute-of-day (0-1439) the dispatch run starts
@@ -725,7 +725,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     # IOG-adjusted windows, exactly as before - matches self.io_adjusted's own default of {}.
     iog = params.get("iog", {"enabled": False})
     if iog.get("enabled"):
-        my_predbat.io_adjusted = expand_io_adjusted(iog["run_start_minute"], iog["run_slots"], minutes_now, end_minute=minutes_now + forecast_minutes)
+        my_predbat.io_adjusted = expand_io_adjusted(iog.get("run_start_minute", 0), iog.get("run_slots", 0), minutes_now, end_minute=minutes_now + forecast_minutes)
     else:
         my_predbat.io_adjusted = {}
 
