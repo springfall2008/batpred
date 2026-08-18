@@ -46,6 +46,7 @@ coverage/*.txt
 coverage/*.db
 coverage/*.html
 coverage/*.prof
+coverage/*.py
 coverage/cache/
 coverage/debug/
 coverage/predbat_standalone/

@@ -144,7 +144,9 @@ def test_axle(my_predbat=None):
         ("history_cleanup", _test_axle_history_cleanup, "History cleanup old events"),
         ("fetch_sessions", _test_axle_fetch_sessions, "Fetch sessions from API"),
         ("load_slot_export", _test_axle_load_slot_export, "Load slot export integration"),
+        ("load_slot_export_boosts_import", _test_axle_load_slot_export_boosts_import_rate, "Load slot export event also boosts rate_import"),
         ("load_slot_import", _test_axle_load_slot_import, "Load slot import integration"),
+        ("byok_export_boosts_import", _test_axle_byok_export_event_boosts_import_rate, "BYOK export event boosts import rate"),
         ("active_function", _test_axle_active_function, "Active status checking"),
         ("managed_init", _test_axle_managed_initialization, "Managed mode initialisation"),
         ("managed_price_curve", _test_axle_managed_price_curve_processing, "Managed mode price curve processing"),
@@ -1099,6 +1101,69 @@ def _test_axle_load_slot_export(my_predbat=None):
     return False
 
 
+def _test_axle_load_slot_export_boosts_import_rate(my_predbat=None):
+    """
+    Test that load_axle_slot also raises rate_import for an export-direction session.
+
+    Exporting during an Axle event earns a premium, so charging instead carries the same
+    opportunity cost - the import rate should reflect that too, not just the export rate.
+    """
+    from axle import load_axle_slot
+    from datetime import datetime, timezone
+
+    print("Testing load_axle_slot export event also boosts rate_import...")
+
+    class MockBase:
+        def __init__(self):
+            self.midnight_utc = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+            self.now_utc = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 10 * 60
+            self.forecast_minutes = 24 * 60
+            self.prefix = "predbat"
+            self.rate_import = {minute: 15.0 for minute in range(self.forecast_minutes)}
+            self.load_scaling_dynamic = {}
+            self.load_scaling_saving = 0.5
+            self.load_scaling_free = 0.0
+
+        def log(self, message):
+            print(f"  [LOG] {message}")
+
+        def time_abs_str(self, minutes):
+            return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+    base = MockBase()
+
+    axle_sessions = [
+        {
+            "start_time": "2024-01-01T14:00:00+00:00",
+            "end_time": "2024-01-01T16:00:00+00:00",
+            "import_export": "export",
+            "pence_per_kwh": 100.0,
+        }
+    ]
+
+    start_minutes = 14 * 60
+    end_minutes = 16 * 60
+
+    rate_replicate = {}
+    load_axle_slot(base, axle_sessions, base.rate_import, export=False, rate_replicate=rate_replicate)
+
+    for minute in range(start_minutes, end_minutes):
+        assert base.rate_import[minute] == 115.0, f"rate_import at minute {minute} should be boosted to 115.0 (15.0 + 100), got {base.rate_import[minute]}"
+        assert rate_replicate.get(minute) == "saving"
+
+    assert base.rate_import[start_minutes - 1] == 15.0, "Rate before event should be unchanged"
+    assert base.rate_import[end_minutes] == 15.0, "Rate at end_minutes (not inclusive) should be unchanged"
+
+    # load_scaling_saving is only set on the export=True call (see _test_axle_load_slot_export);
+    # an export-direction session processed here (export=False) should not touch it.
+    assert base.load_scaling_dynamic == {}, "Processing rate_import should not set load_scaling_dynamic for an export session"
+
+    print("  ✓ rate_import boosted by 100p/kWh for the export event's 2-hour period")
+
+    return False
+
+
 def _test_axle_load_slot_import(my_predbat=None):
     """
     Test that load_axle_slot decreases import rates by pence_per_kwh and applies load_scaling_free for import events
@@ -1177,6 +1242,91 @@ def _test_axle_load_slot_import(my_predbat=None):
     print(f"  ✓ Rate at 04:00 unchanged: {base.rate_import[end_minutes]}")
     print(f"  ✓ {len(rate_replicate)} minutes marked as 'saving' events")
     print(f"  ✓ load_scaling_free ({base.load_scaling_free}) applied to {len(base.load_scaling_dynamic)} minutes in import event")
+
+    return False
+
+
+def _test_axle_byok_export_event_boosts_import_rate(my_predbat=None):
+    """
+    A BYOK Axle export event pays a premium to export, so charging (importing) instead during
+    the same window carries the same opportunity cost - Predbat should not see it as free to
+    charge cheaply for the whole period. load_axle_slot now applies an export-direction
+    session's pence_per_kwh to both rate_export and rate_import (mirroring how Octopus saving
+    sessions boost both directions), so the single event Axle reports is enough - no need to
+    fabricate a second session.
+
+    Regression test for: BYOK export events only boosted rate_export, leaving rate_import
+    untouched for the event period.
+    """
+    from axle import load_axle_slot, fetch_axle_sessions
+    from datetime import datetime, timezone
+
+    print("Test: BYOK Axle export event also boosts the import rate")
+
+    axle = MockAxleAPI()
+    axle.initialize(api_key="test_key", pence_per_kwh=100, automatic=False)
+
+    now = datetime(2025, 12, 20, 13, 30, 0, tzinfo=timezone.utc)
+    axle._now_utc = now
+
+    json_data = {"start_time": "2025-12-20T14:00:00Z", "end_time": "2025-12-20T16:00:00Z", "import_export": "export", "updated_at": "2025-12-20T13:45:00Z"}
+    mock_response = create_aiohttp_mock_response(status=200, json_data=json_data)
+    mock_session = create_aiohttp_mock_session(mock_response=mock_response)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        run_async(axle.fetch_axle_event())
+    axle.publish_axle_event()
+
+    # The event hasn't started yet, so it's only visible via event_current - no history entry
+    # is needed or created for it to be seen ahead of time.
+    assert axle.event_history == [], "Future export event should not be in history yet"
+
+    class MockBase:
+        def __init__(self):
+            self.midnight_utc = datetime(2025, 12, 20, 0, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 13 * 60 + 30
+            self.forecast_minutes = 24 * 60
+            self.rate_import = {minute: 15.0 for minute in range(24 * 60)}
+            self.rate_export = {minute: 5.0 for minute in range(24 * 60)}
+            self.load_scaling_dynamic = {}
+            self.load_scaling_saving = 0.5
+            self.load_scaling_free = 0.0
+            self.prefix = "predbat"
+
+        def log(self, message):
+            pass
+
+        def time_abs_str(self, minutes):
+            return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+        def get_state_wrapper(self, entity_id, default=None, attribute=None):
+            sensor = axle.dashboard_items.get(entity_id)
+            if not sensor:
+                return default
+            if attribute:
+                return sensor["attributes"].get(attribute, default)
+            return sensor["state"]
+
+        def get_arg(self, name, indirect=True):
+            return "binary_sensor.predbat_axle_event"
+
+    base = MockBase()
+    axle_sessions = fetch_axle_sessions(base)
+    assert len(axle_sessions) == 1, "Only the single export event should be reported, no synthetic companion"
+
+    rate_replicate_import = {}
+    rate_replicate_export = {}
+    load_axle_slot(base, axle_sessions, base.rate_import, export=False, rate_replicate=rate_replicate_import)
+    load_axle_slot(base, axle_sessions, base.rate_export, export=True, rate_replicate=rate_replicate_export)
+
+    start_minutes = 14 * 60
+    end_minutes = 16 * 60
+    for minute in range(start_minutes, end_minutes):
+        assert base.rate_import[minute] == 115.0, f"rate_import at minute {minute} should be boosted to 115.0 (15.0 + 100 opportunity cost), got {base.rate_import[minute]}"
+        assert base.rate_export[minute] == 105.0, f"rate_export at minute {minute} should still be boosted to 105.0, got {base.rate_export[minute]}"
+
+    print("  ✓ Import rate boosted by pence_per_kwh during the Axle export event window")
+    print("  ✓ Export rate still boosted, from the same single session")
 
     return False
 
@@ -1288,36 +1438,26 @@ def _test_axle_managed_price_curve_processing(my_predbat=None):
 
     axle._process_price_curve(price_curve)
 
-    # 2 valid slots × 2 directions = 4 events
-    assert len(axle.event_history) == 4, f"Expected 4 events, got {len(axle.event_history)}"
+    # 2 valid slots × 1 session each = 2 events. load_axle_slot applies an export-direction
+    # session to both rate_export and rate_import, so a single session per slot is enough.
+    assert len(axle.event_history) == 2, f"Expected 2 events, got {len(axle.event_history)}"
+    assert all(e["import_export"] == "export" for e in axle.event_history)
 
-    # Check first slot: 50 GBP/MWh = 5.0 p/kWh
-    export_events = [e for e in axle.event_history if e["import_export"] == "export"]
-    import_events = [e for e in axle.event_history if e["import_export"] == "import"]
-    assert len(export_events) == 2
-    assert len(import_events) == 2
+    # First slot: 50 GBP/MWh → 5.0 p/kWh
+    first = [e for e in axle.event_history if "14:00:00" in e["start_time"]][0]
+    assert first["pence_per_kwh"] == 5.0, f"Expected 5.0, got {first['pence_per_kwh']}"
 
-    # First export: 50 GBP/MWh → 5.0 p/kWh
-    first_export = [e for e in export_events if "14:00:00" in e["start_time"]][0]
-    assert first_export["pence_per_kwh"] == 5.0, f"Expected 5.0, got {first_export['pence_per_kwh']}"
-
-    # First import: negated → -5.0 p/kWh
-    first_import = [e for e in import_events if "14:00:00" in e["start_time"]][0]
-    assert first_import["pence_per_kwh"] == -5.0, f"Expected -5.0, got {first_import['pence_per_kwh']}"
-
-    # Second slot: -20 GBP/MWh = -2.0 p/kWh (negative wholesale price)
-    second_export = [e for e in export_events if "14:30:00" in e["start_time"]][0]
-    assert second_export["pence_per_kwh"] == -2.0, f"Expected -2.0, got {second_export['pence_per_kwh']}"
-
-    second_import = [e for e in import_events if "14:30:00" in e["start_time"]][0]
-    assert second_import["pence_per_kwh"] == 2.0, f"Expected 2.0, got {second_import['pence_per_kwh']}"
+    # Second slot: -20 GBP/MWh = -2.0 p/kWh (negative wholesale price passes straight through,
+    # so load_axle_slot lowers both rate_export and rate_import for this slot)
+    second = [e for e in axle.event_history if "14:30:00" in e["start_time"]][0]
+    assert second["pence_per_kwh"] == -2.0, f"Expected -2.0, got {second['pence_per_kwh']}"
 
     # Null price slot should be skipped
     null_events = [e for e in axle.event_history if "15:00:00" in e.get("start_time", "")]
     assert len(null_events) == 0, "Null price slots should be skipped"
 
     print("  ✓ Price curve conversion correct (GBP/MWh → p/kWh)")
-    print("  ✓ Export and import sessions created per slot")
+    print("  ✓ One session created per slot (load_axle_slot applies it to both directions)")
     print("  ✓ Null prices skipped")
     return False
 
@@ -1560,16 +1700,12 @@ def _test_axle_managed_fetch_end_to_end(my_predbat=None):
         run_async(axle.fetch_axle_event())
     axle.publish_axle_event()  # run() always republishes after a fetch attempt
 
-    # Should have 4 events: 2 slots × 2 directions
-    assert len(axle.event_history) == 4, f"Expected 4 events, got {len(axle.event_history)}"
+    # Should have 2 events: 2 slots × 1 session each
+    assert len(axle.event_history) == 2, f"Expected 2 events, got {len(axle.event_history)}"
 
     # Check conversion: 80 GBP/MWh = 8.0 p/kWh
-    export_events = [e for e in axle.event_history if e["import_export"] == "export"]
-    import_events = [e for e in axle.event_history if e["import_export"] == "import"]
-    assert len(export_events) == 2
-    assert len(import_events) == 2
-
-    first_export = [e for e in export_events if "14:00:00" in e["start_time"]][0]
+    assert all(e["import_export"] == "export" for e in axle.event_history)
+    first_export = [e for e in axle.event_history if "14:00:00" in e["start_time"]][0]
     assert first_export["pence_per_kwh"] == 8.0
 
     # Sensor should be published
@@ -1630,8 +1766,8 @@ def _test_axle_managed_token_retry(my_predbat=None):
         with patch("asyncio.sleep"):
             run_async(axle.fetch_axle_event())
 
-    # Should succeed after retry: 1 slot × 2 directions = 2 events
-    assert len(axle.event_history) == 2, f"Expected 2 events after token retry, got {len(axle.event_history)}"
+    # Should succeed after retry: 1 slot × 1 session = 1 event
+    assert len(axle.event_history) == 1, f"Expected 1 event after token retry, got {len(axle.event_history)}"
     assert axle.partner_token == "tok_fresh_456"
 
     # Verify token was invalidated and re-fetched

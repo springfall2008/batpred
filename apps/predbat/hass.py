@@ -164,9 +164,7 @@ class Hass:
         log_size = self.logfile.tell()
         if log_size > 10000000 and threading.current_thread() is threading.main_thread():
             # Only rotate from the main thread to avoid race conditions with
-            # component threads that also call log() — a Threading.Lock cannot
-            # be used here because the logfile object must survive pickle for
-            # the multiprocessing pool.
+            # component threads that also call log().
             for num_logs in range(max_logs - 1, 0, -1):
                 filename = "predbat." + format(num_logs) + ".log"
                 if os.path.isfile(filename):
