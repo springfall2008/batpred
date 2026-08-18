@@ -299,9 +299,11 @@ COMPONENT_LIST = {
             "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "sunsynk_automatic_ignore_pv"},
-            # Off by default: the write format is inferred from third-party clients and
-            # has not been confirmed against live hardware. Monitoring needs no opt-in.
-            "control_enable": {"required": False, "default": False, "config": "sunsynk_control_enable"},
+            # On by default, matching solis_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only - worth doing while the inferred write format is unconfirmed
+            # against live hardware (see the VERIFY@SPIKE notes in sunsynk_const.py).
+            "control_enable": {"required": False, "default": True, "config": "sunsynk_control_enable"},
             # Battery capacity arrives in amp-hours, so it needs a pack voltage to become
             # kWh. Normally inferred from the BMS charge target; this is the escape hatch
             # for a pack that does not report one.

@@ -156,6 +156,16 @@ def test_component_registered():
         if arg not in entry.get("args", {}):
             print(f"ERROR: component arg {arg} not registered")
             failed = True
+    # Pin the registered defaults. control_enable in particular decides whether Predbat
+    # writes to a real inverter at all, so a silent flip either way is worth catching:
+    # False would leave a configured component inert, True is the intended behaviour and
+    # matches solis_control_enable.
+    defaults = {"control_enable": True, "region": "sunsynk", "auth_method": "password", "automatic": False, "automatic_ignore_pv": False}
+    for arg, expect in defaults.items():
+        got = entry.get("args", {}).get(arg, {}).get("default")
+        if got != expect:
+            print(f"ERROR: component arg {arg} default {got!r}, expected {expect!r}")
+            failed = True
     assert not failed, "test_component_registered"
 
 
