@@ -224,8 +224,8 @@ def test_payload_renders_indexed_fields_and_types():
     if payload.get(SUNSYNK_SERIAL_FIELD) != "INV1":
         print(f"ERROR: serial should be echoed back, got {payload.get(SUNSYNK_SERIAL_FIELD)!r}")
         failed = True
-    if payload.get(SUNSYNK_SOLAR_SELL_FIELD) not in ("0", "1"):
-        print(f"ERROR: solarSell should be '0' or '1', got {payload.get(SUNSYNK_SOLAR_SELL_FIELD)!r}")
+    if payload.get(SUNSYNK_SOLAR_SELL_FIELD) != "1":
+        print(f"ERROR: solarSell should always be '1', got {payload.get(SUNSYNK_SOLAR_SELL_FIELD)!r}")
         failed = True
     assert not failed, "test_payload_renders_indexed_fields_and_types"
 
@@ -785,6 +785,34 @@ def test_external_changes_are_logged():
     assert not failed, "test_external_changes_are_logged"
 
 
+def test_solar_export_is_never_disabled():
+    """solarSell must stay on in every state, including idle and charging.
+
+    It governs whether surplus PV reaches the grid at all, not what the battery does.
+    Deriving it from the active window - on only while exporting - would curtail spare
+    solar for most daylight hours once the battery is full, silently costing export
+    revenue, and Predbat has no notion of PV curtailment to notice it. An export window
+    still exports via the selling-first work mode and the slot SoC targets.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "10"}
+    charge = {"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"}
+    export = {"enable": True, "soc": 20, "power": 3000, "start": "16:00:00", "end": "19:00:00"}
+    cases = [
+        ("idle midday", _schedule(reserve=10), 12 * 60),
+        ("inside the charge window", _schedule(reserve=10, charge=charge), 3 * 60),
+        ("inside the export window", _schedule(reserve=10, export=export), 17 * 60),
+        ("both windows set, neither active", _schedule(reserve=10, charge=charge, export=export), 12 * 60),
+    ]
+    for name, schedule, minutes in cases:
+        payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=minutes)
+        if payload.get(SUNSYNK_SOLAR_SELL_FIELD) != "1":
+            print(f"ERROR: {name} produced solarSell {payload.get(SUNSYNK_SOLAR_SELL_FIELD)!r}, expected '1'")
+            failed = True
+    assert not failed, "test_solar_export_is_never_disabled"
+
+
 def run_sunsynk_control_tests(my_predbat):
     """Run all Sunsynk control-logic tests."""
     failed = False
@@ -797,6 +825,7 @@ def run_sunsynk_control_tests(my_predbat):
         ("active_window_mode", test_active_window_drives_the_global_mode),
         ("midnight_wrap", test_window_active_handles_midnight_wrap),
         ("payload_field_types", test_payload_renders_indexed_fields_and_types),
+        ("solar_export_never_off", test_solar_export_is_never_disabled),
         ("payload_preserves", test_payload_preserves_unowned_settings),
         ("payload_soc_floor", test_payload_clamps_to_the_inverter_soc_floor),
         ("payload_no_baseline_is_empty", test_build_settings_payload_returns_empty_without_a_baseline),
