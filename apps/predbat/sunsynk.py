@@ -791,7 +791,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # single place that knows which fields Sunsynk wants bare and which quoted, so a
         # field that bypasses it is a field whose encoding cannot be corrected in one place.
         payload = {SUNSYNK_SERIAL_FIELD: sn, SUNSYNK_WORKMODE_FIELD: encode_setting(SUNSYNK_WORKMODE_FIELD, active["work_mode"])}
-        payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1" if active["solar_sell"] else "0")
+        # Solar Export is always left ON, regardless of what the active state derives.
+        #
+        # solarSell does not govern the BATTERY - it governs whether surplus PV reaches the
+        # grid at all. Predbat plans when the battery charges and exports; it assumes, like
+        # every other inverter it drives, that spare solar exports passively in the
+        # background. Deriving this from the active window (on only inside an export window,
+        # off otherwise) would curtail surplus PV for most daylight hours, silently costing
+        # the user export revenue on a sunny day once the battery is full - and Predbat has
+        # no notion it is doing so, because nothing in its model represents PV curtailment.
+        #
+        # An export window still exports: that is driven by the selling-first work mode and
+        # the slot SoC targets, not by this flag. Turning it off is never useful here, only
+        # harmful, so it is not derived at all.
+        payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1")
         payload[SUNSYNK_TOU_ENABLE_FIELD] = encode_setting(SUNSYNK_TOU_ENABLE_FIELD, "1")
         for day in SUNSYNK_DAY_FIELDS:
             payload[day] = encode_setting(day, True)
