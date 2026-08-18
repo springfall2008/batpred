@@ -454,6 +454,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
+        app.router.add_get("/debug_apps_live", self.html_debug_apps_live)
         app.router.add_get("/debug_plan", self.html_debug_plan)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
@@ -872,7 +873,7 @@ class WebInterface(ComponentBase):
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='./debug_apps'>apps.yaml (file)</a></td></tr>\n"
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
@@ -2802,6 +2803,24 @@ chart.render();
 
     async def html_debug_apps(self, request):
         return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
+
+    async def html_debug_apps_live(self, request):
+        """
+        Return an apps.yaml reconstructed from the live in-memory settings (self.args).
+
+        Pass ?masked=1 to redact credential-like keys, matching create_debug_yaml's masking rule.
+        """
+        masked = request.query.get("masked", "0") == "1"
+        args_copy = copy.deepcopy(self.args)
+        if masked:
+            for key in args_copy:
+                if ("_key" in key.lower()) or ("password" in key.lower()):
+                    args_copy[key] = "xxx"
+        yaml = YAML()
+        buf = StringIO()
+        yaml.dump({ROOT_YAML_KEY: args_copy}, buf)
+        filename = "apps_live_masked.yaml.txt" if masked else "apps_live.yaml.txt"
+        return await self.html_file(filename, buf.getvalue())
 
     async def html_debug_plan(self, request):
         html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
