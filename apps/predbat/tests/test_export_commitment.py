@@ -23,7 +23,6 @@ def setup_single_export_window(my_predbat, rate_import=10.0, rate_export=30.0, b
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     reset_inverter(my_predbat)
-    my_predbat.pool = None
 
     my_predbat.forecast_minutes = 24 * 60
     end_record = my_predbat.forecast_minutes
@@ -175,11 +174,11 @@ def run_in_progress_start_test(my_predbat):
 
 def run_tweak_monotonic_test(my_predbat):
     """
-    tweak_plan must not write back a window change that makes the whole plan worse.
+    optimise_plan_pass must not write back a window change that makes the whole plan worse.
 
     optimise_export ranks its candidates against the window being turned off and on a score carrying
     adjustments the plan metric does not, so it can return something worse than the setting an earlier pass
-    chose. Here it is stubbed to return exactly that - export off, start delayed - and tweak_plan is expected
+    chose. Here it is stubbed to return exactly that - export off, start delayed - and the pass is expected
     to measure the result and put the window back.
     """
     failed = False
@@ -216,23 +215,23 @@ def run_tweak_monotonic_test(my_predbat):
 
     my_predbat.optimise_export = worse_optimise_export
     try:
-        my_predbat.tweak_plan(end_record)
+        my_predbat.optimise_plan_pass(end_record, budget=8)
     finally:
         my_predbat.optimise_export = orig_optimise_export
 
     if my_predbat.export_limits_best[0] != 0.0:
-        print("ERROR: tweak_plan kept a worse export limit {} instead of reverting to 0.0".format(my_predbat.export_limits_best[0]))
+        print("ERROR: optimise_plan_pass kept a worse export limit {} instead of reverting to 0.0".format(my_predbat.export_limits_best[0]))
         failed = True
     if my_predbat.export_window_best[0]["start"] != start:
-        print("ERROR: tweak_plan kept a delayed export start {} instead of reverting to {}".format(my_predbat.export_window_best[0]["start"], start))
+        print("ERROR: optimise_plan_pass kept a delayed export start {} instead of reverting to {}".format(my_predbat.export_window_best[0]["start"], start))
         failed = True
     if "start_orig" in my_predbat.export_window_best[0]:
-        print("ERROR: tweak_plan left a start_orig behind after reverting the change")
+        print("ERROR: optimise_plan_pass left a start_orig behind after reverting the change")
         failed = True
 
     metric_after = my_predbat.run_prediction_metric([], [], my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record)[0]
     if metric_after > metric_before:
-        print("ERROR: tweak_plan made the plan worse, metric {} was {}".format(metric_after, metric_before))
+        print("ERROR: optimise_plan_pass made the plan worse, metric {} was {}".format(metric_after, metric_before))
         failed = True
 
     my_predbat.charge_window_best = []
@@ -244,9 +243,9 @@ def run_tweak_monotonic_test(my_predbat):
 
 def run_second_pass_monotonic_test(my_predbat):
     """
-    optimise_full_second_pass must not write back a window change that makes the whole plan worse.
+    optimise_plan_pass must not write back a worsening change when run unbudgeted either.
 
-    Same guarantee as run_tweak_monotonic_test, for the pass used when calculate_second_pass is enabled. The
+    Same guarantee as run_tweak_monotonic_test, for the budget=0 form used when calculate_second_pass is enabled. The
     existing optimise_windows_kernel test runs this pass but only proves it still completes.
     """
     failed = False
@@ -282,7 +281,7 @@ def run_second_pass_monotonic_test(my_predbat):
 
     my_predbat.optimise_export = worse_optimise_export
     try:
-        my_predbat.optimise_full_second_pass(0, 0, 0, 0, 0, 0, 0, 0, 1, record_export_windows)
+        my_predbat.optimise_plan_pass(end_record, budget=0)
     finally:
         my_predbat.optimise_export = orig_optimise_export
 
@@ -326,10 +325,10 @@ def run_reported_metric_matches_plan_test(my_predbat):
     my_predbat.export_limits_best = [100.0]
     my_predbat.end_record = end_record
 
-    reported_metric = my_predbat.tweak_plan(end_record)[0]
+    reported_metric = my_predbat.optimise_plan_pass(end_record, budget=8)[0]
 
     if my_predbat.export_limits_best[0] >= 100.0:
-        print("ERROR: expected tweak_plan to enable the profitable export, limit is still {}".format(my_predbat.export_limits_best[0]))
+        print("ERROR: expected optimise_plan_pass to enable the profitable export, limit is still {}".format(my_predbat.export_limits_best[0]))
         failed = True
 
     # Both sides come from compute_metric, which rounds to 4 DP, so they should agree exactly. The tolerance
@@ -337,7 +336,7 @@ def run_reported_metric_matches_plan_test(my_predbat):
     # own ranking - otherwise reporting the adjusted metric by mistake would slip through unnoticed.
     simulated_metric = my_predbat.run_prediction_metric(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record)[0]
     if abs(reported_metric - simulated_metric) > 0.0001:
-        print("ERROR: tweak_plan reported metric {} but the plan it left simulates to {}".format(reported_metric, simulated_metric))
+        print("ERROR: optimise_plan_pass reported metric {} but the plan it left simulates to {}".format(reported_metric, simulated_metric))
         failed = True
 
     my_predbat.charge_window_best = []
@@ -375,11 +374,11 @@ def run_charge_reported_metric_test(my_predbat):
     my_predbat.export_limits_best = []
     my_predbat.end_record = end_record
 
-    reported_metric = my_predbat.tweak_plan(end_record)[0]
+    reported_metric = my_predbat.optimise_plan_pass(end_record, budget=8)[0]
 
     simulated_metric = my_predbat.run_prediction_metric(my_predbat.charge_limit_best, my_predbat.charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=end_record)[0]
     if abs(reported_metric - simulated_metric) > 0.0001:
-        print("ERROR: tweak_plan reported charge metric {} but the plan it left simulates to {}".format(reported_metric, simulated_metric))
+        print("ERROR: optimise_plan_pass reported charge metric {} but the plan it left simulates to {}".format(reported_metric, simulated_metric))
         failed = True
 
     my_predbat.charge_window_best = []
@@ -459,10 +458,10 @@ def run_export_commitment_tests(my_predbat):
     # 4) The harness itself must simulate a live battery, or the metric assertions above and below are vacuous
     failed |= run_harness_live_test(my_predbat)
 
-    # 5) tweak_plan must revert a window change that makes the whole plan worse
+    # 5) the budgeted plan pass must revert a window change that makes the whole plan worse
     failed |= run_tweak_monotonic_test(my_predbat)
 
-    # 6) optimise_full_second_pass must do the same
+    # 6) the unbudgeted plan pass must do the same
     failed |= run_second_pass_monotonic_test(my_predbat)
 
     # 7) An in-progress export must not be restarted later inside its own window

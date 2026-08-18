@@ -26,6 +26,7 @@ async def test_octopus_misc(my_predbat):
     failed += test_octopus_get_intelligent_target_time(my_predbat)
     failed += test_octopus_get_intelligent_battery_size(my_predbat)
     failed += test_octopus_get_intelligent_vehicle(my_predbat)
+    failed += test_octopus_automatic_config_num_cars(my_predbat)
     failed += await test_octopus_run(my_predbat)
 
     if failed == 0:
@@ -1849,6 +1850,80 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
         return 1
     else:
         print("\n**** ✅ Octopus get_intelligent_vehicle tests PASSED ****")
+        return 0
+
+
+def test_octopus_automatic_config_num_cars(my_predbat):
+    """
+    Test OctopusAPI automatic_config method's num_cars auto-discovery from Octopus Intelligent devices.
+
+    Tests:
+    - Test 1: Suspended devices (e.g. an old/decommissioned charger still linked to the account) are
+      excluded from the entity lists and don't count towards num_cars
+    - Test 2: num_cars auto-discovery only ever raises num_cars, never lowers an existing higher value
+    """
+    print("\n**** Running Octopus automatic_config num_cars tests ****")
+    failed = False
+
+    # automatic_config() writes several keys (num_cars, octopus_saving_session_join,
+    # octopus_intelligent_slot, metric_octopus_*, ...) directly into my_predbat.args, and
+    # my_predbat is a single shared instance reused across every test in the run - so without
+    # saving/restoring, those writes would leak into unrelated tests that run afterwards.
+    original_args = dict(my_predbat.args)
+
+    # Test 1: 5 registered devices, 2 suspended - only the 3 active devices should count towards
+    # num_cars and appear in the entity lists. A stale/decommissioned device left in an Octopus
+    # account should not be treated as a car needing a charging slot (and, before
+    # fetch_config_options' num_cars clamp existed, an inflated count could push num_cars past
+    # what Predbat supports and crash get_car_charging_planned() with TypeError: float() argument
+    # must be a string or a real number, not 'NoneType').
+    print("\n*** Test 1: Suspended devices are excluded from num_cars and entity lists ***")
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.intelligent_devices = {
+        "device-aaa1": {"suspended": False},
+        "device-bbb2": {"suspended": True},
+        "device-ccc3": {"suspended": False},
+        "device-ddd4": {"suspended": True},
+        "device-eee5": {"suspended": False},
+    }
+    my_predbat.args["num_cars"] = 0
+
+    api.automatic_config(["import", "export"])
+
+    if my_predbat.args.get("num_cars") != 3:
+        print(f"ERROR: Expected num_cars to be raised to 3 active devices, got {my_predbat.args.get('num_cars')}")
+        failed = True
+    else:
+        print("PASS: num_cars raised to the count of active (non-suspended) devices only")
+
+    slot_list = my_predbat.args.get("octopus_intelligent_slot", [])
+    if len(slot_list) != 3:
+        print(f"ERROR: Expected 3 entities in octopus_intelligent_slot, got {len(slot_list)}")
+        failed = True
+    else:
+        print("PASS: octopus_intelligent_slot only contains active devices")
+
+    # Test 2: num_cars auto-discovery never lowers an already-higher value
+    print("\n*** Test 2: num_cars is not lowered below an existing higher value ***")
+    my_predbat.args["num_cars"] = 4
+
+    api.automatic_config(["import", "export"])
+
+    if my_predbat.args.get("num_cars") != 4:
+        print(f"ERROR: Expected num_cars to remain at 4, got {my_predbat.args.get('num_cars')}")
+        failed = True
+    else:
+        print("PASS: num_cars left unchanged when already >= the active device count")
+
+    # Restore my_predbat.args so this test's auto-discovery writes don't leak into later tests
+    my_predbat.args.clear()
+    my_predbat.args.update(original_args)
+
+    if failed:
+        print("\n**** ❌ Octopus automatic_config num_cars tests FAILED ****")
+        return 1
+    else:
+        print("\n**** ✅ Octopus automatic_config num_cars tests PASSED ****")
         return 0
 
 

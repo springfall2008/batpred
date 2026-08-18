@@ -392,7 +392,11 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
-    if not can_modify_history:
+    # The glitch filter below is the only code here that writes to history, and it only runs for
+    # backwards incrementing data, so that is the only case worth copying for. Copying regardless
+    # cost ~150k deepcopy calls on a plan cycle for the two calculate_yesterday calls alone, neither
+    # of which asks for the filter. can_modify_history stays the caller's explicit opt-out on top.
+    if clean_increment and backwards and not can_modify_history:
         history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
@@ -989,13 +993,45 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
+def clone_windows(windows):
+    """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
+
+    Window dicts never hold nested mutable values, so copying each dict is equivalent to
+    copy.deepcopy(windows) here but far cheaper - deepcopy's generic recursive walk measured
+    ~275us per call on a typical export_window, this is a few us.
+    """
+    return [w.copy() for w in windows]
+
+
+def _clean_window(w, start=None, end=None):
+    """Rebuild window dict retaining essential simulation and anti-clipping keys."""
+    res = {
+        "start": start if start is not None else w["start"],
+        "end": end if end is not None else w["end"],
+        "average": w.get("average", 0.0),
+    }
+    if "target" in w:
+        res["target"] = w["target"]
+    if "clipping_target_soc_pct" in w:
+        res["clipping_target_soc_pct"] = w["clipping_target_soc_pct"]
+    return res
+
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
-    Filters and removes intersecting charge windows
+    Filters and removes intersecting charge windows.
+    Splits candidate charge windows into pre/inter/post segments upon intersecting an active clipping window,
+    stamping clipping_target_soc_pct onto the intersecting segment instead of zeroing/deleting it.
     """
-    clip_again = True
+    has_active_export = False
+    for limit in export_limit_best:
+        if limit < 100.0:
+            has_active_export = True
+            break
+    if not has_active_export:
+        return list(charge_limit_best), [_clean_window(w) for w in charge_window_best]
 
-    # For each charge window
+    clip_again = True
     while clip_again:
         clip_again = False
         new_limit_best = []
@@ -1006,6 +1042,11 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
             end = window["end"]
             limit = charge_limit_best[window_n]
             clipped = False
+
+            if limit <= 0.0:
+                new_window_best.append(_clean_window(window, start, end))
+                new_limit_best.append(limit)
+                continue
 
             # For each discharge window
             for dwindow_n in range(len(export_limit_best)):
@@ -1022,9 +1063,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                         if window.get("clipping_target_soc_pct") != target_soc:
                             # Part 1: Before the anti-clipping window
                             if dstart > start and (dstart - start) >= 5:
-                                new_window1 = window.copy()
-                                new_window1["start"] = start
-                                new_window1["end"] = dstart
+                                new_window1 = _clean_window(window, start, dstart)
                                 new_window_best.append(new_window1)
                                 new_limit_best.append(limit)
 
@@ -1032,9 +1071,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                             inter_start = max(start, dstart)
                             inter_end = min(end, dend)
                             if (inter_end - inter_start) >= 5:
-                                new_window2 = window.copy()
-                                new_window2["start"] = inter_start
-                                new_window2["end"] = inter_end
+                                new_window2 = _clean_window(window, inter_start, inter_end)
                                 new_window2["clipping_target_soc_pct"] = target_soc
                                 new_window2["target"] = target_soc
                                 new_window_best.append(new_window2)
@@ -1062,9 +1099,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                         else:
                             # Two segments
                             if (dstart - start) >= 5:
-                                new_window = window.copy()
-                                new_window["start"] = start
-                                new_window["end"] = dstart
+                                new_window = _clean_window(window, start, dstart)
                                 new_window_best.append(new_window)
                                 new_limit_best.append(limit)
                             start = dend
@@ -1074,9 +1109,7 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
                                 break  # Break out of dwindow loop to process the new `start` cleanly
 
             if not clipped or ((end - start) >= 5):
-                new_window = window.copy()
-                new_window["start"] = start
-                new_window["end"] = end
+                new_window = _clean_window(window, start, end)
                 new_window_best.append(new_window)
                 new_limit_best.append(limit)
 

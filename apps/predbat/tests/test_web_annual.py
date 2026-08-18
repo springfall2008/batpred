@@ -1421,10 +1421,10 @@ def test_web_annual_store_failure_surfaces(my_predbat):
 def sample_run_results():
     """Return a results document covering an ok, a degraded and an unavailable month."""
     scenarios = {
-        "no_pvbat": {"cost_p": 18000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 0.0},
-        "pv_only": {"cost_p": 13000.0, "import_kwh": 340.0, "export_kwh": 70.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 210.0},
-        "without_predbat": {"cost_p": 9000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "export_credit_p_estimate": 300.0},
-        "with_predbat": {"cost_p": 6600.0, "import_kwh": 280.0, "export_kwh": 145.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "export_credit_p_estimate": 675.0},
+        "no_pvbat": {"cost_p": 18000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0},
+        "pv_only": {"cost_p": 13000.0, "import_kwh": 340.0, "export_kwh": 70.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 210.0},
+        "without_predbat": {"cost_p": 9000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "battery_cycles": 2.0, "export_credit_p_estimate": 300.0},
+        "with_predbat": {"cost_p": 6600.0, "import_kwh": 280.0, "export_kwh": 145.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "battery_cycles": 3.0, "export_credit_p_estimate": 675.0},
     }
     return {
         "year": 2025,
@@ -1486,6 +1486,14 @@ def test_web_annual_results(my_predbat):
         failed = True
     if "24.00" not in html:
         print("  ERROR: the Predbat saving (2400p = £24.00) should be shown")
+        failed = True
+
+    print("Test: the battery cycle metric appears in the payback table")
+    if "<th>Battery cycles a year</th>" not in html:
+        print("  ERROR: expected the Battery cycles column header in the rendered HTML, got:\n{}".format(html))
+        failed = True
+    if "3.00 (+1.00)" not in html:
+        print("  ERROR: expected the with Predbat battery cycles value (3.00 (+1.00)) in the rendered HTML, got:\n{}".format(html))
         failed = True
 
     print("Test: the validated colourblind-safe palette is used, not the house trio")

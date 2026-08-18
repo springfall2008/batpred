@@ -504,6 +504,39 @@ def run_test_plan_why_reason(my_predbat):
             print("ERROR: SyntaxWarning in web_helper.py line {}: {}".format(item.lineno, item.message))
         failed = True
 
+    # --- Test 15: editable rate cells don't double-mark a manual override (batpred#4474) ---
+    # row.{import,export}_rate_adjust_type === 'manual' and renderRateCell()'s own isOverride
+    # check both independently render the same turned-F glyph for the same single override -
+    # visually stacking two identical markers, and since only isOverride gates the Clear link,
+    # the two signals can disagree and leave a marker with no working Clear behind it. The fix
+    # skips the adjust-type marker specifically for 'manual' when editable, leaving isOverride as
+    # the sole source of truth for both the marker and the Clear control in that case.
+    print("Test editable rate cells don't double-render the manual-override marker")
+    for label, adjust_var in (("import", "importAdjustType"), ("export", "exportAdjustType")):
+        rate_field = "{}_rate_adjust_type".format(label)
+        expected = "const {} = (editable && row.{} === 'manual') ? null : row.{};".format(adjust_var, rate_field, rate_field)
+        if expected not in renderer_js:
+            print("ERROR: expected {} to null out a 'manual' adjust type in editable mode (found: {})".format(adjust_var, expected in renderer_js))
+            failed = True
+        # The old unconditional form must be gone, not just superseded - if it's still present
+        # anywhere the double-render bug is still reachable.
+        old_unconditional = "const {} = row.{} ? ` ${{getAdjustSymbol(row.{})}}` : '';".format({"import": "importAdjust", "export": "exportAdjust"}[label], rate_field, rate_field)
+        if old_unconditional in renderer_js:
+            print("ERROR: old unconditional {} form is still present alongside the fix".format({"import": "importAdjust", "export": "exportAdjust"}[label]))
+            failed = True
+
+    # --- Test 16: toggleForceDropdown doesn't throw on a stale/missing dropdown id (#4474 follow-up) ---
+    # Lives in get_plan_css() alongside the rest of the dropdown open/close JS, not
+    # get_plan_renderer_js() (which only covers the table-building functions).
+    print("Test toggleForceDropdown guards against a missing dropdown element")
+    plan_css_full = web_helper.get_plan_css()
+    toggle_start = plan_css_full.index("function toggleForceDropdown(")
+    toggle_end = plan_css_full.index("\n    }", toggle_start)
+    toggle_src = plan_css_full[toggle_start:toggle_end]
+    if "if (!dropdown)" not in toggle_src:
+        print("ERROR: expected toggleForceDropdown to null-guard document.getElementById(id) before using it")
+        failed = True
+
     if not failed:
         print("All plan why-reason tests passed")
     return failed

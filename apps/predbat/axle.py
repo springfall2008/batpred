@@ -458,15 +458,12 @@ class AxleAPI(ComponentBase):
     def _process_price_curve(self, data):
         """Convert Axle price curve to session format for load_axle_slot().
 
-        The price curve provides half-hourly wholesale market prices (GBP/MWh).
-        These are overlaid onto existing tariff rates:
-        - Export: wholesale price added to rate_export (high price = more export)
-        - Import: wholesale price added to rate_import (high price = less import,
-          negative price = cheap import encourages charging)
-        - Null prices are skipped (no modification, normal tariff applies)
-
-        Note: load_axle_slot subtracts import pence_per_kwh, so we negate it here
-        to achieve addition of the wholesale price to the import rate.
+        The price curve provides half-hourly wholesale market prices (GBP/MWh), overlaid onto
+        existing tariff rates. One "export" session per slot is enough: load_axle_slot adds
+        the wholesale price to both rate_export and rate_import for an export-direction session
+        (high price = more export and pricier import; negative price = cheap import, which
+        also encourages charging). Null prices are skipped (no modification, normal tariff
+        applies).
         """
         prices = data.get("half_hourly_traded_prices", [])
         session_count = 0
@@ -492,27 +489,16 @@ class AxleAPI(ComponentBase):
             start_formatted = start_dt.strftime(TIME_FORMAT)
             end_formatted = end_dt.strftime(TIME_FORMAT)
 
-            # Create export session: adds wholesale price as export bonus
-            # load_axle_slot does: rate_export + pence_per_kwh
-            export_session = {
+            # load_axle_slot applies an export-direction session's pence_per_kwh to both
+            # rate_export and rate_import, so a single session models the wholesale price's
+            # effect on both sides of the meter.
+            session = {
                 "start_time": start_formatted,
                 "end_time": end_formatted,
                 "import_export": "export",
                 "pence_per_kwh": pence_per_kwh,
             }
-            self.add_event_to_history(export_session, allow_future=True)
-
-            # Create import session: adds wholesale price to import cost
-            # load_axle_slot does: rate_import - pence_per_kwh, so we negate
-            # to get rate_import + wholesale_price (high price = expensive import,
-            # negative price = cheap import)
-            import_session = {
-                "start_time": start_formatted,
-                "end_time": end_formatted,
-                "import_export": "import",
-                "pence_per_kwh": -pence_per_kwh,
-            }
-            self.add_event_to_history(import_session, allow_future=True)
+            self.add_event_to_history(session, allow_future=True)
             session_count += 1
 
         self.log(f"AxleAPI: Processed {session_count} price curve slots into sessions")
@@ -676,17 +662,23 @@ def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
             end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes + base.minutes_now)
 
         if start_minutes is not None and end_minutes is not None and start_minutes < (base.forecast_minutes + base.minutes_now):
-            if (export and import_export == "export") or (not export and import_export == "import"):
+            if import_export == "export":
+                # An export event pays a premium to export, so charging instead during the same
+                # window carries the same opportunity cost - apply the same boost to both the
+                # export and the import rate (mirrors how Octopus saving sessions boost both
+                # directions), rather than only making export look attractive.
                 base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
+                    rate_dict[minute] = rate_dict.get(minute, 0) + pence_per_kwh
+                    rate_replicate[minute] = "saving"
                     if export:
-                        rate_dict[minute] = rate_dict.get(minute, 0) + pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_saving
-                        rate_replicate[minute] = "saving"
-                    else:
-                        rate_dict[minute] = rate_dict.get(minute, 0) - pence_per_kwh
-                        base.load_scaling_dynamic[minute] = base.load_scaling_free
-                        rate_replicate[minute] = "saving"
+            elif import_export == "import" and not export:
+                base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
+                for minute in range(start_minutes, end_minutes):
+                    rate_dict[minute] = rate_dict.get(minute, 0) - pence_per_kwh
+                    base.load_scaling_dynamic[minute] = base.load_scaling_free
+                    rate_replicate[minute] = "saving"
 
 
 def fetch_axle_active(base):

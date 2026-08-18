@@ -1678,6 +1678,10 @@ var height = window.innerHeight;
 width = width / 3 * 2;
 height = height / 3 * 2;
 
+if (width < 600) {
+    width = 600
+}
+
 if (height * 1.68 > width) {
    height = width / 1.68;
 }

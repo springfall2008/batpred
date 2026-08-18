@@ -57,6 +57,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [Sunsynk Cloud](#sunsynk-cloud) | Predbat | See [apps.yaml](apps-yaml.md#sunsynk-cloud-api) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
    | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
@@ -2391,6 +2392,71 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
    So for example, if the inverter minimum SoC is set to 20%, predbat_set_reserve_min must be set to at least 21%. If this is not done then when Predbat sets the reserve SoC, the instruction will be rejected by the inverter and Predbat will error.
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
+
+## Sunsynk Cloud
+
+**Experimental**
+
+Predbat has a built-in Sunsynk Cloud integration for Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect cloud API, providing monitoring and, once confirmed on your own hardware, battery control - no local Modbus/RS485 Home Assistant integration is required. This is a different integration from the [local Modbus SunSynk integration](#sunsynk) described below - use Sunsynk Cloud if you don't have, or don't want to run, local dongle/Modbus access.
+
+Nobody on the Predbat project has a Sunsynk account, so this integration's wire format is inferred from two third-party open-source clients rather than documented. A standalone diagnostics CLI is included specifically so you can verify it against your own inverter before trusting Predbat with control.
+
+### Sunsynk Connect account and region
+
+You need a Sunsynk Connect account e-mail and password - the same login used by the Sunsynk phone app. Add them to `apps.yaml`:
+
+```yaml
+  sunsynk_username: 'you@example.com'
+  sunsynk_password: 'your-password'
+  sunsynk_region: 'sunsynk'
+  sunsynk_automatic: true
+  sunsynk_control_enable: true
+```
+
+Set `sunsynk_region` to `'inteless'` instead of `'sunsynk'` if your account logs in via the `pv.inteless.com` host rather than `api.sunsynk.net` - check with your installer, or try the [diagnostics CLI](#verifying-with-the-sunsynk-diagnostics-cli) below with each region if you are not sure.
+
+### Sunsynk Cloud on Predbat.com (SaaS)
+
+None of the above credentials are needed - connect your Sunsynk Connect account through Predbat.com and the token is injected and refreshed by the platform (`sunsynk_auth_method: 'oauth'`).
+
+### Verifying with the Sunsynk diagnostics CLI
+
+Before turning on control, run the standalone CLI from the `apps/predbat` directory to confirm the account logs in and that the readings match the Sunsynk app:
+
+```bash
+cd apps/predbat
+python3 sunsynk.py --username you@example.com --password your-password
+```
+
+If login fails, retry with the pre-2025 plaintext login:
+
+```bash
+python3 sunsynk.py --username you@example.com --password your-password --auth-method password_legacy
+```
+
+Useful flags:
+
+- `--region sunsynk|inteless` - select the API region (default `sunsynk`)
+- `--serial <sn>` - restrict to one inverter instead of every inverter on the account
+- `--dump-settings` - print the full settings object, useful for confirming the current work mode and slot layout against the app
+- `--write-test` - build a harmless self-use-at-floor schedule, show it, and offer to send it after confirmation - use this to verify a write actually reaches the inverter, and how long the dongle takes to apply it
+
+Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the Sunsynk app, and in particular note whether `battery_power` is positive while charging or while discharging - this sign convention has not been confirmed on real hardware and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.
+
+### Sunsynk Cloud automatic configuration
+
+Set `sunsynk_automatic: true` to have Predbat discover every inverter on your Sunsynk Connect account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
+
+### Sunsynk Cloud inverter control
+
+`sunsynk_control_enable` defaults to `true`, so Predbat drives the inverter as soon as the component is configured. Set it to `false` for monitoring only.
+
+Because the write format is inferred from third-party clients rather than documented by Sunsynk, it is worth running the diagnostics CLI against your own inverter before relying on control, and switching it off if anything looks wrong. Two behaviours to be aware of either way:
+
+- There is a single whole-object settings endpoint. Predbat reads the settings immediately before every write and writes the whole object back, so using the Sunsynk phone app at the same time can overwrite Predbat's change, and vice versa - the last writer wins
+- A write reaching the cloud does not mean the inverter has applied it. The dongle picks up new settings on its next poll, typically one to five minutes later
+
+See the components documentation for details: [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk)
 
 ## Sunsynk
 

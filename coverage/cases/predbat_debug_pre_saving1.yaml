@@ -1920,7 +1920,7 @@ calculate_inday_adjustment: true
 calculate_plan_every: 10
 calculate_regions: true
 calculate_savings: true
-calculate_second_pass: false
+calculate_second_pass: true
 calculate_secondary_order: true
 calculate_tweak_plan: false
 car_charging_battery_size:

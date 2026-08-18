@@ -20,7 +20,7 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
-from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR, LOAD_FORECAST_HISTORY_MAX_DAYS
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR, LOAD_FORECAST_HISTORY_MAX_DAYS, PREDBAT_MAX_CARS
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
@@ -730,6 +730,10 @@ class Fetch:
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
+        self.pv_forecast_minute90 = {}
+        # See Plan.refresh_pv_forecast_minute90(): both series are re-fetched together below, so no
+        # earlier pair of signatures may be held against them
+        self.pv_forecast_minute90_signatures = None
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
@@ -972,9 +976,7 @@ class Fetch:
         # Replicate and scan import rates
         if import_rates:
             self.rate_scan(import_rates, print=False)
-            self.rate_max_base = self.rate_max  # True peak rate before saving sessions / overrides inflate it
-            self.rate_min_base = self.rate_min  # True off-peak rate before free sessions / overrides deflate it
-            self.rate_import_base, _ = self.rate_replicate(import_rates.copy(), {}, is_import=True)  # True import rates, gap-filled but without IO/saving/override distortion
+            self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True)
             self.rate_import_no_io = import_rates.copy()
             for car_n in range(self.num_cars):
@@ -997,6 +999,9 @@ class Fetch:
             self.rate_scan_export(export_rates, print=False)
             export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False)
             self.rate_export_base = export_rates.copy()
+            # Built here, from the base rates, so the saving session and overrides applied below stay
+            # out of it - battery_value_rate needs the tariff's own export price, not an event price
+            self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
@@ -1292,6 +1297,12 @@ class Fetch:
     def fetch_pv_forecast(self):
         """
         Fetch PV forecast data from one or more sensors
+
+        Returns a tuple of (pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90) - the
+        p50, p10 and p90 minute-indexed forecasts respectively. pv_forecast_minute90 is the real
+        p90 series when the source published one (currently only Solcast), otherwise it is a plain
+        copy of the p50 series - see the design spec for why the p90 upside is never synthesised
+        from the p10 spread.
         """
         pv_forecast_minute = {}
         pv_forecast_minute10 = {}
@@ -1387,6 +1398,12 @@ class Fetch:
             pv_forecast_minute90[target_minute] = last_value90
             pv_forecast_minuteCS[target_minute] = last_valueCS
             pv_forecast_minuteHIST[target_minute] = last_valueHIST
+
+        # No p90 published (older sensor data, or a source that does not produce one) - fall back to
+        # the central forecast. No upside is synthesised; see the design spec for why mirroring the
+        # p10 spread was rejected.
+        if not pv_forecast90_packed:
+            pv_forecast_minute90 = dict(pv_forecast_minute)
 
         return pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_minuteCS, pv_forecast_minuteHIST
 
@@ -1850,6 +1867,23 @@ class Fetch:
 
         return dp2(rate_min), dp2(rate_max), dp2(rate_average), rate_min_minute, rate_max_minute
 
+    def rate_base_min_max(self, rates):
+        """
+        Gap-fill `rates` into a "base" import curve (replicated, but without IO-slot/saving-session/
+        override distortion) and work out its true min/max.
+
+        Must scan the gap-filled curve, not the raw input: some tariffs (e.g. a fixed day/night
+        product fetched with a short forward window - #4544) only have the currently-active segment
+        in the raw data at fetch time, so a scan taken before replication can miss a cheaper/dearer
+        segment that hasn't started yet and lock in the wrong "true" min/max for the rest of the day.
+        rate_add_io_slots() then stamps IOG/SmartFlex dispatch slots with that stale value instead of
+        the tariff's real off-peak price. Mirrors how rate_export_base is already built downstream of
+        rate_replicate() on the export side.
+        """
+        rate_base, _ = self.rate_replicate(rates.copy(), {}, is_import=True)
+        rate_min_base, rate_max_base, _, _, _ = self.rate_minmax(rate_base)
+        return rate_base, rate_min_base, rate_max_base
+
     def rate_min_forward_calc(self, rates):
         """
         Work out lowest rate from time forwards
@@ -1961,6 +1995,34 @@ class Fetch:
             # - a cycle stale. `rates` is the freshly-built current-cycle dict being scanned.
             self.rate_min_forward = self.rate_min_forward_calc(rates)
             self.log("Import rates: min {}{}, max {}{}, average {}{}".format(self.rate_min, curr, self.rate_max, curr, self.rate_average, curr))
+
+    def rate_export_max_forward_calc(self, rates):
+        """
+        Work out the highest export rate from each minute forwards
+
+        The export mirror of rate_min_forward_calc. Fed from the base export tariff (see
+        rate_export_base) so a saving session cannot stand in for the tariff's general ability to sell
+        surplus - that question is what the export haircut in battery_value_rate asks, and answering it
+        with a one-off event price makes stored energy look fully recoverable on a system that in fact
+        cannot sell a single kWh.
+        """
+        rate_array = []
+        rate_export_max_forward = {}
+        rate = 0.0
+
+        for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
+            if minute in rates:
+                rate = rates[minute]
+            rate_array.append(rate)
+
+        # Work out the max rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        running_max = rate_array[-1] if rate_array else 0.0
+        for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
+            running_max = max(running_max, rate_array[minute])
+            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
+                rate_export_max_forward[minute] = running_max
+
+        return rate_export_max_forward
 
     def rate_scan_gas(self, rates, print=True):
         """
@@ -2330,6 +2392,10 @@ class Fetch:
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
 
         self.num_cars = self.get_arg("num_cars", 1)
+        if self.num_cars > PREDBAT_MAX_CARS:
+            self.log("Warn: num_cars {} exceeds the {} cars Predbat supports - clamping to {}".format(self.num_cars, PREDBAT_MAX_CARS, PREDBAT_MAX_CARS))
+            self.record_status("Warn: num_cars {} clamped to the maximum of {} supported cars".format(self.num_cars, PREDBAT_MAX_CARS), had_errors=True)
+            self.num_cars = PREDBAT_MAX_CARS
         self.calculate_plan_every = max(self.get_arg("calculate_plan_every"), 5)
         self.calculate_savings_max_charge_slots = self.get_arg("calculate_savings_max_charge_slots", 1)
 
@@ -2351,7 +2417,16 @@ class Fetch:
         self.load_forecast_history = self.get_arg("days_previous_auto", True)
         if self.load_forecast_history:
             window_days = min(max(self.days_previous) if self.days_previous else 7, LOAD_FORECAST_HISTORY_MAX_DAYS)
-            self.log("days_previous_auto enabled - using weighted-bucket historical load forecast over up to {} days".format(window_days))
+            # Config-time log only - describes what's enabled, not what happened this cycle. This
+            # runs unconditionally every cycle regardless of whether the weighted-bucket forecast
+            # actually gets used: Load ML (or any other source that sets load_forecast_only) takes
+            # precedence and skips it entirely (fetch_sensor_data(), guarded by
+            # "not self.load_forecast_only"). The "using weighted-bucket..." wording previously
+            # here read as if it was happening every cycle regardless, which is what actually gets
+            # logged only when the forecast is genuinely used (fetch_sensor_data()'s own "Using
+            # weighted-bucket historical load forecast over N days" line) - confusing on a Load ML
+            # setup where this fallback is rarely/never actually invoked (#4496 follow-up).
+            self.log("days_previous_auto enabled - will fall back to a weighted-bucket historical load forecast over up to {} days if no other load forecast source takes precedence".format(window_days))
             self.max_days_previous = window_days + 1
         elif self.holiday_days_left > 0:
             self.days_previous = [1]
@@ -2393,11 +2468,25 @@ class Fetch:
         self.inverter_soc_reset = self.get_arg("inverter_soc_reset")
 
         self.metric_battery_value_scaling = self.get_arg("metric_battery_value_scaling")
+        self.metric_battery_value_export_scaling = self.get_arg("metric_battery_value_export_scaling")
         self.notify_devices = self.get_arg("notify_devices", ["notify"])
         self.pv_scaling = self.get_arg("pv_scaling")
         self.pv_metric10_weight = self.get_arg("pv_metric10_weight")
+        self.calculate_pv90_plan = self.get_arg("calculate_pv90_plan")
+        self.pv_metric90_weight = self.get_arg("pv_metric90_weight")
         self.load_scaling = self.get_arg("load_scaling")
         self.load_scaling10 = self.get_arg("load_scaling10")
+        self.load_scaling90 = self.get_arg("load_scaling90")
+        if not self.calculate_pv90_plan:
+            # calculate_pv90_plan (CHANGE 2) gates the whole feature: pv_metric90_weight's own
+            # CONFIG_ITEMS default is 0.15, not 0.0, so the user sees a non-zero weight in Home
+            # Assistant even while the switch is off. Force the runtime weight back to 0.0 here so
+            # every one of the pre-existing `pv_metric90_weight > 0` gates elsewhere (the pv90 launch
+            # paths in plan.py, and the pv90 term collapsing out of compute_metric) stays inert until
+            # the user explicitly turns the switch on - no separate gating on calculate_pv90_plan is
+            # added anywhere else, this is the single choke point.
+            self.pv_metric90_weight = 0.0
+
         self.charge_scaling10 = self.get_arg("charge_scaling10")
         self.load_scaling_saving = self.get_arg("load_scaling_saving")
         self.load_scaling_free = self.get_arg("load_scaling_free")
@@ -2622,6 +2711,27 @@ class Fetch:
         self.car_charging_energy = {}
         if "car_charging_energy" in self.args:
             self.car_charging_energy = self.minute_data_import_export(self.max_days_previous, now_utc, "car_charging_energy", scale=self.car_charging_energy_scale, required_unit="kWh")
+            if self.car_charging_hold and not self.car_charging_energy:
+                # car_charging_energy is configured (an entity is set) but resolved to nothing at
+                # all - most likely the entity no longer exists (e.g. removed upstream, see #4458),
+                # though it can also happen for a recorder-excluded entity or a fresh install with
+                # no history yet, which aren't necessarily broken and can persist indefinitely.
+                # minute_data_import_export() already logs a benign "Unable to fetch history"
+                # warning per entity with no had_errors flag, so this degrades to the
+                # car_charging_threshold heuristic below completely silently otherwise. Log the
+                # loud warning only once per incident (not every cycle - see PR review on #4469)
+                # so a persistent-but-intentional setup doesn't get spammed every 5 minutes; the
+                # status sensor still reflects the degraded state every cycle via record_status.
+                if not self.car_charging_energy_warned:
+                    self.log(
+                        "Warn: car_charging_hold is enabled and car_charging_energy is configured ({}) but no data could be loaded for it - falling back to the car_charging_threshold heuristic instead of precise car energy subtraction. Check the entity still exists.".format(
+                            self.get_arg("car_charging_energy", indirect=False)
+                        )
+                    )
+                    self.car_charging_energy_warned = True
+                self.record_status("Warn: car_charging_energy entity has no data, falling back to car_charging_threshold heuristic", had_errors=True)
+            else:
+                self.car_charging_energy_warned = False
         else:
             self.log("Car charging hold {}, threshold {}kWh".format(self.car_charging_hold, self.car_charging_threshold * 60.0))
         return self.car_charging_energy

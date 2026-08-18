@@ -48,6 +48,103 @@ NUM_EXPORT_RATE_FEATURES = LOOKBACK_STEPS  # Historical export rates
 TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES + NUM_TIME_FEATURES
 
 
+class WindowedFeatures:
+    """Training features assembled on demand from sliding windows over the source channels.
+
+    A feature row is five LOOKBACK_STEPS windows - load, PV, temperature, import and export -
+    followed by the target chunk's time features. Consecutive rows differ by one step, so a
+    materialised matrix stores every reading about LOOKBACK_STEPS times over: on 90 days of
+    history that is 66MB holding 0.5MB of distinct values.
+
+    Here each channel stays a dense 1-D array and numpy's sliding_window_view supplies the
+    windows as strides over it, costing nothing. Only the rows a batch actually needs are
+    assembled, into a buffer reused across batches. Rows are produced in ascending target
+    order and normalisation is applied as they are gathered, so a batch is identical to the
+    one the materialised path produced.
+    """
+
+    __slots__ = ["channels", "windows", "time_features", "targets", "mean", "std", "_scratch"]
+
+    def __init__(self, channels, time_features, targets):
+        """
+        Build the window views over dense channels.
+
+        :param channels: Dense per-chunk float32 arrays, in feature-block order.
+        :param time_features: Per-chunk time features, shape (chunks, NUM_TIME_FEATURES).
+        :param targets: Chunk indices that can produce a sample, ascending.
+        """
+        self.channels = channels
+        self.windows = [np.lib.stride_tricks.sliding_window_view(channel, LOOKBACK_STEPS) for channel in channels]
+        self.time_features = time_features
+        self.targets = targets
+        self.mean = None
+        self.std = None
+        self._scratch = None
+
+    def __len__(self):
+        """Number of samples available."""
+        return len(self.targets)
+
+    @property
+    def shape(self):
+        """Shape of the feature set, as if it had been materialised."""
+        return (len(self.targets), TOTAL_FEATURES)
+
+    @property
+    def dtype(self):
+        """Element type of the assembled rows."""
+        return np.dtype(np.float32)
+
+    def __array__(self, dtype=None, copy=None):
+        """Materialise every row, for diagnostics and tests.
+
+        Training never calls this - the point of the class is that the full matrix is never
+        built - but making the conversion explicit keeps the object usable where a real
+        array is genuinely wanted.
+        """
+        out = np.empty((len(self.targets), TOTAL_FEATURES), dtype=np.float32)
+        self._assemble(self.targets, out)
+        if self.mean is not None and self.std is not None:
+            out -= self.mean
+            out /= self.std
+        return out.astype(dtype) if dtype is not None and dtype != np.float32 else out
+
+    def _assemble(self, target_chunks, out):
+        """Write the feature rows for the given target chunks into out."""
+        rows = len(target_chunks)
+        lookback_start = target_chunks + 1
+        offset = 0
+        for window in self.windows:
+            out[:rows, offset : offset + LOOKBACK_STEPS] = window[lookback_start]
+            offset += LOOKBACK_STEPS
+        out[:rows, offset:] = self.time_features[target_chunks]
+        return out[:rows]
+
+    def blocks(self, block=512):
+        """Yield un-normalised row blocks covering every sample, for fitting statistics."""
+        buffer = np.empty((min(block, len(self.targets)), TOTAL_FEATURES), dtype=np.float32)
+        for start in range(0, len(self.targets), block):
+            yield self._assemble(self.targets[start : start + block], buffer)
+
+    def __getitem__(self, indices):
+        """Return the normalised feature rows for the given sample indices.
+
+        Accepts anything that indexes the target array. A scalar gives one row back as a
+        1-D array, matching what indexing the matrix this replaces would have returned.
+        """
+        target_chunks = np.atleast_1d(self.targets[indices])
+        scalar = np.ndim(self.targets[indices]) == 0
+
+        rows = len(target_chunks)
+        if self._scratch is None or len(self._scratch) < rows:
+            self._scratch = np.empty((rows, TOTAL_FEATURES), dtype=np.float32)
+        batch = self._assemble(target_chunks, self._scratch)
+        if self.mean is not None and self.std is not None:
+            batch -= self.mean
+            batch /= self.std
+        return batch[0] if scalar else batch
+
+
 def relu(x):
     """ReLU activation function"""
     return np.maximum(0, x)
@@ -611,91 +708,71 @@ class LoadPredictor:
         # Validation window: most recent chunks (chunk_idx 0 … validation_end_chunk-1)
         validation_end_chunk = validation_holdout_hours * 60 // CHUNK_MINUTES
 
-        X_train_list = []
-        y_train_list = []
-        weight_list = []
-        X_val_list = []
-        y_val_list = []
+        # Build dense per-chunk channels and let sliding windows supply the feature rows.
+        # Materialising the matrix stores every reading about LOOKBACK_STEPS times over; the
+        # windows are strides over the channels and cost nothing, so only the rows a batch
+        # needs are ever assembled. Validation is a single small block and stays materialised.
+        n_chunks = max_chunk_idx + 1
+        channel_sources = (chunked_energy, chunked_pv, chunked_temp, chunked_import, chunked_export)
+        channels = []
+        for source_dict in channel_sources:
+            channel = np.zeros(n_chunks, dtype=np.float32)
+            for chunk_idx, value in source_dict.items():
+                if 0 <= chunk_idx < n_chunks:
+                    channel[chunk_idx] = value
+            channels.append(channel)
 
-        def _build_sample(target_chunk_idx):
-            """Build one (features, target) sample centred on target_chunk_idx."""
-            lookback_start = target_chunk_idx + 1
-            lookback_values = []
-            pv_lookback_values = []
-            temp_lookback_values = []
-            import_rate_lookback = []
-            export_rate_lookback = []
+        # Time features for every chunk that could be a target
+        time_features = np.zeros((n_chunks, NUM_TIME_FEATURES), dtype=np.float32)
+        for chunk_idx in range(n_chunks):
+            target_time = now_utc - timedelta(minutes=alignment_offset + chunk_idx * CHUNK_MINUTES)
+            time_features[chunk_idx] = self._create_time_features(target_time.hour * 60 + target_time.minute, target_time.weekday(), target_time.timetuple().tm_yday)
 
-            for lb_offset in range(LOOKBACK_STEPS):
-                lb_idx = lookback_start + lb_offset
-                if lb_idx in chunked_energy:
-                    lookback_values.append(chunked_energy[lb_idx])
-                    pv_lookback_values.append(chunked_pv.get(lb_idx, 0.0))
-                    temp_lookback_values.append(chunked_temp.get(lb_idx, 0.0))
-                    import_rate_lookback.append(chunked_import.get(lb_idx, 0.0))
-                    export_rate_lookback.append(chunked_export.get(lb_idx, 0.0))
-                else:
-                    return None, None  # Gap in data - skip
+        # A sample needs its target chunk and the whole lookback window above it present.
+        # A rolling count over the presence mask finds those without probing each window.
+        present = np.zeros(n_chunks, dtype=bool)
+        for chunk_idx in chunked_energy:
+            if 0 <= chunk_idx < n_chunks:
+                present[chunk_idx] = True
+        counts = np.zeros(n_chunks + 1, dtype=np.int32)
+        np.cumsum(present, out=counts[1:])
 
-            if len(lookback_values) != LOOKBACK_STEPS:
-                return None, None
-            if target_chunk_idx not in chunked_energy:
-                return None, None
+        candidates = np.arange(0, max(max_chunk_idx - LOOKBACK_STEPS, 0), dtype=np.int64)
+        if len(candidates):
+            window_full = (counts[candidates + LOOKBACK_STEPS + 1] - counts[candidates + 1]) == LOOKBACK_STEPS
+            train_targets = candidates[window_full & present[candidates]]
+        else:
+            train_targets = candidates
 
-            target_value = chunked_energy[target_chunk_idx]
-
-            # Time features for the TARGET chunk midpoint
-            target_time = now_utc - timedelta(minutes=alignment_offset + target_chunk_idx * CHUNK_MINUTES)
-            minute_of_day = target_time.hour * 60 + target_time.minute
-            day_of_week = target_time.weekday()
-            day_of_year = target_time.timetuple().tm_yday
-            time_features = self._create_time_features(minute_of_day, day_of_week, day_of_year)
-
-            features = np.concatenate(
-                [
-                    np.array(lookback_values, dtype=np.float32),
-                    np.array(pv_lookback_values, dtype=np.float32),
-                    np.array(temp_lookback_values, dtype=np.float32),
-                    np.array(import_rate_lookback, dtype=np.float32),
-                    np.array(export_rate_lookback, dtype=np.float32),
-                    time_features,
-                ]
-            )
-            return features, np.array([target_value], dtype=np.float32)
-
-        # Training samples: all available chunks
-        for target_chunk_idx in range(0, max_chunk_idx - LOOKBACK_STEPS):
-            features, target = _build_sample(target_chunk_idx)
-            if features is None:
-                continue
-
-            X_train_list.append(features)
-            y_train_list.append(target)
-
-            # Time-decay weighting (older samples get lower weight)
-            age_days = (alignment_offset + target_chunk_idx * CHUNK_MINUTES) / (24 * 60)
-            weight_list.append(np.exp(-age_days / time_decay_days))
-
-        # Validation samples: most recent validation_end_chunk chunks
-        for target_chunk_idx in range(0, validation_end_chunk):
-            features, target = _build_sample(target_chunk_idx)
-            if features is None:
-                continue
-            X_val_list.append(features)
-            y_val_list.append(target)
-
-        if not X_train_list:
+        if not len(train_targets):
             return None, None, None, None, None
 
-        X_train = np.array(X_train_list, dtype=np.float32)
-        y_train = np.array(y_train_list, dtype=np.float32)
-        train_weights = np.array(weight_list, dtype=np.float32)
+        energy = channels[0]
+        y_train = energy[train_targets].reshape(-1, 1).copy()
 
-        # Normalize weights to sum to number of samples
+        # Time-decay weighting (older samples get lower weight)
+        age_days = (alignment_offset + train_targets * CHUNK_MINUTES) / (24.0 * 60.0)
+        train_weights = np.exp(-age_days / time_decay_days).astype(np.float32)
         train_weights = train_weights * len(train_weights) / np.sum(train_weights)
 
-        X_val = np.array(X_val_list, dtype=np.float32) if X_val_list else None
-        y_val = np.array(y_val_list, dtype=np.float32) if y_val_list else None
+        X_train = WindowedFeatures(channels, time_features, train_targets)
+
+        # Validation: the most recent chunks, small enough to materialise
+        val_candidates = np.arange(0, validation_end_chunk, dtype=np.int64)
+        val_candidates = val_candidates[val_candidates < len(candidates)] if len(candidates) else val_candidates[:0]
+        if len(val_candidates):
+            val_full = (counts[val_candidates + LOOKBACK_STEPS + 1] - counts[val_candidates + 1]) == LOOKBACK_STEPS
+            val_targets = val_candidates[val_full & present[val_candidates]]
+        else:
+            val_targets = val_candidates
+
+        if len(val_targets):
+            X_val = np.empty((len(val_targets), TOTAL_FEATURES), dtype=np.float32)
+            X_train._assemble(val_targets, X_val)
+            y_val = energy[val_targets].reshape(-1, 1).copy()
+        else:
+            X_val = None
+            y_val = None
 
         return X_train, y_train, train_weights, X_val, y_val
 
@@ -808,6 +885,78 @@ class LoadPredictor:
 
         return float(np.mean(errors)), float(np.mean(biases))
 
+    @staticmethod
+    def _feature_mean_std(X, block=512):
+        """
+        Compute per-feature mean and std over row blocks, accumulating in float64.
+
+        np.mean/np.std on a float32 array accumulate in float32, which loses low bits on the
+        feature groups that sit far from zero, and np.std materialises the deviations array
+        internally - another full copy of a 66MB training matrix to produce 1,446 numbers.
+        Two passes over row blocks avoids both: no temporary larger than one block, and
+        float64 accumulators that match a float64 reference.
+
+        Args:
+            X: Feature array, shape (samples, features)
+            block: Rows accumulated per pass. The float64 deviation buffer is
+                   block * features * 8 bytes, so this bounds the working set: 512 rows of
+                   1,446 features is 5.9MB against 47.4MB at 4096.
+
+        Returns:
+            Tuple of (mean, std) as float32 arrays
+        """
+        rows = len(X)
+        total = np.zeros(X.shape[1], dtype=np.float64)
+        for start in range(0, rows, block):
+            total += X[start : start + block].sum(axis=0, dtype=np.float64)
+        mean = total / rows
+
+        squares = np.zeros(X.shape[1], dtype=np.float64)
+        for start in range(0, rows, block):
+            deviation = X[start : start + block].astype(np.float64)
+            deviation -= mean
+            # Square into the deviation buffer rather than allocating a second one of the
+            # same size; the values are identical either way
+            squares += np.square(deviation, out=deviation).sum(axis=0)
+        std = np.sqrt(squares / rows)
+
+        return mean.astype(np.float32), std.astype(np.float32)
+
+    def _fit_windowed_normalisation(self, dataset, ema_alpha=0.0):
+        """
+        Fit per-feature normalisation statistics from a WindowedFeatures dataset.
+
+        Walks assembled row blocks rather than a materialised matrix, so the statistics are
+        the ones a full matrix would have produced without ever building one.
+
+        :param dataset: WindowedFeatures supplying the rows.
+        :param ema_alpha: If > 0 and statistics already exist, blend towards the new ones.
+        """
+        rows = len(dataset)
+        total = np.zeros(TOTAL_FEATURES, dtype=np.float64)
+        for block in dataset.blocks():
+            total += block.sum(axis=0, dtype=np.float64)
+        mean = total / rows
+
+        squares = np.zeros(TOTAL_FEATURES, dtype=np.float64)
+        for block in dataset.blocks():
+            deviation = block.astype(np.float64)
+            deviation -= mean
+            squares += np.square(deviation, out=deviation).sum(axis=0)
+        std = np.sqrt(squares / rows)
+
+        new_mean = mean.astype(np.float32)
+        new_std = np.maximum(std.astype(np.float32), self._get_min_std_array(TOTAL_FEATURES))
+
+        if ema_alpha > 0 and self.feature_mean is not None and self.feature_std is not None:
+            self.feature_mean = (ema_alpha * new_mean + (1 - ema_alpha) * self.feature_mean).astype(np.float32)
+            self.feature_std = (ema_alpha * new_std + (1 - ema_alpha) * self.feature_std).astype(np.float32)
+            self._log_normalization_stats(label="ema-update alpha={}".format(ema_alpha))
+        else:
+            self.feature_mean = new_mean
+            self.feature_std = new_std
+            self._log_normalization_stats(label="fit")
+
     def _get_min_std_array(self, n_features):
         """
         Return the per-feature minimum std array used to prevent extreme normalization.
@@ -818,7 +967,10 @@ class LoadPredictor:
         Returns:
             numpy array of minimum std values, shape (n_features,)
         """
-        min_std = np.ones(n_features) * 1e-8  # Default fallback
+        # float32 to match the dataset and weights: a float64 minimum promotes the whole
+        # normalised feature matrix to float64 via np.maximum, doubling its size and running
+        # training in double precision against float32 weights
+        min_std = np.ones(n_features, dtype=np.float32) * 1e-8  # Default fallback
         if n_features == TOTAL_FEATURES:
             min_std[0:LOOKBACK_STEPS] = 0.01  # Load energy (kWh)
             min_std[LOOKBACK_STEPS : 2 * LOOKBACK_STEPS] = 0.01  # PV energy (kWh)
@@ -858,7 +1010,7 @@ class LoadPredictor:
 
         self.log("ML Predictor: Normalization stats [{}] target(mean={:.4f} std={:.4f}) {}".format(label, self.target_mean if self.target_mean is not None else 0, self.target_std if self.target_std is not None else 0, " ".join(parts)))
 
-    def _normalize_features(self, X, fit=False, ema_alpha=0.0):
+    def _normalize_features(self, X, fit=False, ema_alpha=0.0, in_place=False):
         """
         Normalize features using z-score normalization with feature-specific minimum stds.
 
@@ -868,13 +1020,17 @@ class LoadPredictor:
             ema_alpha: If > 0 and existing params exist, blend new stats with old via EMA
                        (new = alpha * new_stats + (1-alpha) * old_stats). Used during
                        fine-tuning to track feature distribution drift without sudden jumps.
+            in_place: If True, write the normalised values back into X instead of building a
+                      new array. A training feature matrix is around 66MB, and the caller
+                      keeps no use for the un-normalised values, so copying doubles the
+                      resident cost of a training pass for nothing. Only pass this when the
+                      caller is finished with the array it hands in.
 
         Returns:
             Normalized feature array
         """
         if fit:
-            self.feature_mean = np.mean(X, axis=0)
-            self.feature_std = np.std(X, axis=0)
+            self.feature_mean, self.feature_std = self._feature_mean_std(X)
 
             # Clamp std to per-feature minimums to prevent extreme normalization
             self.feature_std = np.maximum(self.feature_std, self._get_min_std_array(len(self.feature_std)))
@@ -882,8 +1038,7 @@ class LoadPredictor:
 
         elif ema_alpha > 0 and self.feature_mean is not None and self.feature_std is not None:
             # EMA update: blend new statistics with existing to track distribution drift
-            new_mean = np.mean(X, axis=0)
-            new_std = np.std(X, axis=0)
+            new_mean, new_std = self._feature_mean_std(X)
 
             # Apply same min-std clamping to new stats before blending
             new_std = np.maximum(new_std, self._get_min_std_array(len(new_std)))
@@ -894,6 +1049,11 @@ class LoadPredictor:
             self._log_normalization_stats(label="ema-update alpha={}".format(ema_alpha))
 
         if self.feature_mean is None or self.feature_std is None:
+            return X
+
+        if in_place:
+            X -= self.feature_mean
+            X /= self.feature_std
             return X
 
         return (X - self.feature_mean) / self.feature_std
@@ -1038,14 +1198,20 @@ class LoadPredictor:
         # Normalize features and targets
         # On initial train: fit normalization from scratch
         # On fine-tune: apply EMA update to track distribution drift gradually
+        # Statistics are fitted from assembled blocks and then applied as batches are
+        # gathered, which yields the same per-feature mean and std as normalising a
+        # materialised matrix would have done
         if is_initial or not self.model_initialized:
-            X_train_norm = self._normalize_features(X_train, fit=True)
+            self._fit_windowed_normalisation(X_train)
             y_train_norm = self._normalize_targets(y_train, fit=True)
         else:
-            X_train_norm = self._normalize_features(X_train, fit=False, ema_alpha=norm_ema_alpha)
+            self._fit_windowed_normalisation(X_train, ema_alpha=norm_ema_alpha)
             y_train_norm = self._normalize_targets(y_train, fit=False)
-            self.log("ML Predictor: Applied EMA normalization update (alpha={}) to track feature drift".format(norm_ema_alpha))
-        X_val_norm = self._normalize_features(X_val, fit=False)
+        X_train.mean = self.feature_mean
+        X_train.std = self.feature_std
+        X_train_norm = X_train
+
+        X_val_norm = self._normalize_features(X_val, fit=False, in_place=True)
         y_val_norm = self._normalize_targets(y_val, fit=False)
 
         # Initialise weights if needed
@@ -1106,7 +1272,12 @@ class LoadPredictor:
             # Draw samples with probability proportional to time-decay weights (with replacement).
             # Recent data is sampled more often; old data still contributes but rarely.
             sampled_indices = np.random.choice(len(X_train_norm), size=n_epoch_samples, replace=True, p=sampling_probs)
-            X_epoch = X_train_norm[sampled_indices]
+            # Gather each batch as it is needed rather than materialising the whole epoch.
+            # When n_epoch_samples is close to (or equals) len(X_train_norm), an epoch-wide gather
+            # duplicates most/all of the feature matrix, and at the epoch boundary the previous
+            # gathered array can still be bound while the next is built, so two large copies may
+            # be live at once. Slicing sampled_indices per batch keeps the working set to a batch
+            # while selecting the same rows in the same order, so training is unchanged.
             y_epoch = y_train_norm[sampled_indices]
 
             # Mini-batch training
@@ -1115,7 +1286,7 @@ class LoadPredictor:
 
             for batch_start in range(0, n_epoch_samples, BATCH_SIZE):
                 batch_end = min(batch_start + BATCH_SIZE, n_epoch_samples)
-                X_batch = X_epoch[batch_start:batch_end]
+                X_batch = X_train_norm[sampled_indices[batch_start:batch_end]]
                 y_batch = y_epoch[batch_start:batch_end]
 
                 # Forward pass (training=True enables dropout)

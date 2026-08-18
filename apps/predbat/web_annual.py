@@ -1289,7 +1289,12 @@ class AnnualPage:
             text += "<table class='comparison-table'><tr><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th></tr>\n"
             for key in SCENARIO_ORDER:
                 entry = scenarios.get(key, {})
-                text += "<tr><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(SCENARIO_LABELS[key], self._pounds(entry.get("cost_p")), round(entry.get("import_kwh", 0), 1), round(entry.get("export_kwh", 0), 1))
+                text += "<tr><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(
+                    SCENARIO_LABELS[key],
+                    self._pounds(entry.get("cost_p")),
+                    round(entry.get("import_kwh", 0), 1),
+                    round(entry.get("export_kwh", 0), 1),
+                )
             text += "</table>\n"
             savings = annual.get("savings", {}) or {}
             text += "<p><strong>PV and battery save {}</strong> against no system.</p>\n".format(self._pounds(savings.get("pv_battery_vs_none_p", 0)))
@@ -1365,7 +1370,8 @@ class AnnualPage:
             text += "<p class='annual-unavailable'>No PV or battery is configured, so there is nothing to price a payback for.</p>\n"
             return text
 
-        text += "<table class='comparison-table'>\n<tr><th>Option</th><th>Capital</th><th>Saving a year</th><th>Pays back in</th></tr>\n"
+        scenarios = annual.get("scenarios", {}) or {}
+        text += "<table class='comparison-table'>\n<tr><th>Option</th><th>Capital</th><th>Saving a year</th><th>Pays back in</th><th>Battery cycles a year</th></tr>\n"
         for key, label in rows:
             row = payback.get(key) or {}
             if row.get("pays_back") and row.get("years") is not None:
@@ -1375,9 +1381,32 @@ class AnnualPage:
             saving = "£{:,.0f}".format(row.get("annual_saving_gbp", 0))
             if row.get("predbat_annual_gbp"):
                 saving += " <span class='annual-note'>(after £{:,.0f}/year for Predbat)</span>".format(row["predbat_annual_gbp"])
-            text += "<tr><td>{}</td><td>£{:,.0f}</td><td>{}</td><td>{}</td></tr>\n".format(label, row.get("capital_gbp", 0), saving, years)
+
+            # Map payback rows to scenario keys for cycles: pv_battery -> without_predbat, pv_battery_predbat -> with_predbat
+            cycles = None
+            if key == "pv_battery":
+                cycles = scenarios.get("without_predbat", {}).get("battery_cycles")
+            elif key == "pv_battery_predbat":
+                cycles = scenarios.get("with_predbat", {}).get("battery_cycles")
+
+            if cycles is None:
+                cycles_display = "—"
+            else:
+                # For the Predbat row, show the change relative to the non-Predbat case
+                if key == "pv_battery_predbat":
+                    base = scenarios.get("without_predbat", {}).get("battery_cycles")
+                    if base is not None:
+                        diff = cycles - base
+                        cycles_display = "{:.2f} ({:+.2f})".format(cycles, diff)
+                    else:
+                        cycles_display = "{:.2f}".format(cycles)
+                else:
+                    cycles_display = "{:.2f}".format(cycles)
+            text += "<tr><td>{}</td><td>£{:,.0f}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n".format(label, row.get("capital_gbp", 0), saving, years, cycles_display)
         text += "</table>\n"
         text += "<p class='annual-note'>Simple payback: capital divided by the modelled annual saving. It ignores panel degradation, price inflation, battery replacement and finance costs.</p>\n"
+        text += "<p class='annual-note'>Predbat uses your battery to store cheap off-peak electricity and then sell it during peak times, which will increase the number of battery cycles. This could reduce the lifespan of your batteries, so check your battery manufacturer's guidelines for battery lifespan.</p>\n"
+
         return text
 
     def _render_chart(self, results):
@@ -1442,12 +1471,12 @@ class AnnualPage:
         energy" rather than "this scenario was never modelled for this month".
         """
         text = "<h2>By month</h2>\n<table class='comparison-table'>\n"
-        text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th></tr>\n"
+        text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th><th>Battery cycles</th></tr>\n"
         for entry in results.get("months", []):
             name = calendar.month_abbr[entry["month"]]
             if entry.get("status") not in ("ok", "degraded"):
                 reason = html.escape(str(entry.get("reason", "no result")), quote=True)
-                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='6'>unavailable — {}</td></tr>\n".format(name, reason)
+                text += "<tr class='annual-unavailable'><td>{}</td><td colspan='7'>unavailable — {}</td></tr>\n".format(name, reason)
                 continue
             suffix = " (degraded — {} sampled day(s) failed)".format(len(entry.get("failed_days", []))) if entry.get("status") == "degraded" else ""
             synthesised = entry.get("rates_synthesised") or []
@@ -1463,7 +1492,7 @@ class AnnualPage:
                 if key not in month_scenarios:
                     continue
                 scenario = month_scenarios[key]
-                text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td></tr>\n".format(
+                text += "<tr><td>{}{}</td><td>{}</td><td>{}</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{} kWh</td><td>{}</td></tr>\n".format(
                     name if first_row else "",
                     suffix if first_row else "",
                     SCENARIO_LABELS[key],
@@ -1472,6 +1501,7 @@ class AnnualPage:
                     round(scenario.get("export_kwh", 0), 1),
                     round(scenario.get("pv_generated_kwh", 0), 1),
                     round(scenario.get("battery_throughput_kwh", 0), 1),
+                    round(scenario.get("battery_cycles", 0), 2),
                 )
                 first_row = False
         text += "</table>\n"

@@ -70,7 +70,7 @@ def test_tariff_catalogue(my_predbat):
     if actual_import != expected_import:
         print("  ERROR: import ids changed, expected {} got {}".format(expected_import, actual_import))
         failed = True
-    expected_export = [NO_EXPORT_ID, "seg", "outgoing_fixed", "outgoing_prime", "agile_outgoing", "flux_export", "intelligent_flux_export", "eon_next_export", "edf_export", "edf_export_exclusive"]
+    expected_export = [NO_EXPORT_ID, "seg", "outgoing_fixed", "outgoing_prime", "agile_outgoing", "flux_export", "intelligent_flux_export", "eon_next_export", "edf_export_12m_v1", "edf_export_12m_v2", "edf_export_exclusive_12m_v3"]
     actual_export = [entry["id"] for entry in EXPORT_TARIFFS]
     if actual_export != expected_export:
         print("  ERROR: export ids changed, expected {} got {}".format(expected_export, actual_export))

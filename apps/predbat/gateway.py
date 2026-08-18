@@ -946,20 +946,46 @@ class GatewayMQTT(ComponentBase):
     def _ev_suffix(ev, multi):
         """Build the entity suffix for an EV charger.
 
-        Single charger (the v1 case) uses a stable "ev" suffix; with more than one
-        charger present, disambiguate by the last 6 chars of the OCPP charge point id.
+        Always identifies the charger by the last 6 chars of its OCPP charge point
+        id, so a given charger keeps the same entity ids for its whole life.
+
+        This used to return a bare "ev" whenever only one charger was present, and
+        only disambiguate when several were. That made the suffix a function of how
+        many chargers happened to be visible in a single status message, so entity
+        ids moved under the user: a site with one charger produced
+        ``sensor.predbat_gateway_ev_power``, but the moment a second charger
+        appeared — or the same charger was briefly seen twice across a reconnect —
+        everything silently renamed to ``sensor.predbat_gateway_ev_<id>_power``,
+        orphaning the old entities and every dashboard and automation bound to
+        them. Pinning to the charge point id removes that whole class of churn.
+
+        Falls back to "ev" only when the charger reports no id at all (a charger
+        that has not completed its BootNotification yet).
+
+        The id is slugified first: an OCPP chargePointSerialNumber is an arbitrary
+        vendor string and may contain spaces, dots, slashes, dashes or non-ASCII,
+        none of which are legal in a Home Assistant entity id. Anything outside
+        [a-z0-9_] is dropped, then the last 6 characters are taken — slugifying
+        before truncating keeps the result stable and legal.
+
+        Note: 6 characters is not collision-proof. Two chargers whose slugified ids
+        share a tail (or differ only by case) map to one entity namespace and the
+        later one wins. Identity stability was the priority here — anything
+        collision-proof either depends on the other chargers present (which is the
+        churn this fixes) or is an opaque digest.
 
         Args:
             ev: An EvCharger protobuf message.
-            multi: True when more than one charger is present in the status.
+            multi: Unused; retained for call-site compatibility. The suffix no
+                longer depends on how many chargers are present.
 
         Returns:
-            str: The entity suffix (e.g. "ev" or "ev_b749").
+            str: The entity suffix (e.g. "ev_b749", or "ev" when the id is unknown
+                or slugifies to nothing).
         """
-        if not multi:
-            return "ev"
         charge_point_id = ev.charge_point_id or ""
-        return f"ev_{charge_point_id[-6:].lower()}" if charge_point_id else "ev"
+        slug = "".join(c for c in charge_point_id.lower() if c.isascii() and (c.isalnum() or c == "_"))
+        return f"ev_{slug[-6:]}" if slug else "ev"
 
     @staticmethod
     def _ev_charge_rate_kw(ev):
@@ -994,11 +1020,21 @@ class GatewayMQTT(ComponentBase):
             self.dashboard_item(f"binary_sensor.{pfx}_online", ev.connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_online", {}), app="gateway")
             ev_car_connected = ev.connected and ev.status in {"Preparing", "Charging", "SuspendedEV", "SuspendedEVSE", "Finishing"}
             self.dashboard_item(f"binary_sensor.{pfx}_connected", ev_car_connected, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_connected", {}), app="gateway")
-            self.dashboard_item(f"binary_sensor.{pfx}_session_active", ev.session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
+            # Live-session fields are only meaningful while the charger is connected.
+            # The gateway now reports known-but-offline chargers instead of omitting
+            # them, and older firmware can leave session_active/power/energy at their
+            # last values. car_charging_now is wired to session_active and PredBat
+            # plans whenever it is true, so an offline charger with a stale
+            # session_active would create a charging slot for a charger that is not
+            # there. Force them to their idle values rather than trusting the payload.
+            session_active = ev.connected and ev.session_active
+            power_w = ev.power_w if ev.connected else 0
+            session_energy_wh = ev.session_energy_wh if ev.connected else 0
+            self.dashboard_item(f"binary_sensor.{pfx}_session_active", session_active, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_active", {}), app="gateway")
             if ev.status:
                 self.dashboard_item(f"sensor.{pfx}_status", ev.status, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_status", {}), app="gateway")
-            self.dashboard_item(f"sensor.{pfx}_power", ev.power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
-            self.dashboard_item(f"sensor.{pfx}_session_energy", round(ev.session_energy_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_power", power_w, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_power", {}), app="gateway")
+            self.dashboard_item(f"sensor.{pfx}_session_energy", round(session_energy_wh / 1000.0, 2), attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_session_energy", {}), app="gateway")
             if ev.current_limit_a:
                 self.dashboard_item(f"sensor.{pfx}_current_limit", ev.current_limit_a, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_current_limit", {}), app="gateway")
             if ev.soc_percent:
@@ -1011,7 +1047,9 @@ class GatewayMQTT(ComponentBase):
                     battery_size_kwh = float(battery_size_kwh)
                 except (ValueError, TypeError):
                     battery_size_kwh = 100.0
-                ev_soc = round(min((ev.session_energy_wh / 1000.0) / battery_size_kwh * 100.0, 100.0), 1)
+                # session_energy_wh is forced to 0 above while disconnected, so an
+                # offline charger estimates 0% rather than replaying the last session.
+                ev_soc = round(min((session_energy_wh / 1000.0) / battery_size_kwh * 100.0, 100.0), 1)
             self.dashboard_item(f"sensor.{pfx}_soc", ev_soc, attributes=GATEWAY_ATTRIBUTE_TABLE.get("ev_soc", {}), app="gateway")
             if ev.max_current_a:
                 self._ev_max_current[ev.charge_point_id or ""] = ev.max_current_a
@@ -1305,12 +1343,17 @@ class GatewayMQTT(ComponentBase):
         if not self.gateway_evc_automatic:
             return
 
+        # Prefer a connected charger. Gateway firmware now reports known-but-offline
+        # chargers with connected=false (previously it omitted them entirely), so
+        # slot 0 can be a stale entry — registering that as the car would wire
+        # car_charging_* to a charger that is not there. Fall back to the first
+        # entry so a charger that is merely offline right now still registers.
         chargers = list(status.ev_chargers)
         if not chargers:
             return
 
         # For now we overwrite the first charger only; multi-charger support needs work
-        ev = chargers[0]
+        ev = next((c for c in chargers if c.connected), chargers[0])
         pfx = f"{self.prefix}_gateway_{self._ev_suffix(ev, multi=False)}"
         self.set_arg("num_cars", 1)
         # Entity-reference args (resolved by get_arg indirect lookup at fetch time).

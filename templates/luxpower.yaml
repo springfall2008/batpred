@@ -116,10 +116,13 @@ pred_bat:
     - number.lux_discharge_current_limit
   battery_power:
     - sensor.lux_battery_discharge_live
+  battery_power_invert: true
   pv_power:
     - sensor.lux_solar_output_live
   load_power:
     - sensor.lux_home_consumption_live
+  grid_power:
+    - sensor.lux_grid_flow_live
   soc_percent:
     - sensor.lux_battery_soc_corrected  # This is a custom template sensor - see LuxPower section of 'Inverter Setup' documentation for how to create
   soc_max:

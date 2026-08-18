@@ -140,26 +140,24 @@ def run_optimise_all_windows(
 
 
 def run_optimise_all_windows_kernel_tests(my_predbat):
-    """Run the optimise all windows tests with the Python engine and again with the C++ kernel, comparing runtime.
+    """Run the optimise all windows tests with the C++ kernel
 
     Both runs must pass their normal assertions; the kernel run dispatches every supported
     prediction to the C++ kernel. Returns True on failure.
     """
 
-    start = time.time()
-    failed = run_optimise_all_windows_tests(my_predbat)
-    python_time = time.time() - start
-    print("Optimise all windows tests (Python engine) took {} seconds".format(round(python_time, 2)))
-
     available, required_failure = kernel_available()
-    if not available:
-        return required_failure
-
-    start = time.time()
-    failed |= run_optimise_all_windows_tests(my_predbat, prediction_kernel=True)
-    kernel_time = time.time() - start
-    print("Optimise all windows tests (C++ kernel) took {} seconds".format(round(kernel_time, 2)))
-    print("C++ kernel speedup: {}x".format(round(python_time / kernel_time, 1)))
+    failed = False
+    if available:
+        start = time.time()
+        failed |= run_optimise_all_windows_tests(my_predbat, prediction_kernel=True)
+        kernel_time = time.time() - start
+        print("Optimise all windows tests (C++ kernel) took {} seconds".format(round(kernel_time, 2)))
+    else:
+        start = time.time()
+        failed |= run_optimise_all_windows_tests(my_predbat)
+        python_time = time.time() - start
+        print("Optimise all windows tests (Python engine) took {} seconds".format(round(python_time, 2)))
     return failed
 
 

@@ -119,8 +119,9 @@ EXPORT_TARIFFS = [
     {"id": "flux_export", "name": "Octopus Flux export", "export_octopus_url": "{}/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-{{dno_region}}/standard-unit-rates".format(_OCTOPUS)},
     {"id": "intelligent_flux_export", "name": "Octopus Intelligent Flux export", "export_octopus_url": _INTELLI_FLUX},
     {"id": "eon_next_export", "name": "Eon Next export (16.5p)", "rates_export": [{"rate": 16.5}]},
-    {"id": "edf_export", "name": "EDF Export (15p)", "rates_export": [{"rate": 15.0}]},
-    {"id": "edf_export_exclusive", "name": "EDF Export Exclusive (18p)", "rates_export": [{"rate": 18.0}]},
+    {"id": "edf_export_12m_v1", "name": "EDF Export 12m v1 (15p)", "rates_export": [{"rate": 15.0}]},
+    {"id": "edf_export_12m_v2", "name": "EDF Export 12m v2 (13p)", "rates_export": [{"rate": 13.0}]},
+    {"id": "edf_export_exclusive_12m_v3", "name": "EDF Export Exclusive 12m v3 (18p)", "rates_export": [{"rate": 18.0}]},
 ]
 
 
