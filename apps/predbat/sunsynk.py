@@ -43,10 +43,14 @@ from sunsynk_const import (
     SUNSYNK_TELEMETRY_NEGATE,
     SUNSYNK_CAPACITY_AH_FIELD,
     SUNSYNK_CHARGE_VOLT_FIELD,
-    SUNSYNK_MAX_CHARGE_CURRENT_FIELD,
+    SUNSYNK_CHARGE_CURRENT_FIELDS,
+    SUNSYNK_POWER_LIMIT_FIELD,
     SUNSYNK_RATED_POWER_FIELD,
     SUNSYNK_BATTERY_LOW_CAP_FIELD,
-    LIFEPO4_CHARGE_VOLTS_PER_CELL,
+    LIFEPO4_CELL_COUNTS,
+    LIFEPO4_CHARGE_VOLTS_MIN,
+    LIFEPO4_CHARGE_VOLTS_MAX,
+    LIFEPO4_CHARGE_VOLTS_TYPICAL,
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
     SUNSYNK_WORKMODE,
     SUNSYNK_WORKMODE_FIELD,
@@ -507,7 +511,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
         # Ratings inputs are kept raw on device_values so the derivations below can read them.
         battery = responses.get("battery") or {}
-        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_MAX_CHARGE_CURRENT_FIELD):
+        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS:
             if field in battery and battery[field] is not None:
                 values[field] = self._as_float(battery[field])
         self.device_values[sn] = values
@@ -544,17 +548,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         charge_volts = self._as_float(charge_volts)
         if charge_volts <= 0:
             return 0.0
-        # VERIFY@SPIKE — this rounds to the nearest whole cell assuming every pack charges
-        # to (close enough to) LIFEPO4_CHARGE_VOLTS_PER_CELL. It is exact for a target that
-        # is itself an exact multiple of 3.55V/cell, but a legitimate pack charged to a
-        # different per-cell target - e.g. 24 cells at 3.45V/cell = 82.8V - rounds to 23
-        # cells instead of 24, silently giving a nominal voltage (and therefore capacity and
-        # battery_rate_max) about 4% wrong. See sunsynk_const.py for the full note; no live
-        # hardware has confirmed the real spread of charge targets in use.
-        cells = round(charge_volts / LIFEPO4_CHARGE_VOLTS_PER_CELL)
-        if cells <= 0:
+        # Pick the standard stack size whose implied volts-per-cell falls inside the LiFePO4
+        # charge window, breaking ties toward the typical value. Dividing by one assumed
+        # figure and rounding is wrong at both ends of that window - 3.55 turns a 24-cell
+        # pack charged at 3.65V/cell into 25 cells, and 3.65 turns a 16-cell pack charged at
+        # 3.45V/cell into 15 - and either way the error is silent, ~4%, and lands in soc_max.
+        candidates = [(abs(charge_volts / cells - LIFEPO4_CHARGE_VOLTS_TYPICAL), cells) for cells in LIFEPO4_CELL_COUNTS if LIFEPO4_CHARGE_VOLTS_MIN <= charge_volts / cells <= LIFEPO4_CHARGE_VOLTS_MAX]
+        if not candidates:
+            # A charge target that fits no standard stack is not something to guess at: a
+            # wrong soc_max makes Predbat plan against a battery that does not exist.
+            self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
             return 0.0
-        return cells * LIFEPO4_NOMINAL_VOLTS_PER_CELL
+        return min(candidates)[1] * LIFEPO4_NOMINAL_VOLTS_PER_CELL
 
     def battery_capacity(self, sn):
         """Return the usable battery capacity in kWh, or 0 when it cannot be derived."""
@@ -568,11 +573,45 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     def battery_rate_max(self, sn):
         """Return the maximum charge rate in watts, or 0 when it cannot be derived."""
         values = self.device_values.get(sn, {})
-        amps = self._as_float(values.get(SUNSYNK_MAX_CHARGE_CURRENT_FIELD))
+        # First candidate with a positive value wins. A real system was seen reporting
+        # maxChargeCurrentLimit 0.0 alongside chargeCurrentLimit 216.0, which derived a rate
+        # of 0 and made automatic_config skip battery_rate_max entirely.
+        amps = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
         volts = self.nominal_pack_voltage(values.get(SUNSYNK_CHARGE_VOLT_FIELD))
         if amps <= 0 or volts <= 0:
             return 0.0
         return amps * volts
+
+    def inverter_limit(self, sn):
+        """Return the inverter's usable AC limit in watts, or 0 when unknown.
+
+        The hardware rating (ratePower) is not the whole story: an installer-set power
+        limiter (pvMaxLimit) can cap the inverter below it, and that cap is what actually
+        binds. A real system was seen with ratePower 8000 and pvMaxLimit 7000, so taking the
+        rating alone would have Predbat plan a kilowatt the inverter will never deliver.
+        Whichever is lower wins; if only one is known, that one is used.
+        """
+        limits = [value for value in (self.device_rated_power.get(sn, 0.0), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_POWER_LIMIT_FIELD))) if value > 0]
+        return min(limits) if limits else 0.0
+
+    def export_limit(self, sn):
+        """Return the maximum export power in watts, or 0 when unknown.
+
+        Predbat's inverter.py defaults export_limit to 99999W - effectively unlimited - so
+        leaving this unmapped lets it plan an export the inverter will simply clip. The
+        Sunsynk app exposes an "Export power limiter" in Grid Settings, and a real system
+        had it at 7000W against a 8000W inverter.
+
+        Bounded by inverter_limit as well: the inverter cannot export more AC than it can
+        produce, whichever setting nominally allows it.
+
+        See SUNSYNK_POWER_LIMIT_FIELD - with one sample where the app's "Export power
+        limiter" and "Inverter Power Limiter" both read 7000 against an identical
+        500-16000W range, and pvMaxLimit the only settings field holding 7000, the two
+        cannot yet be told apart and may be one register surfaced twice.
+        """
+        limits = [value for value in (self.inverter_limit(sn), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_POWER_LIMIT_FIELD))) if value > 0]
+        return min(limits) if limits else 0.0
 
     def battery_reserve_min(self, sn):
         """Return the inverter's own SOC floor as a percent, or 0 when unknown."""
@@ -951,9 +990,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             rate_max = self.battery_rate_max(sn)
             if rate_max > 0:
                 self.dashboard_item(self._sensor_name(sn, "battery_rate_max"), state=round(rate_max), attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Battery Rate Max"}, app="sunsynk")
-            rated_power = self.device_rated_power.get(sn, 0.0)
+            rated_power = self.inverter_limit(sn)
             if rated_power > 0:
                 self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Inverter Limit"}, app="sunsynk")
+            export_limit = self.export_limit(sn)
+            if export_limit > 0:
+                self.dashboard_item(self._sensor_name(sn, "export_limit"), state=export_limit, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Export Limit"}, app="sunsynk")
             floor = self.battery_reserve_min(sn)
             if floor > 0:
                 self.dashboard_item(self._sensor_name(sn, "battery_reserve_min"), state=floor, attributes={"unit_of_measurement": "%", "friendly_name": f"Sunsynk {sn} Battery Reserve Min"}, app="sunsynk")
@@ -1319,10 +1361,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
             self.log("Warn: Sunsynk no battery charge-current limit available, battery_rate_max must be set manually in apps.yaml")
-        if all(self.device_rated_power.get(sn, 0.0) > 0 for sn in self.device_list):
+        if all(self.inverter_limit(sn) > 0 for sn in self.device_list):
             self.set_arg_auto("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
         else:
             self.log("Warn: Sunsynk no ratePower reported, inverter_limit must be set manually in apps.yaml")
+        # Without this Predbat falls back to an effectively unlimited export (inverter.py
+        # defaults export_limit to 99999W), so a system capped at 7kW would be planned as if
+        # it could export 9kW.
+        if all(self.export_limit(sn) > 0 for sn in self.device_list):
+            self.set_arg_auto("export_limit", [self._sensor_name(sn, "export_limit") for sn in devices])
+        else:
+            self.log("Warn: Sunsynk no export power limit available, export_limit must be set manually in apps.yaml")
         if all(self.battery_reserve_min(sn) > 0 for sn in self.device_list):
             self.set_arg_auto("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
 
