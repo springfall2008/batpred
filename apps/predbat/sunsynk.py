@@ -93,7 +93,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         inverter_sn=None,
         automatic=False,
         automatic_ignore_pv=False,
-        control_enable=False,
+        control_enable=True,
         battery_nominal_voltage=None,
         **kwargs,
     ):

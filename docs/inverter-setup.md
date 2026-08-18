@@ -2410,7 +2410,7 @@ You need a Sunsynk Connect account e-mail and password - the same login used by 
   sunsynk_password: 'your-password'
   sunsynk_region: 'sunsynk'
   sunsynk_automatic: true
-  sunsynk_control_enable: false
+  sunsynk_control_enable: true
 ```
 
 Set `sunsynk_region` to `'inteless'` instead of `'sunsynk'` if your account logs in via the `pv.inteless.com` host rather than `api.sunsynk.net` - check with your installer, or try the [diagnostics CLI](#verifying-with-the-sunsynk-diagnostics-cli) below with each region if you are not sure.
@@ -2439,7 +2439,7 @@ Useful flags:
 - `--region sunsynk|inteless` - select the API region (default `sunsynk`)
 - `--serial <sn>` - restrict to one inverter instead of every inverter on the account
 - `--dump-settings` - print the full settings object, useful for confirming the current work mode and slot layout against the app
-- `--write-test` - build a harmless self-use-at-floor schedule, show it, and offer to send it after confirmation - use this to verify a write actually reaches the inverter before setting `sunsynk_control_enable: true`
+- `--write-test` - build a harmless self-use-at-floor schedule, show it, and offer to send it after confirmation - use this to verify a write actually reaches the inverter, and how long the dongle takes to apply it
 
 Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the Sunsynk app, and in particular note whether `battery_power` is positive while charging or while discharging - this sign convention has not been confirmed on real hardware and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.
 
@@ -2447,9 +2447,11 @@ Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_powe
 
 Set `sunsynk_automatic: true` to have Predbat discover every inverter on your Sunsynk Connect account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
 
-### Enabling Sunsynk Cloud inverter control
+### Sunsynk Cloud inverter control
 
-`sunsynk_control_enable` defaults to `false` - Predbat only monitors the inverter and never writes to it. Only set it to `true` once the diagnostics CLI has confirmed the wire format works correctly against your own inverter, because:
+`sunsynk_control_enable` defaults to `true`, so Predbat drives the inverter as soon as the component is configured. Set it to `false` for monitoring only.
+
+Because the write format is inferred from third-party clients rather than documented by Sunsynk, it is worth running the diagnostics CLI against your own inverter before relying on control, and switching it off if anything looks wrong. Two behaviours to be aware of either way:
 
 - There is a single whole-object settings endpoint. Predbat reads the settings immediately before every write and writes the whole object back, so using the Sunsynk phone app at the same time can overwrite Predbat's change, and vice versa - the last writer wins
 - A write reaching the cloud does not mean the inverter has applied it. The dongle picks up new settings on its next poll, typically one to five minutes later

@@ -829,7 +829,7 @@ Add your Sunsynk Connect account e-mail and password (the same login used by the
   sunsynk_password: 'your-password'
   sunsynk_region: 'sunsynk'
   sunsynk_automatic: true
-  sunsynk_control_enable: false
+  sunsynk_control_enable: true
 ```
 
 **Note:** It's strongly recommended to store `sunsynk_username` and `sunsynk_password` in `secrets.yaml` and reference them as `!secret sunsynk_username` etc - see [Storing secrets](#storing-secrets).
@@ -843,7 +843,7 @@ Add your Sunsynk Connect account e-mail and password (the same login used by the
 - `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
 - `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
 - `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
-- `sunsynk_control_enable` - Set to `true` to allow Predbat to write charge/export schedules to the inverter. Defaults to `false` - monitoring works immediately, but writes need this explicit opt-in until the wire format is confirmed against real hardware
+- `sunsynk_control_enable` - Allow Predbat to write charge/export schedules to the inverter (default: `true`, set to `false` for monitoring only)
 - `sunsynk_battery_nominal_voltage` - Optional override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target
 
 `sunsynk_auth_method: 'password'` never automatically falls back to `'password_legacy'` - if the RSA login fails, retry with `password_legacy` deliberately rather than have Predbat silently send your password in plaintext. `password_legacy` is still sent over TLS, but without the additional RSA encryption layer, so only choose it for a region whose API still serves the older login.
