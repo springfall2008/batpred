@@ -908,7 +908,7 @@ CONFIG_ITEMS = [
         "friendly_name": "When to trust a dynamic (daytime) Intelligent dispatch slot as cheap for the house battery",
         "type": "select",
         "options": ["none", "completed", "started", "planned"],
-        "default": "none",
+        "default": "planned",
         "enable": "expert_mode",
     },
     {
