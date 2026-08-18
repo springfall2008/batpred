@@ -324,9 +324,16 @@ def run_test_web_if(my_predbat):
             failed = 1
 
         print("\n**** Verifying live apps.yaml masking ****")
+        # A bare request (no masked param) must default to masked - a direct/copied URL
+        # should never leak credentials without an explicit opt-in.
         res = requests.get("http://127.0.0.1:5052/debug_apps_live")
+        if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
+            print("ERROR: Default /debug_apps_live request was not masked")
+            failed = 1
+
+        res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "0"})
         if res.status_code != 200 or "test_secret_value" not in res.text:
-            print("ERROR: Unmasked /debug_apps_live did not contain the expected credential value")
+            print("ERROR: Unmasked /debug_apps_live (masked=0) did not contain the expected credential value")
             failed = 1
 
         res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "1"})
