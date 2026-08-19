@@ -11,7 +11,8 @@
 Registers each discovered Sunsynk inverter as a ``SunsynkCloud`` Predbat inverter,
 publishing monitoring sensors and DEYE-style schedule control entities. Predbat drives
 those entities through the generic Inverter class; this module derives the Sunsynk work
-mode internally and applies it by read-modify-write of the whole settings object.
+mode internally and applies it by read-modify-write of the System Mode settings group
+(the write endpoint silently discards anything larger - see SUNSYNK_SYSTEM_MODE_FIELDS).
 
 Three auth methods: ``password`` (RSA-encrypted login, the default), ``password_legacy``
 (the pre-2025 plaintext login, opt-in) and ``oauth`` (token injected by Predbat.com).
@@ -57,6 +58,8 @@ from sunsynk_const import (
     SUNSYNK_SOLAR_SELL_FIELD,
     SUNSYNK_TOU_ENABLE_FIELD,
     SUNSYNK_SERIAL_FIELD,
+    SUNSYNK_SYSTEM_MODE_FIELDS,
+    SUNSYNK_DERIVED_SLOT_FIELDS,
     SUNSYNK_DAY_FIELDS,
     TOU_FIELD,
     TOU_SLOT_COUNT,
@@ -527,7 +530,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         return values
 
     async def fetch_settings(self, sn):
-        """Read the whole settings object, which is both config and the write baseline."""
+        """Read the whole settings object: config, plus the baseline the write group is built from.
+
+        The read returns everything (350 keys on a real inverter); only the System Mode subset
+        of it is ever posted back. See SUNSYNK_SYSTEM_MODE_FIELDS.
+        """
         data = await self._get("settings_read", sn=sn)
         if data:
             self.device_settings[sn] = data
@@ -702,11 +709,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         the battery serving the house for the whole interval and push the load onto the
         grid. Self-use slots cover most of the day, so this is the default state.
         """
-        return {"time": start_time, "power": int(self_use_power), "soc": int(reserve), "grid_charge": False}
+        return {"time": start_time, "power": int(self_use_power), "soc": int(reserve), "grid_charge": False, "sell": False}
 
     def _action_slot(self, start_time, state):
         """Build a slot realising a derived control state."""
-        return {"time": start_time, "power": int(state["power"]), "soc": int(state["slot_soc"]), "grid_charge": bool(state["grid_charge"])}
+        return {"time": start_time, "power": int(state["power"]), "soc": int(state["slot_soc"]), "grid_charge": bool(state["grid_charge"]), "sell": bool(state.get("solar_sell"))}
 
     def build_tou_slots(self, schedule, current_soc, self_use_power):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
@@ -848,13 +855,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             payload[TOU_FIELD["power"].format(n=index)] = encode_setting(TOU_FIELD["power"].format(n=index), slot["power"])
             payload[TOU_FIELD["soc"].format(n=index)] = encode_setting(TOU_FIELD["soc"].format(n=index), slot["soc"])
             payload[TOU_FIELD["grid_charge"].format(n=index)] = encode_setting(TOU_FIELD["grid_charge"].format(n=index), slot["grid_charge"])
+            # The per-slot Sell flag ("Sell" in the app). It MUST be 1 for a forced export
+            # slot, and every per-slot flag must be present in the payload or the API
+            # silently discards them all - see TOU_FIELD.
+            payload[TOU_FIELD["sell"].format(n=index)] = "1" if slot["sell"] else "0"
         return payload
 
     def build_settings_payload(self, sn, schedule, current_soc, now_minutes=None):
         """Build the full settings object to POST for one inverter.
 
-        Read-modify-write: start from the last-read settings so every field Predbat does
-        not own survives verbatim, then overwrite only the slots, mode and flags it does.
+        Read-modify-write over the System Mode group only: start from the last-read values
+        for those fields so the ones Predbat does not own survive verbatim, then overwrite the
+        slots, mode and flags it does. Fields outside the group are never sent - the endpoint
+        discards an oversized object entirely.
         Returns {} when self.device_settings holds no baseline for sn - a payload built
         from an empty baseline would contain only the owned keys, and posting it would
         drop every installer setting Predbat does not own. This is a public producer, not
@@ -867,7 +880,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return {}
         if now_minutes is None:
             now_minutes = self._now_minutes()
-        payload = dict(baseline)
+        # Only the System Mode group is sent. The endpoint accepts a larger object and then
+        # silently discards the whole write - see SUNSYNK_SYSTEM_MODE_FIELDS - so restricting
+        # this is what makes the write land at all. It also means a schedule write can never
+        # disturb the battery, grid or generator settings: they are simply never transmitted.
+        payload = {key: value for key, value in baseline.items() if key in SUNSYNK_SYSTEM_MODE_FIELDS and key not in SUNSYNK_DERIVED_SLOT_FIELDS}
         payload.update(self._owned_payload(sn, schedule, current_soc, now_minutes))
         return payload
 
