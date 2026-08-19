@@ -707,6 +707,11 @@ def _run_with_hard_timeout(coro, seconds=5):
     bytecode instructions, so it fires even inside a loop that never truly yields.
     """
 
+    if not hasattr(signal, "SIGALRM"):
+        import asyncio
+
+        return run_async_local(asyncio.wait_for(coro, timeout=seconds))
+
     def _handler(signum, frame):
         """Convert the SIGALRM into a Python exception so pytest-free assertions can catch it."""
         raise _HardTimeout(f"operation exceeded its {seconds}s hard timeout - suspected infinite loop")

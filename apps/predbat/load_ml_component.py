@@ -677,7 +677,16 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: Generating predictions load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
             if 0:
                 self._log_prediction_input_table(now_utc)
-            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, import_rates=self.import_rates_data, export_rates=self.export_rates_data, exog_features=exog_features)
+            predictions = self.predictor.predict(
+                self.load_data,
+                now_utc,
+                midnight_utc,
+                pv_minutes=self.pv_data,
+                temp_minutes=self.temperature_data,
+                import_rates=self.import_rates_data,
+                export_rates=self.export_rates_data,
+                exog_features=exog_features,
+            )
 
             if predictions:
                 self.current_predictions = predictions
@@ -821,7 +830,7 @@ class LoadMLComponent(ComponentBase):
         max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
 
         def dict_to_array(data_dict):
-            arr = np.zeros(max_steps, dtype=np.float32)
+            arr = np.full(max_steps, np.nan, dtype=np.float32)
             if data_dict:
                 for minute, value in data_dict.items():
                     # Only persist historical data (non-negative integer keys)
@@ -886,15 +895,18 @@ class LoadMLComponent(ComponentBase):
             saved_utc = datetime.fromisoformat(metadata["saved_utc"])
             age_days = float(metadata.get("age_days", 0))
 
-            max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
-
             def array_to_dict(arr):
                 """Reconstruct a sparse {minute: value} dict with keys as stored"""
                 result = {}
+                has_nans = np.isnan(arr).any()
                 for i in range(len(arr)):
                     val = float(arr[i])
-                    if val != 0.0:
-                        result[i * PREDICT_STEP] = val
+                    if has_nans:
+                        if not np.isnan(val) and np.isfinite(val):
+                            result[i * PREDICT_STEP] = val
+                    else:
+                        if val != 0.0:
+                            result[i * PREDICT_STEP] = val
                 return result
 
             self.load_data = array_to_dict(data["load"])
@@ -976,22 +988,22 @@ class LoadMLComponent(ComponentBase):
                     curriculum_step_days=5,
                     max_intermediate_passes=8,
                 )
-            # Even if initial was done we need to do one fine tuned curriculum pass too.
-            val_mae = self.predictor.train_curriculum(
-                load_data_snap,
-                now_utc_snap,
-                pv_minutes=pv_data_snap,
-                temp_minutes=temp_data_snap,
-                import_rates=import_rates_snap,
-                export_rates=export_rates_snap,
-                epochs=epochs,
-                time_decay_days=time_decay,
-                validation_holdout_hours=holdout_hours,
-                patience=patience,
-                curriculum_window_days=window_days,
-                curriculum_step_days=step_days,
-                max_intermediate_passes=max_intermediate_passes,
-            )
+            else:
+                val_mae = self.predictor.train_curriculum(
+                    load_data_snap,
+                    now_utc_snap,
+                    pv_minutes=pv_data_snap,
+                    temp_minutes=temp_data_snap,
+                    import_rates=import_rates_snap,
+                    export_rates=export_rates_snap,
+                    epochs=epochs,
+                    time_decay_days=time_decay,
+                    validation_holdout_hours=holdout_hours,
+                    patience=patience,
+                    curriculum_window_days=window_days,
+                    curriculum_step_days=step_days,
+                    max_intermediate_passes=max_intermediate_passes,
+                )
 
             if val_mae is not None:
                 self.last_train_time = datetime.now(timezone.utc)
@@ -1054,7 +1066,8 @@ class LoadMLComponent(ComponentBase):
                 derived_baseline += self.load_data.get(minute, 0.0)
         derived_baseline = dp4(derived_baseline)
         self.log(
-            "Warn: ML Component: Load baseline of {} kWh was captured on {} which is a previous day, re-derived load so far today as {} kWh".format(dp2(self.load_minutes_now), self.load_minutes_now_time.strftime("%Y-%m-%d %H:%M"), dp2(derived_baseline))
+            "Warn: ML Component: Load baseline of {} kWh was captured on {} which is a previous day, "
+            "re-derived load so far today as {} kWh".format(dp2(self.load_minutes_now), self.load_minutes_now_time.strftime("%Y-%m-%d %H:%M"), dp2(derived_baseline))
         )
         return derived_baseline
 
