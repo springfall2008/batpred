@@ -233,6 +233,7 @@ from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
 from tests.test_annual_sampling import test_annual_sampling
 from tests.test_annual_interpolate import test_annual_fast_mode_assembly, test_annual_interpolate
+from tests.test_annual_curve_reference import test_annual_curve_reference
 from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
@@ -577,6 +578,7 @@ def main():
         ("annual_cli_fast_flag", test_annual_cli_fast_flag, "Annual CLI --fast flag tests", False),
         ("annual_interpolate", test_annual_interpolate, "Annual fast-mode interpolation curve tests", False),
         ("annual_fast_mode_assembly", test_annual_fast_mode_assembly, "Annual fast-mode assembly tests", False),
+        ("annual_curve_reference", test_annual_curve_reference, "Annual fast-mode curve reference scoring", False),
         ("annual_cli_machine", test_annual_cli_machine, "Annual CLI machine mode tests", False),
         ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
         ("annual_job", test_annual_job, "Annual subprocess job control tests", False),
