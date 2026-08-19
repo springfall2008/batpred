@@ -3170,6 +3170,7 @@ def _test_database_zero_preservation():
         """Minimal base for LoadMLComponent."""
 
         def __init__(self, config_root):
+            """Initialize MockBase."""
             self.prefix = "predbat"
             self.config_root = config_root
             self.now_utc = datetime.now(timezone.utc)
@@ -3180,12 +3181,15 @@ def _test_database_zero_preservation():
             self.log_messages = []
 
         def log(self, msg):
+            """Record log message."""
             self.log_messages.append(msg)
 
         def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            """Mock get_arg."""
             return {"load_today": ["sensor.load_today"]}.get(key, default)
 
     async def run_test():
+        """Run async save and reload assertions."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = MockBase(config_root=tmpdir)
             component = LoadMLComponent(base, load_ml_enable=True)

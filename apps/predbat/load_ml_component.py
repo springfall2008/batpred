@@ -830,6 +830,7 @@ class LoadMLComponent(ComponentBase):
         max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
 
         def dict_to_array(data_dict):
+            """Convert sparse {minute: value} dictionary into a fixed-size numpy array."""
             arr = np.full(max_steps, np.nan, dtype=np.float32)
             if data_dict:
                 for minute, value in data_dict.items():
