@@ -10,6 +10,7 @@
 
 from unittest.mock import patch
 from sunsynk_const import (
+    SUNSYNK_SYSTEM_MODE_FIELDS,
     SUNSYNK_WORKMODE,
     SUNSYNK_WORKMODE_FIELD,
     SUNSYNK_SOLAR_SELL_FIELD,
@@ -216,15 +217,15 @@ def test_payload_renders_indexed_fields_and_types():
                 continue
             value = payload[name]
             if concept == "grid_charge":
-                if not isinstance(value, bool):
-                    print(f"ERROR: {name} = {value!r} should be a bare JSON boolean")
+                if value not in ("true", "false"):
+                    print(f"ERROR: {name} = {value!r} should be the string 'true' or 'false' - a bare boolean is discarded by the API")
                     failed = True
             elif not isinstance(value, str):
                 print(f"ERROR: {name} = {value!r} should be a string")
                 failed = True
     for day in SUNSYNK_DAY_FIELDS:
-        if payload.get(day) is not True:
-            print(f"ERROR: {day} should be True, got {payload.get(day)!r}")
+        if payload.get(day) != "true":
+            print(f"ERROR: {day} should be the string 'true', got {payload.get(day)!r}")
             failed = True
     if payload.get(SUNSYNK_TOU_ENABLE_FIELD) != "1":
         print(f"ERROR: TOU master enable should be '1', got {payload.get(SUNSYNK_TOU_ENABLE_FIELD)!r}")
@@ -239,26 +240,42 @@ def test_payload_renders_indexed_fields_and_types():
 
 
 def test_payload_preserves_unowned_settings():
-    """Read-modify-write leaves every field Predbat does not own exactly as it was."""
+    """Fields Predbat does not own survive - in-group verbatim, out-of-group by never being sent.
+
+    Read-modify-write only covers the System Mode group, because the endpoint discards a
+    larger object outright. So an installer setting is protected two different ways
+    depending on which side of that boundary it sits, and both are worth pinning: a
+    zeroExportPower must come back unchanged, while a batteryShutdownCap must be absent
+    from the payload entirely rather than echoed.
+    """
     failed = False
     s = MockSunsynk()
     s.device_rated_power["INV1"] = 8000.0
     s.device_settings["INV1"] = {
         "sn": "INV1",
-        "batteryShutdownCap": "5",
-        "batteryLowCap": "10",
+        # inside the System Mode group - must be carried through untouched
         "safetyType": "3",
+        "battMode": "1",
+        "energyMode": "1",
         "zeroExportPower": "20",
         "solarMaxSellPower": "8000",
-        "genTime1on": False,
+        "pvMaxLimit": "7000",
         "sellTime1Volt": "49.0",
+        "genTime1on": "false",
+        # outside it - must never be transmitted by a schedule write
+        "batteryShutdownCap": "5",
+        "batteryLowCap": "10",
         "batteryMaxCurrentCharge": "100",
     }
     schedule = _schedule(reserve=10, charge={"enable": True, "soc": 95, "power": 3000, "start": "02:00:00", "end": "05:00:00"})
     payload = s.build_settings_payload("INV1", schedule, current_soc=40, now_minutes=3 * 60)
-    for key, expect in (("batteryShutdownCap", "5"), ("safetyType", "3"), ("zeroExportPower", "20"), ("solarMaxSellPower", "8000"), ("batteryMaxCurrentCharge", "100"), ("genTime1on", False), ("sellTime1Volt", "49.0")):
-        if payload.get(key) != expect:
-            print(f"ERROR: unowned field {key} became {payload.get(key)!r}, expected {expect!r}")
+    for key, expect in (("safetyType", "3"), ("battMode", "1"), ("energyMode", "1"), ("zeroExportPower", "20"), ("solarMaxSellPower", "8000"), ("pvMaxLimit", "7000"), ("sellTime1Volt", "49.0"), ("genTime1on", "false")):
+        if str(payload.get(key)) != expect:
+            print(f"ERROR: in-group unowned field {key} became {payload.get(key)!r}, expected {expect!r}")
+            failed = True
+    for key in ("batteryShutdownCap", "batteryLowCap", "batteryMaxCurrentCharge"):
+        if key in payload:
+            print(f"ERROR: {key} is outside the System Mode group and must not be sent, got {payload[key]!r}")
             failed = True
     assert not failed, "test_payload_preserves_unowned_settings"
 
@@ -886,12 +903,13 @@ def test_self_use_slots_are_never_zero_power():
     payload = s.build_settings_payload("INV1", sched, current_soc=38, now_minutes=22 * 60)
     for n in range(1, TOU_SLOT_COUNT + 1):
         power = int(payload[TOU_FIELD["power"].format(n=n)])
-        charging = payload[TOU_FIELD["grid_charge"].format(n=n)]
+        # The encoded flag is a STRING: "false" is truthy in Python, so compare it.
+        charging = payload[TOU_FIELD["grid_charge"].format(n=n)] == "true"
         if not charging and power <= 0:
             print(f"ERROR: self-use slot {n} at {payload[TOU_FIELD['time'].format(n=n)]} has power {power} - that freezes the battery")
             failed = True
     # The charge slot carries the requested charge power, not the self-use power.
-    charge_slots = [n for n in range(1, TOU_SLOT_COUNT + 1) if payload[TOU_FIELD["grid_charge"].format(n=n)]]
+    charge_slots = [n for n in range(1, TOU_SLOT_COUNT + 1) if payload[TOU_FIELD["grid_charge"].format(n=n)] == "true"]
     if not charge_slots or int(payload[TOU_FIELD["power"].format(n=charge_slots[0])]) != 3000:
         print(f"ERROR: charge slot should carry 3000W, got {[payload[TOU_FIELD['power'].format(n=n)] for n in charge_slots]}")
         failed = True
@@ -949,13 +967,123 @@ def test_hold_charge_keeps_predbat_rate_without_charging():
         failed = True
     else:
         n = hold[0]
-        if payload[TOU_FIELD["grid_charge"].format(n=n)]:
+        if payload[TOU_FIELD["grid_charge"].format(n=n)] == "true":
             print("ERROR: the hold-charge slot enabled grid charge")
             failed = True
         if int(payload[TOU_FIELD["power"].format(n=n)]) != 3000:
             print(f"ERROR: hold-charge slot power {payload[TOU_FIELD['power'].format(n=n)]}, expected Predbat's 3000W")
             failed = True
     assert not failed, "test_hold_charge_keeps_predbat_rate_without_charging"
+
+
+def test_payload_is_limited_to_the_system_mode_group():
+    """Only the System Mode group may be posted; a larger object is silently discarded.
+
+    Confirmed live: posting the full 350-key settings object returned success and changed
+    nothing, twice, while the same change sent as the 53-key group persisted immediately.
+    Fields inside the group that Predbat does not own must still be carried through, and
+    fields outside it must never be sent at all.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    # A realistic blob: System Mode fields Predbat does not own, plus unrelated groups.
+    s.device_settings["INV1"] = {
+        "sn": "INV1",
+        "batteryLowCap": "20",
+        "sysWorkMode": "2",
+        "solarSell": "1",
+        "peakAndVallery": "1",
+        "safetyType": "3",
+        "battMode": "1",
+        "energyMode": "1",
+        "zeroExportPower": "0",
+        "solarMaxSellPower": "9200",
+        "pvMaxLimit": "7000",
+        "sellTime1Volt": "49.0",
+        "genTime1on": "false",
+        # outside the group - battery and grid settings that a schedule write must not touch
+        "batteryShutdownCap": "5",
+        "batteryMaxCurrentCharge": "100",
+        "importPower": "10350",
+        "acOutputPowerLimit": "14464",
+        "someUnknownKnob": "42",
+    }
+    sched = _schedule(reserve=20, charge={"enable": True, "soc": 90, "power": 3000, "start": "03:00:00", "end": "04:00:00"})
+    payload = s.build_settings_payload("INV1", sched, current_soc=40, now_minutes=3 * 60 + 30)
+    outside = [k for k in payload if k not in SUNSYNK_SYSTEM_MODE_FIELDS]
+    if outside:
+        print(f"ERROR: payload carries fields outside the System Mode group: {sorted(outside)}")
+        failed = True
+    for k in ("batteryShutdownCap", "batteryMaxCurrentCharge", "importPower", "acOutputPowerLimit", "someUnknownKnob"):
+        if k in payload:
+            print(f"ERROR: {k} must never be sent by a schedule write")
+            failed = True
+    # Unowned fields INSIDE the group must survive verbatim.
+    for k, expect in (("safetyType", "3"), ("battMode", "1"), ("energyMode", "1"), ("zeroExportPower", "0"), ("solarMaxSellPower", "9200"), ("pvMaxLimit", "7000"), ("sellTime1Volt", "49.0"), ("genTime1on", "false")):
+        if str(payload.get(k)) != expect:
+            print(f"ERROR: in-group unowned field {k} became {payload.get(k)!r}, expected {expect!r}")
+            failed = True
+    assert not failed, "test_payload_is_limited_to_the_system_mode_group"
+
+
+def test_export_slots_set_the_sell_flag():
+    """A forced export slot must set sellTime{n}En, and it must be present on every slot.
+
+    CONFIRMED live: with sellTime{n}En absent from the payload the API silently discarded
+    time{n}on on six consecutive writes across every encoding tried, while the rest of the
+    same write persisted. It validates the per-slot field set as a whole. The flags are
+    independent once all are present.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "20"}
+    sched = _schedule(reserve=20, export={"enable": True, "soc": 20, "power": 2500, "start": "16:00:00", "end": "19:00:00"})
+    payload = s.build_settings_payload("INV1", sched, current_soc=80, now_minutes=17 * 60)
+    # Present on every slot, or the API drops the flags.
+    for n in range(1, TOU_SLOT_COUNT + 1):
+        name = TOU_FIELD["sell"].format(n=n)
+        if name not in payload:
+            print(f"ERROR: {name} missing - the API needs the full per-slot set or it drops the flags")
+            failed = True
+        elif payload[name] not in ("0", "1"):
+            print(f"ERROR: {name} = {payload[name]!r}, expected the numeric string '0' or '1'")
+            failed = True
+    # The export slot sells; the self-use slots do not.
+    selling = [n for n in range(1, TOU_SLOT_COUNT + 1) if payload.get(TOU_FIELD["sell"].format(n=n)) == "1"]
+    if not selling:
+        print("ERROR: an export window produced no slot with the Sell flag set")
+        failed = True
+    for n in selling:
+        if payload[TOU_FIELD["time"].format(n=n)] != "16:00":
+            print(f"ERROR: Sell set on slot {n} at {payload[TOU_FIELD['time'].format(n=n)]}, expected the 16:00 export slot")
+            failed = True
+    # A charge-only schedule must not set Sell anywhere.
+    charge_sched = _schedule(reserve=20, charge={"enable": True, "soc": 90, "power": 3000, "start": "03:00:00", "end": "04:00:00"})
+    charge_payload = s.build_settings_payload("INV1", charge_sched, current_soc=40, now_minutes=3 * 60 + 30)
+    if any(charge_payload.get(TOU_FIELD["sell"].format(n=n)) == "1" for n in range(1, TOU_SLOT_COUNT + 1)):
+        print("ERROR: a charge-only schedule set the Sell flag")
+        failed = True
+    assert not failed, "test_export_slots_set_the_sell_flag"
+
+
+def test_server_derived_slot_fields_are_never_written():
+    """time{n}On (capital O) is server-derived and must never be transmitted.
+
+    It changed from '0' to '65' on a write that did not mention it, and writing '1' to it
+    also produced '65'. It is not the boolean it resembles.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "20", **{f"time{n}On": "0" for n in range(1, TOU_SLOT_COUNT + 1)}}
+    payload = s.build_settings_payload("INV1", _schedule(reserve=20), current_soc=50, now_minutes=12 * 60)
+    leaked = [f"time{n}On" for n in range(1, TOU_SLOT_COUNT + 1) if f"time{n}On" in payload]
+    if leaked:
+        print(f"ERROR: server-derived fields transmitted: {leaked}")
+        failed = True
+    assert not failed, "test_server_derived_slot_fields_are_never_written"
 
 
 def run_sunsynk_control_tests(my_predbat):
@@ -976,6 +1104,9 @@ def run_sunsynk_control_tests(my_predbat):
         ("payload_field_types", test_payload_renders_indexed_fields_and_types),
         ("solar_export_never_off", test_solar_export_is_never_disabled),
         ("payload_preserves", test_payload_preserves_unowned_settings),
+        ("payload_system_mode_only", test_payload_is_limited_to_the_system_mode_group),
+        ("export_sell_flag", test_export_slots_set_the_sell_flag),
+        ("no_derived_fields", test_server_derived_slot_fields_are_never_written),
         ("payload_soc_floor", test_payload_clamps_to_the_inverter_soc_floor),
         ("payload_no_baseline_is_empty", test_build_settings_payload_returns_empty_without_a_baseline),
         ("payloads_equal", test_payloads_equal_ignores_nothing_material),
