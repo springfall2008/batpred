@@ -2940,11 +2940,17 @@ class Octopus:
             if entity_id:
                 state = self.get_arg("octopus_saving_session", False)
                 joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
-                if not joined_events:
-                    entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
-                    joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
-
                 available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
+                if not joined_events and not available_events:
+                    # Legacy binary_sensor entities carry neither attribute - fall back to the
+                    # newer event entity naming convention, but only adopt it if it actually has data
+                    fallback_entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
+                    fallback_joined_events = self.get_state_wrapper(entity_id=fallback_entity_id, attribute="joined_events")
+                    fallback_available_events = self.get_state_wrapper(entity_id=fallback_entity_id, attribute="available_events")
+                    if fallback_joined_events or fallback_available_events:
+                        entity_id = fallback_entity_id
+                        joined_events = fallback_joined_events
+                        available_events = fallback_available_events
 
             if available_events and not self.get_arg("octopus_saving_auto_join", True):
                 self.log("Octopus: Saving session auto-join is disabled, not joining available events")
