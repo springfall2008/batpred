@@ -58,16 +58,35 @@ TOU_SLOT_COUNT = 6
 FREEZE_EXPORT_SOC = 99
 
 # Distinct ascending start times used to pad a schedule out to TOU_SLOT_COUNT.
-# Sunsynk's slots are sequential intervals ("from this start until the next slot's
-# start"), so every start must be unique — duplicates create zero-length intervals.
-# Seven options guarantee TOU_SLOT_COUNT distinct times survive even if all four
-# of a schedule's own window boundaries collide with fillers.
+#
+# CONFIRMED by Sunsynk's own documentation ("Avoiding conflicts in the System Mode timer"):
+# the six slots are sequential chronological intervals, each running until the next slot
+# begins, and "Timers MUST be set chronologically from Timer 1 to Timer 6". Timer 6 is the
+# only one permitted to roll over midnight and continue until Timer 1 restarts. So distinct
+# ascending starts are a real requirement, not a Predbat preference.
+#
+# A slot is an interval regardless of its grid-charge flag: the documented factory default
+# runs all six timers as ranges with Grid Charge ticked on only two of them. That is what
+# makes Predbat's padding work - a filler slot with grid charge off still TERMINATES the
+# charge window before it.
+#
+# Note an inverter can nonetheless be found sitting with all six slots at 00:00 (an
+# unconfigured default). The API stores that happily; it is simply not a chronological
+# programme, so no conclusion about valid schedules should be drawn from it.
+#
+# Seven options guarantee TOU_SLOT_COUNT distinct times survive even if all four of a
+# schedule's own window boundaries collide with fillers.
 TOU_FILLER_TIMES = ["00:00", "04:00", "08:00", "12:00", "16:00", "20:00", "23:00"]
 
-# VERIFY@SPIKE — that Sunsynk has these three modes is a semantic claim inherited
-# from DEYE and is safe. That they are numbered 0/1/2 IN DEYE'S ORDER is an
-# ENCODING claim and is the single highest-cost unknown in this integration:
-# getting it wrong silently swaps export for charge. Confirm before enabling control.
+# CONFIRMED live (inverter 2405116013, 2026-08-18). The Sunsynk app's System Mode screen
+# lists Work Mode as Selling First / Zero-Export + Limit To Load Only / Limited to Home, and
+# with "Limited to Home" selected the settings object reported sysWorkMode '2' - so the
+# numbering follows the app's own order, which is also DEYE's. "Limited to Home" is
+# Sunsynk's name for zero-export-to-CT.
+#
+# The mode does NOT by itself decide whether the system exports: the separate Solar Export
+# toggle (solarSell) does. The same inverter exported 11.1 kWh on the day this was confirmed
+# while sitting in "Limited to Home", because solarSell was '1'.
 SUNSYNK_WORKMODE = {
     "selling_first": "0",
     "zero_export_load": "1",
@@ -134,30 +153,79 @@ SUNSYNK_ENERGY = {
     "battery_discharge_today": ("battery", "etodayDischg"),
 }
 
-# VERIFY@SPIKE — sign convention. DEYE reports battery power positive on discharge;
-# if Sunsynk agrees this stays empty, otherwise add "battery_power" here.
-SUNSYNK_TELEMETRY_NEGATE = ()
+# Metrics whose sign must be flipped to reach Predbat's convention (battery positive on
+# discharge, grid negative on import).
+#
+# battery_power CONFIRMED live: the app's power-flow diagram showed 478 W flowing
+# battery -> house with PV at 0 W while the API reported power +484, so positive already
+# means discharging, matching DEYE and Predbat. No flip.
+#
+# grid_power's FIELD is confirmed - `pac` read 0 W at the same moment the app did, while
+# grid vip[0].power read -418 W and is evidently something else (a CT or per-phase sense,
+# not whole-house flow). Its SIGN is aligned with DEYE on the Deye-parity rule rather than
+# on direct evidence: every sample so far was at night with the grid idle, so 0 negates to
+# 0 and nothing distinguished the two. DEYE reports grid positive when importing and
+# negates to reach Predbat's negative-for-import convention, and Sunsynk is rebadged DEYE
+# hardware, so it is assumed to match. VERIFY@SPIKE - one daytime sample with real import
+# or export confirms or refutes it; if grid power comes back negative while importing,
+# remove "grid_power" here.
+SUNSYNK_TELEMETRY_NEGATE = ("grid_power",)
 
 # Fields used to derive ratings rather than published directly.
 SUNSYNK_CAPACITY_AH_FIELD = "capacity"  # battery realtime, amp-hours
 SUNSYNK_CHARGE_VOLT_FIELD = "chargeVolt"  # battery realtime, BMS charge target
-SUNSYNK_MAX_CHARGE_CURRENT_FIELD = "maxChargeCurrentLimit"  # battery realtime, amps
 SUNSYNK_RATED_POWER_FIELD = "ratePower"  # inverter detail, watts
 SUNSYNK_BATTERY_LOW_CAP_FIELD = "batteryLowCap"  # settings, percent floor
 
-# LiFePO4 cell voltages used to infer the pack's nominal voltage from its BMS charge
-# target, so an amp-hour capacity can become kWh. Same derivation deye.py uses.
-LIFEPO4_CHARGE_VOLTS_PER_CELL = 3.55
-LIFEPO4_NOMINAL_VOLTS_PER_CELL = 3.2
+# Output power cap. CONFIRMED live that this can sit BELOW the hardware rating: ratePower
+# 8000 with pvMaxLimit 7000, so using the rating alone would have Predbat plan a kilowatt
+# the inverter will never deliver.
+#
+# The EXPORT limit. The Sunsynk app shows this same value under two labels with an identical
+# 500-16000W range - "Inverter Power Limiter" (System Mode) and "Export power limiter" (Grid
+# Settings) - which is why pvMaxLimit was the only field holding the 7000 both screens
+# displayed. Per Sunsynk's documentation (confirmed by the system owner) the control despite
+# its System Mode label caps EXPORT, not the inverter's AC output: the inverter can still
+# deliver its full ratePower to the house. So this backs export_limit, and inverter_limit
+# stays on ratePower.
+#
+# Not to be confused with solarMaxSellPower (SUNSYNK_MAX_SOLAR_FIELD), a separate setting.
+SUNSYNK_EXPORT_LIMIT_FIELD = "pvMaxLimit"  # settings, watts
 
-# VERIFY@SPIKE — cell-count rounding in SunsynkAPI.nominal_pack_voltage assumes every real
-# pack is charged to (close enough to) 3.55V/cell that round(chargeVolt / 3.55) recovers the
-# true cell count. It is exact for the values tested (56.8, 85.2, 113.6V) because those are
-# exact multiples of 3.55, but a legitimate pack charged to a different per-cell target -
-# e.g. 24 cells at 3.45V/cell = 82.8V - rounds to 23 cells instead of 24, silently giving a
-# nominal voltage, capacity and battery_rate_max about 4% wrong. No live hardware has
-# confirmed the real spread of charge targets in use. The remote tester should compare the
-# derived battery_capacity against the battery's actual rated kWh before trusting it.
+# Grid import cap - "Import power limiter" in the app's Grid Settings. CONFIRMED live:
+# app 10350 W, settings importPower '10350'. Not consumed yet; recorded so the mapping is
+# not lost, since it bounds how fast Predbat can charge from the grid.
+SUNSYNK_IMPORT_LIMIT_FIELD = "importPower"  # settings, watts
+
+# "Max Solar Power" in the app - CONFIRMED live by the system owner: app 9200, settings
+# solarMaxSellPower '9200'. Recorded rather than consumed: it is a PV-side cap, not the AC
+# export cap Predbat's export_limit wants (see automatic_config for why that is left unset).
+SUNSYNK_MAX_SOLAR_FIELD = "solarMaxSellPower"  # settings, watts
+
+# Charge-current limit candidates, in priority order: the FIRST field with a positive value
+# wins. CONFIRMED live that a real system reports maxChargeCurrentLimit 0.0 while
+# chargeCurrentLimit 216.0 carries the actual limit - reading only the max field derived
+# battery_rate_max as 0, so automatic_config skipped it and Predbat ran with no charge-rate
+# limit at all. Both names are kept because it is unknown which other firmware populates.
+SUNSYNK_CHARGE_CURRENT_FIELDS = ("chargeCurrentLimit", "maxChargeCurrentLimit")
+
+# LiFePO4 pack geometry, used to turn an amp-hour capacity into kWh.
+#
+# Cell count is inferred from the BMS charge target. Dividing by one assumed volts-per-cell
+# is wrong at both ends of the legitimate range: 3.55 turns a 24-cell pack charged at
+# 3.65V/cell into 25 cells, and 3.65 turns a 16-cell pack charged at 3.45V/cell into 15.
+# Either error is silent, about 4%, and lands in soc_max. Instead the standard stack sizes
+# are tried and the one whose implied volts-per-cell falls inside the charge window wins,
+# breaking ties toward the typical value - exact for every combination of these stack sizes
+# with a 3.45-3.65V/cell target.
+#
+# CONFIRMED live: chargeVolt 58.4 -> 16 cells at exactly 3.65V/cell -> 51.2V nominal ->
+# 200Ah = 10.24 kWh, matching the pack's rating and its bmsVolt of 52.3V at 42% SoC.
+LIFEPO4_CELL_COUNTS = (8, 15, 16, 24, 32)
+LIFEPO4_CHARGE_VOLTS_MIN = 3.40
+LIFEPO4_CHARGE_VOLTS_MAX = 3.75
+LIFEPO4_CHARGE_VOLTS_TYPICAL = 3.55
+LIFEPO4_NOMINAL_VOLTS_PER_CELL = 3.2
 
 # Refresh cadence per class of state, in minutes. ComponentBase ticks run() every 60
 # seconds; these are the maximum ages a cached tier may reach before it is re-polled.

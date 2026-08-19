@@ -398,7 +398,7 @@ def test_publish_data_publishes_derived_capacity():
 def test_apply_reserve_live_forces_write_despite_noop():
     """apply_reserve_live posts a dynamic_control even when the payload is unchanged (force=True bypass)."""
     failed = False
-    d = RecordingDeye()
+    d = RecordingDeye().with_rating("INV1")
     d.device_list = ["INV1"]
     d.device_values = {"INV1": {"soc": 50.0}}
     d.local_schedule = {"INV1": {"reserve": 25, "charge": {"enable": False}, "export": {"enable": False}}}
@@ -511,7 +511,7 @@ def test_reserve_entity_echoes_the_written_value_even_below_the_floor():
     actually protects the battery.
     """
     failed = False
-    d = RecordingDeye()
+    d = RecordingDeye().with_rating("INV1")
     d.device_list = ["INV1"]
     d.device_values = {"INV1": {"soc": 50.0}}
     d.device_battery_config = {"INV1": {"battLowCapacity": 14}}

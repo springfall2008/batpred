@@ -581,7 +581,9 @@ def test_fetch_device_data_maps_telemetry_and_energy():
     with patch.object(s, "_get", side_effect=fake_get):
         run_async_local(s.fetch_device_data("INV1"))
     values = s.device_values.get("INV1", {})
-    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", 430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
+    # grid_power is negated to reach Predbat's negative-for-import convention, matching
+    # deye.py: Sunsynk's pac of +430 (importing) must publish as -430.
+    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", -430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
         if values.get(leaf) != expect:
             print(f"ERROR: telemetry {leaf} = {values.get(leaf)}, expected {expect}")
             failed = True
@@ -1014,6 +1016,99 @@ def test_cli_reports_telemetry_failure_naming_the_serials():
     assert not failed, "test_cli_reports_telemetry_failure_naming_the_serials"
 
 
+def test_battery_rate_max_prefers_a_populated_current_field():
+    """A zero maxChargeCurrentLimit must not mask a populated chargeCurrentLimit.
+
+    Confirmed live on inverter 2405116013: maxChargeCurrentLimit 0.0 alongside
+    chargeCurrentLimit 216.0. Reading only the max field derived a rate of 0, which made
+    automatic_config skip battery_rate_max and left Predbat with no charge-rate limit.
+    """
+    failed = False
+    s = MockSunsynk()
+    # The live shape: max is zero, the real limit is in chargeCurrentLimit.
+    s.device_values["INV1"] = {"chargeCurrentLimit": 216.0, "maxChargeCurrentLimit": 0.0, "chargeVolt": 58.4}
+    rate = s.battery_rate_max("INV1")
+    if abs(rate - 216.0 * 51.2) > 1:
+        print(f"ERROR: expected 216A x 51.2V = 11059W, got {rate}")
+        failed = True
+    # The other way round must still work - unknown which field other firmware populates.
+    s.device_values["INV2"] = {"chargeCurrentLimit": 0.0, "maxChargeCurrentLimit": 100.0, "chargeVolt": 56.8}
+    if abs(s.battery_rate_max("INV2") - 100.0 * 51.2) > 1:
+        print(f"ERROR: fallback to maxChargeCurrentLimit failed, got {s.battery_rate_max('INV2')}")
+        failed = True
+    # Both zero is genuinely unknown and must stay 0 rather than be invented.
+    s.device_values["INV3"] = {"chargeCurrentLimit": 0.0, "maxChargeCurrentLimit": 0.0, "chargeVolt": 58.4}
+    if s.battery_rate_max("INV3") != 0:
+        print(f"ERROR: no current limit should derive 0, got {s.battery_rate_max('INV3')}")
+        failed = True
+    assert not failed, "test_battery_rate_max_prefers_a_populated_current_field"
+
+
+def test_nominal_pack_voltage_across_the_lifepo4_charge_window():
+    """Cell count must come out right for any per-cell charge target in the real range.
+
+    A single assumed volts-per-cell is wrong at both ends: 3.55 turns a 24-cell pack
+    charged at 3.65V/cell into 25 cells, and 3.65 turns a 16-cell pack charged at
+    3.45V/cell into 15. Both errors are silent and land in soc_max.
+    """
+    failed = False
+    s = MockSunsynk()
+    # (charge target, expected cells) across 3.45 / 3.55 / 3.65 V per cell.
+    cases = [(55.2, 16), (56.8, 16), (58.4, 16), (82.8, 24), (85.2, 24), (87.6, 24), (110.4, 32), (113.6, 32), (116.8, 32)]
+    for charge_volts, cells in cases:
+        expect = cells * 3.2
+        got = s.nominal_pack_voltage(charge_volts)
+        if abs(got - expect) > 0.01:
+            print(f"ERROR: chargeVolt {charge_volts} gave {got}V ({got / 3.2:.0f} cells), expected {expect}V ({cells} cells)")
+            failed = True
+    # A target matching no standard stack must refuse rather than guess.
+    if s.nominal_pack_voltage(200.0) != 0:
+        print(f"ERROR: an unmatched charge target should derive 0, got {s.nominal_pack_voltage(200.0)}")
+        failed = True
+    # The explicit override still wins over any inference.
+    s.battery_nominal_voltage = 48.0
+    if s.nominal_pack_voltage(58.4) != 48.0:
+        print("ERROR: sunsynk_battery_nominal_voltage override was ignored")
+        failed = True
+    assert not failed, "test_nominal_pack_voltage_across_the_lifepo4_charge_window"
+
+
+def test_inverter_limit_is_the_rating_and_export_limit_is_the_cap():
+    """pvMaxLimit caps EXPORT, not the inverter's output, despite its app label.
+
+    Sunsynk's documentation confirms the "Inverter Power Limiter" control is an export cap,
+    which is why the app shows the same value on both the System Mode and Grid Settings
+    screens. The inverter can still deliver its full ratePower to the house, so reducing
+    inverter_limit by it would under-rate the inverter for self-consumption.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"pvMaxLimit": "7000"}
+    if s.inverter_limit("INV1") != 8000.0:
+        print(f"ERROR: inverter_limit should be the 8000W rating, got {s.inverter_limit('INV1')}")
+        failed = True
+    if s.export_limit("INV1") != 7000.0:
+        print(f"ERROR: export_limit should be the 7000W cap, got {s.export_limit('INV1')}")
+        failed = True
+    # Export can never exceed what the inverter can produce, whatever the setting allows.
+    s.device_rated_power["INV2"] = 3600.0
+    s.device_settings["INV2"] = {"pvMaxLimit": "16000"}
+    if s.export_limit("INV2") != 3600.0:
+        print(f"ERROR: export must be bounded by the rating, got {s.export_limit('INV2')}")
+        failed = True
+    # A G98 site: a 3.68kW export cap behind a much larger inverter must survive intact.
+    s.device_rated_power["INV3"] = 8000.0
+    s.device_settings["INV3"] = {"pvMaxLimit": "3680"}
+    if s.export_limit("INV3") != 3680.0 or s.inverter_limit("INV3") != 8000.0:
+        print(f"ERROR: G98 case wrong - export {s.export_limit('INV3')}, inverter {s.inverter_limit('INV3')}")
+        failed = True
+    if s.inverter_limit("UNKNOWN") != 0 or s.export_limit("UNKNOWN") != 0:
+        print("ERROR: an unknown serial should derive 0 for both")
+        failed = True
+    assert not failed, "test_inverter_limit_is_the_rating_and_export_limit_is_the_cap"
+
+
 def run_sunsynk_api_tests(my_predbat):
     """Run all Sunsynk API tests."""
     failed = False
@@ -1038,6 +1133,9 @@ def run_sunsynk_api_tests(my_predbat):
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),
         ("battery_rate_max", test_battery_rate_max_from_charge_current),
+        ("rate_max_field_priority", test_battery_rate_max_prefers_a_populated_current_field),
+        ("pack_voltage_window", test_nominal_pack_voltage_across_the_lifepo4_charge_window),
+        ("inverter_limit_vs_export", test_inverter_limit_is_the_rating_and_export_limit_is_the_cap),
         ("battery_reserve_min", test_battery_reserve_min_from_settings),
         ("device_list_no_serials_terminates", test_get_device_list_terminates_when_serials_are_missing),
         ("device_list_deduplicates", test_get_device_list_deduplicates_repeated_pages),

@@ -83,6 +83,17 @@ class MinuteArray:
         return new
 
 
+def mask_secret_args(args):
+    """
+    Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+    """
+    masked = copy.deepcopy(args)
+    for key in masked:
+        if ("_key" in key.lower()) or ("password" in key.lower()):
+            masked[key] = "xxx"
+    return masked
+
+
 # Helper to make dict hashable for caching
 def charge_curve_to_tuple(d):
     """Convert dict to tuple for use as cache key"""

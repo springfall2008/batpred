@@ -43,10 +43,14 @@ from sunsynk_const import (
     SUNSYNK_TELEMETRY_NEGATE,
     SUNSYNK_CAPACITY_AH_FIELD,
     SUNSYNK_CHARGE_VOLT_FIELD,
-    SUNSYNK_MAX_CHARGE_CURRENT_FIELD,
+    SUNSYNK_CHARGE_CURRENT_FIELDS,
+    SUNSYNK_EXPORT_LIMIT_FIELD,
     SUNSYNK_RATED_POWER_FIELD,
     SUNSYNK_BATTERY_LOW_CAP_FIELD,
-    LIFEPO4_CHARGE_VOLTS_PER_CELL,
+    LIFEPO4_CELL_COUNTS,
+    LIFEPO4_CHARGE_VOLTS_MIN,
+    LIFEPO4_CHARGE_VOLTS_MAX,
+    LIFEPO4_CHARGE_VOLTS_TYPICAL,
     LIFEPO4_NOMINAL_VOLTS_PER_CELL,
     SUNSYNK_WORKMODE,
     SUNSYNK_WORKMODE_FIELD,
@@ -507,7 +511,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
         # Ratings inputs are kept raw on device_values so the derivations below can read them.
         battery = responses.get("battery") or {}
-        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_MAX_CHARGE_CURRENT_FIELD):
+        for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS:
             if field in battery and battery[field] is not None:
                 values[field] = self._as_float(battery[field])
         self.device_values[sn] = values
@@ -544,17 +548,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         charge_volts = self._as_float(charge_volts)
         if charge_volts <= 0:
             return 0.0
-        # VERIFY@SPIKE — this rounds to the nearest whole cell assuming every pack charges
-        # to (close enough to) LIFEPO4_CHARGE_VOLTS_PER_CELL. It is exact for a target that
-        # is itself an exact multiple of 3.55V/cell, but a legitimate pack charged to a
-        # different per-cell target - e.g. 24 cells at 3.45V/cell = 82.8V - rounds to 23
-        # cells instead of 24, silently giving a nominal voltage (and therefore capacity and
-        # battery_rate_max) about 4% wrong. See sunsynk_const.py for the full note; no live
-        # hardware has confirmed the real spread of charge targets in use.
-        cells = round(charge_volts / LIFEPO4_CHARGE_VOLTS_PER_CELL)
-        if cells <= 0:
+        # Pick the standard stack size whose implied volts-per-cell falls inside the LiFePO4
+        # charge window, breaking ties toward the typical value. Dividing by one assumed
+        # figure and rounding is wrong at both ends of that window - 3.55 turns a 24-cell
+        # pack charged at 3.65V/cell into 25 cells, and 3.65 turns a 16-cell pack charged at
+        # 3.45V/cell into 15 - and either way the error is silent, ~4%, and lands in soc_max.
+        candidates = [(abs(charge_volts / cells - LIFEPO4_CHARGE_VOLTS_TYPICAL), cells) for cells in LIFEPO4_CELL_COUNTS if LIFEPO4_CHARGE_VOLTS_MIN <= charge_volts / cells <= LIFEPO4_CHARGE_VOLTS_MAX]
+        if not candidates:
+            # A charge target that fits no standard stack is not something to guess at: a
+            # wrong soc_max makes Predbat plan against a battery that does not exist.
+            self.log(f"Warn: Sunsynk cannot infer a LiFePO4 stack size from chargeVolt {charge_volts}; set sunsynk_battery_nominal_voltage in apps.yaml to derive capacity")
             return 0.0
-        return cells * LIFEPO4_NOMINAL_VOLTS_PER_CELL
+        return min(candidates)[1] * LIFEPO4_NOMINAL_VOLTS_PER_CELL
 
     def battery_capacity(self, sn):
         """Return the usable battery capacity in kWh, or 0 when it cannot be derived."""
@@ -568,11 +573,37 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
     def battery_rate_max(self, sn):
         """Return the maximum charge rate in watts, or 0 when it cannot be derived."""
         values = self.device_values.get(sn, {})
-        amps = self._as_float(values.get(SUNSYNK_MAX_CHARGE_CURRENT_FIELD))
+        # First candidate with a positive value wins. A real system was seen reporting
+        # maxChargeCurrentLimit 0.0 alongside chargeCurrentLimit 216.0, which derived a rate
+        # of 0 and made automatic_config skip battery_rate_max entirely.
+        amps = next((amp for amp in (self._as_float(values.get(field)) for field in SUNSYNK_CHARGE_CURRENT_FIELDS) if amp > 0), 0.0)
         volts = self.nominal_pack_voltage(values.get(SUNSYNK_CHARGE_VOLT_FIELD))
         if amps <= 0 or volts <= 0:
             return 0.0
         return amps * volts
+
+    def inverter_limit(self, sn):
+        """Return the inverter's AC power rating in watts, or 0 when unknown.
+
+        This is the hardware rating (ratePower) only. It is deliberately NOT reduced by
+        pvMaxLimit: despite that setting's "Inverter Power Limiter" label in the app, Sunsynk
+        documents it as an EXPORT cap, so the inverter can still deliver its full rating to
+        the house. See export_limit.
+        """
+        return self.device_rated_power.get(sn, 0.0)
+
+    def export_limit(self, sn):
+        """Return the maximum export power in watts, or 0 when unknown.
+
+        Predbat's inverter.py defaults export_limit to 99999W - effectively unlimited - so
+        leaving this unmapped lets it plan an export the inverter will simply clip. A real
+        system had a 7000W export cap behind an 8000W inverter.
+
+        Bounded by the inverter rating too: whatever the setting nominally allows, the
+        inverter cannot export more AC than it can produce.
+        """
+        limits = [value for value in (self.inverter_limit(sn), self._as_float(self.device_settings.get(sn, {}).get(SUNSYNK_EXPORT_LIMIT_FIELD))) if value > 0]
+        return min(limits) if limits else 0.0
 
     def battery_reserve_min(self, sn):
         """Return the inverter's own SOC floor as a percent, or 0 when unknown."""
@@ -581,6 +612,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
     def derive_control_state(self, schedule, current_soc):
         """Map Predbat's schedule intent to a Sunsynk control state (see the spec's table).
+
+        The work mode governs whether the BATTERY may export, and it is orthogonal to
+        solarSell, which governs whether surplus PV may. Confirmed on a live system that
+        exported 11.1 kWh in a day while sitting in "Limited to Home" with solarSell on, so
+        the mode does not gate solar.
+
+        Non-export states therefore use zero_export_ct ("Limited to Home"): the battery
+        serves the whole house, measured at the grid CT, without exporting. The stricter
+        zero_export_load ("Zero-Export + Limit To Load Only") measures at the inverter's own
+        output instead, so on a CT-clamp install it would stop the battery serving anything
+        not wired to the inverter, and the shortfall would come from the grid.
 
         Semantics are inherited from DEYE — the same registers sit behind both clouds —
         but every wire value comes from SUNSYNK_WORKMODE, never from DEYE's enum.
@@ -593,17 +635,27 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             export_soc = int(export.get("soc", FREEZE_EXPORT_SOC))
             behaviour = "freeze_export" if export_soc >= FREEZE_EXPORT_SOC else "export"
             slot_soc = FREEZE_EXPORT_SOC if export_soc >= FREEZE_EXPORT_SOC else export_soc
-            return {"behaviour": behaviour, "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": slot_soc, "power": int(export.get("power", 0))}
+            # Zero power IS the freeze: selling-first with no power holds the battery while
+            # surplus solar still exports.
+            power = 0 if behaviour == "freeze_export" else int(export.get("power", 0))
+            return {"behaviour": behaviour, "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": slot_soc, "power": power}
 
         if charge.get("enable"):
             charge_soc = int(charge.get("soc", 0))
             if charge_soc > current_soc and charge_soc > reserve:
-                return {"behaviour": "charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
+                return {"behaviour": "charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
             if charge_soc == reserve:
-                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
-            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
+                # Zero power IS the freeze: the slot is enabled for grid charge but given no
+                # power, so the battery neither charges nor discharges and simply holds.
+                return {"behaviour": "freeze_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": 0}
+            # The battery is already at or above the requested target, so grid charge stays
+            # OFF - the charge is simply not triggered. The slot still carries Predbat's
+            # charge rate, because that is the rate it has chosen for this window; only the
+            # behaviour differs, not the power. Zero here would mean freeze, which is a
+            # different state, and the inverter's full rating would discard Predbat's rate.
+            return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
-        return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_load"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+        return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
 
     @staticmethod
     def _to_slot_time(value):
@@ -642,18 +694,28 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             return start <= now_minutes < end
         return now_minutes >= start or now_minutes < end
 
-    def _self_use_slot(self, start_time, reserve):
-        """Build a self-use slot holding at the reserve SOC."""
-        return {"time": start_time, "power": 0, "soc": int(reserve), "grid_charge": False}
+    def _self_use_slot(self, start_time, reserve, self_use_power):
+        """Build a self-use slot holding at the reserve SOC.
+
+        self_use_power must NOT be zero. Zero power is how Sunsynk expresses a freeze - the
+        battery neither charges nor discharges - so a zero-power self-use slot would stop
+        the battery serving the house for the whole interval and push the load onto the
+        grid. Self-use slots cover most of the day, so this is the default state.
+        """
+        return {"time": start_time, "power": int(self_use_power), "soc": int(reserve), "grid_charge": False}
 
     def _action_slot(self, start_time, state):
         """Build a slot realising a derived control state."""
         return {"time": start_time, "power": int(state["power"]), "soc": int(state["slot_soc"]), "grid_charge": bool(state["grid_charge"])}
 
-    def build_tou_slots(self, schedule, current_soc):
+    def build_tou_slots(self, schedule, current_soc, self_use_power):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
 
-        Slots are sequential intervals, so every start time must be distinct and ascending.
+        Slots are sequential intervals ("from this start until the next slot's start") and
+        Sunsynk documents that they MUST be set chronologically, so every start is written
+        distinct and ascending. A slot is an interval whatever its grid-charge flag says,
+        which is what lets a filler slot terminate the charge window before it.
+
         Segment boundaries are collected from a 00:00 self-use baseline plus each enabled
         window's start (its action) and end (back to self-use), then padded with fillers
         and trimmed to the earliest, most imminent TOU_SLOT_COUNT.
@@ -686,14 +748,14 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
                 slots.append(self._action_slot(start_time, state))
             else:
-                slots.append(self._self_use_slot(start_time, reserve))
+                slots.append(self._self_use_slot(start_time, reserve, self_use_power))
 
         used = {slot["time"] for slot in slots}
         for filler in TOU_FILLER_TIMES:
             if len(slots) >= TOU_SLOT_COUNT:
                 break
             if filler not in used:
-                slots.append(self._self_use_slot(filler, reserve))
+                slots.append(self._self_use_slot(filler, reserve, self_use_power))
                 used.add(filler)
         return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
 
@@ -734,7 +796,15 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         since build_settings_payload rebuilds and re-clamps against the fresh floor as
         soon as a real read does happen - see apply_settings).
         """
-        slots = self.build_tou_slots(schedule, current_soc)
+        # Self-use slots get the inverter's full rating so the battery is free to serve
+        # whatever the house draws. Zero would freeze it (see _self_use_slot); if the rating
+        # is unknown, fall back to the largest slot power already on the inverter rather
+        # than write a freeze by accident.
+        self_use_power = int(self.inverter_limit(sn)) or self._existing_slot_power(sn)
+        if not self_use_power:
+            self.log(f"Warn: Sunsynk {sn} has no inverter rating and no existing slot power, so self-use slots would be written with zero power (a freeze); skipping the write")
+            return {}
+        slots = self.build_tou_slots(schedule, current_soc, self_use_power)
         active = self._active_state(schedule, current_soc, now_minutes)
 
         # Never ask the battery to go below the floor its own installer settings declare.
@@ -756,7 +826,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         # single place that knows which fields Sunsynk wants bare and which quoted, so a
         # field that bypasses it is a field whose encoding cannot be corrected in one place.
         payload = {SUNSYNK_SERIAL_FIELD: sn, SUNSYNK_WORKMODE_FIELD: encode_setting(SUNSYNK_WORKMODE_FIELD, active["work_mode"])}
-        payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1" if active["solar_sell"] else "0")
+        # Solar Export is always left ON, regardless of what the active state derives.
+        #
+        # solarSell does not govern the BATTERY - it governs whether surplus PV reaches the
+        # grid at all. Predbat plans when the battery charges and exports; it assumes, like
+        # every other inverter it drives, that spare solar exports passively in the
+        # background. Deriving this from the active window (on only inside an export window,
+        # off otherwise) would curtail surplus PV for most daylight hours, silently costing
+        # the user export revenue on a sunny day once the battery is full - and Predbat has
+        # no notion it is doing so, because nothing in its model represents PV curtailment.
+        #
+        # An export window still exports: that is driven by the selling-first work mode and
+        # the slot SoC targets, not by this flag. Turning it off is never useful here, only
+        # harmful, so it is not derived at all.
+        payload[SUNSYNK_SOLAR_SELL_FIELD] = encode_setting(SUNSYNK_SOLAR_SELL_FIELD, "1")
         payload[SUNSYNK_TOU_ENABLE_FIELD] = encode_setting(SUNSYNK_TOU_ENABLE_FIELD, "1")
         for day in SUNSYNK_DAY_FIELDS:
             payload[day] = encode_setting(day, True)
@@ -787,6 +870,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         payload = dict(baseline)
         payload.update(self._owned_payload(sn, schedule, current_soc, now_minutes))
         return payload
+
+    def _existing_slot_power(self, sn):
+        """Return the largest per-slot power already set on the inverter, or 0 if none.
+
+        Used only as a fallback for self-use slots when the inverter rating is unknown -
+        writing zero there would freeze the battery, so reusing whatever the installer
+        already had is strictly better than that.
+        """
+        settings = self.device_settings.get(sn, {})
+        powers = [self._as_float(settings.get(TOU_FIELD["power"].format(n=n))) for n in range(1, TOU_SLOT_COUNT + 1)]
+        return int(max(powers)) if powers and max(powers) > 0 else 0
 
     def payloads_equal(self, a, b):
         """Compare two settings payloads for change detection."""
@@ -951,9 +1045,12 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             rate_max = self.battery_rate_max(sn)
             if rate_max > 0:
                 self.dashboard_item(self._sensor_name(sn, "battery_rate_max"), state=round(rate_max), attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Battery Rate Max"}, app="sunsynk")
-            rated_power = self.device_rated_power.get(sn, 0.0)
+            rated_power = self.inverter_limit(sn)
             if rated_power > 0:
                 self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=rated_power, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Inverter Limit"}, app="sunsynk")
+            export_cap = self.export_limit(sn)
+            if export_cap > 0:
+                self.dashboard_item(self._sensor_name(sn, "export_limit"), state=export_cap, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Export Limit"}, app="sunsynk")
             floor = self.battery_reserve_min(sn)
             if floor > 0:
                 self.dashboard_item(self._sensor_name(sn, "battery_reserve_min"), state=floor, attributes={"unit_of_measurement": "%", "friendly_name": f"Sunsynk {sn} Battery Reserve Min"}, app="sunsynk")
@@ -1319,10 +1416,19 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
             self.log("Warn: Sunsynk no battery charge-current limit available, battery_rate_max must be set manually in apps.yaml")
-        if all(self.device_rated_power.get(sn, 0.0) > 0 for sn in self.device_list):
+        if all(self.inverter_limit(sn) > 0 for sn in self.device_list):
             self.set_arg_auto("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
         else:
             self.log("Warn: Sunsynk no ratePower reported, inverter_limit must be set manually in apps.yaml")
+        # Without this Predbat falls back to inverter.py's effectively unlimited 99999W
+        # default and plans exports the inverter simply clips. pvMaxLimit is the export cap
+        # despite its "Inverter Power Limiter" label in the app - a G98/G99 site capped at
+        # 3.68kW behind a much larger inverter is exactly the case this protects.
+        # See SUNSYNK_EXPORT_LIMIT_FIELD.
+        if all(self.export_limit(sn) > 0 for sn in self.device_list):
+            self.set_arg_auto("export_limit", [self._sensor_name(sn, "export_limit") for sn in devices])
+        else:
+            self.log("Warn: Sunsynk no export power limit available, export_limit must be set manually in apps.yaml")
         if all(self.battery_reserve_min(sn) > 0 for sn in self.device_list):
             self.set_arg_auto("battery_min_soc", [self._sensor_name(sn, "battery_reserve_min") for sn in devices])
 
