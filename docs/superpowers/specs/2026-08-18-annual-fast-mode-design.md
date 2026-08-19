@@ -87,11 +87,27 @@ plumbing.
 
 ### Anchor months
 
-`ANCHOR_MONTHS = (1, 4, 7, 10)` — January, April, July, October. One per season, and a
-spread that spans the solar range from midwinter to midsummer, which is what the fit
-needs to resolve `b`. The measured data does not meaningfully separate this from
-`(2, 5, 8, 11)` or `(3, 6, 9, 12)`; it is chosen for spread and for reading naturally as
-one per season.
+`ANCHOR_MONTHS = (3, 6, 9, 12)` — March, June, September, December. One per season, and a
+spread that spans the solar range from midwinter to midsummer, which is what the fit needs
+to resolve `b`.
+
+**Corrected after implementation.** This originally said `(1, 4, 7, 10)`, on the grounds
+that the measured data did not separate the candidates. That was wrong, and wrong in a way
+worth recording: the per-month cost error genuinely does not separate them, but the
+*savings* figures — the numbers a reader acts on — separate them sharply, because a saving
+is a difference between two reconstructed scenarios and small relative errors in each are
+amplified in the difference. Measured on the Cosy reference, reconstructing the year from
+each candidate:
+
+| Anchors | System saving | Predbat saving |
+|---|---|---|
+| (1, 4, 7, 10) | +1.2% | −10.6% |
+| (2, 5, 8, 11) | −0.8% | +11.7% |
+| **(3, 6, 9, 12)** | **−0.5%** | **+0.2%** |
+
+Anchor count does not rescue a bad set: six, seven and eight anchors were also tried and
+land no better (Cosy with seven anchors is +11.8% on the Predbat saving, worse than four
+well-chosen ones).
 
 ### The interpolation module
 
@@ -206,11 +222,10 @@ the mode; excluding them would report a four month year. The `annual` block gain
 `"fast_mode": True` and `"months_interpolated"`, so a stored run can never be mistaken for
 a full one after the fact.
 
-A caveat states the measured accuracy rather than implying none. Interpolation itself
-contributes **under 1%** to annual savings, and individual months land within roughly 10-13%
-typically, worse in the tails. The caveat must not promise better than the underlying run
-delivers, though: on a high day-to-day variance tariff such as Agile the sampled anchors
-carry roughly 8-18% of their own error, which fast mode inherits and a full run has too.
+A caveat states the measured accuracy rather than implying none. On a tariff that passes
+the volatility guard below, the annual savings land within about 3% and payback within
+about 1% (measured: 0.5% and 0.2% on the Cosy reference); individual months are rougher,
+typically within about 10%. Tariffs where that would not hold never reach interpolation.
 
 ### Web UI
 
@@ -255,6 +270,35 @@ advantage on all five references.
 
 Rates are still fetched for all twelve months, for the unavailable-month and export-credit
 reasons above — those stand on their own and do not depend on a rate regressor.
+
+### The volatility guard
+
+Fast mode's accuracy holds only while a month's economics follow the solar curve. On Agile
+they do not, and **no anchor set rescues it** — every choice is 8-32% out on one savings
+figure or the other, and adding anchors does not help. That is a property of the tariff,
+not a fixable modelling defect: adding a rate term to the basis overfits (above), and
+because least squares is linear, fitting the savings difference directly is *identically*
+equal to differencing two fits, so that reformulation is a no-op.
+
+So rather than report a fast wrong number, the run declines fast mode and plans all twelve
+months. The signal is the coefficient of variation of daily average import price, which
+separates the two cases by roughly fortyfold:
+
+| Tariff | Rate variability | Verdict |
+|---|---|---|
+| Cosy | 0.002 | fast mode runs |
+| Intelligent Go and other banded tariffs | ~0 by construction | fast mode runs |
+| Agile | 0.222 | full run |
+
+`FAST_MODE_MAX_RATE_CV = 0.10` sits between them with a wide margin either side. It is
+measured over the four anchor months rather than one: a single month is too tight (Agile's
+quietest month is 0.104 against the 0.10 limit) while the four-month mean sits at twice it.
+
+The check runs **before any month is planned**, so the progress total is honest from the
+first month rather than growing mid-run, and no work is wasted — the anchors a fast run
+would have planned are months a full run needs anyway. Verified end to end: `--fast` on
+Agile produces a bit-identical full run (+0.0% on both savings), and on Cosy reconstructs
+payback to 5.84 years against 5.81.
 
 ### Fast mode's own error is very small
 
