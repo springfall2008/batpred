@@ -133,7 +133,7 @@ SUNSYNK_DAY_FIELDS = ["mondayOn", "tuesdayOn", "wednesdayOn", "thursdayOn", "fri
 # never transmitted at all, so it cannot be disturbed.
 #
 # Field list taken from solarsynkv3's DetermineSettingCategory, which posts the same group.
-SUNSYNK_SYSTEM_MODE_FIELDS = (
+SUNSYNK_SYSTEM_MODE_FIELDS = frozenset(
     ["sn", "safetyType", "battMode", "solarSell", "pvMaxLimit", "energyMode", "peakAndVallery", "sysWorkMode", "zeroExportPower", "solarMaxSellPower"]
     + [f"sellTime{n}" for n in range(1, TOU_SLOT_COUNT + 1)]
     + [f"sellTime{n}Pac" for n in range(1, TOU_SLOT_COUNT + 1)]
