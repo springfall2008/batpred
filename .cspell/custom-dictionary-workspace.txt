@@ -25,6 +25,8 @@ armhf
 armv
 ASHP
 asyncio
+atfork
+atleast
 authoriser
 autodocstring
 autoflake
@@ -51,6 +53,7 @@ byok
 cadata
 calib
 Cantarell
+CDLL
 cdn
 Cerbo
 cexxxx
@@ -77,6 +80,7 @@ corruptplans
 cprofile
 creds
 crosscharge
+ctypes
 customauthorizer
 customisation
 Customise
@@ -114,6 +118,7 @@ digestmod
 dimport
 dischargeenergytotal
 dischargefreeze
+Dischg
 diverter
 dlimit
 dnoregion
@@ -124,6 +129,7 @@ dwindow
 eauth
 Eddi
 elif
+elinter
 EMEA
 emqx
 emszzzz
@@ -148,6 +154,7 @@ enphaseenergy
 Enpower
 entrez
 epod
+etoday
 etok
 euids
 EVDC
@@ -171,6 +178,7 @@ fontweight
 Forestfire
 formaction
 formmethod
+foxcloud
 foxess
 foxesscloud
 freephase
@@ -184,6 +192,7 @@ generationpower
 geserial
 geseriale
 getall
+getrusage
 Ginlong
 GivEnergy
 givtcp
@@ -223,6 +232,7 @@ idxs
 iflux
 importlimit
 inday
+inteless
 INTELLI
 intelligentdevice
 interp
@@ -274,6 +284,7 @@ luxpower
 markdownlint
 matplotlib
 maximise
+maxrss
 maxsoc
 mbuhansen
 mdlrc
@@ -286,6 +297,8 @@ meterpower
 metricb
 metricmid
 microinverters
+middlebox
+middleboxes
 minb
 minmax
 minsoc
@@ -328,6 +341,7 @@ nordpool
 noreferrer
 nosc
 nosuchrun
+notsn
 nrgheat
 numpy
 OCPP
@@ -378,6 +392,7 @@ preseeded
 prevs
 protobuf
 psum
+pthread
 pvbat
 pvenergytotal
 pvlib
@@ -416,8 +431,10 @@ Roboto
 rowspan
 rstart
 rstrip
+rtol
 rtype
 ruamel
+RUSAGE
 Rvrt
 sapm
 saverestore
@@ -436,6 +453,7 @@ sess
 setattr
 setdefault
 SFMB
+SIGALRM
 sigcloud
 sigen
 sigencloud
@@ -447,6 +465,7 @@ slugifies
 slugify
 slugifying
 snakeviz
+snprintf
 socb
 socketloop
 socs
@@ -454,6 +473,8 @@ sofar
 SolarEdge
 solarman
 solarnet
+solarsynk
+solarsynkv
 Solax
 solaxcloud
 solaxmodbus
@@ -463,6 +484,7 @@ solisx
 sourcery
 Southwell
 sparkline
+spki
 springfall
 starthour
 startminute
@@ -472,6 +494,7 @@ stdlib
 stepline
 Stromligning
 strptime
+strtod
 Strømligning
 subclassing
 submessage
@@ -479,6 +502,7 @@ substep
 sunspec
 sunsynk
 supabase
+synkctl
 syscmd
 tabindex
 tasmota
@@ -489,6 +513,7 @@ temperation
 Teslemetry
 testname
 thirdparty
+threadpool
 timea
 timeb
 timec
@@ -510,6 +535,7 @@ trapz
 Trefor
 treforsiphone
 treforsouthwell
+triggerable
 tunables
 twinx
 typecode
@@ -517,23 +543,33 @@ typecodes
 tzfile
 tzpath
 unconfigured
+underivable
 undiscounted
 unnormalised
 unparseable
+unpickled
+unpickles
+unpushed
 unsmoothed
 unstaged
+urandom
 urlsafe
 useid
 userinterface
+Vallery
 varh
 venv
 Victron
 visibilitychange
 waf
+waitpid
 Wallbox
 weblink
 welink
 Werror
+WEXITSTATUS
+WIFEXITED
+WNOHANG
 workmode
 writeonly
 wrongsha

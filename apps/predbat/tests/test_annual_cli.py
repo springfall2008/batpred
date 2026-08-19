@@ -16,6 +16,7 @@ from contextlib import redirect_stderr, redirect_stdout
 
 import annual_cli
 from annual_cli import format_table, make_progress
+from storage import StorageLocalFiles
 
 
 class _StubPredictor:
@@ -27,10 +28,12 @@ class _StubPredictor:
     """
 
     captured_log = None
+    captured_storage = None
 
     def __init__(self, config, log=None, storage=None, work_dir=None):
-        """Record the log callable and discard everything else."""
+        """Record the log callable and the storage, and discard everything else."""
         _StubPredictor.captured_log = log
+        _StubPredictor.captured_storage = storage
 
     async def run(self, progress=None):
         """Report one fake progress step (if asked) and return canned results."""
@@ -63,10 +66,10 @@ class _WarningPredictor:
 def sample_results():
     """Return a small results document covering an ok month and an unavailable one."""
     scenarios = {
-        "no_pvbat": {"cost_p": 12000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 0.0},
-        "pv_only": {"cost_p": 10000.0, "import_kwh": 350.0, "export_kwh": 60.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 0.0, "export_credit_p_estimate": 180.0},
-        "without_predbat": {"cost_p": 8000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "export_credit_p_estimate": 300.0},
-        "with_predbat": {"cost_p": 6000.0, "import_kwh": 280.0, "export_kwh": 45.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "export_credit_p_estimate": 675.0},
+        "no_pvbat": {"cost_p": 12000.0, "import_kwh": 400.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0},
+        "pv_only": {"cost_p": 10000.0, "import_kwh": 350.0, "export_kwh": 60.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 180.0},
+        "without_predbat": {"cost_p": 8000.0, "import_kwh": 300.0, "export_kwh": 20.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 90.0, "battery_cycles": 2.0, "export_credit_p_estimate": 300.0},
+        "with_predbat": {"cost_p": 6000.0, "import_kwh": 280.0, "export_kwh": 45.0, "pv_generated_kwh": 120.0, "battery_throughput_kwh": 140.0, "battery_cycles": 3.0, "export_credit_p_estimate": 675.0},
     }
     return {
         "year": 2025,
@@ -235,6 +238,59 @@ def test_annual_cli(my_predbat):
 
     if _StubPredictor.captured_log is not print:
         print("  ERROR: --quiet should still construct AnnualPredictor with log=print, got {}".format(_StubPredictor.captured_log))
+        failed = True
+
+    print("Test: storage_factory defaults to local files and is called with (work_dir, log)")
+    # The default must keep the command line behaving exactly as it did before the factory
+    # existed, so a plain run is still backed by StorageLocalFiles rooted at --work-dir.
+    original_predictor = annual_cli.AnnualPredictor
+    annual_cli.AnnualPredictor = _StubPredictor
+    with tempfile.TemporaryDirectory() as work_dir:
+        config_path = os.path.join(work_dir, "annual.yaml")
+        with open(config_path, "w") as handle:
+            handle.write("annual: {}\n")
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                annual_cli.main(["--config", config_path, "--work-dir", os.path.join(work_dir, "work")])
+        finally:
+            annual_cli.AnnualPredictor = original_predictor
+
+    if not isinstance(_StubPredictor.captured_storage, StorageLocalFiles):
+        print("  ERROR: the default storage should be StorageLocalFiles, got {!r}".format(_StubPredictor.captured_storage))
+        failed = True
+
+    print("Test: a supplied storage_factory replaces it, receiving the work dir and log")
+    captured_args = {}
+
+    class _StubStorage:
+        """Records what main() hands the factory, standing in for a non-file backend."""
+
+    def _factory(work_dir, log):
+        captured_args["work_dir"] = work_dir
+        captured_args["log"] = log
+        return _StubStorage()
+
+    original_predictor = annual_cli.AnnualPredictor
+    annual_cli.AnnualPredictor = _StubPredictor
+    with tempfile.TemporaryDirectory() as work_dir:
+        config_path = os.path.join(work_dir, "annual.yaml")
+        with open(config_path, "w") as handle:
+            handle.write("annual: {}\n")
+        expected_work = os.path.join(work_dir, "work")
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                annual_cli.main(["--config", config_path, "--work-dir", expected_work], storage_factory=_factory)
+        finally:
+            annual_cli.AnnualPredictor = original_predictor
+
+    if not isinstance(_StubPredictor.captured_storage, _StubStorage):
+        print("  ERROR: the supplied factory's storage should reach AnnualPredictor, got {!r}".format(_StubPredictor.captured_storage))
+        failed = True
+    if captured_args.get("work_dir") != expected_work:
+        print("  ERROR: the factory should receive --work-dir, got {!r}".format(captured_args.get("work_dir")))
+        failed = True
+    if captured_args.get("log") is not print:
+        print("  ERROR: the factory should receive the run's log callable, got {!r}".format(captured_args.get("log")))
         failed = True
 
     return failed

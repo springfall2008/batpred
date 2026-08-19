@@ -26,6 +26,76 @@ import time
 Execute Predbat plan
 """
 
+# Per-inverter core charge/export states, used to resolve one headline status across a multi-inverter
+# fleet instead of letting whichever inverter is processed last silently win. Precedence lists are
+# ordered most-active-first so the most informative sub-state is shown when inverters within the same
+# side disagree (e.g. one still actively Charging while another has already reached Hold charging).
+CHARGE_STATE_PRECEDENCE = ["Charging", "Freeze charging", "Hold charging"]
+EXPORT_STATE_PRECEDENCE = ["Exporting", "Freeze exporting", "Hold exporting"]
+CHARGE_SIDE_STATES = set(CHARGE_STATE_PRECEDENCE)
+EXPORT_SIDE_STATES = set(EXPORT_STATE_PRECEDENCE)
+
+
+def resolve_multi_inverter_status(status_per_inverter, current_status):
+    """Resolve one headline status across a multi-inverter fleet.
+
+    ``status_per_inverter`` holds each inverter's own final core charge/export state, keyed by
+    inverter id, as recorded during execute_plan()'s per-inverter loop - a plain dict overwrite per
+    inverter, so it correctly reflects each inverter's own last-set state even if that inverter's own
+    processing passed through more than one core-state assignment.
+
+    If inverters disagree across the charge/export divide (one genuinely charging while another
+    discharges at the same time) that's real cross-charging, not noise - surfaced explicitly rather
+    than silently showing whichever inverter happened to be processed last. If they only disagree on
+    sub-state within the same side (e.g. one still actively Charging, another already Hold charging),
+    the most active one is shown - it's the most informative and matches what the fleet is actually
+    doing overall.
+
+    Falls through to ``current_status`` unchanged when no inverter reached a core charge/export state
+    at all (pure Demand, Read-Only, Calibration, or a Hold-for-car/iBoost annotation with nothing else
+    going on) - those cases are already correct and untouched by this resolution. Calibration always
+    wins outright even if ``status_per_inverter`` holds a stale core state from an inverter processed
+    before the one that entered calibration mode, since calibration force-overrides every inverter's
+    controls and that must not be hidden behind a leftover Charging/Exporting label.
+    """
+    if current_status == "Calibration":
+        return current_status
+    states_present = set(status_per_inverter.values())
+    charge_states_present = states_present & CHARGE_SIDE_STATES
+    export_states_present = states_present & EXPORT_SIDE_STATES
+    if charge_states_present and export_states_present:
+        return "Cross-charging"
+    if charge_states_present:
+        return next(candidate for candidate in CHARGE_STATE_PRECEDENCE if candidate in charge_states_present)
+    if export_states_present:
+        return next(candidate for candidate in EXPORT_STATE_PRECEDENCE if candidate in export_states_present)
+    return current_status
+
+
+def build_status_extra(status_extra_parts):
+    """Assemble the per-inverter status detail text recorded during execute_plan().
+
+    Each entry is ``(inverter_id, lead, label, detail)``: ``lead`` is the introductory word used by the
+    first inverter ("target"/"current SoC"), ``label`` is that inverter's own core charge/export state
+    and ``detail`` the SoC figures.
+
+    The per-inverter ``label`` only carries information when the fleet's inverters actually disagree.
+    #4466 added it so a mixed fleet could be read at all, but emitting it unconditionally repeated the
+    headline status on every system whose inverters agree - a single-inverter install showed
+    "Exporting target Exporting 19%-5%". Labels are therefore dropped when every segment carries the
+    same one, restoring the pre-#4466 text for a single inverter and for any fleet acting in unison,
+    and kept when they differ.
+    """
+    if not status_extra_parts:
+        return ""
+    show_labels = len({label for _, _, label, _ in status_extra_parts}) > 1
+    status_extra = ""
+    for inverter_id, lead, label, detail in status_extra_parts:
+        # Only the first inverter introduces the text; the rest are appended after a separator.
+        status_extra += " {}".format(lead) if inverter_id == 0 else " /"
+        status_extra += " {} {}".format(label, detail) if show_labels else " {}".format(detail)
+    return status_extra
+
 
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
@@ -36,10 +106,17 @@ class Execute:
     """
 
     def execute_plan(self):
-        status_extra = ""  # extra status text added to Predbat notifications
+        # Per-inverter detail segments, assembled into the status text after the headline status is
+        # resolved - see build_status_extra() for why they can't be concatenated inline.
+        status_extra_parts = []
         status_hold_car = ""  # car hold status text
         status_hold_iboost = ""  # iBoost hold status text
         status_freeze_export = ""  # freeze export during demand status text
+        # Each inverter's own final core charge/export state, keyed by inverter id - used after the
+        # loop to detect genuine cross-charging (one inverter charging while another discharges at
+        # the same time) rather than silently showing whichever inverter's status happened to be
+        # set last, which hides that the fleet is fighting itself.
+        status_per_inverter = {}
 
         in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
         in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
@@ -198,14 +275,15 @@ class Execute:
                                 resetDischarge = False
 
                             status = "Freeze charging"
-                            status_extra += " target" if inverter.id == 0 else " /"  # Append multi-inverter target SoC's together
-                            status_extra += " {}%".format(inverter.soc_percent)
+                            status_per_inverter[inverter.id] = status
+                            status_extra_parts.append((inverter.id, "target", status, "{}%".format(inverter.soc_percent)))  # Append multi-inverter target SoC's together
                             self.log("Inverter {} Freeze charging with SoC {}%".format(inverter.id, inverter.soc_percent))
                         else:
                             # We can only hold charge if a) we have a way to hold the charge level on the reserve or with a pause feature
                             # and the current charge level is above the target for all inverters
                             if self.set_soc_enable and inverter.soc_percent >= inv_target_soc_percent:
                                 status = "Hold charging"
+                                status_per_inverter[inverter.id] = status
                                 self.log(
                                     "Inverter {} Hold charging as SoC {}% is above target SoC {}% (global soc target {}%) set_discharge_during_charge {}".format(
                                         inverter.id, inverter.soc_percent, dp0(inv_target_soc_percent), dp0(target_soc), self.set_discharge_during_charge
@@ -240,10 +318,10 @@ class Execute:
                                     inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                             else:
                                 status = "Charging"
+                                status_per_inverter[inverter.id] = status
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
-                            status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%-{}%".format(inverter.soc_percent, inv_target_soc_percent)
+                            status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inv_target_soc_percent)))  # append multi-inverter target SoC's together
 
                         if not self.set_discharge_during_charge and resetPause:
                             # Do we discharge discharge during charge
@@ -378,8 +456,8 @@ class Execute:
                         self.isExporting_Target = int(target)
 
                         status = "Exporting"
-                        status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                        status_extra += " {}%-{}%".format(inverter.soc_percent, int(target))
+                        status_per_inverter[inverter.id] = status
+                        status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, int(target))))  # append multi-inverter target SoC's together
                         # Immediate export mode
                     else:
                         inverter.adjust_force_export(False)
@@ -398,16 +476,17 @@ class Execute:
 
                             self.log("Export Freeze as exporting is now at/below target - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                             status = "Freeze exporting"
-                            status_extra += " current SoC" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%".format(inverter.soc_percent)  # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
+                            status_per_inverter[inverter.id] = status
+                            # Discharge limit (99) is meaningless when Freeze Exporting so don't display it
+                            status_extra_parts.append((inverter.id, "current SoC", status, "{}%".format(inverter.soc_percent)))  # append multi-inverter target SoC's together
                             isExporting = True
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
                             self.isExporting_Target = int(target)
                         else:
                             status = "Hold exporting"
+                            status_per_inverter[inverter.id] = status
                             target = self.export_window_best[0].get("target", self.export_limits_best[0])
-                            status_extra += " target" if inverter.id == 0 else " /"  # append multi-inverter target SoC's together
-                            status_extra += " {}%-{}%".format(inverter.soc_percent, inverter.soc_percent)
+                            status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inverter.soc_percent)))  # append multi-inverter target SoC's together
                             self.isExporting_Target = inverter.soc_percent
                             self.log("Export Hold (Demand mode) as export is now at/below target or freeze only is set - current SoC {}kWh and target {}kWh".format(self.soc_kw, discharge_soc))
                 else:
@@ -477,25 +556,29 @@ class Execute:
 
             # iBoost running?
             boostHolding = False
-            if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full and status not in ["Exporting", "Charging"]:
-                if inverter.inv_has_timed_pause:
-                    if resetPause:
-                        inverter.adjust_pause_mode(pause_discharge=True)
-                        resetPause = False
-                else:
-                    if resetDischarge:
-                        inverter.adjust_discharge_rate(0)
-                        resetDischarge = False
-                    if self.set_reserve_enable:
-                        inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
-                        resetReserve = False
-                boostHolding = True
-                self.log("Disabling battery discharge whilst iBoost is running")
-                if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
-                    if status == "Demand":
-                        status = "Hold for iBoost"
+            if self.set_charge_window and self.iboost_enable and self.iboost_prevent_discharge and self.iboost_running_full:
+                # Only pause discharge on this inverter, and only annotate the status as held for
+                # iBoost, if the fleet isn't already Charging/Exporting - pausing would conflict with
+                # that, and the annotation must stay coupled to whether a hold actually happened here.
+                if status not in ["Exporting", "Charging"]:
+                    if inverter.inv_has_timed_pause:
+                        if resetPause:
+                            inverter.adjust_pause_mode(pause_discharge=True)
+                            resetPause = False
                     else:
-                        status_hold_iboost = ", Hold for iBoost"
+                        if resetDischarge:
+                            inverter.adjust_discharge_rate(0)
+                            resetDischarge = False
+                        if self.set_reserve_enable:
+                            inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
+                            resetReserve = False
+                    boostHolding = True
+                    self.log("Disabling battery discharge whilst iBoost is running")
+                    if ("Hold for iBoost" not in status) and (status_hold_iboost == ""):
+                        if status == "Demand":
+                            status = "Hold for iBoost"
+                        else:
+                            status_hold_iboost = ", Hold for iBoost"
 
             # Reset charge/discharge rate
             if resetPause:
@@ -627,6 +710,11 @@ class Execute:
                 metrics().inverter_register_writes_total.inc(inverter.count_register_writes)
             self.count_inverter_writes[inverter.id] += inverter.count_register_writes
             inverter.count_register_writes = 0
+
+        # Resolve the headline status across all inverters rather than leaving whichever inverter was
+        # processed last to silently win.
+        status = resolve_multi_inverter_status(status_per_inverter, status)
+        status_extra = build_status_extra(status_extra_parts)
 
         # Set the charge/discharge status information
         self.set_charge_export_status(isCharging, isExporting, not (isCharging or isExporting))

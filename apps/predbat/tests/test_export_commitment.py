@@ -23,7 +23,6 @@ def setup_single_export_window(my_predbat, rate_import=10.0, rate_export=30.0, b
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     reset_inverter(my_predbat)
-    my_predbat.pool = None
 
     my_predbat.forecast_minutes = 24 * 60
     end_record = my_predbat.forecast_minutes

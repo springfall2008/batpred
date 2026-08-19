@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from const import PREDICT_STEP
+from output import yesterday_slot_is_exporting
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -1123,6 +1124,157 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
     return failed
 
 
+def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
+    """Regression for PR #4466, through the real calculate_yesterday() reconstruction path.
+
+    A whole history of "Cross-charging" status must rebuild BOTH charge windows and export
+    windows for the "yesterday" plan. Before the fix the slot search tested only
+    "exporting" in slot_status, and "Cross-charging" contains "charging" but not "exporting",
+    so every cross-charging minute was reconstructed as charge-only and the export side was
+    silently lost.
+
+    The reconstructed windows live on self.charge_window_best/self.export_window_best only
+    between the fake-window block and the restore at the end of calculate_yesterday, so they
+    are captured from inside the publish_html_plan mock, which is called in that window.
+    """
+    print("calculate_yesterday: Test - Cross-charging history rebuilds both charge and export windows (#4466)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    status_hist = _make_constant_history("Cross-charging", now_utc)
+
+    def _history_with_cross_charging(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_cross_charging
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if "charge_window_best" not in captured:
+        print("ERROR: publish_html_plan was never called - could not observe the reconstructed windows")
+        failed = True
+    else:
+        # The charge side was already correct before the fix ("cross-charging" contains "charging").
+        if not captured["charge_window_best"]:
+            print("ERROR: a Cross-charging history should rebuild charge windows, got none")
+            failed = True
+        # The export side is what the fix restores.
+        if not captured["export_window_best"]:
+            print("ERROR: a Cross-charging history should rebuild export windows too, got none " "(the export half of cross-charging was dropped)")
+            failed = True
+        # Every rebuilt export window needs a matching limit, or the plan pairs them up wrongly.
+        if len(captured["export_window_best"]) != len(captured["export_limits_best"]):
+            print("ERROR: rebuilt {} export windows but {} export limits - they must stay in step".format(len(captured["export_window_best"]), len(captured["export_limits_best"])))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_missing_cost_today_history(my_predbat, failed):
+    """Test: no recorded history for predbat.cost_today (issue #4583).
+
+    Everything calculate_yesterday computes is anchored on yesterday's recorded cost, so when Home
+    Assistant has no history for predbat.cost_today it must give up *before* the expensive
+    step_data_history()/rate-scan work rather than after it, and must not repeat that work - and its
+    warning - on every 10 minute cycle. The reporter's 30 hour log carried 188 copies of it.
+    """
+    print("calculate_yesterday: Test - missing cost_today history bails out early and throttles")
+    now_utc = _setup_base(my_predbat)
+
+    step_calls = []
+    original_run_pred = my_predbat.run_prediction
+
+    def _counting_step_data(*args, **kwargs):
+        """Record that the yesterday step data was built, which shouldn't happen here."""
+        step_calls.append(args)
+        return {}
+
+    history_calls = []
+
+    def _no_history(entity_id, days=30, required=True, tracked=True):
+        """Mimic Home Assistant recording none of the predbat.* entities."""
+        history_calls.append(entity_id)
+        return None
+
+    my_predbat.step_data_history = _counting_step_data
+    my_predbat.get_history_wrapper = _no_history
+    my_predbat.savings_last_updated = None
+
+    my_predbat.calculate_yesterday()
+
+    if step_calls:
+        print("ERROR: calculate_yesterday built the yesterday step data {} times with no cost_today history to use it with".format(len(step_calls)))
+        failed = True
+
+    if my_predbat.savings_last_updated is None:
+        print("ERROR: calculate_yesterday did not record the attempt, so it will redo this work every cycle")
+        failed = True
+
+    # A second call ten minutes later must early-exit rather than fetching and warning all over again
+    history_calls.clear()
+    my_predbat.now_utc = now_utc + timedelta(minutes=10)
+
+    my_predbat.calculate_yesterday()
+
+    if history_calls:
+        print("ERROR: calculate_yesterday retried within the hour, fetching {}".format(history_calls))
+        failed = True
+
+    my_predbat.now_utc = now_utc
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_yesterday_slot_is_exporting(my_predbat, failed):
+    """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
+
+    Regression for PR #4466: the "yesterday" plan reconstruction classified a historical
+    predbat.status slot as exporting purely via "exporting" in slot_status. "Cross-charging"
+    contains "charging" but not "exporting", so a genuine cross-charging slot was silently
+    dropped from the export side, only ever showing up as a charge window.
+    """
+    print("calculate_yesterday: Test - yesterday_slot_is_exporting recognises Cross-charging")
+
+    cases = [
+        ("exporting", True),
+        ("freeze exporting", True),
+        ("cross-charging", True),
+        ("charging", False),
+        ("freeze charging", False),
+        ("demand", False),
+        ("hold for car", False),
+    ]
+    for slot_status, expected in cases:
+        result = yesterday_slot_is_exporting(slot_status)
+        if result != expected:
+            print("ERROR: yesterday_slot_is_exporting({!r}) should be {}, got {}".format(slot_status, expected, result))
+            failed = True
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -1145,5 +1297,8 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
+    failed = _test_missing_cost_today_history(my_predbat, failed)
+    failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
+    failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
 
     return failed

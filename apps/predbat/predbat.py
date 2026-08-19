@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.48.3"
+THIS_VERSION = "v8.49.0"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -68,7 +68,6 @@ from const import (
     INVERTER_QUICK_UPDATE_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
-from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from octopus import Octopus
@@ -271,27 +270,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
-    def cleanup_pool(self):
-        """
-        Terminate and clean up the multiprocessing pool if it is active.
-
-        Ensures worker processes are properly terminated to prevent orphaned
-        processes when the prediction loop exits unexpectedly.
-        """
-        if getattr(self, "pool", None):
-            try:
-                self.pool.terminate()
-                self.pool.join()
-            except Exception as e:
-                self.log("Warn: Failed to terminate multiprocessing pool: {}".format(e))
-                self.log(traceback.format_exc())
-            self.pool = None
-
     def reset(self):
         """
         Init stub
         """
-        reset_prediction_globals()
         self.text_plan = "Computing please wait..."
         self.prediction_cache_enable = True
         self.base_load = 0
@@ -316,8 +298,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Forecast.solar API request metrics for monitoring
         self.currency_symbols = self.args.get("currency_symbols", "£p")
-        self.cleanup_pool()
-        self.pool = None
         self.watch_list = []
         self.restart_active = False
         self.inverter_needs_reset = False
@@ -1177,15 +1157,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             # Kill the current threads
             self.log("Kill current threads before update")
             self.stop_thread = True
-            if self.pool:
-                self.log("Warn: Killing current threads before update...")
-                try:
-                    self.pool.close()
-                    self.pool.join()
-                except Exception as e:
-                    self.log("Warn: Failed to close thread pool: {}".format(e))
-                    self.log("Warn: " + traceback.format_exc())
-                self.pool = None
 
             # Perform the update
             self.log("Perform the update.....")
@@ -1609,7 +1580,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # "Predbat defaulted it" or "another component already overwrote it" (issue #4494 follow-up).
         self.args_from_apps_yaml = copy.deepcopy(self.args)
         self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
-        self.pool = None
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
         self.started_time = self.now_utc_real
@@ -1731,16 +1701,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.log("Info: Components stopped")
 
         await asyncio.sleep(0)
-        if hasattr(self, "pool"):
-            if self.pool:
-                self.log("Info: Terminating thread pool...")
-                try:
-                    self.pool.close()
-                    self.pool.join()
-                except Exception as e:
-                    self.log("Warn: Failed to close thread pool {}".format(e))
-                    self.log("Warn: " + traceback.format_exc())
-                self.pool = None
         self.log("Predbat terminated")
 
     def update_time_loop(self, cb_args):
@@ -1773,7 +1733,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 # Always clear the active flag, even on early return or exception, so the
                 # web spinner and predbat.active switch don't get stuck on
                 self.expose_config("active", False)
-                self.cleanup_pool()
         elif not self.prediction_started:
             time_now = datetime.now()
             inverter_data_last_fetch = self.inverter_data_last_fetch
@@ -1855,7 +1814,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 # Always clear the active flag, even on early return or exception, so the
                 # web spinner and predbat.active switch don't get stuck on
                 self.expose_config("active", False)
-                self.cleanup_pool()
 
     def run_time_loop_balance(self, cb_args):
         """

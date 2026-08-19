@@ -40,7 +40,7 @@ INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
-PREDBAT_MAX_CARS = 4  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate_0..3 config items - the hard ceiling on num_cars
+PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
@@ -51,6 +51,16 @@ MINUTE_WATT = 60 * 1000
 # PV reaching the battery, the surplus is exported cheaply and the target is then made up with grid import,
 # which increases the cost of the plan over the full rate charge the planner costed the window at.
 LOW_POWER_PV_THRESHOLD = 0.1
+
+# Fraction of the peak forecast PV power above which a plan_interval_minutes bucket is classed as
+# "light" rather than "dark" when deciding where to split a charge window (calc_dawn). A charge window
+# otherwise built from a single long cheap-rate period spanning sunrise would apply LOW_POWER_PV_THRESHOLD
+# across the whole thing and abandon low power charging even for the still-dark hours before the sun is
+# up (#4557) - splitting at dawn keeps the dark portion as its own window, genuinely PV-free, so it stays
+# throttled. A fraction of that forecast's own peak, rather than a fixed Watts figure, scales with the
+# site - a fixed threshold picked for a typical system would be noise-level for a large array and
+# unreachable for a small one.
+LOW_POWER_PV_LIGHT_FRACTION = 0.1
 
 INVERTER_TEST = False  # Run inverter control self test
 

@@ -16,6 +16,11 @@ from deye import DeyeAPI
 from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS
 from tests.test_infra import run_async as run_async_local
 
+# Inverter AC rating handed to test doubles. Self-use TOU slots are written at the
+# inverter's rating and a serial with no rating fails closed (see _self_use_power), so any
+# test that builds a control payload has to give its serials one.
+MOCK_RATED_POWER = 5000.0
+
 
 class MockDeye(DeyeAPI):
     """Test double: build a DeyeAPI without the full component lifecycle."""
@@ -37,6 +42,7 @@ class MockDeye(DeyeAPI):
         self.station_ids = []
         self.device_values = {}
         self.device_battery_config = {}
+        self.device_tou_config = {}
         self.device_capacity = {}
         self.device_pack_voltage = {}
         self.device_energy = {}
@@ -51,6 +57,7 @@ class MockDeye(DeyeAPI):
         self._tier_refreshed = {}
         self._cache_restored = False
         self._soc_floor_warned = set()
+        self._self_use_power_warned = set()
         self.log_messages = []
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
@@ -58,6 +65,12 @@ class MockDeye(DeyeAPI):
         self.base.midnight_utc = datetime.now(pytz.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         self.base.minutes_now = 0  # local minutes-since-midnight; tests set this for time-aware control
         self._init_oauth(auth_method, "test-token", None, "deye")
+
+    def with_rating(self, *serials, watts=MOCK_RATED_POWER):
+        """Record an inverter AC rating for each serial and return self, for chaining."""
+        for sn in serials:
+            self.device_rated_power[sn] = float(watts)
+        return self
 
     def log(self, message):
         """Capture logs."""

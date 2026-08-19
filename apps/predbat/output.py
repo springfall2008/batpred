@@ -52,6 +52,17 @@ REASON_TEMPLATES = {
 }
 
 
+def yesterday_slot_is_exporting(slot_status):
+    """True when a historical ``predbat.status`` string (already lower-cased) represents export
+    activity for the "yesterday" plan reconstruction in ``calculate_yesterday()``.
+
+    Includes "cross-charging" explicitly - it genuinely straddles both sides of the fleet at once,
+    but as a string it contains "charging" and not "exporting", so a plain substring check on
+    "exporting" alone would silently drop the export half of a real cross-charging slot.
+    """
+    return "exporting" in slot_status or "cross-charging" in slot_status
+
+
 class Output:
     """Output and sensor publishing mixin.
 
@@ -2938,6 +2949,16 @@ class Output:
                 # Less than an hour old and already updated today
                 return
 
+        # Everything below is anchored on yesterday's recorded cost, so fetch that before doing any of
+        # the expensive work - when Home Assistant isn't recording predbat.cost_today there is nothing
+        # to compute and the step data and rate scans below would only be thrown away again
+        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
+        if not cost_today_data:
+            self.log("Warn: Calculate yesterday: No history for {}.cost_today, so the savings and plan history can not be computed - check that Home Assistant is recording this entity (see the recorder notes in the FAQ)".format(self.prefix))
+            # Record the attempt so this is retried on the normal hourly cadence rather than every cycle
+            self.savings_last_updated = self.now_utc
+            return
+
         self.log("Calculating data from yesterday for savings calculation")
 
         # step_data_history() only fills in offsets up to self.forecast_minutes + plan_interval_minutes.
@@ -3009,10 +3030,6 @@ class Output:
         self.log("Yesterday basic charge window best: {} charge limit best: {} based on max charge slots {}".format(charge_window_best, charge_limit_best, self.calculate_savings_max_charge_slots))
 
         # Get Cost yesterday
-        cost_today_data = self.get_history_wrapper(entity_id=self.prefix + ".cost_today", days=2, required=False)
-        if not cost_today_data:
-            self.log("Warn: Calculate yesterday: No cost_today data for yesterday")
-            return
         cost_data, _ = minute_data(cost_today_data[0], 2, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_data_per_kwh, _ = minute_data(cost_today_data[0], 2, self.now_utc, "p/kWh", "last_updated", attributes=True, backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0)
         cost_yesterday = cost_data.get(minutes_back, 0.0)
@@ -3183,7 +3200,10 @@ class Output:
                     slot_status = predbat_status.get(slot_minute, "").lower()
                     real_minute = minute + slot_offset
 
-                    if "exporting" in slot_status:
+                    # Cross-charging genuinely straddles both sides - track it as both an exporting
+                    # and a charging slot (its name contains "charging" but not "exporting"), so
+                    # these are independent "if"s rather than "if/elif".
+                    if yesterday_slot_is_exporting(slot_status):
                         export_during_slot = slot_status
                         if export_start_minute is None:
                             export_start_minute = real_minute
@@ -3191,7 +3211,7 @@ class Output:
                                 export_start_minute -= 5
                             if charge_start_minute is not None:
                                 charge_end_minute = export_start_minute
-                    elif "charging" in slot_status:
+                    if "charging" in slot_status:
                         charge_during_slot = slot_status
                         if charge_start_minute is None:
                             charge_start_minute = real_minute
@@ -3206,7 +3226,7 @@ class Output:
                 if charge_end_minute is None and charge_start_minute is not None:
                     charge_end_minute = minute + self.plan_interval_minutes
 
-                if "exporting" in export_during_slot:
+                if yesterday_slot_is_exporting(export_during_slot):
                     # Assume exporting at this time
                     self.export_window_best.append({"start": export_start_minute, "end": export_end_minute})
                     if "freeze" in export_during_slot:

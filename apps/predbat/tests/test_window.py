@@ -8,9 +8,11 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 # fmt on
+import copy
 import random
 
-from utils import remove_intersecting_windows
+import prediction_kernel
+from utils import clone_windows, remove_intersecting_windows
 from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
 
@@ -385,5 +387,212 @@ def run_window_sort_tests(my_predbat):
     export_window_best.append({"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": export_rate * 3})
     failed |= run_window_sort_test("single_charge_discharge3", my_predbat, charge_window_best, export_window_best, expected=["d_0_50.0", "df_0_50.0", "c_1_20.0", "cf_1_20.0", "d_1_15.0", "df_1_15.0", "c_0_10.0", "cf_0_10.0"])
     failed |= run_window_sort_test("single_charge_discharge3_c1", my_predbat, charge_window_best, export_window_best, expected=["df_0_50.0", "d_0_49.0", "c_1_21.0", "cf_1_20.0", "df_1_15.0", "d_1_14.0", "c_0_11.0", "cf_0_10.0"], metric_battery_cycle=1.0)
+
+    return failed
+
+
+def run_clone_windows_tests(my_predbat):
+    """Tests for clone_windows, the shallow-copy replacement for copy.deepcopy on window lists.
+
+    clone_windows is only safe because window dicts hold primitives, so these pin both halves of
+    that contract: the copy must equal a deepcopy, and mutating either side must not affect the
+    other. The start-mutation case mirrors what Prediction.thread_run_prediction_export does to
+    the window list it is handed, which is the reason the copy exists at all.
+    """
+    print("**** Running clone_windows tests ****")
+    failed = False
+
+    # Equivalence with deepcopy over the window shapes actually used in the planner
+    cases = [
+        ("empty", []),
+        ("bounds only", [{"start": 0, "end": 30}]),
+        ("with average", [{"start": 0, "end": 30, "average": 12.5}, {"start": 30, "end": 60, "average": 7.0}]),
+        ("with target and sort keys", [{"start": 60, "end": 120, "average": 3.25, "target": 4.0, "id": 2, "key": "0100.2501"}]),
+    ]
+    for name, windows in cases:
+        cloned = clone_windows(windows)
+        if cloned != copy.deepcopy(windows):
+            print("ERROR: clone_windows {} did not match deepcopy: {} vs {}".format(name, cloned, copy.deepcopy(windows)))
+            failed = True
+        if len(cloned) != len(windows):
+            print("ERROR: clone_windows {} changed the list length {} -> {}".format(name, len(windows), len(cloned)))
+            failed = True
+
+    # The list itself must be a new object, and so must every dict in it
+    original = [{"start": 0, "end": 30, "average": 5.0}, {"start": 30, "end": 60, "average": 6.0}]
+    cloned = clone_windows(original)
+    if cloned is original:
+        print("ERROR: clone_windows returned the same list object")
+        failed = True
+    for index, window in enumerate(cloned):
+        if window is original[index]:
+            print("ERROR: clone_windows shared dict {} with the original".format(index))
+            failed = True
+
+    # Writing a start into the copy must not reach the original - this is exactly what
+    # thread_run_prediction_export does to the window list optimise_export hands it
+    cloned[0]["start"] = 15
+    if original[0]["start"] != 0:
+        print("ERROR: clone_windows leaked a start mutation back to the original: {}".format(original[0]["start"]))
+        failed = True
+
+    # And the reverse direction, since the planner also mutates the original between passes
+    original[1]["target"] = 99.0
+    if "target" in cloned[1]:
+        print("ERROR: clone_windows leaked a new key from the original into the copy")
+        failed = True
+
+    return failed
+
+
+def run_window_cache_tests(my_predbat):
+    """Tests for the window bounds cache in prediction_kernel.
+
+    The cache is only sound while every mutation of a window's start/end invalidates it. The last
+    test here is the real guard: it replays a full plan with VALIDATE_WINDOW_CACHE on, which
+    re-derives the bounds on every cache hit and raises on any stale entry. If someone later adds
+    a bare window["start"] = ... on the planning path, that test fails rather than the plan
+    silently simulating against the wrong window geometry.
+    """
+    print("**** Running window cache tests ****")
+    failed = False
+
+    # A window list that grows or shrinks in place keeps its id(), so the entry must also check the
+    # length. Otherwise run_prediction_kernel passes n_charge = len(window_list) alongside the older,
+    # shorter cached arrays and the C kernel reads past their end - a memory-safety failure rather
+    # than merely a wrong plan, which is why this is guarded and not just documented.
+    prediction_kernel.invalidate_window_cache()
+    growing = [{"start": 0, "end": 30, "average": 5.0}]
+    starts_before, ends_before = prediction_kernel.window_bound_arrays(growing)
+    if len(starts_before) != 1:
+        print("ERROR: expected a single-entry bounds array, got {}".format(len(starts_before)))
+        failed = True
+    growing.append({"start": 60, "end": 120, "average": 6.0})
+    starts_after, ends_after = prediction_kernel.window_bound_arrays(growing)
+    if len(starts_after) != len(growing) or len(ends_after) != len(growing):
+        print("ERROR: bounds arrays are stale after the window list grew - len {} against {} windows".format(len(starts_after), len(growing)))
+        failed = True
+    elif list(starts_after) != [0, 60] or list(ends_after) != [30, 120]:
+        print("ERROR: bounds arrays wrong after growth: {} / {}".format(list(starts_after), list(ends_after)))
+        failed = True
+    # The tuple used for the prediction cache key has to follow the same rule
+    prediction_kernel.invalidate_window_cache()
+    shrinking = [{"start": 0, "end": 30, "average": 5.0}, {"start": 60, "end": 120, "average": 6.0}]
+    prediction_kernel.window_bound_tuple(shrinking)
+    shrinking.pop()
+    if prediction_kernel.window_bound_tuple(shrinking) != ((0, 30),):
+        print("ERROR: window_bound_tuple is stale after the window list shrank: {}".format(prediction_kernel.window_bound_tuple(shrinking)))
+        failed = True
+
+    # A repeated lookup on an unchanged list returns the identical cached objects
+    prediction_kernel.invalidate_window_cache()
+    windows = [{"start": 0, "end": 30, "average": 5.0}, {"start": 60, "end": 120, "average": 6.0}]
+    starts_a, ends_a = prediction_kernel.window_bound_arrays(windows)
+    starts_b, ends_b = prediction_kernel.window_bound_arrays(windows)
+    if starts_a is not starts_b or ends_a is not ends_b:
+        print("ERROR: window_bound_arrays rebuilt the arrays for an unchanged list")
+        failed = True
+    if list(starts_a) != [0, 60] or list(ends_a) != [30, 120]:
+        print("ERROR: window_bound_arrays gave {} / {}".format(list(starts_a), list(ends_a)))
+        failed = True
+    if prediction_kernel.window_bound_tuple(windows) != ((0, 30), (60, 120)):
+        print("ERROR: window_bound_tuple gave {}".format(prediction_kernel.window_bound_tuple(windows)))
+        failed = True
+
+    # set_window_start must invalidate, so the next lookup reflects the new bounds
+    prediction_kernel.set_window_start(windows[0], 15)
+    if list(prediction_kernel.window_bound_arrays(windows)[0]) != [15, 60]:
+        print("ERROR: set_window_start did not invalidate the array cache")
+        failed = True
+    if prediction_kernel.window_bound_tuple(windows) != ((15, 30), (60, 120)):
+        print("ERROR: set_window_start did not invalidate the tuple cache")
+        failed = True
+    prediction_kernel.set_window_end(windows[1], 90)
+    if list(prediction_kernel.window_bound_arrays(windows)[1]) != [30, 90]:
+        print("ERROR: set_window_end did not invalidate the array cache")
+        failed = True
+
+    # Two distinct lists holding equal values must not alias to one another
+    other = [{"start": 999, "end": 1200}]
+    if list(prediction_kernel.window_bound_arrays(other)[0]) != [999]:
+        print("ERROR: a second window list aliased onto the first cache entry")
+        failed = True
+    if list(prediction_kernel.window_bound_arrays(windows)[0]) != [15, 60]:
+        print("ERROR: caching a second list corrupted the first entry")
+        failed = True
+
+    # The cache is bounded, so a caller that never repeats a list (a forked pool worker unpickles
+    # fresh lists every call) cannot grow it without limit
+    prediction_kernel.invalidate_window_cache()
+    for index in range(prediction_kernel.WINDOW_CACHE_MAX * 4):
+        prediction_kernel.window_bound_arrays([{"start": index, "end": index + 5}])
+    if len(prediction_kernel._WINDOW_BOUNDS_CACHE) > prediction_kernel.WINDOW_CACHE_MAX:
+        print("ERROR: window cache grew past its bound: {}".format(len(prediction_kernel._WINDOW_BOUNDS_CACHE)))
+        failed = True
+
+    # disable_window_cache (the pool worker initialiser) must turn caching off without changing
+    # the values returned, since workers unpickle fresh lists and can never hit it anyway
+    prediction_kernel.invalidate_window_cache()
+    try:
+        prediction_kernel.disable_window_cache()
+        disabled = [{"start": 5, "end": 35}, {"start": 100, "end": 160}]
+        first_starts, first_ends = prediction_kernel.window_bound_arrays(disabled)
+        second_starts, _ = prediction_kernel.window_bound_arrays(disabled)
+        if list(first_starts) != [5, 100] or list(first_ends) != [35, 160]:
+            print("ERROR: window_bound_arrays gave wrong values with the cache disabled: {} / {}".format(list(first_starts), list(first_ends)))
+            failed = True
+        if first_starts is second_starts:
+            print("ERROR: window_bound_arrays still cached with the cache disabled")
+            failed = True
+        if prediction_kernel.window_bound_tuple(disabled) != ((5, 35), (100, 160)):
+            print("ERROR: window_bound_tuple gave wrong values with the cache disabled")
+            failed = True
+        if prediction_kernel._WINDOW_BOUNDS_CACHE:
+            print("ERROR: the cache stored entries while disabled")
+            failed = True
+    finally:
+        prediction_kernel.WINDOW_CACHE_ENABLED = True
+        prediction_kernel.invalidate_window_cache()
+
+    # The validator itself must actually catch a stale entry, otherwise the plan replay below
+    # would pass no matter what
+    prediction_kernel.invalidate_window_cache()
+    sneaky = [{"start": 0, "end": 30}]
+    prediction_kernel.window_bound_arrays(sneaky)
+    prediction_kernel.window_bound_tuple(sneaky)
+    sneaky[0]["start"] = 10  # deliberately bypassing set_window_start
+    prediction_kernel.VALIDATE_WINDOW_CACHE = True
+    try:
+        prediction_kernel.window_bound_arrays(sneaky)
+        print("ERROR: VALIDATE_WINDOW_CACHE did not detect a stale entry")
+        failed = True
+    except AssertionError:
+        pass
+    finally:
+        prediction_kernel.VALIDATE_WINDOW_CACHE = False
+        prediction_kernel.invalidate_window_cache()
+
+    # Replay a real plan with validation on - every cache hit re-derives and compares, so any
+    # window mutated without set_window_start on the planning path raises here.
+    # The instance is loaded from a debug dump rather than used as handed over: this needs complete,
+    # deterministic planning state, and the shared fixture carries whatever earlier tests left on it.
+    reset_inverter(my_predbat)
+    my_predbat.read_debug_yaml("cases/predbat_debug_agile1.yaml")
+    my_predbat.config_root = "./"
+    my_predbat.save_restore_dir = "./"
+    my_predbat.load_user_config()
+    my_predbat.args["threads"] = 0
+    my_predbat.debug_enable = False
+    my_predbat.plan_valid = False
+
+    prediction_kernel.VALIDATE_WINDOW_CACHE = True
+    try:
+        my_predbat.calculate_plan(recompute=True)
+    except AssertionError as error:
+        print("ERROR: stale window cache during a real plan: {}".format(error))
+        failed = True
+    finally:
+        prediction_kernel.VALIDATE_WINDOW_CACHE = False
+        prediction_kernel.invalidate_window_cache()
 
     return failed

@@ -83,6 +83,17 @@ class MinuteArray:
         return new
 
 
+def mask_secret_args(args):
+    """
+    Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+    """
+    masked = copy.deepcopy(args)
+    for key in masked:
+        if ("_key" in key.lower()) or ("password" in key.lower()):
+            masked[key] = "xxx"
+    return masked
+
+
 # Helper to make dict hashable for caching
 def charge_curve_to_tuple(d):
     """Convert dict to tuple for use as cache key"""
@@ -392,7 +403,11 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
-    if not can_modify_history:
+    # The glitch filter below is the only code here that writes to history, and it only runs for
+    # backwards incrementing data, so that is the only case worth copying for. Copying regardless
+    # cost ~150k deepcopy calls on a plan cycle for the two calculate_yesterday calls alone, neither
+    # of which asks for the filter. can_modify_history stays the caller's explicit opt-out on top.
+    if clean_increment and backwards and not can_modify_history:
         history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
@@ -987,6 +1002,16 @@ def calc_percent_limit(charge_limit, soc_max):
             return 0
         else:
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
+
+
+def clone_windows(windows):
+    """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
+
+    Window dicts never hold nested mutable values, so copying each dict is equivalent to
+    copy.deepcopy(windows) here but far cheaper - deepcopy's generic recursive walk measured
+    ~275us per call on a typical export_window, this is a few us.
+    """
+    return [w.copy() for w in windows]
 
 
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
