@@ -2987,11 +2987,21 @@ class Octopus:
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
                             if entity_id_join:
-                                # Join via selector
+                                # Join via selector (Octopus Energy Direct, or any other integration wired
+                                # up this way) - unaffected by which Bottle Cap Dave service name is current
                                 self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
                             else:
-                                # Join via octopus event (Bottle Cap Dave)
-                                self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
+                                # Join via Bottle Cap Dave's Octopus Energy HA integration. Try the current
+                                # service name first (join_octoplus_power_down_session_event, which
+                                # superseded join_octoplus_saving_session_event - see the integration's
+                                # ADR-0004), falling back to the old name for anyone on an integration
+                                # version that predates the rename. Both remain registered until the old
+                                # one is removed in January 2027, so this fallback is a temporary bridge,
+                                # not a permanent branch.
+                                # TODO(#4599): remove this fallback once the old service name is retired upstream.
+                                if not self.call_service_wrapper("octopus_energy/join_octoplus_power_down_session_event", event_code=code, entity_id=entity_id):
+                                    self.log("Note: octopus_energy/join_octoplus_power_down_session_event not available, falling back to the deprecated join_octoplus_saving_session_event service")
+                                    self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             if self.get_arg("set_event_notify"):
                                 self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             self.octopus_last_joined_try = self.now_utc
