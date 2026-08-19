@@ -898,6 +898,10 @@ def test_every_slot_carries_the_complete_field_set():
     """
     failed = False
     d = MockDeye().with_rating("INV1")
+    # Compared against TOU_FIELD, which is what the slot builders use, so this asks "does
+    # every slot carry the whole set" rather than "are the names right". The names
+    # themselves are pinned against DEYE's published model in test_deye_const.py, which is
+    # the check an edit to TOU_FIELD has to get past.
     expected = set(TOU_FIELD.values())
     schedules = [
         {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}},
