@@ -97,7 +97,7 @@ def test_faq_recorder_config(my_predbat):
 
     recorder = _load_recorder_example()
     if recorder is None:
-        print("ERROR: no recorder: example found in docs/faq.md")
+        print("ERROR: docs/faq.md no longer contains a recorder filter example to check")
         return True
 
     needed = _entities_read_from_history()
