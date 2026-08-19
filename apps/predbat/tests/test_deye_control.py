@@ -959,6 +959,94 @@ def test_export_slots_arm_the_sell_flag():
     assert not failed, "test_export_slots_arm_the_sell_flag"
 
 
+def test_generator_charging_is_never_switched_on_by_predbat():
+    """enableGeneration is off in every slot Predbat writes when the inverter's own value is unknown.
+
+    It authorises charging the battery from an EXTERNAL GENERATOR. Predbat has no model of a
+    generator — no fuel cost, no run hours, nothing it can plan against — so it must never
+    be the thing that switches one on. Predbat previously wrote True on every slot, which
+    authorised generator charging across the whole day on any system with one wired in.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    generate = TOU_FIELD["generate"]
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": True, "soc": 20, "power": 3000, "start": "16:00", "end": "19:00"}}
+    for now_minutes in (3 * 60, 12 * 60, 17 * 60):
+        slots = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=now_minutes)["timeUseSettingItems"]
+        if any(slot[generate] for slot in slots):
+            print(f"ERROR: at {now_minutes} Predbat authorised generator charging: {slots}")
+            failed = True
+        if any(generate not in slot for slot in slots):
+            print(f"ERROR: the field must still be present on every slot: {slots}")
+            failed = True
+    assert not failed, "test_generator_charging_is_never_switched_on_by_predbat"
+
+
+def test_generator_charging_the_owner_configured_is_carried_through():
+    """The inverter's own enableGeneration survives, slot by slot, rather than being cleared.
+
+    Predbat owns the TOU programme but not this flag, so an owner who has generator charging
+    configured keeps it. Read from config/tou and carried across by slot position — the same
+    thing the Sunsynk component does with genTime{n}on through its read-modify-write.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    generate = TOU_FIELD["generate"]
+    # The owner runs the generator on the 2nd and 5th slots of the day.
+    d.device_tou_config["INV1"] = [{"time": f"{n * 4:02d}:00", generate: n in (1, 4), "enableGridCharge": False, "power": 5000, "soc": 20} for n in range(6)]
+    sched = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    slots = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=12 * 60)["timeUseSettingItems"]
+    if [slot[generate] for slot in slots] != [False, True, False, False, True, False]:
+        print(f"ERROR: the owner's generator slots were not carried through: {[s[generate] for s in slots]}")
+        failed = True
+
+    # A short read is padded rather than trusted, and never invents an enable.
+    d.device_tou_config["INV1"] = [{generate: True}]
+    got = [slot[generate] for slot in d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=12 * 60)["timeUseSettingItems"]]
+    if got != [True, False, False, False, False, False]:
+        print(f"ERROR: a short read should pad with off, got {got}")
+        failed = True
+    assert not failed, "test_generator_charging_the_owner_configured_is_carried_through"
+
+
+def test_fetch_tou_config_caches_and_survives_an_unsupported_model():
+    """config/tou is read into the cache, and a model that rejects it leaves generator charging off."""
+    failed = False
+    d = MockDeye()
+    items = [{"time": "00:00", "enableGeneration": True, "enableGridCharge": False, "power": 5000, "soc": 20}]
+
+    async def fake_post(endpoint_key, body):
+        """Return a TOU read for the config point, mirroring DeviceTimeOfUseResponse."""
+        if endpoint_key != "config_tou":
+            return {"success": True}
+        return {"success": True, "timeUseSettingItems": items, "touAction": "on"}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        got = run_async_local(d.fetch_tou_config("INV1"))
+    if got != items or d.device_tou_config.get("INV1") != items:
+        print(f"ERROR: the TOU read should be cached: {d.device_tou_config}")
+        failed = True
+
+    # Some models answer "config point not supported" — that must not clear what is known,
+    # nor raise, and the flags fall back to off for a serial that was never read.
+    async def fake_fail(endpoint_key, body):
+        """Reject the config point the way a model without it does."""
+        return {"success": False, "code": "2106001", "msg": "config point not supported"}
+
+    with patch.object(d, "_post", side_effect=fake_fail):
+        got = run_async_local(d.fetch_tou_config("INV2"))
+    if got != []:
+        print(f"ERROR: a rejected read should report nothing, got {got}")
+        failed = True
+    if d.device_tou_config.get("INV1") != items:
+        print("ERROR: a failure for one serial must not disturb another's cached read")
+        failed = True
+    if any(d._generation_flags("INV2")):
+        print(f"ERROR: an unread serial must default to no generator charging: {d._generation_flags('INV2')}")
+        failed = True
+    assert not failed, "test_fetch_tou_config_caches_and_survives_an_unsupported_model"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -994,6 +1082,9 @@ def run_deye_control_tests(my_predbat):
         ("tou_days", test_payload_names_every_day_the_schedule_runs_on),
         ("slot_field_set", test_every_slot_carries_the_complete_field_set),
         ("sell_flag", test_export_slots_arm_the_sell_flag),
+        ("generation_never_on", test_generator_charging_is_never_switched_on_by_predbat),
+        ("generation_carried", test_generator_charging_the_owner_configured_is_carried_through),
+        ("tou_config_read", test_fetch_tou_config_caches_and_survives_an_unsupported_model),
     ]:
         try:
             if fn():

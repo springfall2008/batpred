@@ -70,6 +70,7 @@ DEYE_CACHE_STATIC = "static"  # station_ids, device_list
 DEYE_CACHE_CONFIG = "config"  # device_battery_config
 DEYE_CACHE_RATINGS = "ratings"  # device_capacity, device_pack_voltage, device_rated_power
 DEYE_CACHE_CONTROL = "control"  # applied_payload, pending_orders, order_poll_count
+DEYE_CACHE_TOU = "tou"  # device_tou_config, the programme the inverter already holds
 
 # Telemetry and the energy counters are deliberately NOT cached. The live tier polls every
 # minute, so a cache would be written 1440 times a day to save at most one tick's gap at

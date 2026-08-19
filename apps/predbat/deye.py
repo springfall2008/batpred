@@ -60,6 +60,7 @@ from deye_const import (
     DEYE_RESTORE_MAX_CONTROL,
     DEYE_CACHE_STATIC,
     DEYE_CACHE_CONFIG,
+    DEYE_CACHE_TOU,
     DEYE_CACHE_RATINGS,
     DEYE_CACHE_CONTROL,
 )
@@ -115,6 +116,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.station_ids = []
         self.device_values = {}
         self.device_battery_config = {}
+        self.device_tou_config = {}
         self.device_capacity = {}
         self.device_pack_voltage = {}
         self.device_energy = {}
@@ -488,6 +490,41 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.device_battery_config[sn] = data
         return data
 
+    async def fetch_tou_config(self, sn):
+        """Read the inverter's current TOU programme, for the one slot field Predbat does not own.
+
+        Only enableGeneration is taken from it (see _generation_flags). The read model
+        (DeviceTimeOfUseResponse -> TimeOfUseItem) carries no enableSell at all, so the sell
+        flag cannot be round-tripped this way even though the write model has it.
+        """
+        data = await self._post("config_tou", {"deviceSn": sn})
+        if not data.get("success", True):
+            # Not fatal, and the same config point some models reject outright: generator
+            # charging then stays off in everything Predbat writes, which is the safe way
+            # for this to be wrong.
+            self.log(f"Warn: DEYE config/tou failed for {sn}: {data.get('msg', 'unknown')} - generator charging will be left off in the slots Predbat writes")
+            return []
+        items = data.get("timeUseSettingItems") or []
+        self.device_tou_config[sn] = items
+        return items
+
+    def _generation_flags(self, sn):
+        """Return the per-slot enableGeneration flags to carry through, one per TOU slot.
+
+        enableGeneration authorises charging the battery from an EXTERNAL GENERATOR. Predbat
+        has no model of a generator - no fuel cost, no run hours, nothing it could plan
+        against - so it must never be what switches one on. It is equally not Predbat's
+        setting to throw away, so the inverter's own value is carried across by slot
+        position, exactly as the Sunsynk component carries genTime{n}on through its
+        read-modify-write.
+
+        Defaults to all-off when the programme has not been read, or the model rejects
+        config/tou: unknown has to fail towards not running someone's generator.
+        """
+        items = self.device_tou_config.get(sn) or []
+        flags = [bool(item.get(TOU_FIELD["generate"])) for item in items[:TOU_SLOT_COUNT]]
+        return flags + [False] * (TOU_SLOT_COUNT - len(flags))
+
     async def fetch_measure_points(self, sn):
         """Log the device's measure-point metadata (read-only, first cycle only).
 
@@ -578,7 +615,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         grid. Self-use slots cover every interval Predbat is not actively charging or
         exporting, so that would be the battery's default state.
         """
-        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: True, TOU_FIELD["sell"]: False}
+        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: False, TOU_FIELD["sell"]: False}
 
     def _action_slot(self, start_time, state):
         """Build a TOU slot realising a derived control state.
@@ -592,7 +629,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             TOU_FIELD["power"]: int(state["power"]),
             TOU_FIELD["soc"]: int(state["slot_soc"]),
             TOU_FIELD["grid_charge"]: bool(state["grid_charge"]),
-            TOU_FIELD["generate"]: True,
+            TOU_FIELD["generate"]: False,
             TOU_FIELD["sell"]: bool(state.get("solar_sell")),
         }
 
@@ -752,6 +789,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if lifted and sn not in self._soc_floor_warned:
                 self._soc_floor_warned.add(sn)
                 self.log(f"Info: DEYE {sn} raising requested slot SOC to the inverter's {floor}% floor (config/battery battLowCapacity)")
+        # enableGeneration is the external-generator charge flag, and it is the owner's
+        # setting rather than Predbat's - carried across by slot position from whatever
+        # config/tou last reported, defaulting to off. Applied here, on the finished slot
+        # list, so it lands on the slots the inverter actually receives (the same reason the
+        # SOC floor is clamped here) and no slot builder has to invent a value.
+        for slot, generation in zip(slots, self._generation_flags(sn)):
+            slot[TOU_FIELD["generate"]] = generation
         return {
             "deviceSn": sn,
             "workMode": active["work_mode"],
@@ -1240,8 +1284,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return await self.save_cache(DEYE_CACHE_STATIC, {"station_ids": self.station_ids, "device_list": self.device_list})
 
     async def save_config(self):
-        """Cache the per-device config/battery responses."""
-        return await self.save_cache(DEYE_CACHE_CONFIG, self.device_battery_config)
+        """Cache the per-device config/battery and config/tou responses."""
+        saved = await self.save_cache(DEYE_CACHE_CONFIG, self.device_battery_config)
+        # A separate file so the existing config cache keeps its shape: a restart that finds
+        # only the old one still restores the battery config, and simply re-reads the TOU
+        # programme on the first config tier.
+        await self.save_cache(DEYE_CACHE_TOU, self.device_tou_config)
+        return saved
 
     def _ratings_payload(self):
         """Return the static per-device ratings in their cached shape."""
@@ -1291,6 +1340,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if isinstance(config, dict) and config:
             self.device_battery_config = config
             self.mark_refreshed("config", age)
+
+        # Restored on the same tier clock as the battery config. Worth keeping across a
+        # restart: without it the first write of a cycle that beats the config refresh would
+        # clear a generator setting the inverter really does hold.
+        tou, _ = await self.load_cache(DEYE_CACHE_TOU)
+        if isinstance(tou, dict) and tou:
+            self.device_tou_config = tou
 
         # Ratings are static per install and carry no TTL of their own — device/latest
         # rewrites them on every live refresh. Restoring them unconditionally is the main
@@ -1364,7 +1420,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return True
 
     async def refresh_config(self):
-        """Re-read config/battery for every device and cache it when anything came back."""
+        """Re-read config/battery and config/tou for every device, caching whatever came back.
+
+        config/tou is read for the settings Predbat does not own but must not clobber when it
+        rewrites the programme - see _generation_flags.
+        """
         got_any = False
         for sn in self.device_list:
             try:
@@ -1372,6 +1432,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                     got_any = True
             except Exception as e:
                 self.log(f"Warn: DEYE config/battery failed for {sn}: {e}")
+            try:
+                if await self.fetch_tou_config(sn):
+                    got_any = True
+            except Exception as e:
+                self.log(f"Warn: DEYE config/tou failed for {sn}: {e}")
         # The clock is started either way so a model that rejects this config point
         # entirely retries on the tier cadence rather than on every single tick, but the
         # cache is only written when there is something worth keeping.
