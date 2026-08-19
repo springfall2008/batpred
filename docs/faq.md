@@ -246,13 +246,11 @@ recorder:
       - predheat
     entities:
       - sensor.predbat_load_ml_forecast
-      - sensor.predbat_pv_today
       - sensor.predbat_pv_tomorrow
       - sensor.predbat_pv_forecast_raw
       - sensor.predbat_pv_d2
       - sensor.predbat_pv_d3
       - sensor.predbat_temperature
-      - sensor.predbat_pv_forecast_h0
   include:
     entities: #The history of these entities is used by Predbat
       - predbat.cost_today
@@ -267,6 +265,7 @@ recorder:
       - predbat.load_inday_adjustment
       - predbat.ppkwh_today
       - predbat.ppkwh_hour
+      - predbat.pv_energy_h0
       - predbat.pv_power
       - predbat.rates
       - predbat.rates_export
@@ -282,6 +281,13 @@ recorder:
       - predheat.target_temperature
 
 ```
+
+Do not trim the list above without checking what reads it - Predbat needs the recorded history of every entity in it,
+and quietly loses a feature for each one it can no longer read. For example `predbat.cost_today` is what the
+Plan tab's *History* and *Yesterday Without Predbat* views are built from, and `sensor.predbat_pv_forecast_h0` and
+`sensor.predbat_pv_today` are what PV calibration and the PV accuracy chart compare against. Note also that an entity
+named under `include` is only recorded if its domain is the one being excluded - listing a `sensor.*` entity under both
+`exclude` and `include` leaves it excluded.
 
 When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:

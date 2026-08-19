@@ -2405,6 +2405,28 @@ def _test_component_fetch_load_data():
 
         print("    ✓ Step-size calculation correct (bug #3384 regression test passed)")
 
+    async def test_rate_history_is_optional():
+        """The import/export rate history only adds features to the model, so a missing history
+        must be fetched as optional - Home Assistant has no history for predbat.rates when its
+        recorder isn't storing that entity, and that isn't a Predbat error (issue #4583)."""
+        mock_base = MockBase()
+        load_data, age = create_load_minutes(28)
+        mock_base.minute_data_load = MagicMock(return_value=(load_data, age))
+        mock_base.minute_data_import_export = MagicMock(return_value=None)
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        component.ml_max_days_history = 28
+
+        await component._fetch_load_data()
+
+        rate_calls = [call for call in mock_base.minute_data_import_export.call_args_list if str(call.args[2]).endswith((".rates", ".rates_export"))]
+        assert len(rate_calls) == 2, f"Expected the import and export rate history to be fetched, got {rate_calls}"
+        for call in rate_calls:
+            assert call.kwargs.get("required") is False, f"Rate history must be fetched as optional data, got {call}"
+
+        print("    ✓ Rate history is fetched as optional data")
+
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
     run_async(test_basic_fetch())
@@ -2417,6 +2439,7 @@ def _test_component_fetch_load_data():
     run_async(test_temperature_data_fetch())
     run_async(test_temperature_no_data())
     run_async(test_step_size_calculation())
+    run_async(test_rate_history_is_optional())
     print("  All _fetch_load_data tests passed!")
 
 

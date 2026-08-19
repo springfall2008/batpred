@@ -113,6 +113,7 @@ from tests.test_manual_select import run_test_manual_select
 from tests.test_minute_array import test_minute_array
 from tests.test_minute_data import test_minute_data, test_minute_data_load, test_minute_data_no_smoothing_backwards, test_minute_data_no_smoothing_forward
 from tests.test_minute_data_import_export import test_minute_data_import_export
+from tests.test_faq_recorder_config import test_faq_recorder_config
 from tests.test_minute_data_state import test_minute_data_state
 from tests.test_minute_data_copy import run_minute_data_copy_tests
 from tests.test_format_time_ago import test_format_time_ago
@@ -345,6 +346,7 @@ def main():
         ("minute_data", test_minute_data, "Minute data tests", False),
         ("minute_data_load", test_minute_data_load, "Minute data load tests", False),
         ("minute_data_import_export", test_minute_data_import_export, "Minute data import/export tests", False),
+        ("faq_recorder_config", test_faq_recorder_config, "FAQ recorder filter example matches the entities Predbat reads history for", False),
         ("minute_data_no_smoothing_backwards", test_minute_data_no_smoothing_backwards, "Minute data no-smoothing backwards tests", False),
         ("minute_data_no_smoothing_forward", test_minute_data_no_smoothing_forward, "Minute data no-smoothing forward tests", False),
         ("get_now_cumulative", test_get_now_from_cumulative, "Get now from cumulative tests", False),
