@@ -858,7 +858,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             # The per-slot Sell flag ("Sell" in the app). It MUST be 1 for a forced export
             # slot, and every per-slot flag must be present in the payload or the API
             # silently discards them all - see TOU_FIELD.
-            payload[TOU_FIELD["sell"].format(n=index)] = "1" if slot["sell"] else "0"
+            # Through encode_setting like every other owned field, so wire encoding stays in
+            # one place. Passed as 1/0 rather than a bool: sellTime{n}En is deliberately NOT
+            # in SUNSYNK_BOOL_FIELDS (the API returns it as "1"/"0", unlike time{n}on's
+            # "true"/"false"), so it falls through to str() - and str(True) would be "True".
+            payload[TOU_FIELD["sell"].format(n=index)] = encode_setting(TOU_FIELD["sell"].format(n=index), 1 if slot["sell"] else 0)
         return payload
 
     def build_settings_payload(self, sn, schedule, current_soc, now_minutes=None):
