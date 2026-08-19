@@ -25,7 +25,7 @@ import sys
 import yaml
 from aiohttp import web
 
-from annual import AnnualConfigError, validate_config
+from annual import INCLUDED_STATUSES, AnnualConfigError, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
 from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
@@ -1425,7 +1425,7 @@ class AnnualPage:
         categories = []
         series = {key: [] for key in SCENARIO_ORDER}
         for entry in results.get("months", []):
-            if entry.get("status") not in ("ok", "degraded"):
+            if entry.get("status") not in INCLUDED_STATUSES:
                 continue
             categories.append(calendar.month_abbr[entry["month"]])
             for key in SCENARIO_ORDER:
@@ -1474,7 +1474,7 @@ class AnnualPage:
         text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th><th>Battery cycles</th></tr>\n"
         for entry in results.get("months", []):
             name = calendar.month_abbr[entry["month"]]
-            if entry.get("status") not in ("ok", "degraded"):
+            if entry.get("status") not in INCLUDED_STATUSES:
                 reason = html.escape(str(entry.get("reason", "no result")), quote=True)
                 text += "<tr class='annual-unavailable'><td>{}</td><td colspan='7'>unavailable — {}</td></tr>\n".format(name, reason)
                 continue

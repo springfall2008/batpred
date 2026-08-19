@@ -1262,6 +1262,12 @@ SCENARIO_KEYS = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]
 
 SCENARIO_FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh", "battery_cycles"]
 
+# Month statuses that carry real figures and count toward the annual totals. "interpolated"
+# is one of them: a fast-mode month was never planned, but it is a modelled estimate of a
+# real month, and dropping it would report a four month year. Shared with annual_cli and
+# web_annual so the CLI table, the chart and the month table cannot drift from the totals.
+INCLUDED_STATUSES = ("ok", "degraded", "interpolated")
+
 
 def _blend_results(with_car, without_car, fraction):
     """Blend two full four-scenario result dicts field by field.
@@ -1622,8 +1628,8 @@ class AnnualPredictor:
         ``annual.standing_charge_p`` are ``None`` and ``annual.savings`` is empty rather than
         reporting a fabricated zero-cost, zero-saving year.
         """
-        included = [entry for entry in months if entry["status"] in ("ok", "degraded")]
-        excluded = [entry["month"] for entry in months if entry["status"] not in ("ok", "degraded")]
+        included = [entry for entry in months if entry["status"] in INCLUDED_STATUSES]
+        excluded = [entry["month"] for entry in months if entry["status"] not in INCLUDED_STATUSES]
 
         annual_scenarios = None
         standing_total = None

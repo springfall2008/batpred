@@ -23,7 +23,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from annual import SCENARIO_KEYS, AnnualConfigError, AnnualPredictor  # noqa: E402
+from annual import INCLUDED_STATUSES, SCENARIO_KEYS, AnnualConfigError, AnnualPredictor  # noqa: E402
 from storage import StorageLocalFiles  # noqa: E402
 
 SCENARIO_LABELS = {"no_pvbat": "No PV/Battery", "pv_only": "PV Only", "without_predbat": "Without Predbat", "with_predbat": "With Predbat"}
@@ -65,7 +65,7 @@ def format_table(results, currency="p"):
 
     for entry in results["months"]:
         name = calendar.month_abbr[entry["month"]]
-        if entry["status"] not in ("ok", "degraded"):
+        if entry["status"] not in INCLUDED_STATUSES:
             lines.append("{:<6}{:>60}".format(name, "unavailable - {}".format(entry.get("reason", "unknown"))))
             continue
         row = "{:<6}".format(name)
