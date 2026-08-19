@@ -578,11 +578,23 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         grid. Self-use slots cover every interval Predbat is not actively charging or
         exporting, so that would be the battery's default state.
         """
-        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: True}
+        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: True, TOU_FIELD["sell"]: False}
 
     def _action_slot(self, start_time, state):
-        """Build a TOU slot realising a derived control state."""
-        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(state["power"]), TOU_FIELD["soc"]: int(state["slot_soc"]), TOU_FIELD["grid_charge"]: bool(state["grid_charge"]), TOU_FIELD["generate"]: True}
+        """Build a TOU slot realising a derived control state.
+
+        enableSell is the slot's forced-export flag, so it follows solar_sell: on for the
+        two export states, off for charging and holding. It is written on self-use slots
+        too (as False) because the per-slot field set has to be complete — see TOU_FIELD.
+        """
+        return {
+            TOU_FIELD["time"]: start_time,
+            TOU_FIELD["power"]: int(state["power"]),
+            TOU_FIELD["soc"]: int(state["slot_soc"]),
+            TOU_FIELD["grid_charge"]: bool(state["grid_charge"]),
+            TOU_FIELD["generate"]: True,
+            TOU_FIELD["sell"]: bool(state.get("solar_sell")),
+        }
 
     def build_tou_slots(self, schedule, current_soc, self_use_power):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows."""

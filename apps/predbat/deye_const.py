@@ -212,29 +212,42 @@ DEYE_ENERGY_KEYS = {
 # a silent 0.0, so absence is logged rather than swallowed.
 DEYE_TELEMETRY_REQUIRED = ("soc", "battery_power", "pv_power", "load_power")
 
-# TimeUseSettingItem per-slot fields — CONFIRMED from official sample
-# clientcode/commission/sys_tou_update.py and the strategy/* samples.
+# TimeUseSettingItem per-slot fields — CONFIRMED from the official Swagger definition
+# (GET https://eu1-developer.deyecloud.com/v2/api-docs, the spec behind
+# developer.deyecloud.com/api; definitions.TimeUseSettingItem).
 #
-# This is the COMPLETE per-slot field set: the sample posts exactly these five keys and
-# every strategy/dynamic_control_*.py sample carries the same five. Worth stating because
-# Sunsynk — the same hardware behind a different cloud — silently discards the per-slot
-# flags when the field set is incomplete (sellTime{n}En absent made time{n}on vanish on six
-# consecutive writes). DEYE cannot hit that failure mode while every item carries all five,
-# and there is no per-slot sell/export enable here to omit: the sell bit exists in the
-# underlying register (prog{n} bit 0x40 single-phase / 0x20 three-phase) but the DEYE cloud
-# does not expose it in TimeUseSettingItem, deriving export from workMode instead.
+# The SPEC is the authority here, NOT the sample code. Every sample in
+# DeyeCloudDevelopers/deye-openapi-client-sample-code omits enableSell, which reads as if
+# the field does not exist — but the spec lists it, and it is the same forced-export
+# register bit Sunsynk exposes as sellTime{n}En, where a live write test proved an export
+# slot does not arm without it. Each sample is a whole-day single behaviour, so none of
+# them ever needed one slot to sell and another not to.
+#
+# Every field here goes on EVERY slot. Sunsynk — the same hardware behind a different
+# cloud — validates the per-slot field set as a whole and silently discards the flags when
+# it is incomplete: with sellTime{n}En absent, time{n}on vanished on six consecutive writes
+# across every encoding tried, while the rest of each write persisted and the API reported
+# success throughout.
+#
+# The one spec field deliberately NOT written is "voltage" ("If enabled battery voltage
+# mode, this field should be set"). Predbat drives SOC targets, not voltage targets, so it
+# has nothing to put there and a guessed value would be acted on. Sunsynk leaves its
+# equivalent, sellTime{n}Volt, untouched for the same reason.
 TOU_FIELD = {
     "time": "time",
     "power": "power",
     "soc": "soc",
     "grid_charge": "enableGridCharge",
     "generate": "enableGeneration",
+    "sell": "enableSell",
 }
 
 # Days the TOU programme runs on. Sent with every control write, all seven of them.
 #
-# CONFIRMED from the official samples: all four of clientcode/strategy/dynamic_control_*.py
-# send this exact list, and the endpoint contract carries touDays[] alongside touAction.
+# CONFIRMED from the official Swagger definition, which types it as an enum of the seven
+# upper-case day names and documents it as "If action is on, fill this field with the days
+# of the week you want to switch on"; all four of clientcode/strategy/dynamic_control_*.py
+# send this exact list too.
 # Predbat previously sent touAction without touDays, which left the active days at whatever
 # the inverter already held — and a programme whose days are empty, or which omits the day
 # the plan is for, is stored and never applied.
