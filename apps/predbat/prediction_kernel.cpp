@@ -232,7 +232,7 @@ struct PkScenario {
     const double *charge_limit;   // kWh target per charge window
     const int32_t *charge_start;  // absolute minutes
     const int32_t *charge_end;
-    const double *export_limits;  // percent per export window (99=freeze, 100=off)
+    const double *export_limits;  // percent per export window (99=freeze, 100=off - see EXPORT_LIMIT_FREEZE/EXPORT_LIMIT_IDLE in const.py)
     const int32_t *export_start;
     const int32_t *export_end;
     double *soc_out;              // caller-allocated, n_steps entries, filled with round(soc, 3)
