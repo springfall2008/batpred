@@ -10,7 +10,7 @@
 
 from unittest.mock import patch
 from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS
-from deye_const import CONFIG_BATTERY_KEYS
+from deye_const import CONFIG_BATTERY_KEYS, DEYE_TOU_DAYS
 from tests.test_deye_api import MockDeye, MOCK_RATED_POWER
 from tests.test_infra import run_async as run_async_local
 
@@ -854,6 +854,65 @@ def test_control_write_fails_closed_without_a_self_use_power():
     assert not failed, "test_control_write_fails_closed_without_a_self_use_power"
 
 
+def test_payload_names_every_day_the_schedule_runs_on():
+    """The control payload carries touDays for all seven days.
+
+    DEYE's TOU programme only runs on the days named in touDays, and Predbat's plan is a
+    24h programme it re-derives every cycle — it has no notion of a day the schedule should
+    be dormant. Every one of the four official strategy samples
+    (clientcode/strategy/dynamic_control_*.py) sends the full seven-day list; Predbat sent
+    none, leaving the active days at whatever the inverter happened to hold. If that is
+    empty, or missing the day the plan is for, the whole schedule silently never runs — the
+    slots are stored and simply not applied. Sunsynk, on the same registers, has the same
+    field as its seven mondayOn..sundayOn flags and Predbat sets all of them there.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    payload = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=3 * 60)
+    days = payload.get("touDays")
+    if sorted(days or []) != sorted(DEYE_TOU_DAYS):
+        print(f"ERROR: touDays must name all seven days, got {days!r}")
+        failed = True
+    if len(DEYE_TOU_DAYS) != 7 or any(day != day.upper() for day in DEYE_TOU_DAYS):
+        print(f"ERROR: DEYE names its days as seven upper-case strings, got {DEYE_TOU_DAYS!r}")
+        failed = True
+    # Every payload, not just an active one: the slots are a 24h programme whatever state
+    # the top level is in.
+    idle = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    if d.build_dynamic_payload("INV1", idle, current_soc=40, now_minutes=12 * 60).get("touDays") != DEYE_TOU_DAYS:
+        print("ERROR: an idle payload must still name the days its slots apply on")
+        failed = True
+    assert not failed, "test_payload_names_every_day_the_schedule_runs_on"
+
+
+def test_every_slot_carries_the_complete_field_set():
+    """Every TOU item carries all five documented fields, none of them omitted.
+
+    Sunsynk, the same hardware behind a different cloud, validates the per-slot field set as
+    a whole and silently discards the flags when it is incomplete: with one flag left out,
+    the grid-charge flag vanished on six consecutive writes across every encoding tried
+    while the rest of each write persisted, and the API reported success throughout. DEYE
+    cannot hit that while every item carries the full set its own samples post, so this
+    pins the set rather than trusting each call site to remember it.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    expected = set(TOU_FIELD.values())
+    schedules = [
+        {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}},
+        {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": 20, "power": 3000, "start": "16:00", "end": "19:00"}},
+        {"reserve": 20, "charge": {"enable": True, "soc": 20, "power": 3000, "start": "01:00", "end": "02:00"}, "export": {"enable": False, "soc": 0, "power": 0}},
+        {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}},
+    ]
+    for index, sched in enumerate(schedules):
+        for slot in d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=3 * 60)["timeUseSettingItems"]:
+            if set(slot) != expected:
+                print(f"ERROR: schedule {index} produced a slot with fields {sorted(slot)}, expected {sorted(expected)}")
+                failed = True
+    assert not failed, "test_every_slot_carries_the_complete_field_set"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -886,6 +945,8 @@ def run_deye_control_tests(my_predbat):
         ("self_use_slot_power", test_self_use_slots_carry_the_inverter_rating),
         ("freeze_zero_power", test_freeze_states_hold_with_zero_power),
         ("no_self_use_power_fails_closed", test_control_write_fails_closed_without_a_self_use_power),
+        ("tou_days", test_payload_names_every_day_the_schedule_runs_on),
+        ("slot_field_set", test_every_slot_carries_the_complete_field_set),
     ]:
         try:
             if fn():

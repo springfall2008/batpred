@@ -214,6 +214,15 @@ DEYE_TELEMETRY_REQUIRED = ("soc", "battery_power", "pv_power", "load_power")
 
 # TimeUseSettingItem per-slot fields — CONFIRMED from official sample
 # clientcode/commission/sys_tou_update.py and the strategy/* samples.
+#
+# This is the COMPLETE per-slot field set: the sample posts exactly these five keys and
+# every strategy/dynamic_control_*.py sample carries the same five. Worth stating because
+# Sunsynk — the same hardware behind a different cloud — silently discards the per-slot
+# flags when the field set is incomplete (sellTime{n}En absent made time{n}on vanish on six
+# consecutive writes). DEYE cannot hit that failure mode while every item carries all five,
+# and there is no per-slot sell/export enable here to omit: the sell bit exists in the
+# underlying register (prog{n} bit 0x40 single-phase / 0x20 three-phase) but the DEYE cloud
+# does not expose it in TimeUseSettingItem, deriving export from workMode instead.
 TOU_FIELD = {
     "time": "time",
     "power": "power",
@@ -221,6 +230,19 @@ TOU_FIELD = {
     "grid_charge": "enableGridCharge",
     "generate": "enableGeneration",
 }
+
+# Days the TOU programme runs on. Sent with every control write, all seven of them.
+#
+# CONFIRMED from the official samples: all four of clientcode/strategy/dynamic_control_*.py
+# send this exact list, and the endpoint contract carries touDays[] alongside touAction.
+# Predbat previously sent touAction without touDays, which left the active days at whatever
+# the inverter already held — and a programme whose days are empty, or which omits the day
+# the plan is for, is stored and never applied.
+#
+# All seven is the only correct value here: Predbat re-derives a 24h programme every cycle
+# and has no notion of a day its plan should be dormant. Sunsynk sets its seven
+# mondayOn..sundayOn flags true for the same reason (SUNSYNK_DAY_FIELDS).
+DEYE_TOU_DAYS = ["SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"]
 
 # config/battery response field names — CONFIRMED live:
 #   {"maxChargeCurrent": 185, "maxDischargeCurrent": 185, "battLowCapacity": 14,
