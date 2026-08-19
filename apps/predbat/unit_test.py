@@ -98,6 +98,7 @@ from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution
 from tests.test_web_annual import (
     test_web_annual,
     test_web_annual_error_isolation,
+    test_web_annual_fast_mode,
     test_web_annual_form,
     test_web_annual_pages,
     test_web_annual_plan_route,
@@ -411,6 +412,7 @@ def main():
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
         ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),
+        ("web_annual_fast_mode", test_web_annual_fast_mode, "Annual web tab fast mode tests", False),
         ("web_annual_routes", test_web_annual_routes, "Annual web tab route tests", False),
         ("web_annual_results", test_web_annual_results, "Annual web tab results tests", False),
         ("web_annual_terminal_state", test_web_annual_terminal_state, "Annual web tab terminal-state claim/no-redirect-loop tests", False),
