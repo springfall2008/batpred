@@ -14,6 +14,36 @@
 from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_WORKMODE, DEYE_TELEMETRY_KEYS, TOU_FIELD, TOU_SLOT_COUNT, FREEZE_EXPORT_SOC
 
 
+# The per-slot wire names, transcribed from definitions.TimeUseSettingItem in DEYE's
+# published Swagger (GET https://eu1-developer.deyecloud.com/v2/api-docs). Spelled out here
+# rather than derived from TOU_FIELD on purpose: a test that reads the same dict it is
+# checking follows a typo or a dropped entry straight into the payload without complaint.
+# A wrong per-slot key is silent - the write is accepted and what the API did not recognise
+# is discarded - which is how enableSell came to be missing in the first place.
+#
+# "voltage" is in the model but deliberately not written (battery voltage mode; Predbat
+# drives SOC targets), so its absence is part of what this pins.
+DEYE_TOU_WIRE_FIELDS = {
+    "time": "time",
+    "power": "power",
+    "soc": "soc",
+    "grid_charge": "enableGridCharge",
+    "generate": "enableGeneration",
+    "sell": "enableSell",
+}
+
+
+def test_tou_field_matches_the_published_model():
+    """TOU_FIELD is exactly DEYE's documented per-slot model, name for name."""
+    failed = False
+    if TOU_FIELD != DEYE_TOU_WIRE_FIELDS:
+        missing = {k: v for k, v in DEYE_TOU_WIRE_FIELDS.items() if TOU_FIELD.get(k) != v}
+        extra = {k: v for k, v in TOU_FIELD.items() if k not in DEYE_TOU_WIRE_FIELDS}
+        print(f"ERROR: TOU_FIELD no longer matches the published model - wrong/missing {missing}, unexpected {extra}")
+        failed = True
+    assert not failed, "test_tou_field_matches_the_published_model"
+
+
 def test_deye_const_shape():
     """Constants expose the keys the component relies on."""
     failed = False
@@ -33,10 +63,6 @@ def test_deye_const_shape():
         if k not in DEYE_TELEMETRY_KEYS:
             print(f"ERROR: telemetry key {k} missing")
             failed = True
-    for f in ("time", "power", "soc", "grid_charge"):
-        if f not in TOU_FIELD:
-            print(f"ERROR: TOU field {f} missing")
-            failed = True
     if TOU_SLOT_COUNT != 6:
         print("ERROR: TOU_SLOT_COUNT must be 6")
         failed = True
@@ -51,6 +77,7 @@ def run_deye_const_tests(my_predbat):
     failed = False
     for name, fn in [
         ("const_shape", test_deye_const_shape),
+        ("tou_field_model", test_tou_field_matches_the_published_model),
     ]:
         try:
             if fn():
