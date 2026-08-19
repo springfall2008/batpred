@@ -42,8 +42,10 @@
 // unconditionally, so loading one against this Python segfaults on the first prediction rather than
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
-#define PK_ABI_VERSION 4
-#define PK_PARITY_REVISION 7
+// ABI 5: PkContext carries the car solar diversion fields, so a binary built before them has a
+// different context layout and must not be loaded against this Python.
+#define PK_ABI_VERSION 5
+#define PK_PARITY_REVISION 8
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -190,6 +192,12 @@ struct PkContext {
     double car_charging_loss;
     double car_charging_limit[PK_MAX_CARS];
     double car_charging_soc[PK_MAX_CARS];
+    double car_charging_solar_max_power[PK_MAX_CARS];
+    double car_charging_solar_min_power[PK_MAX_CARS];
+    double car_charging_solar_power_step[PK_MAX_CARS];
+    double car_charging_solar_limit[PK_MAX_CARS];
+    double car_charging_solar_export_threshold[PK_MAX_CARS];
+    double car_charging_solar_min_soc;
     double iboost_max_energy;
     double iboost_max_power;
     double iboost_min_power;
@@ -213,7 +221,10 @@ struct PkContext {
     int32_t inverter_can_charge_during_export;
     int32_t num_cars;
     int32_t car_energy_reported_load;
+    int32_t car_charging_in_load_history;
     int32_t car_charging_from_battery;
+    int32_t car_charging_solar[PK_MAX_CARS];
+    int32_t car_charging_plugged[PK_MAX_CARS];
     int32_t carbon_enable;
     int32_t iboost_enable;
     int32_t iboost_solar;
@@ -814,6 +825,50 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double car_amount_premium = 0;
         double car_load_energy_bypass = 0;
         if (car_enable) {
+            // Opportunistic solar (sun-following) diversion model - prediction.py:691-728. Applied BEFORE any
+            // planned grid charging so free solar is used first and a planned grid top-up only covers the remainder.
+            for (int32_t car_n = 0; car_n < c->num_cars; car_n++) {
+                // Only divert while selling the surplus pays less than the cheap charge it displaces
+                if (export_rate > c->car_charging_solar_export_threshold[car_n]) {
+                    continue;
+                }
+                if (c->car_charging_solar[car_n] && c->car_charging_plugged[car_n] && pv_now > 0 && car_soc[car_n] < c->car_charging_solar_limit[car_n]) {
+                    // Home battery priority: only divert to the car once the home battery SoC is above the threshold
+                    if (soc_max <= 0 || (soc * 100.0 / soc_max) >= c->car_charging_solar_min_soc) {
+                        // Only the PV left after the house load is served is available to the car
+                        const double surplus = std::max(pv_now - load_yesterday, 0.0);
+                        const double avail_power = std::min(surplus * 60.0 / step, c->car_charging_solar_max_power[car_n]);
+                        const double min_power = c->car_charging_solar_min_power[car_n];
+                        const double power_step = c->car_charging_solar_power_step[car_n];
+                        double charge_power;
+                        if (avail_power < min_power) {
+                            // Below the charger's minimum start power - nothing is diverted
+                            charge_power = 0;
+                        } else if (power_step > 0) {
+                            // Real chargers only switch in whole current steps, leaving a small remainder
+                            charge_power = min_power + static_cast<double>(static_cast<int64_t>((avail_power - min_power) / power_step)) * power_step;
+                        } else {
+                            charge_power = avail_power;
+                        }
+                        double car_solar_amount = charge_power * step / 60.0;
+                        if (car_solar_amount > 0) {
+                            // Cap by remaining capacity to the SOLAR limit (battery-side kWh -> PV-side draw via the charging loss)
+                            const double room = std::max(c->car_charging_solar_limit[car_n] - car_soc[car_n], 0.0);
+                            if (c->car_charging_loss > 0) {
+                                car_solar_amount = std::min(car_solar_amount, room / c->car_charging_loss);
+                            } else {
+                                car_solar_amount = std::min(car_solar_amount, room);
+                            }
+                            if (car_solar_amount > 0) {
+                                pv_now -= car_solar_amount;
+                                car_soc[car_n] += car_solar_amount * c->car_charging_loss;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Planned (grid) car charging - tops up toward the plan target (car_charging_limit), after solar
             for (int32_t car_n = 0; car_n < c->num_cars; car_n++) {
                 const double car_load_now = c->car_load_flat[car_n * n_steps + k];
                 if (car_load_now > 0.0) {
@@ -828,7 +883,10 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     if (c->car_energy_reported_load) {
                         // Note: mirrors the Python engine exactly - the cumulative premium amount is added per car
                         car_amount_premium += car_load_scale / c->car_charging_loss;
-                        load_yesterday += car_amount_premium;
+                        // Already present in the historical load means adding the planned slot would double count
+                        if (!c->car_charging_in_load_history) {
+                            load_yesterday += car_amount_premium;
+                        }
                     } else {
                         car_load_energy_bypass += car_load_scale / c->car_charging_loss;
                     }

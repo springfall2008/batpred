@@ -32,6 +32,9 @@ from const import (
     LOAD_FORECAST_HISTORY_MAX_DAYS,
     PREDBAT_MAX_CARS,
     LOW_POWER_PV_LIGHT_FRACTION,
+    CAR_SOLAR_EXPORT_ALWAYS,
+    CAR_PLUGGED_RESPONSE,
+    CAR_UNPLUGGED_RESPONSE,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -1132,7 +1135,55 @@ class Fetch:
             force_replan = True
         return force_replan
 
+    def set_car_solar_export_threshold(self, car_n):
+        """
+        Decide the export rate at or below which solar may be diverted to this car.
+
+        Diverting PV to the car is not free - its opportunity cost is the export rate given up. Per kWh
+        delivered to the car battery the solar route costs export_rate / car_charging_loss and the grid route
+        costs import_rate / car_charging_loss, so the loss cancels and the comparison is simply the export
+        rate now against the cheapest import available before the car has to be ready. When exporting pays
+        better, the surplus should be sold and the car charged from the cheap slot instead.
+
+        Only applied when there is a departure plan to fall back on, otherwise refusing the solar would just
+        waste it. Returns without limiting when the switch is off or the car is not a solar car.
+        """
+        self.car_charging_solar_export_threshold[car_n] = CAR_SOLAR_EXPORT_ALWAYS
+
+        if not self.car_charging_solar_export_smart or not self.car_charging_solar[car_n]:
+            return
+        if not (self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+            # No planned charge to fall back on - blocking the diversion would simply lose the energy
+            return
+        if not self.rate_import:
+            return
+
+        ready = self.car_ready_minutes(car_n)
+        rates = [self.rate_import[minute] for minute in range(self.minutes_now, ready) if minute in self.rate_import]
+        if not rates:
+            return
+
+        threshold = min(rates)
+        self.car_charging_solar_export_threshold[car_n] = threshold
+        self.log("Car {} solar diversion allowed while the export rate is at or below {}{} (cheapest import before {} minutes)".format(car_n, dp2(threshold), self.currency_symbols[1], ready))
+
     def fetch_sensor_data_car_planning(self):
+        # The per-car solar lists are sized by fetch_sensor_data_cars, which a caller can skip while
+        # num_cars is already set (a debug replay or a restored plan does exactly that), so pad them to
+        # num_cars with their defaults rather than letting the per-car loop below index out of range
+        for name, default in (
+            ("car_charging_solar", False),
+            ("car_charging_plugged", False),
+            ("car_charging_solar_max_power", 7.4),
+            ("car_charging_solar_min_power", 0.0),
+            ("car_charging_solar_power_step", 0.0),
+            ("car_charging_solar_limit", 100.0),
+            ("car_charging_solar_export_threshold", CAR_SOLAR_EXPORT_ALWAYS),
+        ):
+            values = list(getattr(self, name))
+            if len(values) < self.num_cars:
+                setattr(self, name, values + [default] * (self.num_cars - len(values)))
+
         # Work out car plan?
         # Determine which cars are configured with Octopus Intelligent to avoid calling plan_car_charging for them
         iog_entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
@@ -1164,6 +1215,17 @@ class Fetch:
                 self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates)
             else:
                 self.log("Car {} charging is not planned as it is not plugged in".format(car_n))
+
+            # Opportunistic solar-only car with no plan of any kind: no grid slots are scheduled, the PV
+            # diversion is modelled directly in the prediction so the home battery forecast still accounts
+            # for the energy the car takes.
+            if self.car_charging_solar[car_n] and not self.car_charging_planned[car_n]:
+                self.car_charging_slots[car_n] = []
+                self.log("Car {} solar charging only (no active plan): no grid slots planned, PV diversion handled in the forecast".format(car_n))
+
+            # Decide whether the solar surplus is worth more exported than put in the car (needs the plan above,
+            # so it knows whether there is a cheap charge to fall back on)
+            self.set_car_solar_export_threshold(car_n)
 
             # Log the charging plan
             if self.car_charging_slots[car_n]:
@@ -1311,6 +1373,18 @@ class Fetch:
         else:
             # Disable octopus charging if we don't have the slot sensor
             self.octopus_intelligent_charging = False
+
+        # Per-car apps.yaml overrides for expected-car planning, applied for every car (not just IOG ones) so an
+        # external charger integration (e.g. an evcc automation or a calendar template) can publish the expected
+        # arrival time and arrival SoC. Same override pattern as octopus_ready_time above.
+        for car_n in range(self.num_cars):
+            # A charger integration may also know the per-car departure time. car_charging_plan_time is a UI
+            # select read index-less by get_car_charging_planned(), so it cannot carry a per-car value - this
+            # key is the per-car override, mirroring octopus_ready_time. "off" means no override, so the UI
+            # select (and any automation writing it) continues to apply.
+            ready_time = self.parse_car_ready_time(self.get_arg("car_charging_ready_time", None, index=car_n))
+            if ready_time:
+                self.car_charging_plan_time[car_n] = ready_time
 
         # Log final car SoC (initialised before the IOG loop, updated per-car after Octopus battery_size is read)
         if self.num_cars:
@@ -2150,6 +2224,26 @@ class Fetch:
         if print:
             self.log("Gas rates: min {}{}, max {}{}, average {}{}".format(self.rate_gas_min, curr, self.rate_gas_max, curr, self.rate_gas_average, curr))
 
+    def parse_car_ready_time(self, value):
+        """
+        Normalise a car ready (departure) time into a HH:MM:SS string, or None when it is unset/disabled.
+
+        Accepts the HA select value ("off" or HH:MM:SS) and an apps.yaml sensor which may report HH:MM.
+        """
+        if value is None or isinstance(value, bool):
+            return None
+        value = str(value).strip()
+        if value.lower() in ("off", "none", "unknown", "unavailable", ""):
+            return None
+        if len(value) == 5:
+            value += ":00"
+        try:
+            datetime.strptime(value, "%H:%M:%S")
+        except (ValueError, TypeError):
+            self.log("Warn: Car charging ready time value '{}' is invalid, ignoring".format(value))
+            return None
+        return value
+
     def get_car_charging_planned(self):
         """
         Get the car attributes
@@ -2164,10 +2258,20 @@ class Fetch:
         self.car_charging_rate = [7.4 for c in range(max(self.num_cars, 1))]
         self.car_charging_slots = [[] for c in range(self.num_cars)]
         self.car_charging_exclusive = [False for c in range(self.num_cars)]
+        self.car_charging_solar = [False for c in range(self.num_cars)]
+        self.car_charging_plugged = [False for c in range(self.num_cars)]
+        self.car_charging_solar_max_power = [self.car_charging_rate[c] for c in range(self.num_cars)]
+        self.car_charging_solar_min_power = [0.0 for c in range(self.num_cars)]
+        self.car_charging_solar_power_step = [0.0 for c in range(self.num_cars)]
+        self.car_charging_solar_limit = [self.car_charging_limit[c] for c in range(self.num_cars)]
+        # Export rate at or below which solar may be diverted to the car, see set_car_solar_export_threshold
+        self.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS for c in range(self.num_cars)]
 
         self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
         self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
+        self.car_charging_solar_min_soc = self.get_arg("car_charging_solar_min_soc", 0.0)
+        self.car_charging_solar_export_smart = self.get_arg("car_charging_solar_export_smart", False)
 
         # Car charging planned sensor
         for car_n in range(self.num_cars):
@@ -2203,6 +2307,41 @@ class Fetch:
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
 
+            # Opportunistic solar (sun-following) charging - models PV diverted to the car by an external charger (e.g. EVCC)
+            self.car_charging_solar[car_n] = self.get_arg("car_charging_solar", False, index=car_n)
+
+            # Maximum diversion power - defaults to the configured car charging rate, but is uncapped (3-phase chargers exceed the rate slider limit)
+            self.car_charging_solar_max_power[car_n] = float(self.get_arg("car_charging_solar_max_power", self.car_charging_rate[car_n], index=car_n))
+
+            # Minimum power needed before the charger will start diverting (e.g. 3-phase 6A)
+            self.car_charging_solar_min_power[car_n] = float(self.get_arg("car_charging_solar_min_power", 0.0, index=car_n))
+
+            # Discrete charge power step (kW). Real chargers only switch in whole current steps (e.g. 1A = ~0.69kW on 3-phase),
+            # so they leave a small surplus remainder. 0 = continuous (no quantisation).
+            self.car_charging_solar_power_step[car_n] = float(self.get_arg("car_charging_solar_power_step", 0.0, index=car_n))
+
+            # SoC limit (%) the opportunistic solar diversion fills the car to, independent of the grid plan target
+            # (car_charging_limit). Defaults to the grid plan target when not configured. Stored in kWh like car_charging_limit.
+            solar_limit_pct = self.get_arg("car_charging_solar_limit", None, index=car_n)
+            if solar_limit_pct is None:
+                self.car_charging_solar_limit[car_n] = self.car_charging_limit[car_n]
+            else:
+                self.car_charging_solar_limit[car_n] = dp3((float(solar_limit_pct) * self.car_charging_battery_size[car_n]) / 100.0)
+
+            # Plugged-in status over the forecast horizon - falls back to "charging now" if no dedicated sensor is configured
+            plugged = self.get_arg("car_charging_plugged", None, index=car_n)
+            if plugged is None:
+                self.car_charging_plugged[car_n] = self.car_charging_now[car_n]
+            elif isinstance(plugged, str):
+                # Matched on the standard on/true states as well as car_charging_now_response - see
+                # CAR_PLUGGED_RESPONSE for why that list alone cannot be trusted for this sensor
+                state = plugged.lower()
+                self.car_charging_plugged[car_n] = state in self.car_charging_now_response or state in CAR_PLUGGED_RESPONSE
+                if not self.car_charging_plugged[car_n] and state not in CAR_UNPLUGGED_RESPONSE:
+                    self.log("Warn: Car {} plugged-in sensor reports '{}', which is neither a known plugged-in state nor in car_charging_now_response {} - treating the car as unplugged".format(car_n, plugged, self.car_charging_now_response))
+            else:
+                self.car_charging_plugged[car_n] = bool(plugged)
+
         if self.num_cars > 0:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
             self.log(
@@ -2222,6 +2361,18 @@ class Fetch:
                     self.car_charging_exclusive,
                 )
             )
+            if any(self.car_charging_solar):
+                self.log(
+                    "Cars solar diversion {} plugged {}, max power {}kW, min power {}kW, power step {}kW, solar limit {}kWh, home battery priority {}%".format(
+                        self.car_charging_solar,
+                        self.car_charging_plugged,
+                        self.car_charging_solar_max_power,
+                        self.car_charging_solar_min_power,
+                        self.car_charging_solar_power_step,
+                        self.car_charging_solar_limit,
+                        self.car_charging_solar_min_soc,
+                    )
+                )
 
     def fetch_ml_load_forecast(self, now_utc):
         """
@@ -2788,6 +2939,16 @@ class Fetch:
         if not self.car_energy_reported_load:
             # If car energy is not reported as load then we should not attempt to remove car energy from the load data.
             self.car_charging_hold = False
+
+        # The car energy is left in the historical load exactly when it is inside the CT clamp and has not been
+        # stripped back out again, so this follows from the two switches above rather than being one of its own.
+        # In that state the historical load - and any ML model trained on it - already carries the car demand, so
+        # the planned car slots must not add it a second time in the prediction.
+        car_charging_in_load_history = self.car_energy_reported_load and not self.car_charging_hold
+        if car_charging_in_load_history != self.car_charging_in_load_history:
+            self.log("Note: car charging energy is {} the load history (car_charging_hold {}, car_energy_reported_load {})".format("left in" if car_charging_in_load_history else "removed from", self.car_charging_hold, self.car_energy_reported_load))
+        self.car_charging_in_load_history = car_charging_in_load_history
+
         self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
         for car_n in range(self.num_cars):
             car_postfix = "" if car_n == 0 else "_" + str(car_n)

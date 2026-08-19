@@ -6605,7 +6605,9 @@ def get_plan_renderer_js():
 
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
-                    const carVal = row.car_charging > 0 ? row.car_charging : '&#9866;';
+                    // A zero on a green cell is meaningful - the charger may divert here, the surplus is just
+                    // too small to start it - so it must not be drawn as "nothing", matching the HTML plan
+                    const carVal = row.car_charging > 0 ? row.car_charging : (row.car_solar_possible ? 0 : '&#9866;');
                     html += `<td id=car bgcolor=${row.car_color || '#FFFFFF'}>${carVal}</td>`;
                 }
 
