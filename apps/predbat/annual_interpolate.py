@@ -25,7 +25,18 @@ annual savings figure; see docs/superpowers/specs/2026-08-18-annual-fast-mode-de
 import calendar
 
 # One per season, spanning midwinter to midsummer so the fit can resolve the solar slope.
-ANCHOR_MONTHS = (1, 4, 7, 10)
+# March/June/September/December measurably beat the alternatives on the savings figures a
+# reader actually acts on: on the Cosy reference this set reconstructs them to -0.5% and
+# +0.2%, where (1, 4, 7, 10) gives -10.6% on the Predbat saving.
+ANCHOR_MONTHS = (3, 6, 9, 12)
+
+# Above this coefficient of variation in daily average import price, a month's economics are
+# no longer a smooth function of solar and a sampled month stops representing its neighbours,
+# so fast mode declines and the caller plans the year in full instead. Measured across the
+# reference runs: Agile 0.21 (max month 0.33) against 0.005 for Cosy (max 0.039). Banded
+# tariffs sit near zero by construction - their bands are identical every day of the month -
+# so the gap either side of this threshold is roughly fortyfold, not marginal.
+FAST_MODE_MAX_RATE_CV = 0.10
 
 BASIS_SOLAR_AFFINE = "solar_affine"
 BASIS_LINEAR = "linear"
@@ -73,6 +84,35 @@ def _cyclic_linear(anchors, values, month):
             fraction = offset / float(span)
             return values[index] * (1 - fraction) + values[(index + 1) % count] * fraction
     return values[0]
+
+
+def rate_variability(daily_means_by_month):
+    """Return the mean within-month coefficient of variation of daily average import price.
+
+    Fast mode reconstructs unplanned months from planned ones, which only holds when a
+    month's economics are a smooth function of solar. On a tariff whose whole price level
+    moves day to day rather than following a fixed daily pattern, they are not: a couple of
+    sampled days stop representing their own month, let alone its neighbours, and the
+    reconstructed savings can be tens of percent out. This is the cheap signal that tells
+    the two cases apart before any of that error is reported as a payback figure.
+
+    Returns 0.0 when there is nothing measurable, which reads as "stable" - the caller then
+    proceeds with fast mode, matching the behaviour for a tariff with no rate data to judge.
+    """
+    ratios = []
+    for values in daily_means_by_month.values():
+        # Two days cannot describe a month's spread; a month that short is skipped rather
+        # than contributing a wildly over- or under-stated figure to the mean.
+        if len(values) < 3:
+            continue
+        mean_value = sum(values) / len(values)
+        if abs(mean_value) < 1e-9:
+            continue
+        variance = sum((value - mean_value) ** 2 for value in values) / len(values)
+        ratios.append((variance**0.5) / abs(mean_value))
+    if not ratios:
+        return 0.0
+    return sum(ratios) / len(ratios)
 
 
 def choose_basis(anchor_months, monthly_pv, year):

@@ -11,7 +11,7 @@
 
 import calendar
 
-from annual_interpolate import ANCHOR_MONTHS, BASIS_LINEAR, BASIS_SOLAR_AFFINE, build_interpolated_rows, choose_basis
+from annual_interpolate import ANCHOR_MONTHS, BASIS_LINEAR, BASIS_SOLAR_AFFINE, FAST_MODE_MAX_RATE_CV, build_interpolated_rows, choose_basis, rate_variability
 
 YEAR = 2025
 FIELDS = ["cost_p", "import_kwh", "export_kwh", "pv_generated_kwh", "battery_throughput_kwh", "battery_cycles"]
@@ -119,20 +119,21 @@ def test_annual_interpolate(my_predbat):
         print("  ERROR: the fallback must still produce all eight months, got {}".format(len(rows)))
         failed = True
 
-    print("Test: the linear basis wraps December round to January")
-    # December sits between the October and January anchors going forward round the circle;
-    # treating the anchor list as a straight line would extrapolate off the end instead.
-    values = {1: 10.0 * days_in(1), 4: 20.0 * days_in(4), 7: 30.0 * days_in(7), 10: 40.0 * days_in(10)}
+    print("Test: the linear basis wraps the turn of the year")
+    # January and February sit between the December and March anchors going forward round
+    # the circle; treating the anchor list as a straight line would extrapolate off the end.
+    values = {3: 10.0 * days_in(3), 6: 20.0 * days_in(6), 9: 30.0 * days_in(9), 12: 40.0 * days_in(12)}
     rows = build_interpolated_rows(anchor_rows_from(lambda month: values[month]), YEAR, None)
-    december = rows[12]["scenarios"]["no_pvbat"]["cost_p"] / days_in(12)
-    if not 10.0 < december < 40.0:
-        print("  ERROR: December should interpolate between the Oct (40/day) and Jan (10/day) anchors, got {:.2f}/day".format(december))
-        failed = True
+    for month in (1, 2):
+        per_day = rows[month]["scenarios"]["no_pvbat"]["cost_p"] / days_in(month)
+        if not 10.0 < per_day < 40.0:
+            print("  ERROR: month {} should interpolate between the Dec (40/day) and Mar (10/day) anchors, got {:.2f}/day".format(month, per_day))
+            failed = True
 
     print("Test: only the requested months are produced")
-    rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0), YEAR, pv, months=[2, 3])
-    if sorted(rows) != [2, 3]:
-        print("  ERROR: expected only months 2 and 3, got {}".format(sorted(rows)))
+    rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0), YEAR, pv, months=[2, 5])
+    if sorted(rows) != [2, 5]:
+        print("  ERROR: expected only months 2 and 5, got {}".format(sorted(rows)))
         failed = True
 
     print("Test: derived fields are not interpolated")
@@ -157,35 +158,55 @@ def test_annual_fast_mode_assembly(my_predbat):
     pv = linear_pv()
 
     print("Test: fast mode plans only the anchor months")
-    if sorted(ANCHOR_MONTHS) != [1, 4, 7, 10]:
-        print("  ERROR: anchors should be Jan/Apr/Jul/Oct, got {}".format(sorted(ANCHOR_MONTHS)))
+    if sorted(ANCHOR_MONTHS) != [3, 6, 9, 12]:
+        print("  ERROR: anchors should be Mar/Jun/Sep/Dec, got {}".format(sorted(ANCHOR_MONTHS)))
         failed = True
 
     print("Test: an unavailable month is not interpolated over")
     # A month with no rate data must stay unavailable, not be quietly fabricated - which is
     # why run() passes an explicit month list rather than letting the module fill everything.
-    wanted = [month for month in range(1, 13) if month not in ANCHOR_MONTHS and month != 3]
+    wanted = [month for month in range(1, 13) if month not in ANCHOR_MONTHS and month != 2]
     rows = build_interpolated_rows(anchor_rows_from(lambda month: 100.0 * days_in(month)), YEAR, pv, months=wanted)
-    if 3 in rows:
-        print("  ERROR: month 3 was excluded but got interpolated anyway")
+    if 2 in rows:
+        print("  ERROR: month 2 was excluded but got interpolated anyway")
         failed = True
     if len(rows) != 7:
         print("  ERROR: expected 7 interpolated months, got {}".format(len(rows)))
         failed = True
 
+    print("Test: a banded tariff reads as stable and a volatile one does not")
+    # Measured on the reference runs: Cosy 0.005, Agile 0.21. The threshold sits between,
+    # far enough from both that neither is a borderline call.
+    banded = {month: [22.5, 22.5, 22.5, 22.6, 22.5] for month in range(1, 13)}
+    if rate_variability(banded) > FAST_MODE_MAX_RATE_CV:
+        print("  ERROR: a fixed-band tariff should read as stable, got {:.3f}".format(rate_variability(banded)))
+        failed = True
+    volatile = {month: [8.0, 31.0, 15.0, 44.0, 21.0] for month in range(1, 13)}
+    if rate_variability(volatile) <= FAST_MODE_MAX_RATE_CV:
+        print("  ERROR: a day-to-day volatile tariff should exceed the limit, got {:.3f}".format(rate_variability(volatile)))
+        failed = True
+
+    print("Test: too little rate data reads as stable rather than blocking fast mode")
+    if rate_variability({}) != 0.0:
+        print("  ERROR: no rate data should return 0.0, got {!r}".format(rate_variability({})))
+        failed = True
+    if rate_variability({1: [20.0, 30.0]}) != 0.0:
+        print("  ERROR: a month with under three sampled days should be skipped, got {!r}".format(rate_variability({1: [20.0, 30.0]})))
+        failed = True
+
     print("Test: fewer than two surviving anchors produces nothing")
-    single = {1: anchor_rows_from(lambda month: 100.0)[1]}
+    single = {3: anchor_rows_from(lambda month: 100.0)[3]}
     if build_interpolated_rows(single, YEAR, pv) != {}:
         print("  ERROR: a single anchor must not be fitted - run() falls back to a full run instead")
         failed = True
 
     print("Test: two surviving anchors still work")
-    two = {month: anchor_rows_from(lambda m: 100.0 * days_in(m))[month] for month in (1, 7)}
+    two = {month: anchor_rows_from(lambda m: 100.0 * days_in(m))[month] for month in (3, 9)}
     rows = build_interpolated_rows(two, YEAR, pv)
     if len(rows) != 10:
         print("  ERROR: two anchors should fill the other ten months, got {}".format(len(rows)))
         failed = True
-    if rows[5]["interpolated_from"]["anchors"] != [1, 7]:
+    if rows[5]["interpolated_from"]["anchors"] != [3, 9]:
         print("  ERROR: provenance should record the surviving anchors, got {!r}".format(rows[5]["interpolated_from"]["anchors"]))
         failed = True
 
