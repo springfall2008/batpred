@@ -575,9 +575,14 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, required=True):
         """
         Download one or more entities for import/export data
+
+        :param required: Set False when the data only improves the result rather than being needed for it,
+                         e.g. the rate history the ML load model adds as a training feature. A missing
+                         history is then reported once as information instead of as a fetch failure, as
+                         Home Assistant legitimately has no history for entities its recorder isn't storing.
         """
         if "." not in key:
             entity_ids = self.get_arg(key, indirect=False)
@@ -597,7 +602,7 @@ class Fetch:
                 continue
 
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required)
             except (ValueError, TypeError) as exc:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
@@ -630,7 +635,11 @@ class Fetch:
                     can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
             else:
-                if history is None:
+                if not required:
+                    # Optional data - Home Assistant simply has no history for this entity, which is
+                    # normal when its recorder isn't configured to store it, so don't cry wolf
+                    self.log("Info: No history available for {}, continuing without it".format(entity_id))
+                elif history is None:
                     # Only record as a failure if it was None (not just empty but failure)
                     self.log("Warn: Failure to fetch history for {}".format(entity_id))
                     self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
