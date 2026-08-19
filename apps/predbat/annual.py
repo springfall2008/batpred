@@ -319,6 +319,10 @@ def validate_config(config, today=None):
         "samples_per_month": samples_per_month,
         "costs": _validated_costs(raw.get("costs")),
         "debug": _coerce_bool(raw.get("debug", False)),
+        # Plans four seasonal months and interpolates the rest - see annual_interpolate.py.
+        # _coerce_bool for the same reason as "debug": an explicit fast_mode: "false" in a
+        # hand-written YAML must not read as truthy.
+        "fast_mode": _coerce_bool(raw.get("fast_mode", False)),
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),

@@ -150,6 +150,20 @@ def make_progress(quiet, machine=False):
     return progress
 
 
+def apply_fast_override(config, fast):
+    """Set ``annual.fast_mode`` when --fast was given, on whichever config shape was loaded.
+
+    ``validate_config`` accepts both the wrapped ({"annual": {...}}) and the bare inner
+    mapping, so the override has to land on the same mapping it will read - writing to the
+    outer dict of a wrapped config would be silently ignored.
+    """
+    if not fast:
+        return config
+    inner = config.get("annual") if isinstance(config, dict) and isinstance(config.get("annual"), dict) else config
+    inner["fast_mode"] = True
+    return config
+
+
 def main(argv=None, storage_factory=StorageLocalFiles):
     """Parse arguments, run the projection, and write the results. Returns an exit code.
 
@@ -173,6 +187,7 @@ def main(argv=None, storage_factory=StorageLocalFiles):
     parser.add_argument("--work-dir", default="./annual_work", help="Working directory for the headless Predbat instance and cache")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output")
     parser.add_argument("--machine", action="store_true", help="Emit results as JSON on stdout and progress as JSON on stderr, for a calling process")
+    parser.add_argument("--fast", action="store_true", help="Plan only four seasonal months and interpolate the rest (about 2.5x faster, monthly figures approximate)")
     args = parser.parse_args(argv)
 
     try:
@@ -181,6 +196,8 @@ def main(argv=None, storage_factory=StorageLocalFiles):
     except (OSError, yaml.YAMLError) as error:
         sys.stderr.write("Could not read config {}: {}\n".format(args.config, error))
         return 2
+
+    config = apply_fast_override(config, args.fast)
 
     # Under --machine, the engine's log must go to stderr rather than the default print()
     # (stdout): predictor.run() can log warnings - P10 fallbacks, missing rate data, failed
