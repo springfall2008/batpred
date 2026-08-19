@@ -1066,8 +1066,7 @@ class LoadMLComponent(ComponentBase):
                 derived_baseline += self.load_data.get(minute, 0.0)
         derived_baseline = dp4(derived_baseline)
         self.log(
-            "Warn: ML Component: Load baseline of {} kWh was captured on {} which is a previous day, "
-            "re-derived load so far today as {} kWh".format(dp2(self.load_minutes_now), self.load_minutes_now_time.strftime("%Y-%m-%d %H:%M"), dp2(derived_baseline))
+            "Warn: ML Component: Load baseline of {} kWh was captured on {} which is a previous day, " "re-derived load so far today as {} kWh".format(dp2(self.load_minutes_now), self.load_minutes_now_time.strftime("%Y-%m-%d %H:%M"), dp2(derived_baseline))
         )
         return derived_baseline
 
