@@ -1617,7 +1617,7 @@ class Fetch:
         pv_light_dark = {pv_minute: bucket_light[pv_minute // interval] for pv_minute in self.pv_forecast_minute}
         return pv_light_dark
 
-    def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates={}, pv_light_dark={}):
+    def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates=None, pv_light_dark=None):
         """
         Find the charging windows based on the low rate threshold (percent below average)
 
@@ -1628,6 +1628,8 @@ class Fetch:
         light windows - see #4557, where low power charging was defeated for the whole window,
         including the still-dark hours, just because the window's tail overlapped PV later on.
         """
+        alt_rates = alt_rates or {}
+        pv_light_dark = pv_light_dark or {}
         rate_low_start = -1
         rate_low_end = -1
         rate_low_average = 0
@@ -1975,10 +1977,12 @@ class Fetch:
 
         return rate_min_forward
 
-    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates={}, pv_light_dark={}):
+    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None):
         """
         Scan for the next high/low rate window
         """
+        alt_rates = alt_rates or {}
+        pv_light_dark = pv_light_dark or {}
         minute = 0
         found_rates = []
         lowest = 99
