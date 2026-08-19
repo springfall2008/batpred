@@ -38,6 +38,7 @@ from deye_const import (
     TOU_FIELD,
     TOU_SLOT_COUNT,
     TOU_FILLER_TIMES,
+    DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
     DEYE_BUSY_CODES,
     DEYE_BUSY_MARKERS,
@@ -524,7 +525,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         measures at the inverter's own output instead, so on a CT-clamp install it would
         stop the battery serving anything not wired to the inverter and the shortfall would
         come from the grid. Confirmed on Sunsynk hardware, which sits behind the same
-        registers.
+        registers, and since confirmed on DEYE's own side: the official
+        clientcode/strategy/dynamic_control_self_consumption.py sample is exactly
+        ZERO_EXPORT_TO_CT with solarSellAction on, and the fully-charge sample uses the same
+        mode with a high slot SOC.
         """
         reserve = int(schedule.get("reserve", 0))
         charge = schedule.get("charge", {})
@@ -755,8 +759,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             # the slot SoC targets, not from this flag. Turning it off is never useful here,
             # only harmful, so it is not derived at all. derive_control_state still carries
             # solar_sell because build_tou_slots uses it to classify action-vs-self-use slots.
+            #
+            # DEYE's own samples agree: three of the four strategy/dynamic_control_*.py
+            # samples send solarSellAction on, including self-consumption, which pairs it
+            # with ZERO_EXPORT_TO_CT. Only the fully-charge sample omits it.
             "solarSellAction": "on",
             "touAction": "on",
+            # The days the programme runs on. Predbat re-derives a 24h plan every cycle, so
+            # every day is one of them; omitting this left the active days at whatever the
+            # inverter already held, and a programme that names no days is stored and never
+            # applied. See DEYE_TOU_DAYS.
+            "touDays": list(DEYE_TOU_DAYS),
             "timeUseSettingItems": slots,
         }
 
