@@ -592,6 +592,79 @@ friendly_name: Octoplus Saving Session Events
     return failed
 
 
+def test_saving_session_custom_entity_no_rewrite_match(my_predbat):
+    """
+    Test that available_events is read from the configured entity even when its name
+    does not match the binary_sensor -> event rewrite pattern (no '_sessions' substring),
+    and no rewritten entity exists at all.
+    Covers GitHub issue #4573
+    """
+    print("Test saving session with custom entity name that does not match the rewrite pattern (issue #4573)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    # Custom entity name bridging a saving session event. It has no '_sessions' substring
+    # so the legacy binary_sensor -> event rewrite would point at a non-existent entity if
+    # it were ever applied. joined_events is empty (nothing joined yet) but available_events
+    # is populated - this is exactly the state auto-join needs to act on.
+    session_binary = f"""
+state: off
+available_events:
+    - id: 9999
+      start: '{date_today}T18:00:00+{tz_offset}:00'
+      end: '{date_today}T19:00:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 505
+      code: EVENT_TEST
+joined_events: []
+friendly_name: Predbat Octopus Power Down For Predbat
+"""
+
+    saved_args = my_predbat.args.copy()
+    try:
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.predbat_octopus_power_down_for_predbat"] = yaml.safe_load(session_binary)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "binary_sensor.predbat_octopus_power_down_for_predbat"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        if "octopus_saving_session_join" in my_predbat.args:
+            del my_predbat.args["octopus_saving_session_join"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        # Reset throttle so a join is attempted
+        my_predbat.octopus_last_joined_try = None
+
+        ha.service_store_enable = True
+        ha.service_store = []
+        my_predbat.fetch_octopus_sessions()
+        service_result = ha.get_service_store()
+        ha.service_store_enable = False
+
+        join_calls = [svc for svc in service_result if "join" in svc[0]]
+        if len(join_calls) != 1:
+            print(f"ERROR: Expected 1 join call reading available_events from the configured entity, got {len(join_calls)}: {service_result}")
+            failed = True
+        elif join_calls[0][1].get("entity_id") != "binary_sensor.predbat_octopus_power_down_for_predbat":
+            print(f"ERROR: Expected join call to use the configured entity, got {join_calls[0][1]}")
+            failed = True
+        else:
+            print("  PASS: available_events read from the configured entity despite no rewrite match")
+
+        if not failed:
+            print("PASS: Custom entity name (no rewrite match) auto-join test passed")
+    finally:
+        my_predbat.args = saved_args
+        # Restore default throttle state so we do not leak it to other tests
+        my_predbat.octopus_last_joined_try = None
+
+    return failed
+
+
 def test_saving_session_default_rate(my_predbat):
     """
     Test that saving sessions with no octopoints_per_kwh use the default rate

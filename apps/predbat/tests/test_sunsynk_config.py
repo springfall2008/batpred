@@ -750,6 +750,34 @@ def test_run_isolates_one_inverters_failure_from_the_rest():
     assert not failed, "test_run_isolates_one_inverters_failure_from_the_rest"
 
 
+def test_export_limit_is_auto_mapped_from_the_export_cap():
+    """export_limit must be mapped, or Predbat plans exports the inverter clips.
+
+    inverter.py defaults export_limit to 99999W. pvMaxLimit is the export cap (Sunsynk
+    documents the app's "Inverter Power Limiter" as limiting export), so it is mapped, while
+    inverter_limit stays on the hardware rating.
+    """
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1"]
+    s.device_values["INV1"] = {"soc": 50, "capacity": 200, "chargeVolt": 58.4, "chargeCurrentLimit": 216}
+    s.device_energy["INV1"] = {leaf: 1.0 for leaf in ("pv_today", "import_today", "export_today", "load_today", "battery_charge_today", "battery_discharge_today")}
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"batteryLowCap": "20", "pvMaxLimit": "7000"}
+    run_async_local(s.automatic_config())
+    for arg in ("inverter_limit", "export_limit"):
+        if arg not in s.args_set:
+            print(f"ERROR: {arg} was not mapped")
+            failed = True
+    if s.inverter_limit("INV1") != 8000.0:
+        print(f"ERROR: inverter_limit should be the rating 8000, got {s.inverter_limit('INV1')}")
+        failed = True
+    if s.export_limit("INV1") != 7000.0:
+        print(f"ERROR: export_limit should be the cap 7000, got {s.export_limit('INV1')}")
+        failed = True
+    assert not failed, "test_export_limit_is_auto_mapped_from_the_export_cap"
+
+
 def run_sunsynk_config_tests(my_predbat):
     """Run all Sunsynk configuration tests."""
     failed = False
@@ -758,6 +786,7 @@ def run_sunsynk_config_tests(my_predbat):
         ("component_registered", test_component_registered),
         ("apps_schema", test_apps_schema_keys),
         ("automatic_config", test_automatic_config_maps_control_entities),
+        ("export_limit_mapped", test_export_limit_is_auto_mapped_from_the_export_cap),
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),

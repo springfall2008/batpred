@@ -35,6 +35,10 @@ integration_context_header = "Ha-Integration-Context"
 DATE_STR_FORMAT = "%Y-%m-%d"
 DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 
+# Sentinel distinguishing "attribute not present on the entity" from a genuinely empty list,
+# since both would otherwise look the same (falsy) to callers.
+_ATTRIBUTE_UNSET = object()
+
 # Night-rate window definitions: start time, end time, whether the window crosses midnight.
 # Keys: "eco7" (Economy 7), "go" (Octopus GO / generic day-night), "iog" (Intelligent GO TOU).
 OCTOPUS_NIGHT_RATE_WINDOWS = {
@@ -2939,12 +2943,22 @@ class Octopus:
             entity_id = self.get_arg("octopus_saving_session", indirect=False)
             if entity_id:
                 state = self.get_arg("octopus_saving_session", False)
-                joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
-                if not joined_events:
-                    entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
-                    joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events")
-
-                available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events")
+                joined_events = self.get_state_wrapper(entity_id=entity_id, attribute="joined_events", default=_ATTRIBUTE_UNSET)
+                available_events = self.get_state_wrapper(entity_id=entity_id, attribute="available_events", default=_ATTRIBUTE_UNSET)
+                if joined_events is _ATTRIBUTE_UNSET and available_events is _ATTRIBUTE_UNSET:
+                    # Legacy binary_sensor entities carry neither attribute at all - fall back to the
+                    # newer event entity naming convention, but only adopt it if it actually has data.
+                    # A configured entity that has the attributes but with no events right now (empty
+                    # lists) is a valid state and must not trigger this fallback.
+                    fallback_entity_id = entity_id.replace("binary_sensor.", "event.").replace("_sessions", "_session_events")
+                    fallback_joined_events = self.get_state_wrapper(entity_id=fallback_entity_id, attribute="joined_events", default=_ATTRIBUTE_UNSET)
+                    fallback_available_events = self.get_state_wrapper(entity_id=fallback_entity_id, attribute="available_events", default=_ATTRIBUTE_UNSET)
+                    if fallback_joined_events is not _ATTRIBUTE_UNSET or fallback_available_events is not _ATTRIBUTE_UNSET:
+                        entity_id = fallback_entity_id
+                        joined_events = fallback_joined_events
+                        available_events = fallback_available_events
+                joined_events = [] if joined_events is _ATTRIBUTE_UNSET else joined_events
+                available_events = [] if available_events is _ATTRIBUTE_UNSET else available_events
 
             if available_events and not self.get_arg("octopus_saving_auto_join", True):
                 self.log("Octopus: Saving session auto-join is disabled, not joining available events")

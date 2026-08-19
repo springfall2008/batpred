@@ -7733,6 +7733,14 @@ function restartPredbat() {
     }
 }
 
+function downloadLiveApps() {
+    if (confirm(`Download apps.yaml with real credentials?\\n\\nOK = full unmasked file\\nCancel = masked file (credentials redacted)`)) {
+        window.location.href = './debug_apps_live?masked=0';
+    } else {
+        window.location.href = './debug_apps_live?masked=1';
+    }
+}
+
 function toggleSwitch(element, fieldName) {
     // Toggle the active class
     element.classList.toggle('active');
