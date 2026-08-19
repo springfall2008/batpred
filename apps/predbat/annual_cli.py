@@ -150,8 +150,23 @@ def make_progress(quiet, machine=False):
     return progress
 
 
-def main(argv=None):
-    """Parse arguments, run the projection, and write the results. Returns an exit code."""
+def main(argv=None, storage_factory=StorageLocalFiles):
+    """Parse arguments, run the projection, and write the results. Returns an exit code.
+
+    ``storage_factory`` builds the ``StorageBase`` the run caches weather and tariff
+    downloads through, and is called as ``storage_factory(work_dir, log)`` - exactly how
+    ``StorageLocalFiles`` is constructed, so the default is that class itself and the
+    command line behaves as it always has.
+
+    It exists because ``StorageBase`` is already an abstraction (``annual_weather`` and
+    ``annual_tariff`` only ever call ``self.storage.load``/``save``), but this entry point
+    hard-coded the one implementation, so the only way to run the annual tool against a
+    different backend was to fork the CLI. A caller embedding the tool in a long-lived
+    service - where a per-process work dir means every process re-downloads the same
+    immutable ERA5 and Octopus data, and nothing can be shared between them - can now pass
+    a factory for their own backend and reuse everything else here, including the
+    ``--machine`` stdout/stderr contract, which is the fiddly part to reimplement.
+    """
     parser = argparse.ArgumentParser(description="Project a year of electricity costs using the Predbat engine")
     parser.add_argument("--config", required=True, help="Path to the annual prediction YAML config")
     parser.add_argument("--out", default=None, help="Write the results JSON to this path")
@@ -174,7 +189,7 @@ def main(argv=None):
     # process depends on. The default (non-machine) path keeps log=print unchanged.
     log = _stderr_log if args.machine else print
 
-    storage = StorageLocalFiles(args.work_dir, log)
+    storage = storage_factory(args.work_dir, log)
 
     # predictor.run() lazily imports the full Predbat engine (predbat.py) on its first call
     # to create_headless_predbat(); that module's top-level self-update check
