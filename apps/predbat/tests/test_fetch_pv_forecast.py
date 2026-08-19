@@ -132,7 +132,7 @@ def test_fetch_pv_forecast_with_relative_time():
     assert pv_forecast_minute90[60] == pv_forecast_minute[60], f"Expected forecast90 minute 60 to fall back to p50 {pv_forecast_minute[60]}, got {pv_forecast_minute90.get(60)}"
     assert pv_forecast_minute90[120] == pv_forecast_minute[120], f"Expected forecast90 minute 120 to fall back to p50 {pv_forecast_minute[120]}, got {pv_forecast_minute90.get(120)}"
 
-    print(f"PASS: Forecast data correctly shifted back by 120 minutes (stored_minute - offset)")
+    print("PASS: Forecast data correctly shifted back by 120 minutes (stored_minute - offset)")
     print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print(f"PASS: pv_forecast_minute10[0]={pv_forecast_minute10[0]}, [60]={pv_forecast_minute10[60]}, [120]={pv_forecast_minute10[120]}")
     print(f"PASS: pv_forecast_minute90[0]={pv_forecast_minute90[0]}, [60]={pv_forecast_minute90[60]}, [120]={pv_forecast_minute90[120]}")
@@ -196,7 +196,7 @@ def test_fetch_pv_forecast_no_relative_time():
     assert pv_forecast_minute90[60] == pv_forecast_minute[60], f"Expected forecast90 minute 60 to fall back to p50 {pv_forecast_minute[60]}, got {pv_forecast_minute90[60]}"
     assert pv_forecast_minute90[120] == pv_forecast_minute[120], f"Expected forecast90 minute 120 to fall back to p50 {pv_forecast_minute[120]}, got {pv_forecast_minute90[120]}"
 
-    print(f"PASS: Forecast data used with no offset (relative_time missing)")
+    print("PASS: Forecast data used with no offset (relative_time missing)")
     print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 2 PASSED")
 
@@ -249,7 +249,7 @@ def test_fetch_pv_forecast_invalid_relative_time():
     assert pv_forecast_minute90[0] == pv_forecast_minute[0], f"Expected forecast90 minute 0 to fall back to p50 {pv_forecast_minute[0]}, got {pv_forecast_minute90[0]}"
     assert pv_forecast_minute90[120] == pv_forecast_minute[120], f"Expected forecast90 minute 120 to fall back to p50 {pv_forecast_minute[120]}, got {pv_forecast_minute90[120]}"
 
-    print(f"PASS: Forecast data used with no offset (invalid relative_time)")
+    print("PASS: Forecast data used with no offset (invalid relative_time)")
     print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 3 PASSED")
 
@@ -306,7 +306,7 @@ def test_fetch_pv_forecast_relative_time_same_as_midnight():
     assert pv_forecast_minute90[0] == pv_forecast_minute[0], f"Expected forecast90 minute 0 to fall back to p50 {pv_forecast_minute[0]}, got {pv_forecast_minute90[0]}"
     assert pv_forecast_minute90[180] == pv_forecast_minute[180], f"Expected forecast90 minute 180 to fall back to p50 {pv_forecast_minute[180]}, got {pv_forecast_minute90[180]}"
 
-    print(f"PASS: Forecast data maps directly when relative_time = midnight_utc")
+    print("PASS: Forecast data maps directly when relative_time = midnight_utc")
     print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}, [120]={pv_forecast_minute[120]}")
     print("Test 4 PASSED")
 
@@ -383,7 +383,7 @@ def test_fetch_pv_forecast_previous_day():
     assert pv_forecast_minute90[0] == pv_forecast_minute[0], f"Expected forecast90 minute 0 to fall back to p50 {pv_forecast_minute[0]}, got {pv_forecast_minute90.get(0)}"
     assert pv_forecast_minute90[60] == pv_forecast_minute[60], f"Expected forecast90 minute 60 to fall back to p50 {pv_forecast_minute[60]}, got {pv_forecast_minute90.get(60)}"
 
-    print(f"PASS: Forecast data correctly shifted back by 1440 minutes (stored_minute - offset)")
+    print("PASS: Forecast data correctly shifted back by 1440 minutes (stored_minute - offset)")
     print(f"PASS: pv_forecast_minute[0]={pv_forecast_minute[0]}, [60]={pv_forecast_minute[60]}")
     print("Test 5 PASSED")
 
@@ -456,7 +456,7 @@ def test_fetch_pv_forecast_negative_offset():
     assert pv_forecast_minute90[120] == pv_forecast_minute[120], f"Expected forecast90 minute 120 to fall back to p50 {pv_forecast_minute[120]}, got {pv_forecast_minute90.get(120)}"
     assert pv_forecast_minute90[300] == pv_forecast_minute[300], f"Expected forecast90 minute 300 to fall back to p50 {pv_forecast_minute[300]}, got {pv_forecast_minute90.get(300)}"
 
-    print(f"PASS: Forecast data correctly shifted forward by 60 minutes (stored_minute - (-60))")
+    print("PASS: Forecast data correctly shifted forward by 60 minutes (stored_minute - (-60))")
     print(f"PASS: pv_forecast_minute[120]={pv_forecast_minute[120]}, [180]={pv_forecast_minute[180]}, [240]={pv_forecast_minute[240]}")
     print("Test 6 PASSED")
 
@@ -511,8 +511,8 @@ def test_fetch_pv_forecast_with_published_p90():
     assert pv_forecast_minute90[120] == 1.4, f"Expected forecast90 minute 120 to be 1.4, got {pv_forecast_minute90.get(120)}"
     assert pv_forecast_minute90[60] != pv_forecast_minute[60], "pv_forecast_minute90 should not equal the p50 value when forecast90 was published"
 
-    print("✓ Published forecast90 data used verbatim")
-    print(f"✓ pv_forecast_minute90[60]={pv_forecast_minute90[60]}, [120]={pv_forecast_minute90[120]}")
+    print("PASS: Published forecast90 data used verbatim")
+    print(f"PASS: pv_forecast_minute90[60]={pv_forecast_minute90[60]}, [120]={pv_forecast_minute90[120]}")
     print("Test 7 PASSED")
 
 

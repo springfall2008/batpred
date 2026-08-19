@@ -707,17 +707,20 @@ def _run_with_hard_timeout(coro, seconds=5):
     bytecode instructions, so it fires even inside a loop that never truly yields.
     """
 
-    def _handler(signum, frame):
-        """Convert the SIGALRM into a Python exception so pytest-free assertions can catch it."""
-        raise _HardTimeout(f"operation exceeded its {seconds}s hard timeout - suspected infinite loop")
+    if hasattr(signal, "SIGALRM"):
+        def _handler(signum, frame):
+            """Convert the SIGALRM into a Python exception so pytest-free assertions can catch it."""
+            raise _HardTimeout(f"operation exceeded its {seconds}s hard timeout - suspected infinite loop")
 
-    old_handler = signal.signal(signal.SIGALRM, _handler)
-    signal.alarm(seconds)
-    try:
+        old_handler = signal.signal(signal.SIGALRM, _handler)
+        signal.alarm(seconds)
+        try:
+            return run_async_local(coro)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    else:
         return run_async_local(coro)
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
 
 
 def test_get_device_list_terminates_when_serials_are_missing():
