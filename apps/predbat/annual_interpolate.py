@@ -71,7 +71,7 @@ def _fit_affine(xs, ys):
 def _cyclic_linear(anchors, values, month):
     """Interpolate linearly around the month circle, wrapping December to January.
 
-    The year is a cycle, so December sits between the October and January anchors going
+    The year is a cycle, so January sits between the December and March anchors going
     forward rather than off the end of a straight list.
     """
     count = len(anchors)

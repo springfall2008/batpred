@@ -324,6 +324,19 @@ def test_annual_cli_fast_flag(my_predbat):
         print("  ERROR: fast_mode must not be injected when --fast was not given")
         failed = True
 
+    print("Test: a config that is not a mapping is passed through untouched")
+    # An empty YAML file loads as None and a malformed one as a list or a string. Any of
+    # those must reach validate_config, which explains the problem, rather than dying here
+    # with a bare TypeError - which is what --fast used to do on an empty config file.
+    for broken in (None, [], "not a config", 42):
+        try:
+            if annual_cli.apply_fast_override(broken, True) is not broken:
+                print("  ERROR: a non-mapping config should be returned unchanged, got a different object for {!r}".format(broken))
+                failed = True
+        except Exception as error:  # noqa: BLE001 - the whole point is that nothing raises
+            print("  ERROR: apply_fast_override({!r}, True) raised {}: {}".format(broken, type(error).__name__, error))
+            failed = True
+
     return failed
 
 

@@ -159,7 +159,12 @@ def apply_fast_override(config, fast):
     """
     if not fast:
         return config
-    inner = config.get("annual") if isinstance(config, dict) and isinstance(config.get("annual"), dict) else config
+    if not isinstance(config, dict):
+        # An empty or malformed YAML file loads as None (or a list, or a bare string).
+        # Returning it untouched lets validate_config raise its own actionable message
+        # rather than this line failing first with a bare TypeError and a traceback.
+        return config
+    inner = config["annual"] if isinstance(config.get("annual"), dict) else config
     inner["fast_mode"] = True
     return config
 

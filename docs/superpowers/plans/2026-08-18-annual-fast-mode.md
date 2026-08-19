@@ -17,7 +17,10 @@
 - **Spelling:** British English (`en-gb`) via CSpell. New words go in `.cspell/custom-dictionary-workspace.txt`, which is auto-sorted on commit — re-stage after running pre-commit.
 - **Naming:** `lower_case_with_underscores`.
 - **Tests:** Every test function takes `my_predbat` (unused for pure tests) and returns a truthy `failed` value. Register in `TEST_REGISTRY` in `apps/predbat/unit_test.py` as `("name", func, "description", slow_bool)` and add the import.
-- **Anchor months:** `ANCHOR_MONTHS = (1, 4, 7, 10)` — exactly these, in this order.
+- **Anchor months:** `ANCHOR_MONTHS = (3, 6, 9, 12)` — exactly these, in this order.
+  (Corrected during implementation: this plan originally specified `(1, 4, 7, 10)`. The
+  per-month cost error does not separate the candidates, but the savings figures do —
+  see the design doc's Anchor months section for the measurements.)
 - **Chosen basis:** `solar_affine`. The mean-rate regressor was tested and **rejected** (overfits: 362% held-out error). Do not add it.
 - **Verification:** `cd coverage && ./run_pre_commit` must exit 0 before any task is considered done. Save output to a file and grep it; never pipe straight to grep.
 
@@ -192,7 +195,7 @@ git commit -m "feat(whatif): add fast_mode config flag and --fast CLI flag"
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
 - Produces:
-  - `ANCHOR_MONTHS = (1, 4, 7, 10)`
+  - `ANCHOR_MONTHS = (3, 6, 9, 12)`
   - `BASIS_SOLAR_AFFINE = "solar_affine"`, `BASIS_LINEAR = "linear"`, `DEFAULT_BASIS = BASIS_SOLAR_AFFINE`
   - `choose_basis(anchor_months: list, monthly_pv: dict | None, year: int) -> str`
   - `build_interpolated_rows(anchor_rows: dict, year: int, monthly_pv: dict | None, months=None, basis=None) -> dict` returning `{month: row}`. Each row has `month`, `status="interpolated"`, `days`, `scenarios`, `interpolated_from`. It does **not** set `standing_charge_p` or `export_credit_p_estimate` — `run()` adds both (Task 4).
@@ -387,7 +390,7 @@ annual savings figure; see docs/superpowers/specs/2026-08-18-annual-fast-mode-de
 import calendar
 
 # One per season, spanning midwinter to midsummer so the fit can resolve the solar slope.
-ANCHOR_MONTHS = (1, 4, 7, 10)
+ANCHOR_MONTHS = (3, 6, 9, 12)
 
 BASIS_SOLAR_AFFINE = "solar_affine"
 BASIS_LINEAR = "linear"

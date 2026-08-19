@@ -116,7 +116,7 @@ the curve can be unit tested against known inputs and re-scored against referenc
 without standing up an engine.
 
 ```python
-ANCHOR_MONTHS = (1, 4, 7, 10)
+ANCHOR_MONTHS = (3, 6, 9, 12)
 BASIS_SOLAR_AFFINE = "solar_affine"
 BASIS_LINEAR = "linear"
 DEFAULT_BASIS = BASIS_SOLAR_AFFINE  # provisional; fixed by the reference study below
