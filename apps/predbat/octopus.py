@@ -2979,6 +2979,18 @@ class Octopus:
                             saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                         else:
                             saving_rate = saving_rate  # Use default if not specified
+                        # Skip a zero (or negative) reward event rather than join-attempting it - the
+                        # Octopus integration currently puts national Power Up (free electricity) events
+                        # into the Power Down available_events set at 0 p/kWh (#4548 point 5), so without
+                        # this guard every one gets joined, rejected by the integration, and still fires a
+                        # false "joined" notification (#4593). A genuine Power Down session always carries
+                        # a positive reward, so this can never skip anything actually joinable. None keeps
+                        # its existing meaning (rate not reported, default applies) - only an explicit
+                        # non-positive rate is skipped, matching the >0 requirement the planning side's
+                        # joined_events loop already applies when building octopus_saving_slots.
+                        if octopoints_kwh is not None and octopoints_kwh <= 0:
+                            self.log("Octopus: Skipping saving event code {} {}-{} - zero reward rate".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
+                            continue
                         # Do not auto-join a saving session that overlaps an Axle VPP session - we cannot honour both for the same period
                         if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
                             self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))
