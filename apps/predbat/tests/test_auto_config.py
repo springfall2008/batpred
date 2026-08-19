@@ -58,7 +58,7 @@ def run_auto_config_tests(my_predbat):
             print(f"FAIL: inverter_limit still in args: {my_predbat.args['inverter_limit']}")
             failed = True
         elif "inverter_limit" not in my_predbat.unmatched_args:
-            print(f"FAIL: inverter_limit not in unmatched_args")
+            print("FAIL: inverter_limit not in unmatched_args")
             failed = True
         else:
             print("PASS: Final=True moved unmatched arg correctly.")

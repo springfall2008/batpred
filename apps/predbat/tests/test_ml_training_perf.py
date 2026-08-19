@@ -22,7 +22,10 @@ production host would report.
 import gzip
 import json
 import os
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import subprocess
 import sys
 import time
@@ -42,12 +45,16 @@ FIXTURE_NOW = datetime(2026, 8, 17, 12, 0, 0, tzinfo=timezone.utc)
 # interleaved with training's own allocations badly enough to change the result - the same
 # workload read 967MB with the sampler running and 474MB without. ru_maxrss is the kernel's
 # own high-water mark, so it needs no sampling at all: read it once before and once after.
+
+
 def peak_rss_mb():
     """Return this process's peak resident set size in MB.
 
     The value only ever rises, so the difference across a section of work is that section's
     contribution to the peak. ru_maxrss is bytes on macOS and kilobytes on Linux.
     """
+    if resource is None:
+        return 0.0
     value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return value / 1e6 if sys.platform == "darwin" else value / 1e3
 
