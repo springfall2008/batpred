@@ -38,6 +38,7 @@ def test_rate_replicate(my_predbat):
         ("import_offset", _test_import_offset, "Import rate offset"),
         ("export_offset", _test_export_offset_negative, "Export rate offset with negative clamping"),
         ("gas_rates", _test_gas_rates, "Gas rates (is_gas=True)"),
+        ("rate_base_min_max", _test_rate_base_min_max, "rate_base_min_max reflects the gap-filled curve, not the raw sparse fetch (#4544)"),
     ]
 
     print("\n" + "="*70)
@@ -696,5 +697,84 @@ def _test_gas_rates(my_predbat):
     my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
     my_predbat.rate_max = 0
     my_predbat.forecast_minutes = 24*60
+
+    return failed
+
+
+def _test_rate_base_min_max(my_predbat):
+    """
+    Test for rate_base_min_max() reflecting the gap-filled forward curve, not a raw sparse fetch (#4544).
+
+    Reproduces a fixed day/night tariff (e.g. Kraken/E.ON Next Drive Smart) fetched with a short
+    forward window: at fetch time, only the currently-active (expensive, daytime) segment is known
+    forward of "now" - the cheaper night segment a few hours away hasn't been published yet. History
+    has the full repeating day/night pattern, so rate_replicate() can correctly project the true
+    night rate forward from it, but a scan of the raw, not-yet-replicated dict only ever sees the
+    known expensive segment.
+    """
+    failed = 0
+
+    print("*** Test: rate_base_min_max reflects the gap-filled curve, not the raw sparse fetch ***")
+
+    my_predbat.midnight = datetime.strptime("2025-01-01T00:00:00", "%Y-%m-%dT%H:%M:%S")
+    my_predbat.forecast_minutes = 2880
+    my_predbat.minutes_now = 550  # 09:10 - inside the day segment, matching the reported scenario
+    my_predbat.metric_future_rate_offset_import = 0
+    my_predbat.metric_future_rate_offset_export = 0
+    my_predbat.future_energy_rates_import = {}
+    my_predbat.future_energy_rates_export = {}
+    my_predbat.rate_max = 99.0
+
+    day_rate = 31.18
+    night_rate = 8.0
+    day_start, night_start = 300, 1380  # 05:00, 23:00
+
+    rates = {}
+    # Full repeating day/night pattern for yesterday (minutes -1440..-1), so rate_replicate() has a
+    # real forward projection to draw on.
+    for minute in range(-1440, 0):
+        minute_of_day = minute % 1440
+        rates[minute] = night_rate if (minute_of_day >= night_start or minute_of_day < day_start) else day_rate
+
+    # Raw fetch only knows about the current segment (the whole day segment, since the tariff
+    # publishes each segment as a single valid_from/valid_to block) - nothing beyond it is known yet
+    # (mimicking a short forward-fetch window, e.g. Kraken's SmartFlex tariff data).
+    for minute in range(day_start, night_start):
+        rates[minute] = day_rate
+
+    assert night_start not in rates, "Test setup error: tonight's night segment should not be fetched yet"
+
+    # The raw, pre-replicate scan only sees the known expensive segment - this is the bug: taken at
+    # face value, it looks like the tariff never goes below day_rate.
+    raw_min, raw_max, _, _, _ = my_predbat.rate_minmax(rates)
+    if raw_min != day_rate or raw_max != day_rate:
+        print(f"  ✗ ERROR: Test setup error - raw scan should see only {day_rate}, got min={raw_min} max={raw_max}")
+        failed |= 1
+
+    rate_base, rate_min_base, rate_max_base = my_predbat.rate_base_min_max(rates)
+
+    if rate_min_base != night_rate:
+        print(f"  ✗ ERROR: rate_min_base should be {night_rate} (from the gap-filled forward night segment), got {rate_min_base} - this is the #4544 bug")
+        failed |= 1
+    else:
+        print(f"  ✓ rate_min_base correctly reflects the gap-filled night rate: {rate_min_base}")
+
+    if rate_max_base != day_rate:
+        print(f"  ✗ ERROR: rate_max_base should be {day_rate}, got {rate_max_base}")
+        failed |= 1
+    else:
+        print(f"  ✓ rate_max_base correctly reflects the day rate: {rate_max_base}")
+
+    if night_start not in rate_base or rate_base.get(night_start) != night_rate:
+        print(f"  ✗ ERROR: rate_base should have tonight's night segment gap-filled to {night_rate}, got {rate_base.get(night_start)}")
+        failed |= 1
+
+    # Restore context
+    my_predbat.now_utc = datetime.now(my_predbat.local_tz)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.minutes_now = int((my_predbat.now_utc - my_predbat.midnight_utc).total_seconds() / 60)
+    my_predbat.rate_max = 0
+    my_predbat.forecast_minutes = 24 * 60
 
     return failed

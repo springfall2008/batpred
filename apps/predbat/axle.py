@@ -25,6 +25,7 @@ import asyncio
 import json
 import aiohttp
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 from predbat_metrics import record_api_call
 from utils import str2time, minutes_to_time, TIME_FORMAT
 
@@ -457,15 +458,12 @@ class AxleAPI(ComponentBase):
     def _process_price_curve(self, data):
         """Convert Axle price curve to session format for load_axle_slot().
 
-        The price curve provides half-hourly wholesale market prices (GBP/MWh).
-        These are overlaid onto existing tariff rates:
-        - Export: wholesale price added to rate_export (high price = more export)
-        - Import: wholesale price added to rate_import (high price = less import,
-          negative price = cheap import encourages charging)
-        - Null prices are skipped (no modification, normal tariff applies)
-
-        Note: load_axle_slot subtracts import pence_per_kwh, so we negate it here
-        to achieve addition of the wholesale price to the import rate.
+        The price curve provides half-hourly wholesale market prices (GBP/MWh), overlaid onto
+        existing tariff rates. One "export" session per slot is enough: load_axle_slot adds
+        the wholesale price to both rate_export and rate_import for an export-direction session
+        (high price = more export and pricier import; negative price = cheap import, which
+        also encourages charging). Null prices are skipped (no modification, normal tariff
+        applies).
         """
         prices = data.get("half_hourly_traded_prices", [])
         session_count = 0
@@ -491,27 +489,16 @@ class AxleAPI(ComponentBase):
             start_formatted = start_dt.strftime(TIME_FORMAT)
             end_formatted = end_dt.strftime(TIME_FORMAT)
 
-            # Create export session: adds wholesale price as export bonus
-            # load_axle_slot does: rate_export + pence_per_kwh
-            export_session = {
+            # load_axle_slot applies an export-direction session's pence_per_kwh to both
+            # rate_export and rate_import, so a single session models the wholesale price's
+            # effect on both sides of the meter.
+            session = {
                 "start_time": start_formatted,
                 "end_time": end_formatted,
                 "import_export": "export",
                 "pence_per_kwh": pence_per_kwh,
             }
-            self.add_event_to_history(export_session, allow_future=True)
-
-            # Create import session: adds wholesale price to import cost
-            # load_axle_slot does: rate_import - pence_per_kwh, so we negate
-            # to get rate_import + wholesale_price (high price = expensive import,
-            # negative price = cheap import)
-            import_session = {
-                "start_time": start_formatted,
-                "end_time": end_formatted,
-                "import_export": "import",
-                "pence_per_kwh": -pence_per_kwh,
-            }
-            self.add_event_to_history(import_session, allow_future=True)
+            self.add_event_to_history(session, allow_future=True)
             session_count += 1
 
         self.log(f"AxleAPI: Processed {session_count} price curve slots into sessions")
@@ -647,9 +634,9 @@ def fetch_axle_sessions(base):
     return axle_events_deduplicated
 
 
-def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
+def load_axle_slot(base, axle_sessions, rate_dict, export, rate_replicate=None):
     """
-    Load Axle VPP session slot
+    Load Axle VPP session slot into rate_dict (in place)
     """
     if rate_replicate is None:
         rate_replicate = {}
@@ -675,17 +662,23 @@ def load_axle_slot(base, axle_sessions, export, rate_replicate=None):
             end_minutes = min(minutes_to_time(end_time, base.midnight_utc), base.forecast_minutes + base.minutes_now)
 
         if start_minutes is not None and end_minutes is not None and start_minutes < (base.forecast_minutes + base.minutes_now):
-            if (export and import_export == "export") or (not export and import_export == "import"):
+            if import_export == "export":
+                # An export event pays a premium to export, so charging instead during the same
+                # window carries the same opportunity cost - apply the same boost to both the
+                # export and the import rate (mirrors how Octopus saving sessions boost both
+                # directions), rather than only making export look attractive.
                 base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
                 for minute in range(start_minutes, end_minutes):
+                    rate_dict[minute] = rate_dict.get(minute, 0) + pence_per_kwh
+                    rate_replicate[minute] = "saving"
                     if export:
-                        base.rate_export[minute] = base.rate_export.get(minute, 0) + pence_per_kwh
                         base.load_scaling_dynamic[minute] = base.load_scaling_saving
-                        rate_replicate[minute] = "saving"
-                    else:
-                        base.rate_import[minute] = base.rate_import.get(minute, 0) - pence_per_kwh
-                        base.load_scaling_dynamic[minute] = base.load_scaling_free
-                        rate_replicate[minute] = "saving"
+            elif import_export == "import" and not export:
+                base.log("Setting Axle VPP session in range {} - {} export {} pence_per_kwh {}".format(base.time_abs_str(start_minutes), base.time_abs_str(end_minutes), export, pence_per_kwh))
+                for minute in range(start_minutes, end_minutes):
+                    rate_dict[minute] = rate_dict.get(minute, 0) - pence_per_kwh
+                    base.load_scaling_dynamic[minute] = base.load_scaling_free
+                    rate_replicate[minute] = "saving"
 
 
 def fetch_axle_active(base):
@@ -706,60 +699,12 @@ def fetch_axle_active(base):
     return str(state).lower() == "on"
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for testing the Axle API from the command line."""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Axle command-line harness, with its own cache directory."""
 
     def __init__(self):
-        """Initialise a minimal mock of the PredBat base object."""
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.now_utc_exact = self.now_utc
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now(self.local_tz).replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-        self.config_root = "./temp_axle"
-        self.plan_interval_minutes = 30
-        self.fatal_error = False
-        self.had_errors = False
-        self.components = None
-
-    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
-        """Return stored state or attribute for an entity."""
-        entity = self.entities.get(entity_id, {})
-        if raw:
-            return entity
-        if attribute is not None:
-            return entity.get("attributes", {}).get(attribute, default)
-        return entity.get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, required_unit=None):
-        """Store state and attributes for an entity."""
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        """Print a timestamped log message."""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        """Print and store a dashboard item."""
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            print(f"  Attributes: {json.dumps(attributes, indent=2, default=str)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None, indirect=True, attribute=None, combine=False, index=None, domain=None, can_override=False, required_unit=None):
-        """Return the default value for any requested argument."""
-        return default
-
-    def set_arg(self, key, value):
-        """Print a set argument request."""
-        print(f"Set arg {key} = {value}")
-
-    def call_notify(self, message):
-        """Print a notification message."""
-        print(f"NOTIFY: {message}")
+        """Initialise the shared mock with the Axle cache root."""
+        super().__init__(config_root="./temp_axle")
 
 
 async def test_axle_api(api_key, pence_per_kwh):  # pragma: no cover

@@ -364,3 +364,102 @@ def test_validate_config(my_predbat):
 
     print("**** test_validate_config PASSED ****")
     return False
+
+
+def test_validate_config_retry(my_predbat):
+    """
+    Tests validate_config_schedule_retry()/validate_config_check_retry() - the retry mechanism
+    added for #4379 so a validation failure that self-heals on its own (e.g. a slow-starting
+    integration's sensor not populated yet) clears its own error status without needing a
+    manual restart, instead of sitting stale until the next restart/config change.
+
+    Stubs validate_config() itself with a controlled sequence of results rather than relying on
+    real apps.yaml validation reaching a clean state - the test fixture's own baseline args
+    already carry pre-existing validation warnings unrelated to this feature, so "clean" can't
+    be reached just by fixing one deliberately-broken field. This isolates the retry-scheduling
+    logic under test from that ambient noise.
+    """
+    from datetime import timedelta
+
+    print("**** test_validate_config_retry ****")
+
+    saved_args = my_predbat.args.copy()
+    saved_retries_remaining = my_predbat.validate_config_retries_remaining
+    saved_next_retry_time = my_predbat.validate_config_next_retry_time
+    saved_now_utc = my_predbat.now_utc
+    saved_validate_config = my_predbat.validate_config
+
+    def _should_not_be_called():
+        raise AssertionError("validate_config() should not have been called here")
+
+    try:
+        # A clean validation should never arm a retry sequence
+        my_predbat.validate_config_retries_remaining = 0
+        my_predbat.validate_config_next_retry_time = None
+        my_predbat.validate_config_schedule_retry(0)
+        assert my_predbat.validate_config_retries_remaining == 0, "Clean validation should not arm a retry"
+        assert my_predbat.validate_config_next_retry_time is None
+
+        # A failing validation arms the default (2 retries, 1 minute)
+        my_predbat.args.pop("validate_config_retries", None)
+        my_predbat.args.pop("validate_config_retry_minutes", None)
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 2, f"Expected 2 retries armed by default, got {my_predbat.validate_config_retries_remaining}"
+        assert my_predbat.validate_config_next_retry_time == my_predbat.now_utc + timedelta(minutes=1)
+
+        # check_retry() is a no-op before the retry time is due - must not even call validate_config()
+        my_predbat.validate_config = _should_not_be_called
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 2, "Should not have retried before the due time"
+
+        # Once due, a still-failing re-validation decrements the counter and reschedules
+        my_predbat.now_utc = saved_now_utc + timedelta(minutes=1)
+        my_predbat.validate_config = lambda: 1  # simulate validation still failing
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 1, f"Expected 1 retry remaining, got {my_predbat.validate_config_retries_remaining}"
+        assert my_predbat.validate_config_next_retry_time == my_predbat.now_utc + timedelta(minutes=1)
+
+        # Exhausting the final retry while still failing stops the sequence cleanly
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=1)
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 0, "Should give up after the last retry"
+        assert my_predbat.validate_config_next_retry_time is None
+
+        # No further retries happen once the sequence has stopped, however much time passes
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=10)
+        my_predbat.validate_config = _should_not_be_called
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 0
+
+        # A retry that succeeds clears the sequence immediately, not just decrements it
+        my_predbat.validate_config = lambda: 1
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 2
+        my_predbat.now_utc = my_predbat.now_utc + timedelta(minutes=1)
+        my_predbat.validate_config = lambda: 0  # simulate the underlying issue having self-healed
+        my_predbat.validate_config_check_retry()
+        assert my_predbat.validate_config_retries_remaining == 0, "A successful retry should clear the sequence, not just decrement it"
+        assert my_predbat.validate_config_next_retry_time is None
+
+        # validate_config_retries: 0 disables the feature entirely (and cancels any armed retry sequence)
+        my_predbat.validate_config_retries_remaining = 2
+        my_predbat.validate_config_next_retry_time = my_predbat.now_utc + timedelta(minutes=1)
+        my_predbat.args["validate_config_retries"] = 0
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 0, "validate_config_retries=0 should disable retries"
+        assert my_predbat.validate_config_next_retry_time is None
+        # A custom retry count/interval is respected
+        my_predbat.args["validate_config_retries"] = 5
+        my_predbat.args["validate_config_retry_minutes"] = 3
+        my_predbat.validate_config_schedule_retry(1)
+        assert my_predbat.validate_config_retries_remaining == 5
+        assert my_predbat.validate_config_next_retry_time == my_predbat.now_utc + timedelta(minutes=3)
+
+        print("**** test_validate_config_retry PASSED ****")
+        return False
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.validate_config = saved_validate_config
+        my_predbat.validate_config_retries_remaining = saved_retries_remaining
+        my_predbat.validate_config_next_retry_time = saved_next_retry_time
+        my_predbat.now_utc = saved_now_utc

@@ -286,10 +286,14 @@ This will remove the need for a DNS lookup of the IP address every time Predbat 
 
 If defined sets the number of threads to use during plan calculation, the default is 'auto' which will use the same number of threads as you have CPUs in your system.
 
+Predbat batches each group of simulations into a single call to the C++ prediction kernel, which then
+spreads them across this many threads. Results do not depend on the thread count - the same plan is
+produced at any setting - so this only trades CPU for planning time.
+
 Valid values are:
 
 - 'auto' - Use the same number of threads as your CPU count
-- '0' - Don't use threads - disabled
+- '0' - Clamped up to a single kernel thread, i.e. each batch is simulated serially
 - 'N' - Use N threads, recommended values are between 2 and 8
 
 ```yaml
@@ -686,6 +690,7 @@ Add the following to your `apps.yaml` to configure the Solis Cloud integration:
 - `solis_control_enable` - Enable/disable control commands (default: `true`, set to `false` for monitoring only)
 - `solis_cloud_pv_load_ignore` - Optional, defaults to false. When set to `true`, Predbat will override the **solis_automatic** setting and use the **load_today**, **load_power**, **pv_today** and **pv_load** sensors configured in `apps.yaml`.<BR>
 This can be useful if the Solis cloud data in the does not accurately reflect your house PV and load (e.g. multiple inverters that share load or PV inverter and micro-inverters) and you want to use a custom sensors.  All other sensors will use either the `apps.yaml` entries or the Solis Cloud entities depending upon **solis_automatic**.
+- `solis_nominal_voltage` - Optional, your battery's nominal pack voltage (e.g. cell count x nominal cell voltage per cell - **not** the live/resting battery voltage reported by the inverter, which varies with charge state). Only used to compute the `battery_capacity` sensor; the max charge/discharge power sensors and `battery_rate_max` use the live measured voltage automatically and don't need this set. Without it, `battery_capacity` is still published but estimated from the live measured voltage instead, and flagged unreliable (a `reliable: false` attribute, plus a log warning) since that value drifts with charge state - set this option for an accurate, stable figure. `soc_max` must still be set manually either way (see below), the `battery_capacity` sensor is informational only and is not auto-bound to it.
 
 #### Important notes (Solis)
 
@@ -808,6 +813,46 @@ Create a developer app at [developer.deyecloud.com](https://developer.deyecloud.
 When **deye_automatic** is set to `true`, Predbat will discover every battery inverter registered against your DeyeCloud account and automatically create and configure all required sensors and schedule control entities for each one - no manual entity configuration is required.
 
 See [Components - DEYE Cloud API](components.md#deye-cloud-api-deye) for full details.
+
+### Sunsynk Cloud API
+
+**EXPERIMENTAL:** Nobody on the Predbat project has a Sunsynk account, so this integration's wire format is inferred from third-party open-source clients rather than documented, and every request/response is traced to the log by default so a tester can capture evidence for an issue report.
+
+Predbat includes support for Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect cloud API, providing direct cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required.
+
+#### Sunsynk Cloud Configuration
+
+Add your Sunsynk Connect account e-mail and password (the same login used by the Sunsynk phone app) to your `apps.yaml`:
+
+```yaml
+  sunsynk_username: 'you@example.com'
+  sunsynk_password: 'your-password'
+  sunsynk_region: 'sunsynk'
+  sunsynk_automatic: true
+  sunsynk_control_enable: true
+```
+
+**Note:** It's strongly recommended to store `sunsynk_username` and `sunsynk_password` in `secrets.yaml` and reference them as `!secret sunsynk_username` etc - see [Storing secrets](#storing-secrets).
+
+**Configuration options:**
+
+- `sunsynk_username` - Your Sunsynk Connect account e-mail address
+- `sunsynk_password` - Your Sunsynk Connect account password
+- `sunsynk_region` - The API region your account is registered in: `'sunsynk'` (default, `api.sunsynk.net`) or `'inteless'` (`pv.inteless.com`)
+- `sunsynk_auth_method` - The login flow: `'password'` (default, RSA-encrypted login), `'password_legacy'` (the pre-2025 plaintext login, opt-in for regions that still serve it) or `'oauth'` (Predbat.com injects and refreshes the token)
+- `sunsynk_inverter_sn` - Optional, restrict Predbat to specific inverter serial number(s) - a single string or a list. Default is all inverters found on the account
+- `sunsynk_automatic` - Set to `true` to automatically configure Predbat entities (recommended, default: `false`)
+- `sunsynk_automatic_ignore_pv` - Optional, defaults to `false`. When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config
+- `sunsynk_control_enable` - Allow Predbat to write charge/export schedules to the inverter (default: `true`, set to `false` for monitoring only)
+- `sunsynk_battery_nominal_voltage` - Optional override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target
+
+`sunsynk_auth_method: 'password'` never automatically falls back to `'password_legacy'` - if the RSA login fails, retry with `password_legacy` deliberately rather than have Predbat silently send your password in plaintext. `password_legacy` is still sent over TLS, but without the additional RSA encryption layer, so only choose it for a region whose API still serves the older login.
+
+Settings changes reach the inverter via the dongle's next poll, typically one to five minutes after Predbat writes them. Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is a single whole-object write endpoint, so the last writer wins.
+
+When **sunsynk_automatic** is set to `true`, Predbat will discover every inverter registered against your Sunsynk Connect account and automatically create and configure all required sensors and schedule control entities for each one - no manual entity configuration is required.
+
+See [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk) for full details, and [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the diagnostics CLI walkthrough.
 
 ### num_inverters
 
@@ -1531,7 +1576,13 @@ NB: Gen2, Gen3 and Gen1 hybrid inverters with the 'fast performance' firmware ca
 
 Solcast produces 3 forecasted PV estimates, the 'central' (50% or most likely to occur) PV forecast, the '10%' (1 in 10 more cloud coverage 'worst case') PV forecast, and the '90%' (1 in 10 less cloud coverage 'best case') PV forecast.<BR>
 By default, Predbat will use the central (PV50) estimate and apply to it the **input_number.predbat_pv_metric10_weight** weighting of the 10% (worst case) estimate.
-You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.
+You can thus adjust the metric10_weight to be more pessimistic about the solar forecast.<BR>
+The 90% (best case) estimate is also used by default, controlled by **switch.predbat_calculate_pv90_plan** (On by default, and hidden behind
+**switch.predbat_performance_tweaks**). Its weighting is **input_number.predbat_pv_metric90_weight** (expert mode, defaulting to 0.15). Weighting the 90%
+estimate makes Predbat price in a chance of a better-than-forecast day, which makes it somewhat less willing to charge from the grid. Simulating the extra
+scenario costs planning time, so if your machine is struggling you can turn On **switch.predbat_performance_tweaks** to reveal the switch and turn it Off -
+while it is Off no PV90 scenario is simulated at all.
+See [Solar PV adjustment options](customisation.md#solar-pv-adjustment-options).
 
 Predbat models cloud coverage by using the difference between the PV and PV10 forecasts to work out a cloud factor,
 this modulates the PV output predictions up and down over the plan slot duration as if there were passing clouds.
@@ -1542,7 +1593,8 @@ See also [PV configuration options in Home Assistant](customisation.md#solar-pv-
 ## Forecast.solar Solar Forecast
 
 The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
-Predbat Solar calibration can use past data to improve this information and provide the 10% data.
+Predbat Solar calibration can use past data to improve this information and provide both the 10% and the 90% data, each derived from the central forecast
+and capped so neither can exceed what your array can physically produce.
 
 You can create one or more rooftops by providing a list of the data for each one, they will be summed up automatically.
 
@@ -1597,6 +1649,38 @@ When the fallback is active, Predbat derives the Open-Meteo request from the sam
       efficiency: 0.95
   forecast_solar_open_meteo_backup: true
 ```
+
+### Using Open-Meteo as the primary source
+
+Setting `forecast_solar_open_meteo_first: true` reverses the order: Predbat fetches from Open-Meteo
+first and only calls Forecast.solar if Open-Meteo returns no data. Your existing `forecast_solar`
+per-array entries (latitude, longitude, postcode, declination, azimuth, kwp, efficiency) are reused
+as-is. If you also have an `open_meteo_forecast` section, that is used instead, which lets you apply
+Open-Meteo-specific options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+  forecast_solar_open_meteo_first: true
+```
+
+While Open-Meteo is succeeding, Forecast.solar is not called at all, so no Forecast.solar API quota
+is consumed.
+
+Note that `forecast_solar_max_age` is not reused while this flag is set — it only applies to the
+Forecast.solar path. The refresh interval instead comes from `open_meteo_forecast_max_age`
+(default 4 hours).
+
+If `forecast_solar_open_meteo_backup` is also set to true, it has no effect: `forecast_solar_open_meteo_first`
+already makes Open-Meteo the primary source, so there is nothing left for the backup setting to do.
+
+Note that PV calibration compares the last seven days of recorded forecasts against actual
+generation. After changing the source, that history still holds values from the previous source, so
+the calibration scaling factor takes up to seven days to settle. Predbat logs a warning when the
+source changes. Do not judge the accuracy of the new source until the settling period has passed.
 
 ## Open-Meteo Solar Forecast
 
@@ -1809,6 +1893,23 @@ but there is one configuration item in `apps.yaml`:
 ```
 
 Defines how often to run the inverter balancing, 30 seconds is recommended if your machine is fast enough, but the default is 60 seconds.
+
+## Config validation retries
+
+`apps.yaml` is validated at startup and whenever its configuration changes. If a sensor you've mapped isn't populated yet at that exact moment
+(e.g. a slower-starting integration during a Home Assistant restart), Predbat reports a configuration error - correctly, at the time. If that
+sensor comes good on its own a few seconds later, Predbat automatically retries validation a few times, so a self-healed condition clears its
+own error status rather than needing a manual restart.
+
+```yaml
+  validate_config_retries: 2
+  validate_config_retry_minutes: 1
+```
+
+**validate_config_retries** sets how many times to retry after an initial validation failure - the default is 2. **validate_config_retry_minutes**
+sets how long to wait between each retry - the default is 1 minute. Retries only happen after a validation failure; a clean `apps.yaml` is never
+re-checked early. Set **validate_config_retries** to 0 to disable retries entirely and revert to the previous behaviour (a failed validation
+persists until the next restart or config change).
 
 ## Workarounds
 

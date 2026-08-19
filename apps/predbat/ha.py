@@ -32,6 +32,10 @@ from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
 
+# Maximum days of history fetched per request. Long windows are split so only one chunk's
+# response body, decoded string and parsed objects are resident at a time.
+HISTORY_CHUNK_DAYS = 3
+
 
 class RunThread(threading.Thread):
     def __init__(self, coro):
@@ -869,12 +873,36 @@ class HAInterface(ComponentBase):
         else:
             self.log("Warn: Failed to update state data from HA")
 
-    def get_history(self, sensor, now, days=30, from_time=None, force_db=False):
+    def get_history_window(self, sensor, start, end):
+        """
+        Fetch a single window of history for a sensor.
+
+        :param sensor: The sensor to get the history for.
+        :param start: Start of the window.
+        :param end: End of the window.
+        :return: The raw API response, or None.
+        """
+        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
+        if isinstance(res, list) and len(res) > 0:
+            return res
+        return None
+
+    def get_history(self, sensor, now, days=30, from_time=None, force_db=False, chunk_days=HISTORY_CHUNK_DAYS):
         """
         Get the history for a sensor from Home Assistant.
 
+        Long windows are fetched in chunks so only one chunk's response body, decoded string
+        and parsed objects are resident at a time rather than the whole window's. A 21 day
+        window of a power sensor is tens of megabytes of JSON, and holding all three
+        representations of it at once dominated the peak memory of a plan cycle.
+
         :param sensor: The sensor to get the history for.
-        :return: The history for the sensor.
+        :param now: Current time, the end of the window.
+        :param days: How many days of history to fetch.
+        :param from_time: Explicit window start, overriding days.
+        :param force_db: Read from the database rather than Home Assistant.
+        :param chunk_days: Maximum days per request; 0 or None fetches the window in one request.
+        :return: The history for the sensor, oldest first, or None.
         """
         if not sensor:
             return None
@@ -889,11 +917,28 @@ class HAInterface(ComponentBase):
         else:
             start = now - timedelta(days=days)
         end = now
-        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
-        if isinstance(res, list) and len(res) > 0:
-            return res
-        else:
-            return None
+
+        if not chunk_days or (end - start) <= timedelta(days=chunk_days):
+            return self.get_history_window(sensor, start, end)
+
+        history = []
+        cursor = start
+        while cursor < end:
+            window_end = min(cursor + timedelta(days=chunk_days), end)
+            res = self.get_history_window(sensor, cursor, window_end)
+            if res:
+                for item in res[0]:
+                    # Home Assistant opens every window with the state in effect at start_time.
+                    # For chunks after the first that instant is already covered by the previous
+                    # chunk, and the synthesised record can land inside a gap in the recording
+                    # where it would add a data point a single request never returns, changing
+                    # how minute_data interpolates across that gap.
+                    if cursor > start and item.get("last_updated") and str2time(item["last_updated"]) <= cursor:
+                        continue
+                    history.append(item)
+            cursor = window_end
+
+        return [history] if history else None
 
     async def set_state_external(self, entity_id, state, attributes={}):
         """

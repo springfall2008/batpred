@@ -8,6 +8,8 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import asyncio
+
 from web import WebInterface
 
 
@@ -177,7 +179,52 @@ def run_web_functions_tests(my_predbat):
     # The web UI must show the user's configured currency symbol, not the raw "p".
     failed += run_currency_unit_tests(my_predbat, web)
 
+    # -------------------------------------------------------------------------
+    # Compare page empty state (issue #4334) - an empty compare_list must not show the
+    # "Loading chart (please wait)..." messages forever, since nothing will ever load.
+    failed += run_compare_empty_state_tests(my_predbat, web)
+
     print("**** Web functions tests completed ****")
+    return failed
+
+
+def run_compare_empty_state_tests(my_predbat, web):
+    """Unit tests for the Compare page's empty-state messaging (issue #4334)."""
+    failed = 0
+    print("**** Running compare empty state tests ****")
+
+    original_args = my_predbat.args.copy()
+
+    # -------------------------------------------------------------------------
+    print("Test: no compare_list configured shows a clear 'not configured' message, not a stuck loading message")
+    my_predbat.args.pop("compare_list", None)
+    response = asyncio.run(web.html_compare(None))
+    text = response.text
+    if "No tariffs configured yet" not in text:
+        print(f"  ERROR: expected a 'no tariffs configured' message when compare_list is empty")
+        failed += 1
+    if "Loading chart (please wait)" in text:
+        print(f"  ERROR: should not show the stuck 'Loading chart' message when nothing is configured")
+        failed += 1
+    if "7 day rolling average chart loading (please wait)" in text:
+        print(f"  ERROR: should not show the stuck '7 day rolling average' message when nothing is configured")
+        failed += 1
+
+    # -------------------------------------------------------------------------
+    print("Test: a configured but not-yet-computed compare_list keeps the genuine loading message")
+    my_predbat.args["compare_list"] = [{"id": "test1", "name": "Test tariff"}]
+    response = asyncio.run(web.html_compare(None))
+    text = response.text
+    if "No tariffs configured yet" in text:
+        print(f"  ERROR: should not show the 'no tariffs configured' message when compare_list is set")
+        failed += 1
+    if "Loading chart (please wait)" not in text:
+        print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
+        failed += 1
+
+    my_predbat.args = original_args
+
+    print("**** Compare empty state tests completed ****")
     return failed
 
 

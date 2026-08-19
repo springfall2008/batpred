@@ -2009,6 +2009,40 @@ def run_model_tests(my_predbat, prediction_kernel=False):
     # pv_ac_limit must NOT apply to hybrid inverters (PV is DC-coupled, clipping handled by inverter_limit)
     failed |= simple_scenario("pv_ac_limit_hybrid_ignored", my_predbat, 0, 2.0, assert_final_metric=-export_rate * 24, assert_final_soc=24, with_battery=True, hybrid=True, pv_ac_limit=1.5, assert_clipped=0)
 
+    # Low power charging must not make the plan more expensive when the charge window overlaps PV production.
+    # The planner costs every charge window at the full charge rate as low power is only applied to the final
+    # plan, so a throttled rate that caps how much PV reaches the battery pushes the cost above the plan.
+    reset_rates(my_predbat, import_rate, export_rate)
+    reset_inverter(my_predbat)
+
+    # 6kW of PV for the first 2 hours only, with an 8 hour charge window to 12kWh and a 6kW max charge rate.
+    # At full rate the PV alone fills the battery inside those 2 hours, costing nothing. Throttled to fit the
+    # 8 hour window the battery would take only 1.5kW, exporting the other 4.5kW of PV at 5p and then
+    # importing the missing 9kWh at 10p once the sun has gone - 45p worse than the planner costed it at.
+    low_power_pv = {
+        "load_amount": 0,
+        "pv_amount": 6.0,
+        "pv_hours": 2,
+        "charge": 12,
+        "charge_window_best": [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 480, "average": import_rate}],
+        "battery_size": 20,
+        "battery_soc": 0,
+        "battery_rate_max_charge": 6.0,
+        "inverter_limit": 10.0,
+        "export_limit": 10.0,
+        "assert_final_soc": 12,
+        "assert_final_metric": 0,
+    }
+    failed |= simple_scenario("low_power_pv_full_rate", my_predbat, set_charge_low_power=False, **low_power_pv)
+    failed |= simple_scenario("low_power_pv_low_power", my_predbat, set_charge_low_power=True, **low_power_pv)
+
+    # With no PV in the window low power charging still applies, the whole 12kWh comes from the grid either way
+    low_power_dark = dict(low_power_pv)
+    low_power_dark["pv_amount"] = 0
+    low_power_dark["assert_final_metric"] = import_rate * 12
+    failed |= simple_scenario("low_power_dark_full_rate", my_predbat, set_charge_low_power=False, **low_power_dark)
+    failed |= simple_scenario("low_power_dark_low_power", my_predbat, set_charge_low_power=True, **low_power_dark)
+
     my_predbat.prediction_kernel_enable = False
     if failed:
         print("**** ERROR: Some Model tests failed ****")

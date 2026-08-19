@@ -412,7 +412,7 @@ class FutureRate:
 
     def download_futurerate_data_func(self, url):
         try:
-            r = requests.get(url)
+            r = requests.get(url, timeout=120)
         except Exception as e:
             self.log("Warn: Error downloading futurerate data from URL {}, request exception {}".format(url, e))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)

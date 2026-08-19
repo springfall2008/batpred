@@ -11,6 +11,7 @@ import copy
 import json
 import os
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
 
 from futurerate import FutureRate
 
@@ -74,6 +75,18 @@ def run_nordpool_test(my_predbat):
     my_predbat.args["futurerate_peak_premium_import"] = 14
     my_predbat.args["futurerate_peak_premium_export"] = 6.5
     failed = False
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = json.dumps({"multiAreaEntries": []})
+    with patch("futurerate.requests.get", return_value=mock_response) as mock_get:
+        FutureRate(my_predbat).download_futurerate_data_func("https://example.com/nordpool")
+    if mock_get.call_count != 1:
+        print("ERROR: Expected 1 Nord Pool HTTP call for timeout coverage, got {}".format(mock_get.call_count))
+        failed = True
+    elif mock_get.call_args.kwargs.get("timeout") != 120:
+        print("ERROR: Expected Nord Pool download timeout 120, got {}".format(mock_get.call_args.kwargs.get("timeout")))
+        failed = True
 
     fixture = _load_fixture()
     if fixture:

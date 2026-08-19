@@ -59,6 +59,7 @@ def test_load_ml(my_predbat=None):
         ("prediction_with_temp", _test_prediction_with_temp, "Prediction with temperature forecast data"),
         ("component_fetch_load_data", _test_component_fetch_load_data, "LoadMLComponent _fetch_load_data method"),
         ("component_publish_entity", _test_component_publish_entity, "LoadMLComponent _publish_entity method"),
+        ("component_stale_midnight_baseline", _test_component_stale_midnight_baseline, "LoadMLComponent baseline handling when publishing crosses midnight"),
         ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
         ("component_run_data_merge", _test_component_run_data_merge, "LoadMLComponent run() data fetch, save and merge across two runs"),
         ("component_init_predictor_last_train_time", _test_component_init_predictor_sets_last_train_time, "LoadMLComponent _init_predictor sets last_train_time from embedded training_timestamp"),
@@ -448,6 +449,7 @@ def _test_dataset_with_pv():
 
     # Create dataset with PV data
     X_train, y_train, train_weights, X_val, y_val = predictor._create_dataset(load_data, now_utc, pv_minutes=pv_data, time_decay_days=7)
+    X_train = np.asarray(X_train)  # inspecting feature blocks by column needs the assembled rows
 
     # Should have valid samples
     assert X_train is not None, "Training X should not be None"
@@ -489,6 +491,7 @@ def _test_dataset_with_temp():
 
     # Create dataset with temperature data
     X_train, y_train, train_weights, X_val, y_val = predictor._create_dataset(load_data, now_utc, temp_minutes=temp_data, time_decay_days=7)
+    X_train = np.asarray(X_train)  # inspecting feature blocks by column needs the assembled rows
 
     # Should have valid samples
     assert X_train is not None, "Training X should not be None"
@@ -1853,8 +1856,8 @@ def _test_component_fetch_load_data():
             return default
 
         def fetch_pv_forecast(self):
-            """Mock fetch_pv_forecast - returns empty forecasts"""
-            return {}, {}
+            """Mock fetch_pv_forecast - returns empty p50/p10/p90 forecasts"""
+            return {}, {}, {}
 
         def minute_data_import_export(self, days, now_utc, entity, scale=1.0, increment=False, smoothing=False, required_unit=None):
             """Mock minute_data_import_export - returns empty dict"""
@@ -2605,6 +2608,169 @@ def _test_component_publish_entity():
     print("    PASS: Empty predictions handled correctly")
 
     print("  All _publish_entity tests passed!")
+
+
+def _test_component_stale_midnight_baseline():
+    """Test that a load baseline captured on a previous day is not carried into today's forecast.
+
+    Reproduces the case where a long training run starts before local midnight and finishes
+    after it: load_minutes_now still holds yesterday's full daily total while minutes_now has
+    already reset, which used to add a whole day of load on top of every published value.
+    """
+    import asyncio
+    from datetime import datetime, timezone
+    from load_ml_component import LoadMLComponent
+    from unittest.mock import MagicMock
+    from const import PREDICT_STEP
+
+    def run_async(coro):
+        """Run a coroutine on the current or a fresh event loop."""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+
+    class MockBase:
+        """Minimal PredBat stand-in positioned at 00:15, just after local midnight."""
+
+        def __init__(self):
+            """Set up the mock at 2026-01-02 00:15, 15 minutes into the new day."""
+            self.prefix = "predbat"
+            self.config_root = None
+            self.now_utc = datetime(2026, 1, 2, 0, 15, 0, tzinfo=timezone.utc)
+            self.midnight_utc = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+            self.minutes_now = 15
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+            self.dashboard_calls = []
+
+        def log(self, msg):
+            """Record a log message."""
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            """Return canned config values for the keys the component reads."""
+            return {
+                "load_today": ["sensor.load_today"],
+                "load_power": None,
+                "car_charging_energy": None,
+                "load_scaling": 1.0,
+                "car_charging_energy_scale": 1.0,
+            }.get(key, default)
+
+    mock_base = MockBase()
+    component = LoadMLComponent(mock_base, load_ml_enable=True)
+
+    def mock_dashboard_item(entity_id, state, attributes, app):
+        """Capture published entities."""
+        mock_base.dashboard_calls.append({"entity_id": entity_id, "state": state, "attributes": attributes, "app": app})
+
+    component.dashboard_item = mock_dashboard_item
+
+    # Baseline snapshot taken at 23:50 the previous day, holding that whole day's total
+    component.load_minutes_now = 24.9
+    component.load_minutes_now_time = datetime(2026, 1, 1, 23, 50, 0, tzinfo=timezone.utc)
+    # Per-step load history for the 15 minutes since midnight (0.05 kWh per 5 min = 0.15 kWh)
+    component.load_data = {0: 0.05, 5: 0.05, 10: 0.05, 15: 0.05, 20: 0.05}
+
+    component.current_predictions = {0: 0.05, 60: 0.6, 480: 5.0}
+    component.predictor.validation_mae = 0.5
+    component.predictor.get_model_age_hours = MagicMock(return_value=0.5)
+    component.last_train_time = mock_base.now_utc
+    component.load_data_age_days = 7.0
+    component.model_status = "active"
+
+    component._publish_entity()
+
+    attrs2 = mock_base.dashboard_calls[1]["attributes"]
+
+    # Baseline must be re-derived from the 15 minutes of load since midnight, not 24.9 kWh
+    assert abs(attrs2["load_today"] - 0.15) < 0.01, f"Expected load_today 0.15 re-derived since midnight, got {attrs2['load_today']}"
+    assert abs(attrs2["load_today_h1"] - 0.75) < 0.01, f"Expected load_today_h1 0.75 (0.6 + 0.15), got {attrs2['load_today_h1']}"
+    assert abs(attrs2["load_today_h8"] - 5.15) < 0.01, f"Expected load_today_h8 5.15 (5.0 + 0.15), got {attrs2['load_today_h8']}"
+    assert any("previous day" in msg for msg in mock_base.log_messages), "Stale baseline should be logged as a warning"
+
+    print("    ✓ Stale pre-midnight baseline re-derived from load history")
+
+    # Same-day snapshot must be used verbatim, no re-derivation
+    mock_base.dashboard_calls = []
+    component.load_minutes_now = 0.4
+    component.load_minutes_now_time = datetime(2026, 1, 2, 0, 10, 0, tzinfo=timezone.utc)
+
+    component._publish_entity()
+
+    attrs2 = mock_base.dashboard_calls[1]["attributes"]
+    assert abs(attrs2["load_today"] - 0.4) < 0.01, f"Expected load_today 0.4 from the snapshot, got {attrs2['load_today']}"
+    assert abs(attrs2["load_today_h1"] - 1.0) < 0.01, f"Expected load_today_h1 1.0 (0.6 + 0.4), got {attrs2['load_today_h1']}"
+
+    print("    ✓ Same-day baseline snapshot used unchanged")
+
+    # A missing snapshot timestamp (e.g. loaded from an older state) keeps the old behaviour
+    mock_base.dashboard_calls = []
+    component.load_minutes_now_time = None
+
+    component._publish_entity()
+
+    attrs2 = mock_base.dashboard_calls[1]["attributes"]
+    assert abs(attrs2["load_today"] - 0.4) < 0.01, f"Expected load_today 0.4 when no snapshot time is known, got {attrs2['load_today']}"
+
+    print("    ✓ Missing snapshot timestamp falls back to the stored baseline")
+
+    # Re-fetch after a long training run must re-anchor the baseline before predicting
+    async def run_stale_refetch():
+        """Drive run() through a training cycle that leaves the fetched data stale."""
+        fetch_times = []
+
+        async def mock_fetch_load_data():
+            """Return canned data and record when the fetch happened."""
+            fetch_times.append(mock_base.now_utc)
+            load_now = 24.9 if mock_base.now_utc.day == 1 else 0.15
+            return {0: 0.05, 5: 0.05}, 7.0, load_now, {}, {}, {}, {}
+
+        async def mock_do_training(is_initial):
+            """Simulate a training run that takes 25 minutes and crosses midnight."""
+            mock_base.now_utc = datetime(2026, 1, 2, 0, 15, 0, tzinfo=timezone.utc)
+            mock_base.midnight_utc = datetime(2026, 1, 2, 0, 0, 0, tzinfo=timezone.utc)
+            mock_base.minutes_now = 15
+
+        component._fetch_load_data = mock_fetch_load_data
+        component._do_training = mock_do_training
+        component._update_model_status = MagicMock()
+        component.base.prediction_started = False
+        component.load_ml_database_days = 0
+        component.ml_min_days = 0
+        component.initial_training_done = True
+        component.model_valid = True
+        component.data_ready = True
+        component.last_train_time = datetime(2026, 1, 1, 21, 50, 0, tzinfo=timezone.utc)
+        component.predictor.predict = MagicMock(return_value={0: 0.05, 60: 0.6, 480: 5.0})
+
+        # Start the cycle at 23:50 the previous day, before training moves the clock
+        mock_base.now_utc = datetime(2026, 1, 1, 23, 50, 0, tzinfo=timezone.utc)
+        mock_base.midnight_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+        mock_base.minutes_now = 1430
+        mock_base.dashboard_calls = []
+
+        await component.run(0, False)
+
+        assert len(fetch_times) == 2, f"Expected a second fetch after training, got {len(fetch_times)} fetches"
+        assert fetch_times[1].day == 2, f"Second fetch should happen after midnight, got {fetch_times[1]}"
+        assert component.load_minutes_now_time == mock_base.now_utc, "Baseline timestamp should be re-anchored to the post-training time"
+        assert abs(component.load_minutes_now - 0.15) < 0.01, f"Expected re-fetched baseline 0.15, got {component.load_minutes_now}"
+
+        attrs = mock_base.dashboard_calls[1]["attributes"]
+        assert abs(attrs["load_today_h8"] - 5.15) < 0.01, f"Expected load_today_h8 5.15 after re-fetch, got {attrs['load_today_h8']}"
+
+    run_async(run_stale_refetch())
+
+    print("    ✓ Stale data re-fetched after training before predicting")
+
+    assert PREDICT_STEP == 5, "Test assumes a 5 minute prediction step"
+
+    print("  All midnight baseline tests passed!")
 
 
 def _test_car_subtraction_direct():

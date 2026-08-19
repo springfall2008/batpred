@@ -288,17 +288,20 @@ When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is aut
 
 ## GivEnergy Gateway OCPP EV charger
 
-When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger attached, the charger's live state is reported to Predbat over the gateway's MQTT telemetry and exposed as Home Assistant entities (device-level, single charger):
+When Predbat is connected to a GivEnergy Gateway that has an OCPP EV charger attached, the charger's live state is reported to Predbat over the gateway's MQTT telemetry and exposed as Home Assistant entities.
 
-- `binary_sensor.predbat_gateway_ev_connected` - a charge point is connected
-- `sensor.predbat_gateway_ev_status` - OCPP status (e.g. `Available`, `Charging`)
-- `sensor.predbat_gateway_ev_power` - live charge power (W)
-- `sensor.predbat_gateway_ev_session_energy` - energy delivered this session (kWh)
-- `sensor.predbat_gateway_ev_soc` - EV battery SoC % (reported directly by the car, or estimated from session energy / configured battery size when the car does not report it)
-- `sensor.predbat_gateway_ev_current_limit` / `sensor.predbat_gateway_ev_max_current` - present and configured charge current (A)
-- `sensor.predbat_gateway_ev_voltage` - supply voltage (V)
-- `sensor.predbat_gateway_ev_eco_mode` - the charger's current EcoMode setting
-- `sensor.predbat_gateway_ev_charge_rate` - charge-rate capability (kW), derived from the reported current/voltage (falls back to 7.4 kW when the charger does not report its capability)
+Entities are named after the charger, using the last 6 characters of its OCPP charge point id (lower-cased) — for example a charge point id ending `3XB749` gives `sensor.predbat_gateway_ev_3xb749_power`.
+The id is used whether one charger or several are attached, so a charger keeps the same entity ids for its whole life. Below, `<id>` stands for that suffix; a charger that has not yet reported an id falls back to a bare `ev`.
+
+- `binary_sensor.predbat_gateway_ev_<id>_connected` - a charge point is connected
+- `sensor.predbat_gateway_ev_<id>_status` - OCPP status (e.g. `Available`, `Charging`)
+- `sensor.predbat_gateway_ev_<id>_power` - live charge power (W)
+- `sensor.predbat_gateway_ev_<id>_session_energy` - energy delivered this session (kWh)
+- `sensor.predbat_gateway_ev_<id>_soc` - EV battery SoC % (reported directly by the car, or estimated from session energy / configured battery size when the car does not report it)
+- `sensor.predbat_gateway_ev_<id>_current_limit` / `sensor.predbat_gateway_ev_<id>_max_current` - present and configured charge current (A)
+- `sensor.predbat_gateway_ev_<id>_voltage` - supply voltage (V)
+- `sensor.predbat_gateway_ev_<id>_eco_mode` - the charger's current EcoMode setting
+- `sensor.predbat_gateway_ev_<id>_charge_rate` - charge-rate capability (kW), derived from the reported current/voltage (falls back to 7.4 kW when the charger does not report its capability)
 
 To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
 
@@ -306,7 +309,8 @@ To have Predbat plan for the gateway charger as a car, enable it in `apps.yaml`:
   gateway_evc_automatic: true
 ```
 
-When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies. The charge rate tracks the `sensor.predbat_gateway_ev_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
+When enabled, Predbat registers the charger as a car and maps the EV entities above onto the standard `car_charging_*` settings, so the normal [Predbat-led car charging](#predbat-led-charging) planning applies.
+The charge rate tracks the `sensor.predbat_gateway_ev_<id>_charge_rate` capability sensor. The car's battery size and target charge level are taken from your existing `car_charging_battery_size` and `car_charging_limit` settings (the charger cannot report them).
 
 To also have Predbat send the plan to the charger (so the EVC charges according to Predbat's schedule), add a second flag:
 

@@ -16,7 +16,6 @@ with extra load injected into different upcoming time windows.
 The matrix covers extra-kWh levels across multiple time windows.
 """
 
-import copy
 from datetime import timedelta
 from const import PREDICT_STEP
 from prediction import Prediction
@@ -70,6 +69,11 @@ class Marginal:
         matrix = {}
         all_costs = []
 
+        # Every cell below builds a Prediction that differs from the others only in its load, so the
+        # kernel context's load-independent arrays - rates, PV, temperature caps, carbon, car slots
+        # over the whole horizon - are built once here and reused instead of 28 times.
+        kernel_static_cache = {}
+
         for extra_kwh in MARGINAL_EXTRA_KWH_LEVELS:
             matrix[extra_kwh] = {}
             # Convert kWh/hour extra load to kWh per 5-minute step
@@ -78,18 +82,18 @@ class Marginal:
             for idx, offset in enumerate(MARGINAL_TIME_OFFSETS):
                 time_label = time_labels[idx]
 
-                # Deep-copy both load forecasts to avoid mutating shared data
-                modified_load = copy.deepcopy(self.load_minutes_step)
+                # Copy the load forecast to avoid mutating shared data - it is a flat minute -> kWh
+                # dict, so a shallow copy is a full copy and deepcopy only walked it more slowly
+                modified_load = dict(self.load_minutes_step)
 
                 # Inject extra load into the 1-hour window starting at `offset` minutes from now
                 for minute in range(offset, offset + 60, PREDICT_STEP):
                     if minute in modified_load:
                         modified_load[minute] += extra_per_step
 
-                # Create a fresh Prediction with the modified load; this updates PRED_GLOBAL
-                # which is safe since we run synchronously (pool is idle at this point)
+                # Create a fresh Prediction with the modified load.
                 # No need to include 10% extra load as we only run normal simulations.
-                pred = Prediction(self, self.pv_forecast_minute_step, self.pv_forecast_minute_step, modified_load, modified_load)
+                pred = Prediction(self, self.pv_forecast_minute_step, self.pv_forecast_minute_step, modified_load, modified_load, kernel_static_cache=kernel_static_cache)
 
                 # Run prediction against the current best charge/discharge plan, no save to HA
                 (new_metric, *_) = pred.run_prediction(

@@ -26,6 +26,7 @@ nav:
     - predbat-plan-card.md
     - creating-charts.md
     - compare.md
+  - 'What If Annual Prediction': annual-prediction.md
   - 'Predbat development':
     - todo-list.md
     - developing.md

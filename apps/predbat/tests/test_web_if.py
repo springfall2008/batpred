@@ -47,6 +47,9 @@ def run_test_web_if(my_predbat):
         my_predbat.components.start("web")
         ha = my_predbat.ha_interface
 
+        # Inject a fake credential so we can verify live apps.yaml masking below
+        my_predbat.args["octopus_api_key"] = "test_secret_value"
+
         # Define all registered endpoints from web.py
         # Format: (method, path)
         all_endpoints = [
@@ -70,6 +73,7 @@ def run_test_web_if(my_predbat):
             ("GET", "/debug_yaml"),
             ("GET", "/debug_log"),
             ("GET", "/debug_apps"),
+            ("GET", "/debug_apps_live"),
             ("GET", "/debug_plan"),
             ("GET", "/compare"),
             ("POST", "/compare"),
@@ -317,6 +321,24 @@ def run_test_web_if(my_predbat):
 
         if result != "on":
             print("ERROR: Compare tariffs not triggered - expected {} got {}".format("on", result))
+            failed = 1
+
+        print("\n**** Verifying live apps.yaml masking ****")
+        # A bare request (no masked param) must default to masked - a direct/copied URL
+        # should never leak credentials without an explicit opt-in.
+        res = requests.get("http://127.0.0.1:5052/debug_apps_live")
+        if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
+            print("ERROR: Default /debug_apps_live request was not masked")
+            failed = 1
+
+        res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "0"})
+        if res.status_code != 200 or "test_secret_value" not in res.text:
+            print("ERROR: Unmasked /debug_apps_live (masked=0) did not contain the expected credential value")
+            failed = 1
+
+        res = requests.get("http://127.0.0.1:5052/debug_apps_live", params={"masked": "1"})
+        if res.status_code != 200 or "test_secret_value" in res.text or "xxx" not in res.text:
+            print("ERROR: Masked /debug_apps_live did not redact the expected credential value")
             failed = 1
 
         # Check endpoint coverage

@@ -356,6 +356,24 @@ def test_fetch_config_options(my_predbat):
 
     print("✓ Case-insensitivity test passed")
 
+    # Test 14: num_cars is clamped to the maximum Predbat/kernel supports
+    print("\n*** Test 14: num_cars is clamped to the supported maximum ***")
+
+    # An Octopus account with more registered devices than Predbat supports (or any other
+    # misconfiguration) must not be allowed through - car indices beyond the supported maximum
+    # have no HA config entity, which previously crashed get_car_charging_planned() with
+    # TypeError: float() argument must be a string or a real number, not 'NoneType'.
+    mock_config.config["num_cars"] = 12
+
+    my_predbat.fetch_config_options()
+
+    assert my_predbat.num_cars == 8, "num_cars should be clamped to 8 (the supported maximum), got {}".format(my_predbat.num_cars)
+
+    print("✓ num_cars clamp test passed")
+
+    # Restore num_cars for any tests appended after this one
+    mock_config.config["num_cars"] = 2
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times
@@ -365,6 +383,26 @@ def test_fetch_config_options(my_predbat):
     my_predbat.update_save_restore_list = original_update_save_restore_list
     my_predbat.expose_config = original_expose_config
     my_predbat.args = original_args
+
+    # Test 15: get_car_charging_planned resolves all 8 supported cars against the real
+    # CONFIG_ITEMS/config_index (not the MockConfigProvider above) - this is the exact code path
+    # that crashed with TypeError: float() argument must be a string or a real number, not
+    # 'NoneType' when num_cars exceeded the number of car_charging_rate_N entities defined.
+    print("\n*** Test 15: get_car_charging_planned resolves all 8 cars via real config_index ***")
+
+    original_num_cars = my_predbat.num_cars
+    my_predbat.num_cars = 8
+    my_predbat.get_car_charging_planned()
+
+    assert len(my_predbat.car_charging_rate) == 8, "car_charging_rate should have 8 entries, got {}".format(len(my_predbat.car_charging_rate))
+    for car_n, rate in enumerate(my_predbat.car_charging_rate):
+        assert rate == 7.4, "car {} charging rate should default to 7.4, got {}".format(car_n, rate)
+
+    # Restore real config state for any tests that run after this one
+    my_predbat.num_cars = original_num_cars
+    my_predbat.fetch_config_options()
+
+    print("✓ 8-car config resolution test passed")
 
     print("\n**** All fetch_config_options tests passed! ****")
     return False

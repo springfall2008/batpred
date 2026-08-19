@@ -61,8 +61,14 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
     #     dynamic_load(), which only runs from update_pred, not the debug harness).
     #   - battery_rate_max_export is the discharge power cap used in prediction; a leaked full-precision
     #     value (vs the 0.0333 default) can flip the plan at a decision boundary.
+    #   - rate_max_base and rate_export_max_forward are the base-tariff terms battery_value_rate uses;
+    #     fetch rebuilds both every cycle in the product, but the debug harness never calls fetch, and
+    #     debug files written before those fields existed carry neither. Their absent-value defaults
+    #     send battery_value_rate back to rate_max / rate_export_max, which the debug file does carry.
     my_predbat.dynamic_load_baseline = {}
     my_predbat.battery_rate_max_export = 0.0333
+    my_predbat.rate_max_base = 0
+    my_predbat.rate_export_max_forward = {}
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"

@@ -117,6 +117,30 @@ To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in
 
 If this is your situation, create a template sensor in Home Assistant that combines the two into one signed value (e.g. `export - import`, or `-import` when only importing) and point **grid_power** at that combined template instead of either sensor directly.
 
+## I have a second solar array that Predbat doesn't manage as an inverter - how do I include its generation?
+
+The [Power Data](apps-yaml.md#power-data) **pv_power**/**pv_today** lists take one entry per inverter Predbat is actually configured to manage (`num_inverters`) - you can't just add an extra line for a second array that has no corresponding managed inverter (e.g. a separate FIT-metered string, or a second hybrid system Predbat isn't controlling), Predbat will still only look for as many sensors as it has inverters defined.
+
+Instead, create a template sensor in Home Assistant that adds the extra array's generation into the same total, and point your managed inverter's **pv_power**/**pv_today** entry at that combined sensor instead of the raw inverter sensor. For example, combining a managed inverter's PV power with a separate FIT array's:
+
+```yaml
+# Combined PV power sensor, updated every 5 minutes instead of the default of every sensor state change
+- trigger:
+    - platform: time_pattern
+      minutes: "/5"
+  sensor:
+    - name: "Combined PV Power"
+      unique_id: "combined_pv_power"
+      unit_of_measurement: W
+      device_class: power
+      state_class: measurement
+      state: >
+        {{ (states('sensor.givtcp_xxx_pv_power') | float(0)
+          + states('sensor.fit_array_pv_power') | float(0)) | round(0) }}
+```
+
+Use a `time_pattern` trigger template (rather than a plain templated sensor in the UI) so it updates on a fixed schedule instead of firing on every state change of either underlying sensor, which generates unnecessary extra state history. The same pattern works for **pv_today** (summing the two daily energy totals instead of instantaneous power).
+
 ## My plan is freeze charging or holding at 100% battery a lot
 
 **Round trip losses**

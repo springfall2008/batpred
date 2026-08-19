@@ -76,6 +76,20 @@ def test_octopus_free(my_predbat):
     temp_dir = tempfile.mkdtemp()
     original_config_root = getattr(my_predbat, "config_root", None)
     try:
+        with patch("octopus.requests.get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
+            body = my_predbat.download_octopus_free_func(_URL)
+        if mock_get.call_count != 1:
+            print("FAIL: Expected 1 HTTP call when covering free-session timeout, got {}".format(mock_get.call_count))
+            failed = True
+        elif mock_get.call_args.kwargs.get("timeout") != 120:
+            print("FAIL: Expected Octopus free-session timeout 120, got {}".format(mock_get.call_args.kwargs.get("timeout")))
+            failed = True
+        elif body != _JSON_BODY:
+            print("FAIL: Expected Octopus free-session body to round-trip unchanged")
+            failed = True
+        else:
+            print("PASS: Free-session direct download uses the configured timeout")
+
         # --- Test 1: no storage (components=None) — no exception, returns sessions ---
         _reset_free_cache(my_predbat)
         my_predbat.components = None
