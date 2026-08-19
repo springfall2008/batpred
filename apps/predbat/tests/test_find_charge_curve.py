@@ -374,6 +374,121 @@ def test_find_charge_curve_inverted_battery_power(my_predbat):
     return failed
 
 
+def create_tapering_power_history_data(my_predbat, num_days=7):
+    """
+    Create history where the power drawn within a 1% SoC step varies by SoC.
+
+    The existing fixtures hold battery power constant across a whole charging session, so the
+    mean over a step equals the reading at any single minute of it and a curve built from one
+    sample looks identical to one built from the average.
+
+    Here the low SoC steps pull a steady 2600W, while steps at 93% and above pull 2600W only
+    at each end of the step and 650W through the middle - a mean of 1040W. Both ends carry the
+    high reading deliberately, so a curve sampling a single minute of the step reads 2600W
+    whichever end it triggers on and comes out flat. Only a curve that averages the step sees
+    the taper.
+    """
+    ha = my_predbat.ha_interface
+    base_time = my_predbat.midnight_utc - timedelta(days=num_days)
+
+    history_dict = {"sensor.soc_percent": [], "number.charge_rate": [], "number.discharge_rate": [], "sensor.battery_power": [], "predbat.status": []}
+    ha.dummy_items["sensor.soc_percent"] = 100
+    ha.dummy_items["number.charge_rate"] = 2600
+    ha.dummy_items["number.discharge_rate"] = 2600
+    ha.dummy_items["sensor.battery_power"] = -2600
+    ha.dummy_items["predbat.status"] = "Idle"
+
+    total_minutes = num_days * 24 * 60
+    step_minutes = 10  # Minutes spent at each 1% of SoC
+
+    for minutes in range(0, total_minutes):
+        timestamp = base_time + timedelta(minutes=minutes)
+        timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
+        hour = timestamp.hour
+        minute_of_hour = timestamp.minute
+
+        if 2 <= hour < 6:
+            session_minute = (hour - 2) * 60 + minute_of_hour
+            soc = min(98, 80 + session_minute // step_minutes)
+            charge_rate = 2600
+            discharge_rate = 0
+            position = session_minute % step_minutes
+            if soc >= 93 and position not in (0, step_minutes - 1):
+                battery_power = -650
+            else:
+                battery_power = -2600
+            status = "Charging"
+        else:
+            soc = 80 if hour < 2 else 98
+            charge_rate = 0
+            discharge_rate = 0
+            battery_power = 0
+            status = "Idle"
+
+        history_dict["sensor.soc_percent"].append({"state": str(soc), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "%"}})
+        history_dict["number.charge_rate"].append({"state": int(charge_rate), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+        history_dict["number.discharge_rate"].append({"state": int(discharge_rate), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+        history_dict["sensor.battery_power"].append({"state": round(battery_power, 1), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+        history_dict["predbat.status"].append({"state": status, "last_updated": timestamp_str, "attributes": {}})
+
+    def mock_get_history(entity_id, now=None, days=30):
+        if entity_id in history_dict:
+            return [history_dict[entity_id]]
+        return None
+
+    my_predbat.ha_interface.get_history = mock_get_history
+
+
+def test_find_charge_curve_averages_power_across_period(my_predbat):
+    """
+    The curve must reflect the average power over each SoC step, not one sample of it.
+
+    Steps below 93% draw a steady 2600W; steps at 93% and above average 1040W but read 2600W
+    at either end. Averaging the step produces a curve that tapers to roughly 0.4 above 93%.
+    Sampling one minute of the step reads 2600W everywhere and produces a flat curve.
+    """
+    print("*** Running test: find_charge_curve_averages_power_across_period ***")
+    failed = False
+
+    inv = Inverter(my_predbat, 0)
+    inv.battery_rate_max_charge = 2600 / 60000
+    inv.battery_rate_max_discharge = 2600 / 60000
+    inv.soc_max = 10.0
+    inv.battery_scaling = 1.0
+
+    setup_predbat(my_predbat)
+    create_tapering_power_history_data(my_predbat, num_days=7)
+
+    charge_curve = inv.find_charge_curve(discharge=False)
+    if not charge_curve:
+        print("ERROR: No charge curve found from tapering power data")
+        remove_test_history_data(my_predbat)
+        return True
+    print("Charge curve found: {}".format(charge_curve))
+
+    low = [value for soc, value in charge_curve.items() if 86 <= soc <= 91]
+    high = [value for soc, value in charge_curve.items() if 94 <= soc <= 98]
+
+    if not low or not high:
+        print("ERROR: Curve missing the SoC range needed to check the taper: {}".format(sorted(charge_curve)))
+        return True
+
+    if min(low) < 0.9:
+        print("ERROR: Steady 2600W steps below 93% should sit at full rate, got {}".format(low))
+        failed = True
+
+    if max(high) > 0.6:
+        print("ERROR: Curve is flat - built from a single sample of each step rather than its average")
+        print("       Steps at 93%+ average 1040W of 2600W so should be near 0.4, got {}".format(high))
+        failed = True
+
+    if not failed:
+        print("SUCCESS: Curve tapers above 93%, reflecting the averaged power across each SoC step")
+
+    remove_test_history_data(my_predbat)
+    return failed
+
+
 def run_find_charge_curve_tests(my_predbat):
     """
     Run all find_charge_curve tests
@@ -412,6 +527,10 @@ def run_find_charge_curve_tests(my_predbat):
         return failed
 
     failed |= test_find_charge_curve_inverted_battery_power(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_charge_curve_averages_power_across_period(my_predbat)
     if failed:
         return failed
 

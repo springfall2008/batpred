@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from const import PREDICT_STEP
+from output import yesterday_slot_is_exporting
 from tests.test_infra import reset_rates, reset_inverter
 
 UTC = pytz.UTC
@@ -191,6 +192,26 @@ def _make_history_mock(my_predbat, now_utc, cost_value=100.0, soc_value=5.0):
     return _get_history_wrapper
 
 
+def _make_recording_step_data(pv_today_ref, my_predbat, forecast_minutes_snapshots):
+    """Like _make_mock_step_data, but also records self.forecast_minutes at
+    the moment of each call, so a test can verify it was already widened
+    before yesterday_load_step/yesterday_pv_step are built (issue #4418:
+    step_data_history() only fills offsets up to forecast_minutes, so a
+    late minutes_now needs forecast_minutes widened *before* these calls,
+    not just later when the "yesterday" plan_html is rendered)."""
+
+    def _mock(item, minutes_now, forward, step=5, scale_today=1.0, scale_fixed=1.0, **kwargs):
+        forecast_minutes_snapshots.append(my_predbat.forecast_minutes)
+        if item is None:
+            return {minute: 0.0 for minute in range(0, 24 * 60, step)}
+        elif item is pv_today_ref:
+            return {minute: FLAT_PV_KWH for minute in range(0, 24 * 60, step)}
+        else:
+            return {minute: FLAT_LOAD_KWH for minute in range(0, 24 * 60, step)}
+
+    return _mock
+
+
 def _apply_mocks(my_predbat, now_utc, cost_value=100.0, soc_value=5.0):
     """Apply all mocks and return the captured-load list."""
     captured_load_steps = []
@@ -331,6 +352,57 @@ def _test_basic_no_car(my_predbat, failed):
     # --- run_prediction was called (once for baseline, once for no-pvbat) ---
     if len(captured_load) < 2:
         print("ERROR: run_prediction should have been called at least twice, got {} captures".format(len(captured_load)))
+        failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_forecast_minutes_widened_before_step_data(my_predbat, failed):
+    """Regression test for #4418.
+
+    step_data_history() only fills in offsets up to
+    self.forecast_minutes + plan_interval_minutes. The "History" view needs
+    a full "yesterday" (24h) plus "today so far" up to minutes_now, i.e.
+    offsets up to 24*60 + minutes_now. If forecast_minutes is not widened
+    to at least that *before* yesterday_load_step/yesterday_pv_step are
+    built, any offset beyond the live plan's normal horizon silently reads
+    back as zero load/PV for the rest of the day (reproduced live with
+    forecast_plan_hours=30 i.e. forecast_minutes=1800, minutes_now=910 -
+    Load kWh read 0 from ~06:00 onward every day in the History tab).
+
+    Uses a late minutes_now (910, i.e. 15:10) with a forecast_minutes
+    (1800) too small to cover 24*60 + minutes_now (2350) unless widened
+    first, matching the real-world reproduction.
+    """
+    print("calculate_yesterday: Test – forecast_minutes widened before yesterday_load_step/yesterday_pv_step (#4418)")
+    now_utc = _setup_base(my_predbat, minutes_now=910)
+    my_predbat.forecast_minutes = 1800
+
+    forecast_minutes_snapshots = []
+    my_predbat.step_data_history = _make_recording_step_data(my_predbat.pv_today, my_predbat, forecast_minutes_snapshots)
+    my_predbat.get_history_wrapper = _make_history_mock(my_predbat, now_utc)
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = lambda *a, **kw: ("", "{}")
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    required_minutes = 24 * 60 + 910
+    if not forecast_minutes_snapshots:
+        print("ERROR: step_data_history was never called")
+        failed = True
+    elif forecast_minutes_snapshots[0] < required_minutes:
+        print("ERROR: forecast_minutes was only {} at the first step_data_history call, needed >= {} " "(yesterday_load_step/yesterday_pv_step built before widening)".format(forecast_minutes_snapshots[0], required_minutes))
+        failed = True
+    elif any(snap < required_minutes for snap in forecast_minutes_snapshots):
+        print("ERROR: forecast_minutes dropped below {} partway through the step_data_history calls: {}".format(required_minutes, forecast_minutes_snapshots))
+        failed = True
+
+    if my_predbat.forecast_minutes != 1800:
+        print("ERROR: forecast_minutes was not restored to its original value (expected 1800, got {})".format(my_predbat.forecast_minutes))
         failed = True
 
     _restore_methods(my_predbat, original_run_pred)
@@ -1052,6 +1124,101 @@ def _test_soc_kw_h0_fallback(my_predbat, failed):
     return failed
 
 
+def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
+    """Regression for PR #4466, through the real calculate_yesterday() reconstruction path.
+
+    A whole history of "Cross-charging" status must rebuild BOTH charge windows and export
+    windows for the "yesterday" plan. Before the fix the slot search tested only
+    "exporting" in slot_status, and "Cross-charging" contains "charging" but not "exporting",
+    so every cross-charging minute was reconstructed as charge-only and the export side was
+    silently lost.
+
+    The reconstructed windows live on self.charge_window_best/self.export_window_best only
+    between the fake-window block and the restore at the end of calculate_yesterday, so they
+    are captured from inside the publish_html_plan mock, which is called in that window.
+    """
+    print("calculate_yesterday: Test - Cross-charging history rebuilds both charge and export windows (#4466)")
+    now_utc = _setup_base(my_predbat)
+    prefix = my_predbat.prefix
+
+    status_hist = _make_constant_history("Cross-charging", now_utc)
+
+    def _history_with_cross_charging(entity_id, days=30, required=True, tracked=True):
+        if entity_id == prefix + ".cost_today":
+            return _make_constant_history(100.0, now_utc)
+        elif entity_id == prefix + ".soc_kw_h0":
+            return _make_constant_history(5.0, now_utc)
+        elif entity_id == prefix + ".status":
+            return status_hist
+        return None
+
+    captured = {}
+
+    def _capture_publish_html_plan(*args, **kwargs):
+        captured["charge_window_best"] = copy.deepcopy(my_predbat.charge_window_best)
+        captured["export_window_best"] = copy.deepcopy(my_predbat.export_window_best)
+        captured["export_limits_best"] = copy.deepcopy(my_predbat.export_limits_best)
+        return ("", "{}")
+
+    my_predbat.step_data_history = _make_mock_step_data(my_predbat.pv_today)
+    my_predbat.get_history_wrapper = _history_with_cross_charging
+    my_predbat.plan_write_debug = lambda *a, **kw: ("", "{}")
+    my_predbat.publish_html_plan = _capture_publish_html_plan
+    original_run_pred = my_predbat.run_prediction
+    my_predbat.run_prediction = lambda *a, **kw: _make_mock_run_prediction([])(my_predbat, *a, **kw)
+
+    my_predbat.calculate_yesterday()
+
+    if "charge_window_best" not in captured:
+        print("ERROR: publish_html_plan was never called - could not observe the reconstructed windows")
+        failed = True
+    else:
+        # The charge side was already correct before the fix ("cross-charging" contains "charging").
+        if not captured["charge_window_best"]:
+            print("ERROR: a Cross-charging history should rebuild charge windows, got none")
+            failed = True
+        # The export side is what the fix restores.
+        if not captured["export_window_best"]:
+            print("ERROR: a Cross-charging history should rebuild export windows too, got none " "(the export half of cross-charging was dropped)")
+            failed = True
+        # Every rebuilt export window needs a matching limit, or the plan pairs them up wrongly.
+        if len(captured["export_window_best"]) != len(captured["export_limits_best"]):
+            print("ERROR: rebuilt {} export windows but {} export limits - they must stay in step".format(len(captured["export_window_best"]), len(captured["export_limits_best"])))
+            failed = True
+
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
+def _test_yesterday_slot_is_exporting(my_predbat, failed):
+    """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
+
+    Regression for PR #4466: the "yesterday" plan reconstruction classified a historical
+    predbat.status slot as exporting purely via "exporting" in slot_status. "Cross-charging"
+    contains "charging" but not "exporting", so a genuine cross-charging slot was silently
+    dropped from the export side, only ever showing up as a charge window.
+    """
+    print("calculate_yesterday: Test - yesterday_slot_is_exporting recognises Cross-charging")
+
+    cases = [
+        ("exporting", True),
+        ("freeze exporting", True),
+        ("cross-charging", True),
+        ("charging", False),
+        ("freeze charging", False),
+        ("demand", False),
+        ("hold for car", False),
+    ]
+    for slot_status, expected in cases:
+        result = yesterday_slot_is_exporting(slot_status)
+        if result != expected:
+            print("ERROR: yesterday_slot_is_exporting({!r}) should be {}, got {}".format(slot_status, expected, result))
+            failed = True
+
+    return failed
+
+
 # ---------------------------------------------------------------------------
 # Entry point registered in TEST_REGISTRY
 # ---------------------------------------------------------------------------
@@ -1067,11 +1234,14 @@ def test_calculate_yesterday(my_predbat):
 
     failed = _test_early_exit(my_predbat, failed)
     failed = _test_basic_no_car(my_predbat, failed)
+    failed = _test_forecast_minutes_widened_before_step_data(my_predbat, failed)
     failed = _test_car_slot_subtraction(my_predbat, failed)
     failed = _test_car_slot_from_energy_sensor(my_predbat, failed)
     failed = _test_early_exit_respects_day_rollover(my_predbat, failed)
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
+    failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
+    failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
 
     return failed

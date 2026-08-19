@@ -54,6 +54,9 @@ class MockSolisAPI(SolisAPI):
         self.automatic = False
         self.session = None
         self.nominal_voltage = 48.0
+        self.nominal_voltage_last_known = {}
+        self.nominal_pack_voltage = None
+        self.capacity_voltage_warned = set()
         self.control_enable = True
         self.inverter_sn = []
 
@@ -63,7 +66,6 @@ class MockSolisAPI(SolisAPI):
         # Cache structures
         self.cached_values = {}
         self.inverter_details = {}
-        self.storage_modes = {}
         self.parallel_battery_count = {}
         self.max_charge_current = {}
         self.max_discharge_current = {}
@@ -775,6 +777,30 @@ def test_solis_activated_with_api_key():
     return failed
 
 
+def test_initialize_attribute_parity_with_mock():
+    """Every attribute MockSolisAPI stubs must also be set by the real SolisAPI.initialize().
+
+    MockSolisAPI replaces __init__ wholesale, so an attribute added to the mock but forgotten in
+    the real initialize() passes every unit test here and then raises AttributeError against a
+    live inverter — which is exactly how capacity_voltage_warned shipped broken in #4502.
+    """
+    failed = False
+    # Attributes that exist only to drive the test harness and have no production counterpart.
+    test_only = {"_test_now_utc_exact", "log_messages", "dashboard_items", "read_and_write_cid_calls", "set_storage_mode_calls"}
+    component = _init_solis_component({"solis_api_key": "k", "solis_api_secret": "s"})
+    if component is None:
+        print("ERROR: Solis should activate with api_key + api_secret")
+        return True
+    mock_attrs = set(vars(MockSolisAPI()).keys()) - test_only
+    missing = sorted(attr for attr in mock_attrs if not hasattr(component, attr))
+    if missing:
+        print("ERROR: SolisAPI.initialize() does not set attributes stubbed by MockSolisAPI: {}".format(missing))
+        failed = True
+    if not failed:
+        print("PASSED: SolisAPI.initialize() sets every attribute MockSolisAPI stubs")
+    return failed
+
+
 def test_solis_activated_with_oauth_token():
     """Solis activates in OAuth mode when auth_method=oauth + access_token are configured (no api_key)."""
     failed = False
@@ -1015,6 +1041,7 @@ def run_solis_tests(my_predbat):
         failed |= test_solis_not_activated_without_credentials()
         failed |= test_solis_activated_with_api_key()
         failed |= test_solis_activated_with_oauth_token()
+        failed |= test_initialize_attribute_parity_with_mock()
         failed |= asyncio.run(test_oauth_execute_request_refreshes_before_call())
         failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
@@ -1071,7 +1098,10 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_fetch_entity_data())
         failed |= asyncio.run(test_fetch_entity_data_power_clamping())
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
+        failed |= asyncio.run(test_set_arg_auto_warns_once_on_apps_yaml_override())
         failed |= asyncio.run(test_automatic_config())
+        failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
+        failed |= asyncio.run(test_publish_entities_capacity_voltage_reliability())
         failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
         failed |= asyncio.run(test_inverter_sn_filter_exact_match())
         failed |= asyncio.run(test_inverter_sn_filter_case_insensitive())
@@ -2668,6 +2698,7 @@ async def test_publish_entities():
         "gridPurchasedTodayEnergy": 8.7,
         "gridPurchasedTodayEnergyStr": "kWh",
         "batteryCapacitySoc": 85,
+        "batteryHealthSoh": 0,  # documented, valid API response (issue #4494) - must not publish as 0% health
         "maxChargePowerW": 5000,
         "eTotal": 9876.5,
         "eTotalStr": "kWh",
@@ -2759,6 +2790,10 @@ async def test_publish_entities():
     api.max_charge_current[inverter_sn] = 50
     api.max_discharge_current[inverter_sn] = 50
 
+    # Nominal pack voltage for the battery capacity calculation (issue #4493) - deliberately
+    # distinct from the fixture's live batteryVoltage (52.3V) used for power conversions
+    api.nominal_pack_voltage = 512.0
+
     # Call publish_entities
     await api.publish_entities()
 
@@ -2785,10 +2820,11 @@ async def test_publish_entities():
     charge_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_soc"]
     assert charge_soc["state"] == 95, f"Charge SOC should be 95, got {charge_soc['state']}"
 
-    # Check power conversion (amps to watts)
+    # Check power conversion (amps to watts), using the LIVE measured voltage (52.3V from the
+    # fixture's batteryVoltage), not the old hard-coded 48.0V (issue #4493)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power" in api.dashboard_items, "Charge slot 1 power should be published"
     charge_power = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power"]
-    expected_power = int(50 * api.nominal_voltage)  # 50A * 48.0V = 2420W
+    expected_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
     assert charge_power["state"] == expected_power, f"Charge power should be {expected_power}W, got {charge_power['state']}"
     assert charge_power["attributes"]["unit_of_measurement"] == "W", "Charge power should have W unit"
 
@@ -2811,16 +2847,18 @@ async def test_publish_entities():
     reserve_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_reserve_soc"]
     assert reserve_soc["state"] == "10", f"Reserve SOC should be 10, got {reserve_soc['state']}"
 
-    # Check max power numbers (converted from amps)
+    # Check max power numbers (converted from amps using the LIVE measured voltage, 52.3V from
+    # the fixture's batteryVoltage - not the old hard-coded 48.0V, issue #4493)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power" in api.dashboard_items, "Max charge power should be published"
     max_charge = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"]
-    expected_max_power = int(50 * api.nominal_voltage)  # 50A * 48.0V
+    expected_max_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
     assert max_charge["state"] == expected_max_power, f"Max charge power should be {expected_max_power}W, got {max_charge['state']}"
 
-    # Check battery capacity calculation (Ah to kWh)
+    # Check battery capacity calculation (Ah to kWh), using the configured nominal PACK voltage
+    # (512V) rather than the live measured voltage (issue #4493)
     assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity" in api.dashboard_items, "Battery capacity should be published"
     battery_cap = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity"]
-    expected_kwh = round(100 * api.nominal_voltage / 1000.0, 2)  # 100Ah * 48.0V / 1000 = 4.84 kWh
+    expected_kwh = round(100 * 512.0 / 1000.0, 2)  # 100Ah * 512.0V / 1000 = 51.2 kWh
     assert battery_cap["state"] == expected_kwh, f"Battery capacity should be {expected_kwh}kWh, got {battery_cap['state']}"
     assert battery_cap["attributes"]["unit_of_measurement"] == "kWh", "Battery capacity should have kWh unit"
 
@@ -2857,6 +2895,13 @@ async def test_publish_entities():
     pv2_voltage = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage"]
     assert pv2_voltage["state"] == 272.1, f"PV2 voltage should be 272.1, got {pv2_voltage['state']}"
     assert pv2_voltage["attributes"]["unit_of_measurement"] == "V", "PV2 voltage should have V unit"
+
+    # A batteryHealthSoh of 0 is published as-is (0.0) - it's ambiguous (flaky API vs genuinely
+    # unhealthy battery) so it's reported honestly rather than assumed to mean "fully healthy".
+    # It's Inverter.__init__ that protects battery_scaling itself from a 0/negative reading.
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh" in api.dashboard_items, "Battery SOH should be published"
+    battery_soh = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh"]
+    assert battery_soh["state"] == 0.0, f"Battery SOH of 0 should be published as-is (0.0), got {battery_soh['state']}"
 
     print(f"PASSED: publish_entities created {len(api.dashboard_items)} entities correctly")
     return False
@@ -3689,6 +3734,51 @@ async def test_set_storage_mode_if_needed_all_modes():
     return False
 
 
+async def test_set_arg_auto_warns_once_on_apps_yaml_override():
+    """
+    Test ComponentBase.set_arg_auto() (issue #4494 follow-up, PR #4500 review): when
+    automatic_config() binds a key to an auto-discovered entity, and the user had already set
+    that key explicitly in apps.yaml, auto-discovery must still win (unchanged behaviour) but a
+    one-time note should be logged so the override isn't silently invisible.
+    """
+    print("\n=== Test: set_arg_auto warns once on apps.yaml override ===")
+
+    api = MockSolisAPI()
+    set_arg_calls = {}
+
+    def mock_set_arg(key, value):
+        set_arg_calls[key] = value
+
+    api.set_arg = mock_set_arg
+    api.base.args_from_apps_yaml = {"battery_scaling": [1.0], "num_inverters": 1}
+    api.base.apps_yaml_override_warned = set()
+
+    # User's apps.yaml value differs from what auto-discovery wants to set - warn once, but
+    # still apply the auto-discovered value (existing precedence is unchanged)
+    api.set_arg_auto("battery_scaling", ["sensor.predbat_solis_abc123_battery_soh"])
+    assert set_arg_calls.get("battery_scaling") == ["sensor.predbat_solis_abc123_battery_soh"], "Auto-discovered value should still win"
+    assert any("apps.yaml sets 'battery_scaling: [1.0]'" in msg for msg in api.log_messages), "Should warn once about the apps.yaml override"
+    warn_count = sum(1 for msg in api.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Should warn exactly once, got {warn_count}"
+
+    # Calling again for the same key (e.g. next automatic_config() run) must not repeat the warning
+    api.set_arg_auto("battery_scaling", ["sensor.predbat_solis_abc123_battery_soh"])
+    warn_count = sum(1 for msg in api.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Warning should not repeat, got {warn_count}"
+
+    # apps.yaml value happens to already equal the auto-discovered value - nothing was actually
+    # overridden, so no warning
+    api.set_arg_auto("num_inverters", 1)
+    assert not any("num_inverters" in msg for msg in api.log_messages), "Should not warn when nothing was actually overridden"
+
+    # Key never set in apps.yaml at all - no warning
+    api.set_arg_auto("grid_power", ["sensor.predbat_solis_abc123_grid_power"])
+    assert not any("grid_power" in msg for msg in api.log_messages), "Should not warn for a key the user never configured"
+
+    print("PASSED: set_arg_auto warns once on a genuine apps.yaml override and stays silent otherwise")
+    return False
+
+
 async def test_automatic_config():
     """Test automatic_config method configures Predbat correctly"""
     print("Testing automatic_config...")
@@ -3833,6 +3923,116 @@ async def test_automatic_config():
 
     print("PASSED: automatic_config skips inverters without batteries")
 
+    # Test with a battery reporting batteryHealthSoh: 0 - a documented, valid Solis Cloud API
+    # response (issue #4494), not the same as the field being absent. The inverter must still be
+    # configured (not treated as having no battery), otherwise automatic_config aborts entirely
+    # and load_today/charge_start_time etc. are never set.
+    api5 = MockSolisAPI()
+    api5.inverter_sn = ["SN0SOH999"]
+    api5.inverter_details = {"SN0SOH999": {"batteryHealthSoh": 0}}
+
+    set_arg_calls5 = {}
+
+    def mock_set_arg5(key, value):
+        set_arg_calls5[key] = value
+
+    api5.set_arg = mock_set_arg5
+
+    await api5.automatic_config()
+
+    assert set_arg_calls5.get("num_inverters") == 1, f"Expected 1 inverter configured despite batteryHealthSoh 0, got {set_arg_calls5.get('num_inverters')}"
+    assert "load_today" in set_arg_calls5, "load_today should still be configured when batteryHealthSoh is 0"
+
+    print("PASSED: automatic_config still configures an inverter with batteryHealthSoh 0")
+
+    return False
+
+
+async def test_get_nominal_voltage_and_capacity_voltage():
+    """
+    Test get_nominal_voltage() and get_capacity_voltage() (issue #4493): power/current
+    conversions must use the live measured battery voltage (not the old hard-coded 48V), retaining
+    the last known-good reading if it becomes unavailable, while capacity must use a separately
+    configured nominal pack voltage and never guess at one.
+    """
+    print("\n=== Test: get_nominal_voltage and get_capacity_voltage ===")
+
+    api = MockSolisAPI()
+    sn = "TEST_SN"
+    api.inverter_sn = [sn]
+
+    # No details yet - falls back to the 48.0V default
+    assert api.get_nominal_voltage(sn) == 48.0, "Should fall back to 48.0V default with no data"
+    assert api.get_capacity_voltage(sn) is None, "Should return None when solis_nominal_voltage isn't configured"
+
+    # Live batteryVoltage reported - used directly, and remembered
+    api.inverter_details[sn] = {"batteryVoltage": 533.0}
+    assert api.get_nominal_voltage(sn) == 533.0, "Should use the live measured voltage"
+
+    # Live reading becomes unavailable (e.g. API outage) - retains the last known value, not 48.0
+    api.inverter_details[sn] = {"batteryVoltage": None}
+    assert api.get_nominal_voltage(sn) == 533.0, "Should retain last known-good voltage when unavailable"
+
+    # solis_nominal_voltage configured - used for capacity regardless of live voltage
+    api.nominal_pack_voltage = 512.0
+    assert api.get_capacity_voltage(sn) == 512.0, "Should use the configured nominal pack voltage for capacity"
+
+    print("PASSED: get_nominal_voltage and get_capacity_voltage behave correctly")
+    return False
+
+
+async def test_publish_entities_capacity_voltage_reliability():
+    """
+    Test battery_capacity behaviour with and without solis_nominal_voltage configured (issue
+    #4493). The sensor is always published - dropping it outright for every existing install
+    that hasn't set the new option was judged too disruptive - but without a configured nominal
+    pack voltage it falls back to the live measured voltage and is flagged unreliable (a warning
+    is logged, and the "reliable"/"voltage_source" attributes say so), since that value wobbles
+    with charge state and is still not the true nominal figure. parallel_battery_count is applied
+    either way.
+    """
+    print("\n=== Test: publish_entities battery_capacity voltage reliability ===")
+    from solis import SOLIS_CID_BATTERY_CAPACITY
+
+    api = MockSolisAPI()
+    sn = "SN0CAP999"
+    api.inverter_sn = [sn]
+    api.inverter_details[sn] = {"batteryVoltage": 533.0}
+    api.cached_values[sn] = {SOLIS_CID_BATTERY_CAPACITY: "100"}
+
+    prefix = api.prefix
+    entity_id = f"sensor.{prefix}_solis_{sn.lower()}_battery_capacity"
+
+    # No solis_nominal_voltage configured - still published, using the live voltage, flagged unreliable
+    await api.publish_entities()
+    assert entity_id in api.dashboard_items, "battery_capacity should still be published without solis_nominal_voltage configured"
+    capacity_item = api.dashboard_items[entity_id]
+    expected_kwh_estimated = round(100 * 533.0 / 1000.0, 2)  # 100Ah * 533.0V (live) / 1000 = 53.3 kWh
+    assert capacity_item["state"] == expected_kwh_estimated, f"Expected {expected_kwh_estimated}kWh from live voltage, got {capacity_item['state']}"
+    assert capacity_item["attributes"]["reliable"] is False, "Should be flagged unreliable when using the live voltage"
+    assert "estimated from the live measured voltage" in capacity_item["attributes"]["voltage_source"]
+    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    assert warn_count == 1, f"Should warn that the value is an estimate exactly once, got {warn_count}"
+
+    # publish_entities() runs roughly once a minute in production - a second call must not repeat
+    # the warning, or it would drown out the log for every install that hasn't configured this
+    api.dashboard_items = {}
+    await api.publish_entities()
+    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    assert warn_count == 1, f"Warning should not repeat on a second publish_entities() call, got {warn_count}"
+
+    # With solis_nominal_voltage AND 2 parallel batteries configured - both applied, flagged reliable
+    api.nominal_pack_voltage = 512.0
+    api.parallel_battery_count[sn] = 2
+    api.dashboard_items = {}
+    await api.publish_entities()
+    assert entity_id in api.dashboard_items, "battery_capacity should be published once configured"
+    capacity_item = api.dashboard_items[entity_id]
+    expected_kwh = round(100 * 2 * 512.0 / 1000.0, 2)  # 100Ah x 2 parallel x 512V / 1000 = 102.4 kWh
+    assert capacity_item["state"] == expected_kwh, f"Expected {expected_kwh}kWh, got {capacity_item['state']}"
+    assert capacity_item["attributes"]["reliable"] is True, "Should be flagged reliable when solis_nominal_voltage is configured"
+
+    print("PASSED: battery_capacity is always published, flags reliability, and respects parallel_battery_count")
     return False
 
 

@@ -24,6 +24,11 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 RUN_EVERY = 5
+# Forecast scenarios simulated by the planner.
+# PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
+PV_SCENARIO_NOMINAL = 0
+PV_SCENARIO_PV10 = 1
+PV_SCENARIO_PV90 = 2
 LOAD_FORECAST_HISTORY_MAX_DAYS = 30  # Max days of history used by the weighted-bucket load forecast (days_previous_auto)
 CONFIG_ROOTS = ["/config", "/conf", "/homeassistant", "./"]
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -33,12 +38,19 @@ TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
 INVERTER_MAX_RETRY_REST = 5  # Maximum number of retries for inverter REST commands
-INVERTER_REST_TIMEOUT = 5  # Seconds to wait for a REST response before giving up (local network call, should be fast)
+INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 120  # Minimum seconds between quick inverter data updates
+PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
+
+# PV production (kWh) forecast across the remainder of a charge window above which low power charging is
+# abandoned in favour of the max charge rate. Throttling the charge rate while the sun is shining stops the
+# PV reaching the battery, the surplus is exported cheaply and the target is then made up with grid import,
+# which increases the cost of the plan over the full rate charge the planner costed the window at.
+LOW_POWER_PV_THRESHOLD = 0.1
 
 INVERTER_TEST = False  # Run inverter control self test
 

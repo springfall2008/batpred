@@ -23,6 +23,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
     - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
+    - [Sunsynk Cloud API (sunsynk)](#sunsynk-cloud-api-sunsynk)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -585,6 +586,12 @@ Connects Predbat to the Enphase Enlighten cloud for monitoring and battery contr
 - Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use
 - Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules, freeze-export windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. `automatic_config` requires both CFG and DTG support and fails configuration if either is missing
 - On a successful write, Predbat optimistically updates its local cache and moves on rather than waiting to re-read the cloud - the periodic schedule/profile re-read (every 30 minutes) corrects the cache later if a write didn't actually land
+- The PV, grid, battery and load power sensors come from the Enlighten livestream: once per cycle Predbat connects to Enphase's AWS IoT broker over MQTT, takes one measured reading and disconnects. These are separately metered channels, so they are instantaneous and the house load is a real measurement rather than a calculation
+- A livestream reading stays in use for up to 15 minutes, so a single failed connection does not disturb the sensors. Past that they fall back rather than keep presenting an old measurement as current, and readings are never carried across a restart
+- In that fallback, all four come from the same 15-minute energy bucket of the cloud's intra-day data, so they still agree with each other and a power-flow display still balances. The cloud keeps back-filling a bucket for several minutes after it closes, so Predbat reads a bucket that has settled - which means the fallback values lag real time by roughly 15 to 30 minutes
+- In that fallback, load power is the energy-balance residual (PV + grid + battery), which is how the Enphase cloud derives its own consumption figure. Because it is a small difference between much larger numbers, it becomes unreliable while the battery is charging or discharging hard - it is clamped at zero so it can never show a negative house load, but treat it as indicative only during battery activity. The energy (`*_today`) sensors are unaffected either way and remain accurate
+- **Predbat owns the battery schedules**: it drives exactly one window per direction, so unless it is in read-only mode it deletes any other CFG/DTG/RBD schedule it finds on the site, including ones you created in the Enlighten app. Do not add your own battery schedules while Predbat is in write mode - the Enphase cloud rejects any overlapping schedule with an HTTP 409 conflict, which would stop Predbat from controlling the battery. Set Predbat to read-only mode if you want to manage schedules yourself
+- A window that is no longer needed is deleted rather than disabled, because the Enphase cloud ignores a request to disable a schedule (it reports success but keeps enforcing the window)
 - Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
 
 #### Configuration Options (enphase)
@@ -660,6 +667,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
     - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
 - Supports both V1 (older firmware) and V2 (newer firmware) time window formats
 - Automatic configuration available - sets up all required Predbat sensors automatically
+- **Inverter timezone must match Predbat's `timezone` setting**: charge/discharge slot times are written to the inverter as plain `HH:MM` values with no timezone attached. The inverter interprets these using its own configured timezone, not Predbat's. If your inverter's timezone is set to UTC (or anything other than Predbat's `timezone`, `Europe/London` by default), the resulting charge/discharge windows will be offset by the difference - for example, a full hour out whenever British Summer Time is in effect. Set the inverter's own timezone to match Predbat's `timezone` setting to avoid this.
 
 #### Configuration Options (solis)
 
@@ -671,6 +679,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
 | `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
+| `nominal_voltage` | Float | No | - | `solis_nominal_voltage` | Your battery's nominal pack voltage (e.g. cell count x nominal cell voltage), used only for the battery capacity sensor. Not the same as the live measured battery voltage. Without it, the capacity sensor is still published but flagged unreliable - see [apps.yaml](apps-yaml.md#solis-cloud-api) |
 
 ---
 
@@ -770,7 +779,9 @@ Integrates with DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI
 
 - **EXPERIMENTAL**: This is a new integration and may have issues
 - Two deployment modes are supported: the self-hosted Home Assistant add-on manages its own DeyeCloud token from developer app credentials (`deye_auth_method: 'app_credentials'`, the default), while Predbat.com injects and refreshes the token for you (`deye_auth_method: 'oauth'`)
-- DEYE is mode-less like Enphase/Tesla: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal DEYE work mode (`SELLING_FIRST` for export, `ZERO_EXPORT_TO_LOAD` for charge/hold/idle) automatically from that intent (`ZERO_EXPORT_TO_CT` is reserved for CT-metered installs and is not yet selected)
+- DEYE is mode-less like Enphase/Tesla: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal DEYE work mode (`SELLING_FIRST` for export, `ZERO_EXPORT_TO_CT` for charge/hold/idle) automatically from that intent. `ZERO_EXPORT_TO_CT` measures at the grid CT, so the battery serves the whole house without exporting; the stricter `ZERO_EXPORT_TO_LOAD` measures at the inverter's own output and would stop the battery serving anything not wired to it
+- Solar Sell is always left on. It governs whether surplus PV reaches the grid, not what the battery does, so turning it off outside export windows would curtail spare solar for most daylight hours - export windows are driven by the work mode and the slot SOC targets instead
+- Self-use TOU slots are written at the inverter's rated power. Zero slot power is how DEYE expresses a freeze (the battery neither charges nor discharges), so it is used only for freeze-charge and freeze-export; if neither the inverter rating nor the battery config is known, Predbat skips the control write rather than send a slot power it cannot justify
 - Freeze-charge is implemented via the reserve, and freeze-export is signalled by setting the export target SOC to 99% (100% already means export is disabled)
 - Writes are combined into one atomic `strategy_dynamic_control` call per cycle with change detection (no write when the payload is unchanged), and the resulting `orderId` is polled asynchronously until success
 - The reserve control entity writes to DeyeCloud immediately on change, like Fox and Enphase
@@ -791,6 +802,51 @@ Integrates with DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI
 | `automatic_ignore_pv` | Boolean | No | false | `deye_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config |
 
 See [DEYE Cloud setup](inverter-setup.md#deye-cloud) for the full credential-acquisition walkthrough.
+
+---
+
+### Sunsynk Cloud API (sunsynk)
+
+**Can be restarted:** Yes
+
+#### What it does (sunsynk)
+
+Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect cloud API, providing cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required. Predbat discovers every inverter registered against the account, publishes monitoring sensors and derived battery ratings, and writes DEYE-style schedule control entities that are combined into a single settings write each cycle.
+
+#### When to enable (sunsynk)
+
+- You have a Sunsynk hybrid inverter with battery storage registered on Sunsynk Connect (the same account used by the Sunsynk phone app)
+- You want cloud-based monitoring, with optional battery control, and no local hardware or Modbus dongle access
+- You have your Sunsynk Connect account e-mail and password, or you are using Predbat.com
+
+#### Important notes (sunsynk)
+
+- **EXPERIMENTAL:** nobody on the Predbat project has a Sunsynk account, so the wire format is inferred from third-party open-source clients rather than from documentation. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report
+- **Control is on by default**, the same as `solis_control_enable`. Set `sunsynk_control_enable: false` for monitoring only - Predbat then reads telemetry and settings but never writes to the inverter. Because the write format is inferred rather than documented, it is worth running the [diagnostics CLI](inverter-setup.md#sunsynk-cloud) against your own inverter first to confirm the settings layout, and switching control off if anything looks wrong
+- **Three login methods.** `sunsynk_auth_method` selects `password` (RSA-encrypted login, the default), `password_legacy` (the pre-2025 plaintext login, opt-in) or `oauth` (Predbat.com injects and refreshes the token). `password` never falls back to `password_legacy` automatically - choosing the plaintext login is a deliberate decision by the user, not something Predbat does for you. `password_legacy` is still sent over TLS, but without the additional RSA encryption layer, so it exists only for regions whose API still serves the older login
+- Sunsynk is mode-less like DEYE/Enphase: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal Sunsynk work mode automatically from that intent
+- There is a single whole-object settings endpoint, so every write is a read-modify-write of the entire settings object rather than a partial update. Predbat re-reads the settings immediately before every write to keep the race window as small as possible, and logs when a field it does not own has changed since the last read
+- Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is one whole-object write endpoint, so the last writer wins
+- A write reaching the cloud does not mean the inverter has applied it: the dongle collects new settings on its next poll, typically one to five minutes later. Predbat tolerates a few cycles of divergence before warning
+
+#### Configuration Options (sunsynk)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | No | - | `sunsynk_username` | Your Sunsynk Connect account e-mail address (self-hosted add-on only) |
+| `password` | String | No | - | `sunsynk_password` | Your Sunsynk Connect account password (self-hosted add-on only) |
+| `key` | String | No | - | `sunsynk_key` | Injected OAuth access token (Predbat.com SaaS mode only) |
+| `region` | String | No | `sunsynk` | `sunsynk_region` | API region: `sunsynk` (`api.sunsynk.net`) or `inteless` (`pv.inteless.com`) |
+| `auth_method` | String | No | `password` | `sunsynk_auth_method` | `password` (RSA-encrypted login), `password_legacy` (pre-2025 plaintext login) or `oauth` (token injected by Predbat.com) |
+| `token_expires_at` | String | No | - | `sunsynk_token_expires_at` | Injected OAuth token expiry timestamp (Predbat.com SaaS mode only) |
+| `token_hash` | String | No | - | `sunsynk_token_hash` | Injected OAuth token refresh dedup handle (Predbat.com SaaS mode only) |
+| `inverter_sn` | String/List | No | All found | `sunsynk_inverter_sn` | Restrict Predbat to specific inverter serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `sunsynk_automatic` | Set to `true` to automatically configure Predbat to use the discovered Sunsynk inverter(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `sunsynk_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config |
+| `control_enable` | Boolean | No | true | `sunsynk_control_enable` | Allow Predbat to write charge/export schedules to the inverter. Set to `false` for monitoring only |
+| `battery_nominal_voltage` | Float | No | - | `sunsynk_battery_nominal_voltage` | Override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target |
+
+See [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI.
 
 ---
 
@@ -935,7 +991,8 @@ On first run the component queries your account for active meter point agreement
 - **EDF and E.ON Next only** — this component uses the Kraken GraphQL schema specific to those providers and will not work with Octopus Energy (use the `octopus` component instead)
 - The component automatically sets `metric_octopus_import` and `metric_standing_charge` in Predbat, and will also set `metric_octopus_export` **when an export tariff is discovered** — no manual `apps.yaml` edits are needed for those settings once the relevant tariffs have been detected and the component is running
 - E.ON Next customers who have solar export may have their import and export on **separate account numbers** — in this case the component will attempt to discover the export account automatically via an address-matching strategy, or you can provide `export_account_id` explicitly
-- For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically
+- For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically. If you can't find a way to generate a separate API key for your provider, use the `email` auth method with the same email/password you use to sign into your normal EDF or E.ON Next online account — no separate key is required for that method
+- For accounts with a SmartFlex-managed EV device, an `intelligent_dispatch` binary sensor is published per device (see [Published entities](#published-entities-kraken)) and automatically wired into `octopus_intelligent_slot`, exactly like Octopus Intelligent Go — no manual `apps.yaml` configuration is needed for this. Make sure **switch.predbat_octopus_intelligent_charging** (see [car charging docs](car-charging.md)) is turned On so Predbat actually uses the dispatch slots for planning
 
 #### Configuration Options (kraken)
 
@@ -1007,6 +1064,7 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 | `sensor.predbat_kraken_a_12345678_import_rates` | Import rate periods — consumed by Predbat automatically |
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
+| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
 

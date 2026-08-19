@@ -1,6 +1,7 @@
 """
 Tests for GatewayMQTT component.
 """
+
 import sys
 import os
 import math
@@ -10,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytz
 import gateway_status_pb2 as pb
+from gateway import _STARTUP_WAIT_TICKS
 
 import importlib.util
 
@@ -24,7 +26,7 @@ def approx_equal(actual, expected, abs_tol=0.01):
 class TestProtobufDecode:
     """Test protobuf telemetry -> entity mapping."""
 
-    def _make_status(self, soc=50, battery_power=1000, pv_power=2000, grid_power=-500, load_power=1500, mode=0):
+    def _make_status(self, soc=50, battery_power=1000, pv_power=2000, grid_power=-500, load_power=1500):
         status = pb.GatewayStatus()
         status.device_id = "pbgw_test123"
         status.firmware = "0.4.5"
@@ -57,7 +59,6 @@ class TestProtobufDecode:
         inv.inverter.active_power_w = 1800
         inv.inverter.temperature_c = 35.0
 
-        inv.control.mode = mode
         inv.control.charge_enabled = True
         inv.control.discharge_enabled = True
         inv.control.charge_rate_w = 3000
@@ -86,6 +87,9 @@ class TestProtobufDecode:
         assert approx_equal(decoded.inverters[0].grid.voltage_v, 242.5, abs_tol=0.1)
         assert decoded.inverters[0].control.charge_enabled is True
         assert decoded.inverters[0].battery.soh_percent == 98
+
+    def test_control_status_reserves_retired_operating_mode_field(self):
+        assert "mode" not in pb.ControlStatus.DESCRIPTOR.fields_by_name
 
 
 class TestPlanSerialization:
@@ -145,17 +149,6 @@ class TestPlanSerialization:
 
 
 class TestCommandFormat:
-    def test_set_mode_command(self):
-        from gateway import GatewayMQTT
-
-        cmd = GatewayMQTT.build_command("set_mode", mode=1)
-        import json
-
-        parsed = json.loads(cmd)
-        assert parsed["command"] == "set_mode"
-        assert parsed["mode"] == 1
-        assert "command_id" in parsed
-
     def test_set_charge_rate_command(self):
         from gateway import GatewayMQTT
 
@@ -181,40 +174,40 @@ class TestCommandFormat:
         from gateway import GatewayMQTT
         import json
 
-        cmd = GatewayMQTT.build_command("set_mode", mode=1, command_id=7)
+        cmd = GatewayMQTT.build_command("set_charge_rate", power_w=2500, command_id=7)
         parsed = json.loads(cmd)
         assert parsed["command_id"] == "PBAT7"
         assert isinstance(parsed["command_id"], str)
 
-    def test_serial_included_as_dongle_serial(self):
-        """serial kwarg is serialised as dongle_serial in the JSON payload."""
+    def test_serial_included_as_serial(self):
+        """serial kwarg is serialised under the "serial" key (the value is the inverter serial)."""
         from gateway import GatewayMQTT
         import json
 
-        cmd = GatewayMQTT.build_command("set_mode", mode=1, serial="CE123456789")
+        cmd = GatewayMQTT.build_command("set_reserve", target_soc=10, serial="CE123456789")
         parsed = json.loads(cmd)
-        assert parsed["dongle_serial"] == "CE123456789"
-        assert "serial" not in parsed
+        assert parsed["serial"] == "CE123456789"
+        assert "dongle_serial" not in parsed
 
-    def test_dongle_serial_preserves_original_case(self):
-        """dongle_serial is stored as-is (uppercase) even though entity suffixes are lowercased."""
+    def test_serial_preserves_original_case(self):
+        """serial is stored as-is (uppercase) even though entity suffixes are lowercased."""
         from gateway import GatewayMQTT
         import json
 
         cmd = GatewayMQTT.build_command("set_charge_rate", power_w=3000, serial="CE123456789")
         parsed = json.loads(cmd)
-        assert parsed["dongle_serial"] == "CE123456789"
-        assert parsed["dongle_serial"] != parsed["dongle_serial"].lower()
+        assert parsed["serial"] == "CE123456789"
+        assert parsed["serial"] != parsed["serial"].lower()
 
-    def test_dongle_serial_omitted_when_not_provided(self):
-        """dongle_serial key is absent from the JSON when no serial kwarg is given."""
+    def test_serial_omitted_when_not_provided(self):
+        """serial key is absent from the JSON when no serial kwarg is given."""
         from gateway import GatewayMQTT
         import json
 
-        cmd = GatewayMQTT.build_command("set_mode", mode=1)
+        cmd = GatewayMQTT.build_command("set_charge_rate", power_w=2500)
         parsed = json.loads(cmd)
-        assert "dongle_serial" not in parsed
         assert "serial" not in parsed
+        assert "dongle_serial" not in parsed
 
 
 class TestScheduleSlotCommand:
@@ -255,20 +248,20 @@ class TestSerialFromEntityId:
         """Normal entity with 6-char suffix resolves to the correct full serial."""
         gw = self._make_gateway()
         gw._suffix_to_serial["456789"] = "CE123456789"
-        assert gw._serial_from_entity_id("select.predbat_gateway_456789_mode_select") == "CE123456789"
+        assert gw._serial_from_entity_id("select.predbat_gateway_456789_charge_slot1_start") == "CE123456789"
 
     def test_short_serial_suffix(self):
         """Serials shorter than 6 chars produce a shorter suffix; lookup still succeeds."""
         gw = self._make_gateway()
         gw._suffix_to_serial["abc"] = "ABC"  # serial == suffix (3 chars)
-        assert gw._serial_from_entity_id("select.predbat_gateway_abc_mode_select") == "ABC"
+        assert gw._serial_from_entity_id("select.predbat_gateway_abc_charge_slot1_start") == "ABC"
 
     def test_suffix_lookup_is_case_insensitive(self):
         """Entity ID suffix is lowercased before lookup even if entity_id contains upper chars."""
         gw = self._make_gateway()
         gw._suffix_to_serial["456789"] = "CE123456789"
         # Uppercase in entity_id (unusual but should still resolve)
-        assert gw._serial_from_entity_id("select.predbat_gateway_456789_mode_select") == "CE123456789"
+        assert gw._serial_from_entity_id("select.predbat_gateway_456789_charge_slot1_start") == "CE123456789"
 
     def test_no_gateway_marker_returns_none(self):
         """Entity IDs without '_gateway_' return None without logging."""
@@ -280,7 +273,7 @@ class TestSerialFromEntityId:
     def test_unknown_suffix_returns_none_and_warns(self):
         """Unknown suffix returns None and emits a Warn log."""
         gw = self._make_gateway()
-        result = gw._serial_from_entity_id("select.predbat_gateway_456789_mode_select")
+        result = gw._serial_from_entity_id("select.predbat_gateway_456789_charge_slot1_start")
         assert result is None
         gw.log.assert_called_once()
         assert "Warn" in gw.log.call_args[0][0]
@@ -300,6 +293,7 @@ class TestInjectEntities:
         gw._last_status = None
         gw.args = {}
         gw.local_tz = pytz.timezone("Europe/London")
+        gw._suffix_to_serial = {}  # set by automatic_config; empty = nothing bound yet
         gw._dashboard_calls = {}  # entity_id -> (state, attributes)
 
         def capture_dashboard(entity_id, state=None, attributes=None, app=None):
@@ -465,6 +459,12 @@ class TestInjectEntities:
         # discharge_end = 1900 -> 19:00:00
         state, _ = gw._dashboard_calls[f"select.predbat_gateway_{suffix}_discharge_slot1_end"]
         assert state == "19:00:00"
+
+    def test_operating_mode_selector_is_not_published(self):
+        gw = self._make_gateway()
+        gw._inject_entities(self._make_status())
+
+        assert "select.predbat_gateway_456789_mode_select" not in gw._dashboard_calls
 
     def test_energy_counters_wh_to_kwh(self):
         """Energy counters are converted from Wh to kWh correctly."""
@@ -674,6 +674,97 @@ class TestInjectEntities:
         assert entity in gw._dashboard_calls
         state, _ = gw._dashboard_calls[entity]
         assert state == 6000
+
+
+class TestBoundEntitiesAreWritten:
+    """Every entity automatic_config() binds must actually be written by _inject_entities().
+
+    A bound-but-never-written entity holds whatever value it last had and silently
+    freezes — surfacing only as PredBat's clock-skew warning once the stale
+    inverter_time drifts past the threshold.
+    """
+
+    def _make_gateway(self):
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.log = MagicMock()
+        gw.prefix = "predbat"
+        gw._last_status = None
+        gw._auto_configured = False
+        gw._suffix_to_serial = {}
+        gw.args = {}
+        gw._args = {}
+        gw.local_tz = pytz.timezone("Europe/London")
+        gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw._dashboard_calls = {}
+
+        def capture_set_arg(key, value):
+            gw._args[key] = value
+
+        def capture_dashboard(entity_id, state=None, attributes=None, app=None):
+            gw._dashboard_calls[entity_id] = (state, attributes)
+
+        gw.set_arg = capture_set_arg
+        gw.dashboard_item = capture_dashboard
+        return gw
+
+    def _add_inverter(self, status, serial, primary, inv_type=None):
+        inv = status.inverters.add()
+        inv.type = inv_type if inv_type is not None else pb.INVERTER_TYPE_GIVENERGY
+        inv.serial = serial
+        inv.primary = primary
+        inv.connected = True
+        inv.active = True
+        inv.battery.soc_percent = 50
+        inv.battery.capacity_wh = 9500
+        inv.battery.rate_max_w = 5000
+        return inv
+
+    def _gateway_plus_two_aios(self):
+        """Reproduces the field topology: a Gateway coordinating two primary AIOs.
+
+        Per GivTCP rules automatic_config picks the Gateway as the control target,
+        so every arg binds to the Gateway's serial suffix. The Gateway is not
+        flagged primary — firmware only sets primary on battery inverters.
+        """
+        status = pb.GatewayStatus()
+        status.device_id = "pbgw_test"
+        status.firmware = "0.27.0"
+        status.timestamp = 1741789200
+        status.schema_version = 1
+        self._add_inverter(status, "GW2315G357", primary=False, inv_type=pb.INVERTER_TYPE_GIVENERGY_GATEWAY)
+        self._add_inverter(status, "CH2335G421", primary=True)
+        self._add_inverter(status, "CH2432G070", primary=True)
+        return status
+
+    def test_bound_inverter_time_entity_is_written(self):
+        """The inverter_time entity bound by automatic_config must be written."""
+        gw = self._make_gateway()
+        gw._last_status = self._gateway_plus_two_aios()
+        gw.automatic_config()
+
+        bound = gw._args["inverter_time"][0]
+
+        gw._inject_entities(gw._last_status)
+
+        assert bound in gw._dashboard_calls, "automatic_config bound inverter_time to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
+
+    def test_bound_soc_entity_is_written(self):
+        """The soc_percent entity bound by automatic_config must be written."""
+        gw = self._make_gateway()
+        gw._last_status = self._gateway_plus_two_aios()
+        gw.automatic_config()
+
+        bound = gw._args["soc_percent"][0]
+
+        gw._inject_entities(gw._last_status)
+
+        assert bound in gw._dashboard_calls, "automatic_config bound soc_percent to {} but _inject_entities never wrote it; " "written entities were: {}".format(bound, sorted(gw._dashboard_calls))
 
 
 class TestDebugLogging:
@@ -1744,6 +1835,55 @@ class TestAutomaticConfig:
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.example.com", mqtt_token="tok", gateway_inverter_serial=None)
         assert gw.gateway_inverter_serial == []
 
+    def test_serial_filter_blank_strings_become_empty_list(self):
+        """Empty and whitespace-only serials are treated as an unset filter."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        for value in ("", " ", "   ", "\t\r\n"):
+            gw = GatewayMQTT.__new__(GatewayMQTT)
+            gw.base = MagicMock()
+            gw.args = {}
+            gw.initialize(
+                gateway_device_id="pbgw_test",
+                mqtt_host="mqtt.example.com",
+                mqtt_token="tok",
+                gateway_inverter_serial=value,
+            )
+            assert gw.gateway_inverter_serial == []
+
+    def test_serial_filter_list_drops_blanks_and_trims_values(self):
+        """Blank list entries are discarded while valid serials are trimmed."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial=["", None, "  ", " CE000000AA1 ", "\t"],
+        )
+        assert gw.gateway_inverter_serial == ["CE000000AA1"]
+
+    def test_serial_filter_json_array_drops_blanks_and_trims_values(self):
+        """JSON-encoded lists receive the same blank filtering and trimming."""
+        from gateway import GatewayMQTT
+        from unittest.mock import MagicMock
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw.base = MagicMock()
+        gw.args = {}
+        gw.initialize(
+            gateway_device_id="pbgw_test",
+            mqtt_host="mqtt.example.com",
+            mqtt_token="tok",
+            gateway_inverter_serial=' [ "", "  ", " CE000000AA1 " ] ',
+        )
+        assert gw.gateway_inverter_serial == ["CE000000AA1"]
+
     def test_serial_filter_json_array_string_expanded_to_list(self):
         """A JSON-encoded array string is parsed and expanded into a list of serials."""
         from gateway import GatewayMQTT
@@ -1922,15 +2062,6 @@ class TestSelectEvent:
     # Serial routing
     # ------------------------------------------------------------------
 
-    def test_mode_select_includes_serial_when_known(self):
-        """mode_select passes full inverter serial to publish_command when suffix is in the map."""
-        gw = self._make_gateway()
-        gw._suffix_to_serial["456789"] = "CE123456789"
-        self._run(gw.select_event("select.predbat_gateway_456789_mode_select", "Eco"))
-        assert len(gw._published) == 1
-        _, kwargs = gw._published[0]
-        assert kwargs.get("serial") == "CE123456789"
-
     def test_charge_slot_includes_serial_when_known(self):
         """charge_slot1_start passes full inverter serial when suffix is in the map."""
         gw = self._make_gateway()
@@ -1943,7 +2074,7 @@ class TestSelectEvent:
         """No command is sent when the entity suffix cannot be resolved to a serial."""
         gw = self._make_gateway()
         gw._suffix_to_serial = {}  # clear — suffix "456789" unknown
-        self._run(gw.select_event("select.predbat_gateway_456789_mode_select", "Eco"))
+        self._run(gw.select_event("select.predbat_gateway_456789_charge_slot1_start", "01:30:00"))
         assert gw._published == []
         gw.log.assert_called()
 
@@ -2865,6 +2996,9 @@ class TestGatewayUnitControlBinding:
         gw.args = {}
         gw._args = {}
         gw.gateway_inverter_serial = []
+        gw.gateway_evc_automatic = False
+        gw.gateway_evc_control = False
+        gw._configured_ev_chargers = frozenset()
 
         def capture_set_arg(key, value):
             gw._args[key] = value
@@ -3068,6 +3202,56 @@ class TestGatewayUnitControlBinding:
         gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318", "CH9999G999"]).SerializeToString())
         assert gw._args["num_inverters"] == 1
         assert gw._args["charge_start_time"][0] == "select.predbat_gateway_47g077_charge_slot1_start"
+
+    def test_api_started_only_set_once_auto_config_has_completed(self):
+        """api_started must not become visible before automatic_config has wired up the args.
+
+        ComponentManager.start() polls api_started from the *main* thread while the MQTT
+        listener runs in the component's own thread, so setting the flag on receipt of the
+        first telemetry frame — before automatic_config() — lets PredBat startup continue
+        with num_inverters / soc_percent unset.
+        """
+        gw = self._make_handler_gateway()
+        seen = {}
+        real_config = gw.automatic_config
+
+        def watched_config():
+            seen["api_started_during_config"] = gw.api_started
+            return real_config()
+
+        gw.automatic_config = watched_config
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+
+        assert seen["api_started_during_config"] is False, "api_started was set before auto-config ran"
+        assert gw._auto_configured
+        assert gw.api_started is True
+
+    def test_api_started_stays_false_when_auto_config_aborts(self):
+        """A serial filter that matches nothing aborts auto-config, so the API is not started.
+
+        The run() startup path still releases the component after its timeout, but the
+        telemetry path must not declare the component started with no inverter args set.
+        """
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["CH0000X000"]
+
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+
+        assert gw._auto_configured is False
+        assert gw.api_started is False
+
+    def test_api_started_set_on_later_frame_that_needs_no_reconfigure(self):
+        """Once configured, a steady-state frame that triggers no re-config still starts the API."""
+        gw = self._make_handler_gateway()
+        gw.gateway_inverter_serial = ["CH0000X000"]
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw.api_started is False
+
+        # Filter corrected (as a restart would do) — the next frame configures and starts.
+        gw.gateway_inverter_serial = []
+        gw._process_telemetry(self._gateway_plus_aios_status(["CH2414G318"]).SerializeToString())
+        assert gw._auto_configured
+        assert gw.api_started is True
 
     # ------------------------------------------------------------------
     # EMS and AC3 topologies
@@ -3459,13 +3643,14 @@ class TestRunStartupWait:
         return asyncio.run(coro)
 
     def test_returns_true_without_sleeping_when_flag_already_set(self):
-        """When _first_connection_attempted is pre-set, run() returns True without sleeping."""
+        """When both startup conditions are pre-set, run() returns True without sleeping."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch, AsyncMock
 
         gw = self._make_gateway()
         gw._first_connection_attempted = True
+        gw._auto_configured = True
 
         async def run_test():
             async def fake_mqtt_loop():
@@ -3481,7 +3666,7 @@ class TestRunStartupWait:
         assert sleep_count == 0
 
     def test_returns_true_after_flag_set_on_first_sleep(self):
-        """run() exits the wait loop as soon as the flag is set, after a single sleep."""
+        """run() exits the wait loop as soon as the flags are set, after a single sleep."""
         if not HAS_AIOMQTT:
             return
         from unittest.mock import patch
@@ -3492,7 +3677,9 @@ class TestRunStartupWait:
         async def run_test():
             async def fake_sleep(t):
                 sleep_count[0] += 1
-                gw._first_connection_attempted = True  # Simulates MQTT loop completing first attempt
+                # Simulates the MQTT loop connecting and the first telemetry arriving
+                gw._first_connection_attempted = True
+                gw._auto_configured = True
 
             async def fake_mqtt_loop():
                 pass
@@ -3529,7 +3716,9 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 120  # 60 * 2 iterations of 0.5s each = 60s total
+        # The connection and auto-config waits share one budget, so a dead broker stalls
+        # startup for the budget once, not once per wait.
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS
         warn_logged = any("Warn" in str(c) and "not yet complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when the first connection attempt times out"
 
@@ -3586,39 +3775,80 @@ class TestRunStartupWait:
 
         result = self._run(run_test())
         assert result is True
-        assert sleep_count[0] == 60 * 2  # 60 * 2 iterations of 0.5s each = 60s total
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS  # Whole startup budget consumed
         warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
         assert warn_logged, "Expected a Warn log when auto-config times out"
 
-    def test_auto_config_wait_skipped_when_not_connected(self):
-        """When connection failed, auto-config wait is skipped entirely."""
+    def test_auto_config_wait_still_runs_when_first_attempt_failed(self):
+        """A failed *first* connection attempt must not skip the auto-config wait.
+
+        The MQTT loop retries with backoff in the background, so a transient broker
+        failure at startup is usually followed by a connection and telemetry within the
+        60s window. Returning immediately declares the component started with no
+        inverter args set.
+        """
         if not HAS_AIOMQTT:
             return
-        from unittest.mock import patch, AsyncMock
+        from unittest.mock import patch
 
         gw = self._make_gateway()
         gw._first_connection_attempted = True
-        # _mqtt_connected stays False (connection failed)
+        # _mqtt_connected stays False (first attempt failed)
+        sleep_count = [0]
 
         async def run_test():
+            async def fake_sleep(t):
+                sleep_count[0] += 1
+                # Reconnect succeeds and the first telemetry arrives.
+                gw._mqtt_connected = True
+                gw._auto_configured = True
+
             async def fake_mqtt_loop():
                 pass
 
             gw._mqtt_loop = fake_mqtt_loop
-            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch("asyncio.sleep", side_effect=fake_sleep):
                 result = await gw.run(0, True)
-            return result, mock_sleep.call_count
+            return result
 
-        result, sleep_count = self._run(run_test())
+        result = self._run(run_test())
         assert result is True
-        assert sleep_count == 0  # No sleeps: connection-wait breaks immediately, auto-config skipped
+        assert sleep_count[0] == 1  # One sleep in the auto-config wait loop
+
+    def test_auto_config_wait_times_out_when_broker_never_reachable(self):
+        """A broker that never comes up still releases startup after the 60s cap."""
+        if not HAS_AIOMQTT:
+            return
+        from unittest.mock import patch
+
+        gw = self._make_gateway()
+        gw._first_connection_attempted = True
+        sleep_count = [0]
+
+        async def run_test():
+            async def fast_sleep(t):
+                sleep_count[0] += 1  # Never connects, never auto-configures
+
+            async def fake_mqtt_loop():
+                pass
+
+            gw._mqtt_loop = fake_mqtt_loop
+            with patch("asyncio.sleep", side_effect=fast_sleep):
+                result = await gw.run(0, True)
+            return result
+
+        result = self._run(run_test())
+        assert result is True
+        assert sleep_count[0] == _STARTUP_WAIT_TICKS  # Whole startup budget consumed
+        warn_logged = any("Warn" in str(c) and "Auto-config not complete" in str(c) for c in gw.log.call_args_list)
+        assert warn_logged, "Expected a Warn log when auto-config times out"
 
 
 class TestSetChargeSlotPayload:
     """Diagnostic test — captures the raw MQTT JSON for set_charge_slot and prints it.
 
     Expected hub format:
-      {"command": "set_charge_slot", "dongle_serial": "<serial>", "schedule_json": "{\"start\":200}"}
+      {"command": "set_charge_slot", "serial": "<serial>", "schedule_json": "{\"start\":200}"}
     """
 
     def _make_gateway(self):
@@ -3660,7 +3890,7 @@ class TestSetChargeSlotPayload:
         expected = {
             "command": "set_charge_slot",
             "command_id": "PBAT1",
-            "dongle_serial": "CH2330G499",
+            "serial": "CH2330G499",
             "schedule_json": '{"start": 200}',
         }
 
@@ -3715,7 +3945,7 @@ class TestEvTelemetry:
         gw = self._make_gateway()
         gw._inject_ev_entities(self._status_with_ev())
 
-        base = "predbat_gateway_ev"
+        base = "predbat_gateway_ev_3xb749"
         assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is True
         assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is True  # status="Charging" -> car connected
         assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is True
@@ -3731,13 +3961,78 @@ class TestEvTelemetry:
         # Derived charge-rate capability in kW: 32 A × 240 V / 1000
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_charge_rate"][0], 7.68)
 
+    def test_ev_suffix_is_stable_regardless_of_charger_count(self):
+        """A charger keeps the same entity ids whether or not others are present.
+
+        Regression: the suffix used to be a bare "ev" when a single charger was
+        visible and "ev_<id>" only when several were, so entity ids silently
+        renamed the moment a second charger appeared (or the same charger was
+        briefly seen twice across a reconnect), orphaning dashboards bound to them.
+        """
+        from gateway import GatewayMQTT
+
+        ev = self._status_with_ev().ev_chargers[0]
+        assert GatewayMQTT._ev_suffix(ev, False) == "ev_3xb749"
+        assert GatewayMQTT._ev_suffix(ev, True) == "ev_3xb749"
+
+    def test_ev_suffix_falls_back_when_id_unknown(self):
+        """A charger that has not sent its BootNotification yet still gets a suffix."""
+        from gateway import GatewayMQTT
+
+        ev = self._status_with_ev(charge_point_id="").ev_chargers[0]
+        assert GatewayMQTT._ev_suffix(ev, False) == "ev"
+
+    def test_disconnected_charger_reports_offline(self):
+        """A charger the gateway reports as disconnected surfaces as fully idle.
+
+        The gateway now sends known-but-disconnected chargers with connected=false
+        instead of omitting them, so these entities must go False rather than
+        freezing at their last values (which is how a 2-day EV outage went unseen).
+
+        Critically this asserts the LIVE-SESSION fields too, not just online/connected:
+        car_charging_now is wired to session_active and PredBat plans a charging slot
+        whenever it is true, so a disconnected charger carrying a stale
+        session_active would schedule charging for a charger that is not there.
+        The fixture deliberately supplies session_active=True, power_w=7200 and
+        session_energy_wh=12400 alongside connected=False — the inconsistent payload
+        older firmware can emit.
+        """
+        gw = self._make_gateway(battery_size=100)
+        gw._inject_ev_entities(self._status_with_ev(connected=False, status="Unavailable"))
+
+        base = "predbat_gateway_ev_3xb749"
+        assert gw._dashboard_calls[f"binary_sensor.{base}_online"][0] is False
+        assert gw._dashboard_calls[f"binary_sensor.{base}_connected"][0] is False
+        # Stale live-session values must be suppressed, not republished
+        assert gw._dashboard_calls[f"binary_sensor.{base}_session_active"][0] is False
+        assert gw._dashboard_calls[f"sensor.{base}_power"][0] == 0
+        assert gw._dashboard_calls[f"sensor.{base}_session_energy"][0] == 0
+
+    def test_suffix_slugifies_unsafe_charge_point_ids(self):
+        """Charge point ids are vendor strings; entity ids must stay legal.
+
+        Spaces, dots, slashes, dashes and non-ASCII are not valid in a Home Assistant
+        entity id, and nothing downstream sanitises the value.
+        """
+        from gateway import GatewayMQTT
+
+        for cp_id, expected in [
+            ("CP/AB-123", "ev_pab123"),  # punctuation dropped, last 6 kept
+            ("cp 42.7", "ev_cp427"),  # -> "cp427", shorter than 6
+            ("ABC", "ev_abc"),  # shorter than 6 -> whole id
+            ("charge_point_Ω", "ev_point_"),  # non-ASCII dropped, underscore kept
+            ("///", "ev"),  # slugifies to nothing -> fallback
+        ]:
+            ev = self._status_with_ev(charge_point_id=cp_id).ev_chargers[0]
+            assert GatewayMQTT._ev_suffix(ev, False) == expected, cp_id
+
     def test_ev_entity_attributes_from_table(self):
         """Published EV entities carry their GATEWAY_ATTRIBUTE_TABLE attributes."""
         from gateway import GATEWAY_ATTRIBUTE_TABLE
 
         gw = self._make_gateway()
         gw._inject_ev_entities(self._status_with_ev())
-        _, attrs = gw._dashboard_calls["sensor.predbat_gateway_ev_power"]
+        _, attrs = gw._dashboard_calls["sensor.predbat_gateway_ev_3xb749_power"]
         assert attrs == GATEWAY_ATTRIBUTE_TABLE["ev_power"]
 
     def test_not_reported_fields_skipped(self):
@@ -3747,7 +4042,7 @@ class TestEvTelemetry:
         status = self._status_with_ev(soc_percent=0, voltage_v=0, max_current_a=0, current_limit_a=0, eco_mode="", status="")
         gw._inject_ev_entities(status)
 
-        base = "predbat_gateway_ev"
+        base = "predbat_gateway_ev_3xb749"
         # soc is now always published — falls back to session_energy / battery_size * 100
         assert approx_equal(gw._dashboard_calls[f"sensor.{base}_soc"][0], 12.4)
         assert f"sensor.{base}_voltage" not in gw._dashboard_calls
@@ -3767,14 +4062,14 @@ class TestEvTelemetry:
         gw = self._make_gateway(battery_size=50)
         # session_energy_wh=12400 -> 12.4 kWh; battery_size=50 -> 12.4/50*100 = 24.8%
         gw._inject_ev_entities(self._status_with_ev(soc_percent=0))
-        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_soc"][0], 24.8)
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_3xb749_soc"][0], 24.8)
 
     def test_charge_rate_uses_230v_when_voltage_missing(self):
         """With max current but no voltage, charge rate assumes 230 V."""
         gw = self._make_gateway()
         gw._inject_ev_entities(self._status_with_ev(max_current_a=16, voltage_v=0))
         # 16 A × 230 V / 1000
-        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_charge_rate"][0], 3.68)
+        assert approx_equal(gw._dashboard_calls["sensor.predbat_gateway_ev_3xb749_charge_rate"][0], 3.68)
 
     def test_no_chargers_publishes_nothing(self):
         """A status with no EV chargers publishes no EV entities."""
@@ -3837,20 +4132,52 @@ class TestEvAutoConfig:
         ev.voltage_v = voltage_v
         return status
 
+    def test_registers_connected_charger_not_a_stale_slot(self):
+        """A disconnected charger in slot 0 must not be registered over a connected one.
+
+        Gateway firmware now reports known-but-offline chargers with connected=false
+        (it used to omit them), so the first entry is no longer guaranteed to be live.
+        """
+        status = pb.GatewayStatus()
+        stale = status.ev_chargers.add()
+        stale.connected = False
+        stale.charge_point_id = "CP0000"
+        live = status.ev_chargers.add()
+        live.connected = True
+        live.charge_point_id = "CP0001"
+
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(status)
+
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0001_connected"]
+
+    def test_registers_offline_charger_when_none_connected(self):
+        """A charger that is merely offline right now still registers, so it reappears."""
+        status = pb.GatewayStatus()
+        offline = status.ev_chargers.add()
+        offline.connected = False
+        offline.charge_point_id = "CP0002"
+
+        gw = self._make_gateway(ev_enable=True, num_cars=0)
+        gw._register_ev_car(status)
+
+        assert gw._args["num_cars"] == 1
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp0002_connected"]
+
     def test_registers_car_when_none_configured(self):
         """With the flag on and no existing cars, the charger is registered as car 1."""
         gw = self._make_gateway(ev_enable=True, num_cars=0)
         gw._register_ev_car(self._status_with_ev())
 
         assert gw._args["num_cars"] == 1
-        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_connected"]
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_session_active"]
-        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_soc"]
+        assert gw._args["car_charging_planned"] == ["binary_sensor.predbat_gateway_ev_cp1_connected"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
+        assert gw._args["car_charging_soc"] == ["sensor.predbat_gateway_ev_cp1_soc"]
         # car_charging_rate is a UI config item — set via expose_config, not set_arg
         assert "car_charging_rate" not in gw._args
         gw.base.expose_config.assert_called_once_with("car_charging_rate", 7.68)  # 32A * 240V / 1000
         # Session energy sensor for subtracting EV load from history
-        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_session_energy"
+        assert gw._args["car_charging_energy"] == "sensor.predbat_gateway_ev_cp1_session_energy"
         # Battery size and target limit are left to the existing car_charging_* settings
         assert "car_charging_battery_size" not in gw._args
         assert "car_charging_limit" not in gw._args
@@ -3872,7 +4199,7 @@ class TestEvAutoConfig:
         """car_charging_now is wired to session_active when gateway_evc_control is False."""
         gw = self._make_gateway(ev_enable=True, num_cars=0, evc_control=False)
         gw._register_ev_car(self._status_with_ev())
-        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_session_active"]
+        assert gw._args["car_charging_now"] == ["binary_sensor.predbat_gateway_ev_cp1_session_active"]
 
     def test_car_charging_now_omitted_when_controlling(self):
         """car_charging_now is not set when gateway_evc_control is True to prevent feedback loop."""
@@ -4210,6 +4537,52 @@ class TestRateAnchors(unittest.TestCase):
         self.assertIsNone(extract_rate_anchors(8.0, float("inf"), 15.0, 12.0))
 
 
+class TestPublishRawLoopSafety:
+    """_publish_raw() must run the actual client.publish() on the event loop that
+    owns the aiomqtt Client (self._loop), even when invoked from a different loop —
+    otherwise the publish confirmation Future is bound to the wrong loop and stalls
+    for aiomqtt's ~10s default timeout instead of completing near-instantly. This is
+    what happens today when a control write reaches GatewayMQTT via
+    ha.py::run_async(), which runs the whole call chain on a fresh, throwaway
+    event loop distinct from GatewayMQTT's own persistent MQTT loop.
+    """
+
+    def test_publish_dispatches_to_owning_loop_when_called_cross_loop(self):
+        """A cross-loop _publish_raw() call must execute client.publish() on the
+        thread that owns self._loop, not on the calling thread."""
+        import asyncio
+        import threading
+        from gateway import GatewayMQTT
+
+        gw = GatewayMQTT.__new__(GatewayMQTT)
+        gw._mqtt_connected = True
+        observed = {}
+
+        class FakeClient:
+            async def publish(self, topic, payload, qos=0, retain=False):
+                observed["thread_ident"] = threading.get_ident()
+
+        gw._mqtt_client = FakeClient()
+
+        # Real second event loop on its own thread — mimics GatewayMQTT's
+        # persistent MQTT loop (owned by a dedicated thread via hass.py::create_task).
+        owner_loop = asyncio.new_event_loop()
+        owner_thread = threading.Thread(target=owner_loop.run_forever, daemon=True)
+        owner_thread.start()
+        gw._loop = owner_loop
+
+        try:
+            # Call _publish_raw from a DIFFERENT, freshly-created loop on THIS
+            # thread — mirrors ha.py::run_async()'s asyncio.run(coro) pattern.
+            asyncio.run(gw._publish_raw("predbat/devices/test/command", b"payload"))
+        finally:
+            owner_loop.call_soon_threadsafe(owner_loop.stop)
+            owner_thread.join(timeout=2)
+            assert not owner_thread.is_alive(), "owner MQTT loop thread did not stop"
+            owner_loop.close()
+        assert observed.get("thread_ident") == owner_thread.ident, "client.publish() ran on the wrong thread/loop"
+
+
 def run_gateway_tests(my_predbat=None):
     """Run all GatewayMQTT tests. Returns True on failure, False on success."""
     from tests.test_gateway_token_refresh import TestIsAuthFailure, TestApplyRefreshResponse, TestMaybeRefreshOnAuthError
@@ -4222,6 +4595,8 @@ def run_gateway_tests(my_predbat=None):
         TestInjectEntities,
         TestDebugLogging,
         TestAutomaticConfig,
+        TestBoundEntitiesAreWritten,
+        TestGatewayUnitControlBinding,
         TestEvTelemetry,
         TestEvAutoConfig,
         TestEvInitialize,
@@ -4244,6 +4619,7 @@ def run_gateway_tests(my_predbat=None):
         TestApplyRefreshResponse,
         TestMaybeRefreshOnAuthError,
         TestRateAnchors,
+        TestPublishRawLoopSafety,
     ]
     for cls in test_classes:
         instance = cls()

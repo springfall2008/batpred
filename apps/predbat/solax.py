@@ -23,10 +23,32 @@ import argparse
 import traceback
 from datetime import datetime, timezone, timedelta
 from component_base import ComponentBase
+from mock_base import MockBase as SharedMockBase
 
 SOLAX_TIMEOUT = 20
 SOLAX_RETRIES = 5
 SOLAX_MIN_RESERVE_PERCENT = 10  # SolaX Cloud clamps target_soc/reserve controls to this floor; see control_info()
+SOLAX_TEST_MODE_DURATION = 60 * 60  # Default timeOfDuration (seconds) for the standalone CLI raw commands
+SOLAX_MIN_MODE_DURATION = 60  # Shortest timeOfDuration (seconds) that can be requested
+SOLAX_CONTROL_RETRY_BACKOFF = 5 * 60  # First wait (seconds) before retrying a control mode the inverter rejected
+SOLAX_CONTROL_RETRY_MAX = 60 * 60  # Longest wait (seconds) between retries of a rejected control mode
+# nextMotion values, the action the inverter takes once a VPP mode ends
+SOLAX_NEXT_MOTION_EXIT = 160  # Exit remote control
+SOLAX_NEXT_MOTION_SELF_CONSUME = 161  # Back to self-consume charge/discharge mode
+# Raw commands that can be issued one at a time from the standalone CLI, see run_test_command()
+SOLAX_TEST_COMMANDS = [
+    "self_consume",
+    "self_consume_charge_only",
+    "exit_vpp",
+    "soc_target",
+    "positive_negative",
+    "work_mode_selfuse",
+    "work_mode_feedin",
+]
+SOLAX_PLANT_INFO_MAX_AGE = 8 * 60  # Plant info is static, re-poll it once the data is this many minutes old
+SOLAX_DEVICE_INFO_MAX_AGE = 30  # Device info changes rarely, re-poll it once the data is this many minutes old
+SOLAX_CACHE_EXPIRY_HOURS = 24  # Cached plant and device info is discarded by the storage layer after this long
+SOLAX_INFO_RETRY_MINUTES = 5  # Wait this long before retrying a plant or device info read that failed
 SOLAX_COMMAND_RETRY_DELAY = 2.0
 SOLAX_COMMAND_MAX_RETRIES = 8
 SOLAX_REGIONS = {
@@ -339,6 +361,10 @@ class SolaxAPI(ComponentBase):
         self.current_mode_hash = None
         self.current_mode_hash_timestamp = None
         self.enable_controls = enable_controls
+        self.freeze_charge_min_soc = None
+        self.failed_mode_hash = None
+        self.failed_mode_retry_time = None
+        self.failed_mode_count = 0
 
         # Build base URL from region
         self.base_url = f"https://{SOLAX_REGIONS.get(region, SOLAX_REGIONS['eu'])}"
@@ -356,6 +382,18 @@ class SolaxAPI(ComponentBase):
         self.realtime_data = {}
         self.realtime_device_data = {}
         self.controls = {}
+
+        # Which plants and devices failed their most recent realtime poll, stale data is not republished
+        self.realtime_plant_failed = set()
+        self.realtime_device_failed = set()
+
+        # When the plant and device info was last read successfully, seeded from the storage cache on
+        # startup so that a restart does not re-read data that is still current, plus when it was last
+        # attempted so that a failing read is retried at a sensible rate rather than every cycle
+        self.plant_info_updated = None
+        self.plant_info_attempted = None
+        self.device_info_updated = None
+        self.device_info_attempted = None
 
         # Error tracking
         self.error_count = 0
@@ -560,6 +598,10 @@ class SolaxAPI(ComponentBase):
             except ValueError:
                 self.log(f"SolaX API: Invalid number value {value} for {entity_id}")
                 return
+            # Clamp to the range the entity advertises, a service call can set a value outside it and
+            # the entity would then disagree with what is sent to the inverter
+            if min_value is not None and max_value is not None:
+                value = max(min_value, min(max_value, value))
         self.controls[plant_id][field] = value
         self.log(f"SolaX API: Updated control for plant {plant_id}, field {field} to {value}")
         await self.publish_controls()
@@ -706,7 +748,6 @@ class SolaxAPI(ComponentBase):
         # Export takes priority over charge (although overlapping windows should not be possible)
         if export_window:
             new_target_soc = max(export_target_soc, reserve_soc)
-            duration = (export_end - now).total_seconds()
             new_end = export_end_minutes
             if new_target_soc >= current_soc:
                 # Freeze export
@@ -717,7 +758,6 @@ class SolaxAPI(ComponentBase):
                 new_mode = "export"
                 new_power = -export_power
         elif charge_window:
-            duration = (charge_end - now).total_seconds()
             new_end = charge_end_minutes
             new_target_soc = max(charge_target_soc, reserve_soc)
             if (new_target_soc == reserve_soc) or (new_target_soc == current_soc):
@@ -736,11 +776,29 @@ class SolaxAPI(ComponentBase):
             new_mode = "eco"
             new_target_soc = reserve_soc
             new_power = 0
-            duration = 12 * 60 * 60  # Default to 12 hours
             new_end = 0
 
-        duration = min(duration, 12 * 60 * 60)  # Max duration 12 hours
-        new_mode_hash = hash((new_mode, new_power, new_target_soc, new_end))
+        # Freeze charge holds the battery where it was when the window opened, the floor is not chased
+        # upwards as PV charges the battery so that a long freeze does not rewrite the inverter repeatedly
+        if new_mode == "freeze_charge":
+            if self.freeze_charge_min_soc is None:
+                self.freeze_charge_min_soc = max(reserve_soc, min(100, current_soc))
+            new_min_soc = self.freeze_charge_min_soc
+        else:
+            self.freeze_charge_min_soc = None
+            new_min_soc = reserve_soc
+
+        # Clamp here rather than only inside set_default_work_mode, so that the mode hash, the backoff
+        # state and the log all describe the payload that is actually sent
+        new_min_soc = max(SOLAX_MIN_RESERVE_PERCENT, min(100, new_min_soc))
+
+        # Only hash what is actually sent for this mode.  The freeze modes hold the battery with min_soc
+        # and send no SOC target, so tracking new_target_soc there would rewrite the inverter every time
+        # the battery SOC moved by 1%
+        if new_mode in ("eco", "freeze_charge", "freeze_export"):
+            new_mode_hash = hash((new_mode, new_end, new_min_soc))
+        else:
+            new_mode_hash = hash((new_mode, new_power, new_target_soc, new_end, new_min_soc))
         old_mode_hash = self.current_mode_hash
         old_mode_hash_timestamp = self.current_mode_hash_timestamp
         # Check age of current mode hash
@@ -750,30 +808,39 @@ class SolaxAPI(ComponentBase):
                 old_mode_hash = None  # Force update if older than 15 minutes
         if old_mode_hash is not None and new_mode_hash == old_mode_hash:
             self.log(f"SolaX API: No control changes for plant {plant_id}, skipping")
+        elif new_mode_hash == self.failed_mode_hash and self.failed_mode_retry_time and now < self.failed_mode_retry_time:
+            # This exact mode was rejected by the inverter, back off rather than retrying every cycle.
+            # A different mode is always tried immediately as it may well be one the inverter accepts.
+            wait = int((self.failed_mode_retry_time - now).total_seconds())
+            self.log(f"Warn: SolaX API: Mode {new_mode} failed {self.failed_mode_count} time(s) for plant {plant_id}, waiting {wait} seconds before retrying")
         else:
             success = True
             if new_mode == "eco":
-                self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying self consume mode")
-                success1 = await self.set_default_work_mode(sn_list, mode="selfuse")
-                success2 = await self.self_consume_mode(sn_list, time_of_duration=duration)
+                # Hand control back to the inverter, its own self use logic is what idle means.  The VPP
+                # self consume mode is not used as some inverters reject it (device execution failed)
+                self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying self use work mode with min_soc {new_min_soc}")
+                success1 = await self.set_default_work_mode(sn_list, mode="selfuse", min_soc=new_min_soc)
+                success2 = await self.exit_vpp_mode(sn_list)
                 success = success1 and success2
             elif new_mode == "freeze_charge":
-                self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying self consume charge only mode")
-                success2 = await self.set_default_work_mode(sn_list, mode="selfuse")
-                success1 = await self.self_consume_charge_only_mode(sn_list, time_of_duration=duration)
+                # Freeze charge is self use held at the current SOC, the battery can charge from PV but
+                # will not discharge below min_soc
+                self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying self use work mode frozen at min_soc {new_min_soc}")
+                success1 = await self.set_default_work_mode(sn_list, mode="selfuse", min_soc=new_min_soc)
+                success2 = await self.exit_vpp_mode(sn_list)
                 success = success1 and success2
             elif new_mode == "freeze_export":
-                success1 = await self.set_default_work_mode(sn_list, mode="feedin")
+                success1 = await self.set_default_work_mode(sn_list, mode="feedin", min_soc=new_min_soc)
                 success2 = await self.exit_vpp_mode(sn_list)
                 success = success1 and success2
             elif new_mode == "charge":
                 self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying SOC target control mode")
-                success1 = await self.set_default_work_mode(sn_list, mode="selfuse")
+                success1 = await self.set_default_work_mode(sn_list, mode="selfuse", min_soc=new_min_soc)
                 success2 = await self.soc_target_control_mode(sn_list, new_target_soc, charge_discharge_power=new_power)
                 success = success1 and success2
             elif new_mode == "export":
                 self.log(f"SolaX API: Plant {plant_id} : {sn_list} Applying SOC target control mode for export")
-                success1 = await self.set_default_work_mode(sn_list, mode="feedin")
+                success1 = await self.set_default_work_mode(sn_list, mode="feedin", min_soc=new_min_soc)
                 success2 = await self.soc_target_control_mode(sn_list, new_target_soc, charge_discharge_power=new_power)
                 success = success1 and success2
             else:
@@ -783,7 +850,17 @@ class SolaxAPI(ComponentBase):
             if success:
                 self.current_mode_hash = new_mode_hash
                 self.current_mode_hash_timestamp = now
-                self.log(f"SolaX API: Applied new mode {new_mode} target_soc {new_target_soc} new_power {new_power} for plant {plant_id}")
+                self.failed_mode_hash = None
+                self.failed_mode_retry_time = None
+                self.failed_mode_count = 0
+                self.log(f"SolaX API: Applied new mode {new_mode} target_soc {new_target_soc} new_power {new_power} min_soc {new_min_soc} for plant {plant_id}")
+            else:
+                # Back off exponentially so a mode the inverter always rejects cannot hammer the cloud API
+                self.failed_mode_count = self.failed_mode_count + 1 if new_mode_hash == self.failed_mode_hash else 1
+                backoff = min(SOLAX_CONTROL_RETRY_BACKOFF * (2 ** (self.failed_mode_count - 1)), SOLAX_CONTROL_RETRY_MAX)
+                self.failed_mode_hash = new_mode_hash
+                self.failed_mode_retry_time = now + timedelta(seconds=backoff)
+                self.log(f"Warn: SolaX API: Failed to apply mode {new_mode} for plant {plant_id}, retry in {backoff} seconds")
 
         self.log(f"SolaX API: Applied controls for plant {plant_id}")
         return True
@@ -1238,6 +1315,106 @@ class SolaxAPI(ComponentBase):
             self.plant_info = result
         return result
 
+    def data_is_due(self, updated, attempted, max_age_minutes):
+        """
+        Work out whether data needs re-reading based on how old it is
+
+        Args:
+            updated: When the data was last read successfully, or None if it never has been
+            attempted: When the data was last attempted, or None if it never has been
+            max_age_minutes: How old the data may be before it is re-read
+
+        Returns:
+            True if the data should be read now
+        """
+        now = datetime.now(timezone.utc)
+        if updated is not None and (now - updated).total_seconds() < max_age_minutes * 60:
+            return False
+        # Run is called every few seconds, so a read that keeps failing must not be retried every cycle
+        if attempted is not None and (now - attempted).total_seconds() < SOLAX_INFO_RETRY_MINUTES * 60:
+            return False
+        return True
+
+    async def load_cached_info(self, name, max_age_minutes):
+        """
+        Load one static info cache entry if it is still within its maximum age
+
+        Args:
+            name: Cache entry name
+            max_age_minutes: How old the cached data may be before it is treated as missing
+
+        Returns:
+            tuple: (data, updated) where data is None when there is nothing usable to restore
+        """
+        if not self.storage:
+            return None, None
+
+        cached = await self.storage.load("solax", name)
+        if not isinstance(cached, dict) or not cached:
+            self.log(f"SolaX API: No {name} in the storage cache, will poll")
+            return None, None
+
+        age = await self.storage.age("solax", name)
+        if age is None or age >= max_age_minutes:
+            self.log("SolaX API: Cached {} is stale (age {}), will poll".format(name, "{:.1f} minutes".format(age) if age is not None else "unknown"))
+            return None, None
+
+        self.log(f"SolaX API: Restored {name} from the storage cache (age {age:.1f} minutes)")
+        return cached, datetime.now(timezone.utc) - timedelta(minutes=age)
+
+    async def load_static_info(self):
+        """
+        Restore the plant and device info from the storage cache
+
+        Plant and device info describe the hardware and barely change, so a restart can reuse whatever is
+        still within its maximum age rather than re-reading it all from the cloud.  The recorded read time
+        comes from the cache age, so data that is already close to expiry is re-polled promptly.
+        """
+        plant_cached, plant_updated = await self.load_cached_info("plant_info", SOLAX_PLANT_INFO_MAX_AGE)
+        if plant_cached and plant_cached.get("plant_info"):
+            self.plant_info = plant_cached["plant_info"]
+            self.plant_info_updated = plant_updated
+
+        device_cached, device_updated = await self.load_cached_info("device_info", SOLAX_DEVICE_INFO_MAX_AGE)
+        if device_cached and device_cached.get("device_info"):
+            self.device_info = device_cached["device_info"]
+            self.plant_inverters = device_cached.get("plant_inverters", {})
+            self.plant_batteries = device_cached.get("plant_batteries", {})
+            self.device_info_updated = device_updated
+
+    async def save_plant_info(self):
+        """
+        Save the plant info to the storage cache
+
+        Returns:
+            True on success, False if there is no storage or the save failed
+        """
+        if not self.storage:
+            return False
+        expiry = datetime.now(timezone.utc) + timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS)
+        return await self.storage.save("solax", "plant_info", {"plant_info": self.plant_info}, format="json", expiry=expiry)
+
+    async def save_device_info(self):
+        """
+        Save the device info and its plant mappings to the storage cache
+
+        Returns:
+            True on success, False if there is no storage or the save failed
+        """
+        if not self.storage:
+            return False
+        return await self.storage.save(
+            "solax",
+            "device_info",
+            {
+                "device_info": self.device_info,
+                "plant_inverters": self.plant_inverters,
+                "plant_batteries": self.plant_batteries,
+            },
+            format="json",
+            expiry=datetime.now(timezone.utc) + timedelta(hours=SOLAX_CACHE_EXPIRY_HOURS),
+        )
+
     async def query_device_info(self, plant_id, device_type, device_sn=None, business_type=None):
         """
         Query device information with pagination support
@@ -1605,8 +1782,10 @@ class SolaxAPI(ComponentBase):
         if result is not None and len(result) > 0:
             # One result per device SN
             self.realtime_device_data[sn] = result[0]
+            self.realtime_device_failed.discard(sn)
             self.log(f"SolaX API: Retrieved real-time data for device SN {sn} {result[0]}")
             return result
+        self.realtime_device_failed.add(sn)
         return None
 
     def is_a1_hybrid_g2(self, device_sn):
@@ -1666,7 +1845,7 @@ class SolaxAPI(ComponentBase):
             sn = device_result.get("sn")
             this_status = device_result.get("status")
             if this_status != status:
-                self.log(f"  {sn}: {status}")
+                self.log(f"  {sn}: {this_status} : {SOLAX_COMMAND_STATUS.get(this_status, 'Unknown status')}")
                 status = this_status
                 break
 
@@ -1720,7 +1899,8 @@ class SolaxAPI(ComponentBase):
                         self.log(f"SolaX API: Command execution succeeded for requestId {request_id}")
                         return True
                     else:
-                        self.log(f"SolaX API: Command execution failed with status {status} : {status_desc} for requestId {request_id}")
+                        result_desc = SOLAX_COMMAND_STATUS.get(status, f"Unknown status {status}")
+                        self.log(f"Warn: SolaX API: Command {command_name} execution failed with status {status} : {result_desc} for requestId {request_id} payload {payload}")
                         return False
 
                 if attempt < SOLAX_COMMAND_MAX_RETRIES - 1:
@@ -1737,7 +1917,7 @@ class SolaxAPI(ComponentBase):
         self.log(f"Warn: SolaX API: Command issuance failed or device offline {sn} status {status} : {status_desc}")
         return False
 
-    async def positive_or_negative_mode(self, sn, battery_power, time_of_duration, next_motion=161,
+    async def positive_or_negative_mode(self, sn, battery_power, time_of_duration, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME,
                                         business_type=None):
         """
         Set inverter working mode to Positive or Negative mode
@@ -1775,7 +1955,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "positive/negative", sn)
 
-    async def self_consume_mode(self, sn_list, time_of_duration, next_motion=161,
+    async def self_consume_mode(self, sn_list, time_of_duration, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME,
                                 business_type=None):
         """
         Set inverter working mode to Self-Consume Charge/Discharge Mode
@@ -1812,7 +1992,7 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "self-consume", sn_list)
 
-    async def self_consume_charge_only_mode(self, sn_list, time_of_duration, next_motion=161,
+    async def self_consume_charge_only_mode(self, sn_list, time_of_duration, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME,
                                             business_type=None):
         """
         Set inverter working mode to Self-Consume Charge Only Mode
@@ -1879,12 +2059,25 @@ class SolaxAPI(ComponentBase):
         # Send command and wait for result
         return await self.send_command_and_wait(endpoint, payload, "exit-vpp-mode", sn_list)
 
-    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse"):
-        success = await self.set_work_mode(mode, sn_list, 10, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
+    async def set_default_work_mode(self, sn_list, business_type=None, mode="selfuse", min_soc=SOLAX_MIN_RESERVE_PERCENT):
+        """
+        Set the inverter default work mode, the battery holds at min_soc and charges from PV only
+
+        Args:
+            sn_list: List of device serial numbers
+            business_type: Business type (1=Residential, 4=Commercial), defaults to residential
+            mode: Work mode, 'selfuse', 'backup' or 'feedin'
+            min_soc: Minimum SOC percentage the battery will discharge to
+
+        Returns:
+            True if command executed successfully, False otherwise
+        """
+        min_soc = max(SOLAX_MIN_RESERVE_PERCENT, min(100, as_int(min_soc, SOLAX_MIN_RESERVE_PERCENT)))
+        success = await self.set_work_mode(mode, sn_list, min_soc, 100, 0, "00:00", "00:00", "00:00", "23:59", business_type=business_type)
         if success:
-            self.log(f"SolaX API: Set default work mode to {mode} for device {sn_list}")
+            self.log(f"SolaX API: Set default work mode to {mode} min_soc {min_soc} for device {sn_list}")
         else:
-            self.log(f"Warn: SolaX API: Failed to set default work mode to {mode} for device {sn_list}")
+            self.log(f"Warn: SolaX API: Failed to set default work mode to {mode} min_soc {min_soc} for device {sn_list}")
         return success
 
     async def set_work_mode(self, mode, sn_list, min_soc, charge_upper_soc, charge_from_grid_enable,
@@ -2046,8 +2239,12 @@ class SolaxAPI(ComponentBase):
         # Per-plant accumulators for the load-power calculation (second pass below)
         plant_save = {}  # plant_id -> {"grid": W, "pv": W, "battery": W, "inverter_sn": sn, "friendly_name": name}
 
-        # Publish per-device realtime data
+        # Publish per-device realtime data, skipping any device that was not read on this cycle so that
+        # its sensors keep their previous values rather than being republished from stale data
         for device_sn, realtime in self.realtime_device_data.items():
+            if device_sn in self.realtime_device_failed:
+                self.log(f"Warn: SolaX API: No realtime data read for device {device_sn}, keeping the previous sensor values")
+                continue
             device = self.device_info.get(device_sn, {})
             device_type = device.get("deviceType")
             plant_id = device.get("plantId", "unknown").lower().replace(" ", "_")
@@ -2326,36 +2523,58 @@ class SolaxAPI(ComponentBase):
 
             inverter_max_power = self.get_max_power_inverter(plant_id)
             battery_max_power = self.get_max_power_battery(plant_id)
-            battery_soc_max = self.get_max_soc_battery(plant_id)
             battery_soc, battery_size_max_approx = self.get_current_soc_battery_kwh(plant_id)
+            # The plant capacity is a nominal figure from the portal and can read below the measured energy
+            # remaining when the battery is near full, so never publish a capacity below the current SOC
+            battery_soc_max = max(self.get_max_soc_battery(plant_id), battery_soc)
             battery_temp = self.get_battery_temperature(plant_id)
             charge_discharge_power = self.get_charge_discharge_power_battery(plant_id)
 
-            # Battery SOC
-            self.dashboard_item(
-                f"sensor.{self.prefix}_solax_{plant_id}_battery_soc",
-                state=battery_soc,
-                attributes={
-                    "friendly_name": f"SolaX {plant_name} Battery SOC",
-                    "unit_of_measurement": "kWh",
-                    "device_class": "energy",
-                    "state_class": "measurement",
-                    "soc_max": battery_soc_max,
-                },
-                app="solax",
-            )
-            # Battery Charge/Discharge Power
-            self.dashboard_item(
-                f"sensor.{self.prefix}_solax_{plant_id}_battery_charge_discharge_power",
-                state=charge_discharge_power,
-                attributes={
-                    "friendly_name": f"SolaX {plant_name} Battery Charge/Discharge Power",
-                    "unit_of_measurement": "W",
-                    "device_class": "power",
-                    "state_class": "measurement",
-                },
-                app="solax",
-            )
+            # The battery sensors come from the device realtime data, so hold them back when a battery
+            # failed its last read rather than republishing stale values
+            battery_ok = not any(device_sn in self.realtime_device_failed for device_sn in self.plant_batteries.get(plant_id, []))
+
+            if battery_ok:
+                # Battery SOC
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_battery_soc",
+                    state=battery_soc,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Battery SOC",
+                        "unit_of_measurement": "kWh",
+                        "device_class": "energy",
+                        "state_class": "measurement",
+                        "soc_max": battery_soc_max,
+                    },
+                    app="solax",
+                )
+                # Battery Charge/Discharge Power
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_battery_charge_discharge_power",
+                    state=charge_discharge_power,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Battery Charge/Discharge Power",
+                        "unit_of_measurement": "W",
+                        "device_class": "power",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+                # Battery temperature sensor
+                self.dashboard_item(
+                    f"sensor.{self.prefix}_solax_{plant_id}_battery_temperature",
+                    state=battery_temp,
+                    attributes={
+                        "friendly_name": f"SolaX {plant_name} Battery Temperature",
+                        "unit_of_measurement": "°C",
+                        "device_class": "temperature",
+                        "state_class": "measurement",
+                    },
+                    app="solax",
+                )
+            else:
+                self.log(f"Warn: SolaX API: No battery realtime data read for plant {plant_id}, keeping the previous battery sensor values")
+
             # Battery SOC max sensor
             self.dashboard_item(
                 f"sensor.{self.prefix}_solax_{plant_id}_battery_capacity",
@@ -2364,19 +2583,6 @@ class SolaxAPI(ComponentBase):
                     "friendly_name": f"SolaX {plant_name} Battery Capacity",
                     "unit_of_measurement": "kWh",
                     "device_class": "energy",
-                    "state_class": "measurement",
-                },
-                app="solax",
-            )
-
-            # Battery temperature sensor
-            self.dashboard_item(
-                f"sensor.{self.prefix}_solax_{plant_id}_battery_temperature",
-                state=battery_temp,
-                attributes={
-                    "friendly_name": f"SolaX {plant_name} Battery Temperature",
-                    "unit_of_measurement": "°C",
-                    "device_class": "temperature",
                     "state_class": "measurement",
                 },
                 app="solax",
@@ -2421,9 +2627,12 @@ class SolaxAPI(ComponentBase):
                 app="solax",
             )
 
-            # Publish realtime data if available
+            # Publish realtime data, but only when this cycle actually read it.  Publishing on a failed
+            # read would push stale totals, or zeros before the first successful read
             realtime_plant_id = plant.get("plantId")
-            if realtime_plant_id and realtime_plant_id in self.realtime_data:
+            if realtime_plant_id and realtime_plant_id in self.realtime_plant_failed:
+                self.log(f"Warn: SolaX API: No realtime data read for plant {realtime_plant_id}, keeping the previous sensor values")
+            elif realtime_plant_id and realtime_plant_id in self.realtime_data:
                 realtime = self.realtime_data[realtime_plant_id]
 
                 # Total Yield sensor
@@ -2535,14 +2744,27 @@ class SolaxAPI(ComponentBase):
             True on success, False on failure
         """
         if first:
-            # Fetch plant information on startup
-            self.log("SolaX API: Fetching plant information...")
-            await self.query_plant_info()
+            # Reuse whatever hardware information is still current, a restart then avoids re-reading it all
+            await self.load_static_info()
 
-            if self.plant_info is None:
+        # Plant info is static, it is only re-read once the data itself has aged out
+        plant_info_refreshed = False
+        if self.data_is_due(self.plant_info_updated, self.plant_info_attempted, SOLAX_PLANT_INFO_MAX_AGE):
+            self.log("SolaX API: Fetching plant information...")
+            self.plant_info_attempted = datetime.now(timezone.utc)
+            result = await self.query_plant_info()
+            if result is not None and self.plant_info is not None:
+                self.plant_info_updated = datetime.now(timezone.utc)
+                plant_info_refreshed = True
+                await self.save_plant_info()
+            elif self.plant_info is None:
                 self.log("Warn: SolaX API: Failed to fetch plant information")
                 return False
+            else:
+                # A refresh that fails keeps whatever was read before rather than dropping the plants
+                self.log("Warn: SolaX API: Failed to refresh plant information, keeping the previous data")
 
+        if first or plant_info_refreshed:
             self.plant_list = [plant.get('plantId') for plant in self.plant_info]
             if self.plant_sn_filter:
                 self.plant_list = [pid for pid in self.plant_list if pid in self.plant_sn_filter]
@@ -2551,19 +2773,43 @@ class SolaxAPI(ComponentBase):
         # Check readonly mode
         is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
 
-        if first or seconds % (30 * 60) == 0:
-            # Periodic plant info refresh every 30 minutes
+        # Device info is re-read once the data has aged out rather than on a fixed cycle since startup
+        if self.data_is_due(self.device_info_updated, self.device_info_attempted, SOLAX_DEVICE_INFO_MAX_AGE):
+            self.device_info_attempted = datetime.now(timezone.utc)
+            # An empty plant list means nothing was read, so it must not count as a successful refresh
+            device_info_ok = bool(self.plant_list)
+            previous_devices = set(self.device_info.keys())
             for plantID in self.plant_list:
                 self.log(f"SolaX API: Fetching device information for plant ID {plantID}...")
-                await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_INVERTER)  # Inverter
-                await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_BATTERY)  # Battery
+                for device_type in (SOLAX_DEVICE_TYPE_INVERTER, SOLAX_DEVICE_TYPE_BATTERY):
+                    if await self.query_device_info(plantID, device_type=device_type) is None:
+                        device_info_ok = False
 
                 # await self.query_device_info(plantID, device_type=SOLAX_DEVICE_TYPE_METER)  # Meter
                 # await self.query_plant_statistics_daily(plantID)
 
+            if device_info_ok:
+                self.device_info_updated = datetime.now(timezone.utc)
+                # Refresh the cache so that a restart can skip this read
+                await self.save_device_info()
+
+                # Hardware changes show up in the plant record too, battery and PV capacity come from
+                # there, so a changed device list makes the plant info suspect however recently it was read
+                if previous_devices and set(self.device_info.keys()) != previous_devices:
+                    self.log("SolaX API: Device list changed, re-reading plant information")
+                    self.plant_info_updated = None
+                    self.plant_info_attempted = None
+            else:
+                # Do not mark a partial read as fresh, or cache it over data that was complete
+                self.log(f"Warn: SolaX API: Failed to read device information, retrying in {SOLAX_INFO_RETRY_MINUTES} minutes")
+
         if first or seconds % 60 == 0:
             for plantID in self.plant_list:
-                await self.query_plant_realtime_data(plantID)
+                # Note what failed to read, those sensors are not republished from stale data below
+                if await self.query_plant_realtime_data(plantID) is None:
+                    self.realtime_plant_failed.add(plantID)
+                else:
+                    self.realtime_plant_failed.discard(plantID)
                 await self.query_device_realtime_data_all(plantID)
 
         # Fetch controls first time only
@@ -2597,57 +2843,58 @@ class SolaxAPI(ComponentBase):
         return True
 
 
-class MockBase:  # pragma: no cover
-    """Mock base class for standalone testing"""
+class MockBase(SharedMockBase):  # pragma: no cover
+    """Mock base for the Solax command-line harness, which works in UTC rather than local time."""
 
     def __init__(self):
-        self.prefix = "predbat"
-        self.local_tz = timezone.utc
-        self.args = {}
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get('state', default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {
-            'state': state,
-            'attributes': attributes or {}
-        }
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if 'options' in attributes:
-                attributes['options'] = '...'
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and '.' in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and '.' in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
+        """Initialise the shared mock pinned to UTC."""
+        super().__init__(local_tz=timezone.utc)
 
 
-async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=None):  # pragma: no cover
+async def run_test_command(solax, plant_id, command, duration, next_motion, target_soc, power):  # pragma: no cover
+    """
+    Issue a single raw control command against a plant, used to bisect which command an inverter rejects
+
+    Args:
+        solax: SolaxAPI instance
+        plant_id: Plant to control
+        command: Command name from SOLAX_TEST_COMMANDS
+        duration: Mode duration in seconds for the modes that take one
+        next_motion: Action after the mode ends (160=Exit Remote Control, 161=Back to Self-Consume Mode)
+        target_soc: Target SOC for soc_target
+        power: Charge/discharge power in Watts for soc_target and positive_negative
+
+    Returns:
+        True if the command executed successfully, False otherwise
+    """
+    sn_list = solax.plant_inverters.get(plant_id, [])
+    if not sn_list:
+        print(f"✗ No inverters found for plant {plant_id}")
+        return False
+
+    if command == "self_consume":
+        return await solax.self_consume_mode(sn_list, time_of_duration=duration, next_motion=next_motion)
+    elif command == "self_consume_charge_only":
+        return await solax.self_consume_charge_only_mode(sn_list, time_of_duration=duration, next_motion=next_motion)
+    elif command == "exit_vpp":
+        return await solax.exit_vpp_mode(sn_list)
+    elif command == "soc_target":
+        return await solax.soc_target_control_mode(sn_list, target_soc, charge_discharge_power=power)
+    elif command == "positive_negative":
+        success = True
+        for sn in sn_list:
+            success = await solax.positive_or_negative_mode(sn, battery_power=power, time_of_duration=duration, next_motion=next_motion) and success
+        return success
+    elif command == "work_mode_selfuse":
+        return await solax.set_default_work_mode(sn_list, mode="selfuse")
+    elif command == "work_mode_feedin":
+        return await solax.set_default_work_mode(sn_list, mode="feedin")
+
+    print(f"✗ Unknown test command: {command}")
+    return False
+
+
+async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=None, duration=None, test_commands=None, next_motion=SOLAX_NEXT_MOTION_SELF_CONSUME, target_soc=50, power=0, command_delay=0):  # pragma: no cover
     """
     Test function for standalone execution
 
@@ -2657,6 +2904,12 @@ async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=N
         region: API region
         plant_id: Optional plant ID filter
         test_mode: Optional control mode to test ('eco', 'charge', 'freeze_charge', 'export', 'freeze_export')
+        duration: Optional timeOfDuration in seconds for the raw commands that take one
+        test_commands: Optional list of raw commands to issue in order, see SOLAX_TEST_COMMANDS
+        next_motion: Action after a VPP mode ends, for the raw commands that take one
+        target_soc: Target SOC for the soc_target raw command
+        power: Charge/discharge power in Watts for the soc_target and positive_negative raw commands
+        command_delay: Seconds to hold between raw commands, use to let a mode take effect before backing out of it
     """
     print(f"\n{'=' * 60}")
     print(f"Testing SolaX API")
@@ -2666,6 +2919,10 @@ async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=N
         print(f"Plant ID filter: {plant_id}")
     if test_mode:
         print(f"Test mode: {test_mode}")
+    if test_commands:
+        print(f"Test commands: {', '.join(test_commands)}")
+    if duration:
+        print(f"Mode duration: {duration} seconds")
     print(f"{'=' * 60}\n")
 
     # Create mock base
@@ -2688,6 +2945,31 @@ async def test_solax_api(client_id, client_secret, region, plant_id, test_mode=N
         return
     else:
         print("✓ Initialisation successful")
+
+    # If raw test commands are specified, issue them in order against the first plant
+    if test_commands and solax.plant_list:
+        command_plant_id = solax.plant_list[0]
+        command_duration = max(SOLAX_MIN_MODE_DURATION, duration) if duration else SOLAX_TEST_MODE_DURATION
+        current_soc_kwh, max_soc_kwh = solax.get_current_soc_battery_kwh(command_plant_id)
+        current_soc = int((current_soc_kwh / max_soc_kwh) * 100) if max_soc_kwh > 0 else 0
+        failed = False
+        for index, command in enumerate(test_commands):
+            if index and command_delay:
+                print(f"\nHolding for {command_delay} seconds before the next command...")
+                await asyncio.sleep(command_delay)
+            print(f"\n{'=' * 60}")
+            print(f"Issuing command: {command}")
+            print(f"Plant ID: {command_plant_id}")
+            print(f"Battery SOC: {current_soc}% ({current_soc_kwh:.2f} of {max_soc_kwh:.2f} kWh)")
+            print(f"{'=' * 60}\n")
+            success = await run_test_command(solax, command_plant_id, command, command_duration, next_motion, target_soc, power)
+            if success:
+                print(f"✓ Command {command} succeeded")
+            else:
+                print(f"✗ Command {command} failed")
+                failed = True
+        if failed:
+            return 1
 
     # If test_mode is specified, apply controls
     if test_mode and solax.plant_list:
@@ -2802,7 +3084,8 @@ def main():  # pragma: no cover
     """Main entry point for standalone testing"""
     parser = argparse.ArgumentParser(
         description="Test SolaX Cloud API and control modes",
-        epilog="Example: python solax.py --client-id YOUR_ID --client-secret YOUR_SECRET --test-mode charge",
+        epilog="Example: python solax.py --client-id YOUR_ID --client-secret YOUR_SECRET --test-mode charge\n"
+               "Example: python solax.py --client-id YOUR_ID --client-secret YOUR_SECRET --test-command self_consume --duration 3600",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--client-id", required=True, help="SolaX Cloud client ID")
@@ -2810,11 +3093,22 @@ def main():  # pragma: no cover
     parser.add_argument("--region", default="eu", choices=["eu", "us", "cn"], help="API region (default: eu)")
     parser.add_argument("--plant-id", help="Optional plant ID to filter")
     parser.add_argument("--test-mode", choices=["eco", "charge", "freeze_charge", "export", "freeze_export"],
-                        help="Test control mode: eco (no windows), charge (active charge), freeze_charge (at target), export (active export), freeze_export (at/above target)")
+                        help="Test control mode: eco (self consume, no windows), charge (active charge), freeze_charge (at target), export (active export), freeze_export (at/above target)")
+    parser.add_argument("--duration", type=int, default=None,
+                        help=f"timeOfDuration in seconds for the --test-command modes that take one (default {SOLAX_TEST_MODE_DURATION}, minimum {SOLAX_MIN_MODE_DURATION})")
+    parser.add_argument("--test-command", action="append", choices=SOLAX_TEST_COMMANDS, dest="test_commands",
+                        help="Issue a single raw control command, repeat to run several in order (e.g. --test-command exit_vpp --test-command self_consume). Use to find which command an inverter rejects")
+    parser.add_argument("--next-motion", type=int, default=SOLAX_NEXT_MOTION_SELF_CONSUME, choices=[SOLAX_NEXT_MOTION_EXIT, SOLAX_NEXT_MOTION_SELF_CONSUME],
+                        help=f"Action after a VPP mode ends for --test-command ({SOLAX_NEXT_MOTION_EXIT}=Exit Remote Control, {SOLAX_NEXT_MOTION_SELF_CONSUME}=Back to Self-Consume Mode, default {SOLAX_NEXT_MOTION_SELF_CONSUME})")
+    parser.add_argument("--target-soc", type=int, default=50, help="Target SOC for --test-command soc_target (default 50)")
+    parser.add_argument("--power", type=int, default=0, help="Charge/discharge power in Watts for --test-command soc_target and positive_negative (default 0)")
+    parser.add_argument("--command-delay", type=int, default=0,
+                        help="Seconds to hold between chained --test-command commands, e.g. soc_target, wait, exit_vpp (default 0)")
 
     args = parser.parse_args()
 
-    asyncio.run(test_solax_api(args.client_id, args.client_secret, args.region, args.plant_id, args.test_mode))
+    asyncio.run(test_solax_api(args.client_id, args.client_secret, args.region, args.plant_id, args.test_mode, args.duration,
+                               args.test_commands, args.next_motion, args.target_soc, args.power, args.command_delay))
 
 
 if __name__ == "__main__":  # pragma: no cover

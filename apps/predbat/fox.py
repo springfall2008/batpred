@@ -25,7 +25,9 @@ import json
 import argparse
 import random
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
+from utils import dp2
 
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
@@ -62,7 +64,7 @@ FOX_SETTINGS_DEFAULTS = {
 # range/unit/precision to schedule-derived settings) so a persisted cache from before that
 # change is detected as stale and forces one settings/scheduler refresh regardless of age,
 # instead of being reused as-is - potentially forever, since nothing else would ever correct it.
-FOX_SETTINGS_CACHE_VERSION = 2
+FOX_SETTINGS_CACHE_VERSION = 3
 
 # Storage cache keys for device data persisted between reboots
 FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "device_settings", "device_settings_unavailable", "device_settings_version", "scheduler_state", "device_values", "device_production_month"]
@@ -905,7 +907,21 @@ class FoxAPI(ComponentBase, OAuthMixin):
         result = await self.request_get(GET_DEVICE_INFO, post=False, datain=query)
         if result is not None:
             self.device_detail[deviceSN] = result
+            self.log("Fox: Device detail {}".format(result))
         return result
+
+    @staticmethod
+    def capacity_watts(detail):
+        """
+        Return the device's rated capacity in watts, correcting for Fox reporting the
+        device/detail 'capacity' field as a truncated integer on half-kW models (e.g. a
+        10.5kW KH10.5 inverter reports capacity=10). If deviceType ends in '.5' and the
+        raw capacity is an exact multiple of 1000W, bump it up to end in 500.
+        """
+        capacity = detail.get("capacity", 0) * 1000.0
+        if capacity and capacity % 1000 == 0 and str(detail.get("deviceType", "")).endswith(".5"):
+            capacity += 500.0
+        return capacity
 
     async def get_device_settings(self, deviceSN, checkBattery=True):
         """
@@ -1463,7 +1479,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             return {}
 
         detail = self.device_detail.get(deviceSN, {})
-        inverter_capacity = detail.get("capacity", 0) * 1000.0
+        inverter_capacity = self.capacity_watts(detail)
 
         # EVO-series devices fail the v1 scheduler API permanently (errno 41200); route
         # them to v2 by productType. Every other device stays on v1, which it supports.
@@ -1476,6 +1492,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
         if result is not None:
             self.fdpwr_max[deviceSN] = result.get("properties", {}).get("fdpwr", {}).get("range", {}).get("max", 8000)
             # XXX: Fox seems to be have an issue with FD Power max value being too high, cap it at the inverter capacity
+            # (inverter_capacity is already corrected for half-kW deviceTypes by capacity_watts())
             if inverter_capacity:
                 self.fdpwr_max[deviceSN] = min(inverter_capacity, self.fdpwr_max[deviceSN])
 
@@ -1757,7 +1774,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             detail = self.device_detail.get(sn, {})
             hasPV = detail.get("hasPV", False)
             hasBattery = detail.get("hasBattery", False)
-            capacity = detail.get("capacity", 0) * 1000.0
+            capacity = self.capacity_watts(detail)
             hasScheduler = detail.get("function", {}).get("scheduler", False)
             deviceType = detail.get("deviceType", "Unknown")
             stationName = detail.get("stationName", "Unknown")
@@ -1791,7 +1808,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
             self.dashboard_item(
                 entity_name_sensor + "_" + sn.lower() + "_battery_soh",
                 state=soh_fraction,
-                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "device_class": "battery", "state_class": "measurement", "icon": "mdi:battery-heart"},
+                attributes={"friendly_name": f"Fox {sn} Battery State of Health", "unit_of_measurement": "*", "state_class": "measurement", "icon": "mdi:battery-heart"},
                 app="fox",
             )
 
@@ -1914,7 +1931,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 # Month Total Sensor
                 item_name = variable + " (Month)"
                 entity_id = entity_name_sensor + "_" + sn.lower() + "_" + variable.lower() + "_month"
-                state = sum(values)
+                state = dp2(sum(values))
                 attributes = {"unit_of_measurement": units, "friendly_name": f"Fox {sn} {item_name}", "values": values}
                 if units in ["kWh", "Wh"]:
                     attributes["device_class"] = "energy"
@@ -1926,7 +1943,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 # Today Total Sensor
                 item_name = variable + " (Today)"
                 entity_id = entity_name_sensor + "_" + sn.lower() + "_" + variable.lower() + "_today"
-                state = values[today - 1] if len(values) >= today else 0
+                state = dp2(values[today - 1]) if len(values) >= today else 0
 
                 attributes = {
                     "unit_of_measurement": units,
@@ -2244,56 +2261,6 @@ class FoxAPI(ComponentBase, OAuthMixin):
 
         if len(batteries):
             self.set_arg("battery_temperature_history", f"sensor.{self.prefix}_fox_{batteries[0]}_battemperature")
-
-
-class MockBase:  # pragma: no cover
-    """Mock base class for testing"""
-
-    def __init__(self):
-        self.local_tz = datetime.now().astimezone().tzinfo
-        self.now_utc = datetime.now(self.local_tz)
-        self.prefix = "predbat"
-        self.args = {}
-        self.midnight_utc = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
-        self.entities = {}
-
-    def get_state_wrapper(self, entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=None):
-        if raw:
-            return self.entities.get(entity_id, {})
-        else:
-            return self.entities.get(entity_id, {}).get("state", default)
-
-    def set_state_wrapper(self, entity_id, state, attributes=None, app=None):
-        self.entities[entity_id] = {"state": state, "attributes": attributes or {}}
-
-    def log(self, message):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-
-    def dashboard_item(self, entity_id, state=None, attributes=None, app=None):
-        print(f"ENTITY: {entity_id} = {state}")
-        if attributes:
-            if "options" in attributes:
-                attributes["options"] = "..."
-            print(f"  Attributes: {json.dumps(attributes, indent=2)}")
-        self.set_state_wrapper(entity_id, state, attributes)
-
-    def get_arg(self, key, default=None):
-        return default
-
-    def set_arg(self, key, value):
-        state = None
-        if isinstance(value, str) and "." in value:
-            state = self.get_state_wrapper(value, default=None)
-        elif isinstance(value, list):
-            state = "n/a []"
-            for v in value:
-                if isinstance(v, str) and "." in v:
-                    state = self.get_state_wrapper(v, default=None)
-                    break
-        else:
-            state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
 
 
 async def test_write_schedule(sn, api_key, token_hash, token_expires, supabase_url, supabase_key, user_id):  # pragma: no cover

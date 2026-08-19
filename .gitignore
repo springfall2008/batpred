@@ -46,6 +46,7 @@ coverage/*.txt
 coverage/*.db
 coverage/*.html
 coverage/*.prof
+coverage/*.py
 coverage/cache/
 coverage/debug/
 coverage/predbat_standalone/
@@ -108,3 +109,6 @@ it
 
 # Runtime-generated manifest
 apps/predbat/manifest.yaml
+
+# Claude Code local worktrees
+.claude/worktrees/

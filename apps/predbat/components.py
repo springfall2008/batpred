@@ -35,6 +35,7 @@ from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
 from deye import DeyeAPI
+from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
@@ -107,6 +108,7 @@ COMPONENT_LIST = {
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
             "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
             "forecast_solar_open_meteo_backup": {"required": False, "config": "forecast_solar_open_meteo_backup", "default": False},
+            "forecast_solar_open_meteo_first": {"required": False, "config": "forecast_solar_open_meteo_first", "default": False},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
             "pv_forecast_tomorrow": {"required": False, "config": "pv_forecast_tomorrow"},
             "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
@@ -250,6 +252,11 @@ COMPONENT_LIST = {
         "args": {
             "app_id": {"required": False, "config": "deye_app_id"},
             "app_secret": {"required": False, "config": "deye_app_secret"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as deye_key;
+            # without this entry it is dropped and DEYE rejects every call as
+            # "auth invalid token".
+            "key": {"required": False, "config": "deye_key"},
             "username": {"required": False, "config": "deye_username"},
             "password": {"required": False, "config": "deye_password"},
             "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
@@ -260,12 +267,52 @@ COMPONENT_LIST = {
             "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
             "automatic": {"required": False, "default": False, "config": "deye_automatic"},
             "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+            # config/battery reports capacity in Ah, so it needs a pack voltage to become
+            # kWh. Normally derived from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "deye_battery_nominal_voltage"},
         },
         # Gate activation on having at least one auth path — app credentials (app_id,
-        # self-hosted add-on) OR an injected SaaS token (token_hash). Without this the
+        # self-hosted add-on) OR an injected SaaS access token (key). Without this the
         # component would start for every instance since all individual args are
-        # optional to allow either auth mode.
-        "required_or": ["app_id", "token_hash"],
+        # optional to allow either auth mode. Gate on key, not token_hash: the hash is
+        # only a refresh dedup handle, so gating on it starts the component for an
+        # instance that has no usable token and then fails on every API call.
+        "required_or": ["app_id", "key"],
+        "phase": 1,
+    },
+    "sunsynk": {
+        "class": SunsynkAPI,
+        "name": "Sunsynk Cloud",
+        "event_filter": "predbat_sunsynk_",
+        "args": {
+            "username": {"required": False, "config": "sunsynk_username"},
+            "password": {"required": False, "config": "sunsynk_password"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as
+            # sunsynk_key; without this entry it is dropped and every call is rejected.
+            "key": {"required": False, "config": "sunsynk_key"},
+            "region": {"required": False, "default": "sunsynk", "config": "sunsynk_region"},
+            "auth_method": {"required": False, "default": "password", "config": "sunsynk_auth_method"},
+            "token_expires_at": {"required": False, "config": "sunsynk_token_expires_at"},
+            "token_hash": {"required": False, "config": "sunsynk_token_hash"},
+            "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "sunsynk_automatic_ignore_pv"},
+            # On by default, matching solis_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only - worth doing while the inferred write format is unconfirmed
+            # against live hardware (see the VERIFY@SPIKE notes in sunsynk_const.py).
+            "control_enable": {"required": False, "default": True, "config": "sunsynk_control_enable"},
+            # Battery capacity arrives in amp-hours, so it needs a pack voltage to become
+            # kWh. Normally inferred from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "sunsynk_battery_nominal_voltage"},
+        },
+        # Gate activation on having at least one auth path — a username (self-hosted) OR
+        # an injected SaaS access token. Without this the component would start for every
+        # instance, since all individual args are optional to allow either auth mode.
+        "required_or": ["username", "key"],
         "phase": 1,
     },
     "enphase": {
@@ -475,6 +522,7 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
+            "nominal_voltage": {"required": False, "config": "solis_nominal_voltage"},
         },
         # Gate activation on having at least one auth path — HMAC (api_key) OR OAuth
         # (access_token). Without this the component would start for every instance
@@ -493,7 +541,7 @@ COMPONENT_LIST = {
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
         },
-        "phase": 1,
+        "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
     },
 }

@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.46.4"
+THIS_VERSION = "v8.48.8"
 
 from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
@@ -68,7 +68,6 @@ from const import (
     INVERTER_QUICK_UPDATE_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
-from prediction import reset_prediction_globals
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from octopus import Octopus
@@ -271,27 +270,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         return (self.midnight + timedelta(minutes=minute)).strftime("%m-%d %H:%M:%S")
 
-    def cleanup_pool(self):
-        """
-        Terminate and clean up the multiprocessing pool if it is active.
-
-        Ensures worker processes are properly terminated to prevent orphaned
-        processes when the prediction loop exits unexpectedly.
-        """
-        if getattr(self, "pool", None):
-            try:
-                self.pool.terminate()
-                self.pool.join()
-            except Exception as e:
-                self.log("Warn: Failed to terminate multiprocessing pool: {}".format(e))
-                self.log(traceback.format_exc())
-            self.pool = None
-
     def reset(self):
         """
         Init stub
         """
-        reset_prediction_globals()
         self.text_plan = "Computing please wait..."
         self.prediction_cache_enable = True
         self.base_load = 0
@@ -299,6 +281,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}
+        self.validate_config_retries_remaining = 0
+        self.validate_config_next_retry_time = None
         self.ha_interface = None
         self.num_cars = 0
         self.fatal_error = False
@@ -314,8 +298,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Forecast.solar API request metrics for monitoring
         self.currency_symbols = self.args.get("currency_symbols", "£p")
-        self.cleanup_pool()
-        self.pool = None
         self.watch_list = []
         self.restart_active = False
         self.inverter_needs_reset = False
@@ -340,6 +322,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.previous_status = None
         self.had_errors = False
         self.plan_valid = False
+        self.plan_preclip = None
         self.plan_last_updated = None
         self.plan_last_updated_minutes = 0
         self.plugin_system = None
@@ -375,6 +358,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_more_solar_threshold = 1.0
         self.metric_battery_cycle = 0.0
         self.metric_battery_value_scaling = 1.0
+        self.metric_battery_value_export_scaling = 0.8
+        self.calculate_pv90_plan = False
+        self.pv_metric90_weight = 0.15
+        self.load_scaling90 = 0.7
         self.metric_future_rate_offset_import = 0.0
         self.metric_future_rate_offset_export = 0.0
         self.metric_inday_adjust_damping = 1.0
@@ -411,7 +398,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_set_charge_before = True
         self.best_soc_min = 0
         self.best_soc_max = 0
-        self.best_soc_margin = 0
         self.best_soc_keep = 0
         self.best_soc_keep_weight = 0.5
         self.rate_min = 0
@@ -430,6 +416,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_export_min_minute = 0
         self.rate_export_max = 0
         self.rate_export_max_minute = 0
+        self.rate_export_max_forward = {}
         self.rate_export_average = 0
         self.rate_gas_min = 0
         self.rate_gas_max = 0
@@ -482,6 +469,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_manual_soc = []
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
+        self.car_charging_energy_warned = False
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
@@ -550,6 +538,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_forecast_array = []
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
+        self.pv_forecast_minute90 = {}
+        # (p50, p90) content signatures from the previous plan run, used to spot a p90 that has been
+        # left behind by a p50 reassigned underneath it - see Plan.refresh_pv_forecast_minute90()
+        self.pv_forecast_minute90_signatures = None
         self.load_scaling_dynamic = {}
         self.carbon_intensity = {}
         self.carbon_history = {}
@@ -689,6 +681,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             "charge_limit_best": self.charge_limit_best,
             "export_window_best": self.export_window_best,
             "export_limits_best": self.export_limits_best,
+            "plan_preclip": self.plan_preclip,
             "plan_last_updated": self.plan_last_updated.isoformat() if self.plan_last_updated else None,
             "plan_last_updated_minutes": self.plan_last_updated_minutes,
         }
@@ -740,6 +733,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_limit_best = plan_data.get("charge_limit_best", [])
         self.export_window_best = plan_data.get("export_window_best", [])
         self.export_limits_best = plan_data.get("export_limits_best", [])
+        # The pre-clip snapshot plan selection scores against. Older saves predate it, and it is only ever a
+        # four part plan, so anything else is discarded and the comparison falls back to the clipped plans.
+        preclip = plan_data.get("plan_preclip")
+        self.plan_preclip = tuple(preclip) if isinstance(preclip, (list, tuple)) and len(preclip) == 4 else None
         self.plan_last_updated = saved_dt
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
@@ -1164,15 +1161,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             # Kill the current threads
             self.log("Kill current threads before update")
             self.stop_thread = True
-            if self.pool:
-                self.log("Warn: Killing current threads before update...")
-                try:
-                    self.pool.close()
-                    self.pool.join()
-                except Exception as e:
-                    self.log("Warn: Failed to close thread pool: {}".format(e))
-                    self.log("Warn: " + traceback.format_exc())
-                self.pool = None
 
             # Perform the update
             self.log("Perform the update.....")
@@ -1505,6 +1493,50 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         return errors
 
+    def validate_config_schedule_retry(self, errors):
+        """
+        Called immediately after validate_config() with its error count. If validation failed,
+        (re-)arms a retry sequence so a self-healed condition (e.g. a slow-starting integration's
+        sensor not populated yet) clears its own error status without needing a manual restart -
+        see #4379. A clean validation cancels any retry sequence already in progress.
+        """
+        if errors:
+            retries = int(self.get_arg("validate_config_retries", 2))
+            if retries > 0:
+                self.validate_config_retries_remaining = retries
+                retry_minutes = max(0, int(self.get_arg("validate_config_retry_minutes", 1)))
+                self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+            else:
+                self.validate_config_retries_remaining = 0
+                self.validate_config_next_retry_time = None
+        else:
+            self.validate_config_retries_remaining = 0
+            self.validate_config_next_retry_time = None
+
+    def validate_config_check_retry(self):
+        """
+        Called every 15 seconds from update_time_loop(). Re-runs validate_config() if a retry is
+        due, only while a retry sequence is armed (i.e. only following an actual validation
+        failure - see #4379) - a no-op the rest of the time.
+        """
+        if self.validate_config_retries_remaining <= 0:
+            return
+        if self.validate_config_next_retry_time is None or self.now_utc < self.validate_config_next_retry_time:
+            return
+
+        self.validate_config_retries_remaining -= 1
+        errors = self.validate_config()
+        if errors == 0:
+            self.log("Info: Config validation retry succeeded, previous errors have now cleared")
+            self.validate_config_retries_remaining = 0
+            self.validate_config_next_retry_time = None
+        elif self.validate_config_retries_remaining <= 0:
+            self.log("Warn: Config validation still failing after all retries, giving up until the next restart or config change")
+            self.validate_config_next_retry_time = None
+        else:
+            retry_minutes = self.get_arg("validate_config_retry_minutes", 1)
+            self.validate_config_next_retry_time = self.now_utc + timedelta(minutes=retry_minutes)
+
     def is_running(self):
         """
         Check if the app is running
@@ -1546,7 +1578,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         """
         Setup the app, called once each time the app starts
         """
-        self.pool = None
+        # Snapshot of apps.yaml exactly as the user wrote it, before Predbat's own defaulting
+        # (auto_config/load_user_config) or any component's automatic_config() touches self.args -
+        # lets ComponentBase.set_arg_auto() tell "user explicitly configured this" apart from
+        # "Predbat defaulted it" or "another component already overwrote it" (issue #4494 follow-up).
+        self.args_from_apps_yaml = copy.deepcopy(self.args)
+        self.apps_yaml_override_warned = set()  # {arg} already warned about via set_arg_auto()
         self.log("Predbat: Startup {}".format(__name__))
         self.update_time(print=False)
         self.started_time = self.now_utc_real
@@ -1609,7 +1646,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
             self.load_user_config(quiet=False, register=True)
             self.auto_config(final=False)
-            self.validate_config()
+            self.validate_config_schedule_retry(self.validate_config())
 
             # Restore the last saved plan so it is immediately active before the first calculation
             self.load_plan()
@@ -1668,16 +1705,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.log("Info: Components stopped")
 
         await asyncio.sleep(0)
-        if hasattr(self, "pool"):
-            if self.pool:
-                self.log("Info: Terminating thread pool...")
-                try:
-                    self.pool.close()
-                    self.pool.join()
-                except Exception as e:
-                    self.log("Warn: Failed to close thread pool {}".format(e))
-                    self.log("Warn: " + traceback.format_exc())
-                self.pool = None
         self.log("Predbat terminated")
 
     def update_time_loop(self, cb_args):
@@ -1690,13 +1717,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             raise Exception("HA interface not active")
 
         self.check_entity_refresh()
+        self.validate_config_check_retry()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False
             self.prediction_started = True
             try:
                 self.load_user_config()
-                self.validate_config()
+                self.validate_config_schedule_retry(self.validate_config())
                 self.update_pred(scheduled=False)
                 self.create_entity_list()
             except Exception as e:
@@ -1709,7 +1737,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 # Always clear the active flag, even on early return or exception, so the
                 # web spinner and predbat.active switch don't get stuck on
                 self.expose_config("active", False)
-                self.cleanup_pool()
         elif not self.prediction_started:
             time_now = datetime.now()
             inverter_data_last_fetch = self.inverter_data_last_fetch
@@ -1773,7 +1800,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.update_pending = False
                     self.ha_interface.update_states()
                     self.load_user_config()
-                    self.validate_config()
+                    self.validate_config_schedule_retry(self.validate_config())
                     config_changed = True
 
                 # Retry auto config (and finalise after 10 minutes from startup)
@@ -1795,7 +1822,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 # Always clear the active flag, even on early return or exception, so the
                 # web spinner and predbat.active switch don't get stuck on
                 self.expose_config("active", False)
-                self.cleanup_pool()
 
     def run_time_loop_balance(self, cb_args):
         """

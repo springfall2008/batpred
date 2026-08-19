@@ -62,6 +62,11 @@ def test_plan_persistence(my_predbat):
         my_predbat.plan_last_updated_minutes = saved_minutes
         my_predbat.plan_valid = True
 
+        # The pre-clip snapshot is what plan selection scores against next cycle, so it has to survive a
+        # restart too - without it the first recompute back compares a clipped incumbent and falls back
+        preclip = ([9.0], charge_windows, export_windows, [0.0])
+        my_predbat.plan_preclip = preclip
+
         # 1. save_plan() must not raise and must write something loadable
         print("  Test 1: save_plan() round-trip")
         my_predbat.save_plan()
@@ -74,6 +79,7 @@ def test_plan_persistence(my_predbat):
         my_predbat.plan_last_updated = None
         my_predbat.plan_last_updated_minutes = 0
         my_predbat.plan_valid = False
+        my_predbat.plan_preclip = None
 
         my_predbat.load_plan()
 
@@ -94,6 +100,12 @@ def test_plan_persistence(my_predbat):
             failed += 1
         if my_predbat.plan_last_updated_minutes != saved_minutes:
             print("  FAILED: plan_last_updated_minutes mismatch: {}".format(my_predbat.plan_last_updated_minutes))
+            failed += 1
+        if my_predbat.plan_preclip is None:
+            print("  FAILED: plan_preclip was not restored")
+            failed += 1
+        elif [list(x) for x in my_predbat.plan_preclip] != [list(x) for x in preclip]:
+            print("  FAILED: plan_preclip mismatch: {}".format(my_predbat.plan_preclip))
             failed += 1
 
         # 2. load_plan() with empty storage leaves plan_valid False
