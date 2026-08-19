@@ -712,7 +712,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             # afresh rather than staying quiet.
             if sn not in self._self_use_power_warned:
                 self._self_use_power_warned.add(sn)
-                self.log(f"Warn: DEYE {sn} has no inverter rating and no battery config, so self-use slots would be written with zero power (a freeze); skipping the control write")
+                self.log(f"Warn: DEYE {sn} has no inverter rating and no usable battery max charge rate, so self-use slots would be written with zero power (a freeze); skipping the control write")
             return {}
         self._self_use_power_warned.discard(sn)
         slots = self.build_tou_slots(schedule, current_soc, self_use_power)
