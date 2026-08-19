@@ -913,6 +913,52 @@ def test_every_slot_carries_the_complete_field_set():
     assert not failed, "test_every_slot_carries_the_complete_field_set"
 
 
+def test_export_slots_arm_the_sell_flag():
+    """Only export slots carry enableSell, and every slot carries the field.
+
+    enableSell is TimeUseSettingItem's per-slot forced-export enable — the same register bit
+    Sunsynk exposes as sellTime{n}En, where a live write test proved a forced export slot
+    does not arm without it. Predbat never sent it, so DEYE export windows had the work mode
+    and the SOC target but not the slot flag that makes the slot an export slot.
+
+    It is written on every slot, not just export ones: on Sunsynk an absent per-slot flag
+    made the API silently discard the OTHER flags in the same item, grid charge included, on
+    six consecutive writes that each reported success.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    sell = TOU_FIELD["sell"]
+    export = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": 20, "power": 3000, "start": "16:00", "end": "19:00"}}
+    slots = d.build_dynamic_payload("INV1", export, current_soc=80, now_minutes=17 * 60)["timeUseSettingItems"]
+    armed = [slot for slot in slots if slot[sell]]
+    if [slot[TOU_FIELD["time"]] for slot in armed] != ["16:00"]:
+        print(f"ERROR: only the export window should arm the sell flag, got {[s[TOU_FIELD['time']] for s in armed]}")
+        failed = True
+    if not armed or armed[0][TOU_FIELD["soc"]] != 20:
+        print(f"ERROR: the armed slot should be the export target: {armed}")
+        failed = True
+
+    # A freeze-export holds the battery but still sells, so it arms too.
+    freeze = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000, "start": "16:00", "end": "19:00"}}
+    frozen = [slot for slot in d.build_dynamic_payload("INV1", freeze, current_soc=80, now_minutes=17 * 60)["timeUseSettingItems"] if slot[sell]]
+    if len(frozen) != 1 or frozen[0][TOU_FIELD["power"]] != 0:
+        print(f"ERROR: freeze-export should arm one zero-power sell slot: {frozen}")
+        failed = True
+
+    # A charge window never sells, and neither does an idle day.
+    charge = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    idle = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    for name, sched in (("charge", charge), ("idle", idle)):
+        slots = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=3 * 60)["timeUseSettingItems"]
+        if any(slot[sell] for slot in slots):
+            print(f"ERROR: a {name} schedule must not arm any sell slot: {slots}")
+            failed = True
+        if any(sell not in slot for slot in slots):
+            print(f"ERROR: every slot must carry the sell field even when off: {slots}")
+            failed = True
+    assert not failed, "test_export_slots_arm_the_sell_flag"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -947,6 +993,7 @@ def run_deye_control_tests(my_predbat):
         ("no_self_use_power_fails_closed", test_control_write_fails_closed_without_a_self_use_power),
         ("tou_days", test_payload_names_every_day_the_schedule_runs_on),
         ("slot_field_set", test_every_slot_carries_the_complete_field_set),
+        ("sell_flag", test_export_slots_arm_the_sell_flag),
     ]:
         try:
             if fn():
