@@ -516,7 +516,8 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         """Map Predbat's schedule intent to a DEYE control state (see design spec table).
 
         The work mode governs whether the BATTERY may export; it is orthogonal to
-        solarSellAction, which governs whether surplus PV may (see build_dynamic_payload).
+        solarSellAction, which governs whether surplus PV may reach the grid (see build_dynamic_payload).
+
 
         Non-export states use ZERO_EXPORT_TO_CT: the battery serves the whole house,
         measured at the grid CT, without exporting. The stricter ZERO_EXPORT_TO_LOAD
