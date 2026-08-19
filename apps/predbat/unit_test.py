@@ -73,6 +73,7 @@ from tests.test_saving_session import (
     test_saving_session_join_service_fallback,
     test_saving_session_auto_join_toggle,
     test_saving_session_custom_entity_no_rewrite_match,
+    test_saving_session_entity_regex_power_rename,
 )
 from tests.test_secrets import run_secrets_tests
 from tests.test_ge_cloud import test_ge_cloud
@@ -447,6 +448,7 @@ def main():
         ("saving_session_join_service_fallback", test_saving_session_join_service_fallback, "Saving session join service fallback test (issue #4548 point 3)", False),
         ("saving_session_auto_join_toggle", test_saving_session_auto_join_toggle, "Saving session auto-join toggle test (issue #4120)", False),
         ("saving_session_custom_entity_no_rewrite_match", test_saving_session_custom_entity_no_rewrite_match, "Saving session custom entity no rewrite match test (issue #4573)", False),
+        ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
         ("deye_const", run_deye_const_tests, "DEYE constants tests", False),

@@ -845,3 +845,45 @@ friendly_name: Octoplus Saving Session Events
             print(f"PASS: Default rate correctly injected for null octopoints: {expected_rate} p/kWh")
 
     return failed
+
+
+def test_saving_session_entity_regex_power_rename(my_predbat):
+    """
+    Test that the octopus_saving_session/octopus_free_session apps.yaml 're:' patterns
+    match both the deprecated saving-session/free-electricity entity names and the
+    replacement Power Down/Power Up entity names introduced by Octopus integration
+    v19.0.0, and that each pattern does not cross-match the other event type.
+    Covers GitHub issue #4548 point 2.
+    """
+    print("Test octopus_saving_session/octopus_free_session entity regex Power Down/Up rename (issue #4548 point 2)")
+    failed = False
+
+    saving_pattern = "re:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))"
+    free_pattern = "re:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))"
+
+    cases = [
+        # (arg, pattern, state_keys, expected_match, description)
+        ("octopus_saving_session", saving_pattern, ["event.octopus_energy_a4dd6c5ee_octoplus_saving_session_events"], "event.octopus_energy_a4dd6c5ee_octoplus_saving_session_events", "deprecated saving-session entity"),
+        ("octopus_saving_session", saving_pattern, ["event.octopus_energy_a4dd6c5ee_octoplus_power_down_events"], "event.octopus_energy_a4dd6c5ee_octoplus_power_down_events", "new Power Down entity"),
+        ("octopus_saving_session", saving_pattern, ["event.octopus_energy_a4dd6c5ee_octoplus_power_up_events"], None, "Power Up entity must not match the saving-session/Power Down pattern"),
+        ("octopus_free_session", free_pattern, ["event.octopus_energy_a4dd6c5ee_octoplus_free_electricity_session_events"], "event.octopus_energy_a4dd6c5ee_octoplus_free_electricity_session_events", "deprecated free-electricity entity"),
+        ("octopus_free_session", free_pattern, ["event.octopus_energy_a4dd6c5ee_octoplus_power_up_events"], "event.octopus_energy_a4dd6c5ee_octoplus_power_up_events", "new Power Up entity"),
+        ("octopus_free_session", free_pattern, ["event.octopus_energy_a4dd6c5ee_octoplus_power_down_events"], None, "Power Down entity must not match the free-session/Power Up pattern"),
+    ]
+
+    for arg, pattern, state_keys, expected, description in cases:
+        matched, resolved = my_predbat.resolve_arg_re(arg, pattern, state_keys)
+        if expected is None:
+            if matched:
+                print(f"ERROR: {description} - expected no match, got {resolved}")
+                failed = True
+            else:
+                print(f"PASS: {description} correctly did not match")
+        else:
+            if not matched or resolved != expected:
+                print(f"ERROR: {description} - expected {expected}, got matched={matched} resolved={resolved}")
+                failed = True
+            else:
+                print(f"PASS: {description} resolved to {resolved}")
+
+    return failed
