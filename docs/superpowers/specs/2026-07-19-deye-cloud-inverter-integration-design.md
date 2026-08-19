@@ -207,12 +207,31 @@ sentinel).
 
 | Predbat intent | Signal from entities | DEYE realisation (component-internal) |
 |---|---|---|
-| **Charge** | charge enable, target SOC > current | `ZERO_EXPORT_TO_LOAD`, `gridChargeAction=on`, slot SOC = charge_limit, power = charge_rate |
-| **Freeze charge** | a charge with target SOC = reserve | `gridChargeAction=on`, slot SOC = reserve → holds at reserve |
-| **Hold charge** | charge amount ≤ current SOC, held with reserve | `gridChargeAction=off`, slot SOC = reserve → battery held, no grid charge |
-| **Real export** | export enable, export SOC **< 99** | `SELLING_FIRST`, `solarSellAction=on`, `gridChargeAction=off`, slot SOC = export floor, power = discharge_rate |
-| **Freeze export** | export enable, export SOC **= 99** | `SELLING_FIRST`, `solarSellAction=on`, hold battery at 99% → **solar-only export**, battery not drained |
-| **Idle / self-use** | no active window | `ZERO_EXPORT_TO_LOAD`, `gridChargeAction=off`, slot SOC = reserve |
+| **Charge** | charge enable, target SOC > current | `ZERO_EXPORT_TO_CT`, `gridChargeAction=on`, slot SOC = charge_limit, slot power = charge_rate |
+| **Freeze charge** | a charge with target SOC = reserve | `gridChargeAction=on`, slot SOC = reserve, **slot power = 0** → holds at reserve |
+| **Hold charge** | charge amount ≤ current SOC, held with reserve | `gridChargeAction=off`, slot SOC = reserve, slot power = charge_rate → battery held, no grid charge |
+| **Real export** | export enable, export SOC **< 99** | `SELLING_FIRST`, `gridChargeAction=off`, slot SOC = export floor, slot power = discharge_rate |
+| **Freeze export** | export enable, export SOC **= 99** | `SELLING_FIRST`, hold battery at 99% with **slot power = 0** → **solar-only export**, battery not drained |
+| **Idle / self-use** | no active window | `ZERO_EXPORT_TO_CT`, `gridChargeAction=off`, slot SOC = reserve, slot power = inverter rating |
+
+Three cross-cutting rules the table depends on:
+
+- **Zero slot power IS a freeze.** `TimeUseSettingItem.power` is the slot's
+  charge/export power, and zero tells the inverter to neither charge nor
+  discharge for that interval. Self-use slots therefore carry the inverter's
+  rated power (the battery is free to serve whatever the house draws) and only
+  the two freeze states carry zero. With no rating and no battery config to
+  derive one from, the component writes nothing at all rather than emit a zero
+  it cannot justify.
+- **`solarSellAction` is always `on`.** It governs whether surplus PV reaches
+  the grid, not what the battery does, so deriving it from the active window
+  would curtail spare solar outside export windows — invisibly, since nothing
+  in Predbat's model represents PV curtailment. Export windows come from
+  `SELLING_FIRST` plus the slot SOC targets, not from this flag.
+- **Non-export states use `ZERO_EXPORT_TO_CT`, not `..._TO_LOAD`.** The CT
+  variant measures at the grid CT, so the battery serves the whole house without
+  exporting; `..._TO_LOAD` measures at the inverter's own output and on a
+  CT-clamp install would stop the battery serving anything not wired to it.
 
 Two consequences:
 
