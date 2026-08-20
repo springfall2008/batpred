@@ -321,7 +321,7 @@ def test_hainterface_get_slug(my_predbat=None):
         # Mock app info response
         def mock_get_side_effect(url, *args, **kwargs):
             # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition
-            # 
+            #
             # At present have not changed Predbat API call in order to not break installations that are still using an older HA supervisor
             # Propose in Feb 2027 that Predbat be changed to use the new service call
             if "/addons/self/info" in url:

@@ -110,7 +110,7 @@ async def main():
     # List of root directories to search
     # HA changed terminology from 'addons' to 'apps' in HA 2026.2 with 'addon_configs' becoming 'app_configs' but retained
     # the old directory names for transition
-    # 
+    #
     # At present have not changed Predbat directory call in order to not break installations that are still using an older HA supervisor
     # Propose in Feb 2027 that Predbat be changed to use the new directory call
     roots = [".", "/addon"]
