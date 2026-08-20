@@ -474,7 +474,7 @@ The Predbat code that runs is the same and the configuration is exactly the same
     - Click on the existing AppDaemon/AppDaemon-predbat app
     - Click STOP, and untick 'Start on boot'
 
-6. Briefly start the new Predbat app so that it creates the app_config folder and the template `apps.yaml` file:
+6. Briefly start the new Predbat app so that it creates the `app_configs` folder and the template `apps.yaml` file:
     - Go to Settings/Apps
     - Click on the Predbat app
     - Click START, wait a minute for the app to initialise itself, then click STOP. A Predbat status warning that you have a template `apps.yaml` file is normal and can be ignored
