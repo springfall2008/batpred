@@ -4,11 +4,11 @@ The basic Predbat configuration is defined in the `apps.yaml` file.
 
 Depending on how you installed Predbat the `apps.yaml` file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/addon_configs/6adb4f0d_predbat`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), `apps.yaml` will be in the directory `/apps_configs/6adb4f0d_predbat`,
 
-- with the [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
+- with the deprecated [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's in `/config/appdaemon/apps/batpred/config/`, or
 
-- if the combined AppDaemon/Predbat app installation method was used, it's in `/addon_configs/46f69597_appdaemon-predbat/apps`.
+- if the deprecated combined AppDaemon/Predbat app installation method was used, it's in `/apps_configs/46f69597_appdaemon-predbat/apps`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to edit the `apps.yaml` file - see [editing configuration files within Home Assistant](install.md#editing-configuration-files-in-home-assistant) if you need to install an editor.
@@ -16,7 +16,7 @@ to edit the `apps.yaml` file - see [editing configuration files within Home Assi
 This section of the documentation describes what the different configuration items in `apps.yaml` do.
 
 When you edit `apps.yaml`, the change will automatically be detected and Predbat will be reloaded with the updated file.
-You don't need to restart the Predbat or AppDaemon app for your edits to take effect.
+You don't need to restart Predbat app for your edits to take effect.
 
 ## Templates
 
@@ -34,7 +34,7 @@ and it's very easy to end up with an incorrectly formatted file that will cause 
 
 The [YAML Basics from This Smart Home](https://www.youtube.com/watch?v=nETF43QJebA) is a good introduction video to how YAML should be correctly structured but as a brief introduction:
 
-At the start of the `apps.yaml` file is the predbat module definition:
+At the start of the `apps.yaml` file is the Predbat module definition:
 
 ```yaml
 pred_bat:
@@ -106,7 +106,7 @@ sets the configuration item **battery_temperature_history** to the Home Assistan
 
 note the list items appear on separate lines beneath the configuration item name, with each entry being indented by two spaces, a dash, a space and then the configuration value.
 
-- Entries where the predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
+- Entries where the Predbat configuration item includes a variable name set earlier in `apps.yaml` that is then expanded, e.g.:
 
 ```yaml
   dno_region: "A"
@@ -1058,6 +1058,8 @@ To disable, set it to 1440.
 - **iboost_energy_today** - Set to a sensor which tracks the amount of energy sent to your solar diverter, which can also be used to subtract from your historical load
 for more accurate predictions.
 
+The iboost energy sensor should reset to zero each day so if your source sensor doesn't, then its recommended to wrap it in a utility meter and configure Predbat to use the utility meter.
+
 ## Inverter control configurations
 
 NB: literal numeric values for the power-limit settings below (`inverter_limit`, `pv_ac_limit`, `export_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export`, `inverter_limit_charge_dc`, `battery_rate_max`, `inverter_battery_rate_min`) must always be in **watts** — e.g. `7300` for a 7.3 kW inverter, never `7.3`. Predbat's unit auto-conversion only fires when the value is a sensor reference (it reads `unit_of_measurement` from the HA entity); for literal values there is no entity to read, so the raw number is taken as watts. A literal `inverter_limit: 7.3` will be interpreted as 7.3 W and clamp `battery_draw` to ~0.0006 kWh per 5-min step, producing a plan that looks like Predbat refuses to discharge the battery.
@@ -1510,9 +1512,16 @@ Called when a charge/discharge is cancelled and the inverter goes back to home d
 topic: **topic**/set/auto
 payload: true
 
-## Solcast Solar Forecast
+## Solar Forecast
 
-As described in the [Predbat installation instructions](install.md#solcast-install), Predbat needs a solar forecast
+As described in the [Predbat installation instructions](install.md#solar-forecast-install), Predbat needs a solar forecast
+in order to predict solar generation and battery charging.
+
+The Solar forecast configuration in `apps.yaml` should be configured for either for the [Solcast integration](#solcast-solar-forecast), [Forecast.solar](#forecastsolar-solar-forecast) or [Open-Meteo](#open-meteo-solar-forecast).
+
+### Solcast Solar Forecast
+
+As described in the [Predbat installation instructions](install.md#solar-forecast-install, Predbat needs a solar forecast
 in order to predict solar generation and battery charging which can be provided by the Solcast integration.
 
 By default, the template `apps.yaml` is pre-configured to use the [Solcast forecast integration](install.md#solcast-home-assistant-integration-method) for Home Assistant.
@@ -1592,7 +1601,7 @@ This can have an impact on planning, especially for things like freeze charging 
 
 See also [PV configuration options in Home Assistant](customisation.md#solar-pv-adjustment-options).
 
-## Forecast.solar Solar Forecast
+### Forecast.solar Solar Forecast
 
 The Forecast.solar service can also be used in Predbat, the free version offer access without an API Key but is limited to hourly data and does not provide any 10% or 90% data.
 Predbat Solar calibration can use past data to improve this information and provide both the 10% and the 90% data, each derived from the central forecast
@@ -1688,7 +1697,7 @@ source changes. Do not judge the accuracy of the new source until the settling p
 
 [Open-Meteo](https://open-meteo.com/) is a free, open-source weather API that provides solar irradiance forecasts with no API key required.
 Predbat fetches the Global Tilted Irradiance (GTI) for each array and converts it to a power estimate using a PVWatts cell-temperature model.
-Ensemble members are used to derive a P10 pessimistic estimate alongside the central P50.
+Ensemble members are used to derive a PV10 pessimistic estimate alongside the central PV50.
 
 You can define one or more rooftop arrays by providing a list; they will be summed automatically.
 
@@ -1759,7 +1768,7 @@ These are described in detail in [Energy Rates](energy-rates.md) and are listed 
 - **rates_export_override** - Over-ride export rate for specific date and time range
 - **futurerate_url** - URL of future energy market prices for Agile users
 - **futurerate_adjust_import** and **futurerate_adjust_export** - Whether tomorrow's predicted import or export prices should be adjusted based on market prices or not
-- **futurerate_adjust_auto** - Auto-detect which of import/export are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
+- **futurerate_adjust_auto** - Auto-detect which of the import/export rates are Agile and calibrate only those rates; overrides `futurerate_adjust_import` / `futurerate_adjust_export`; requires the Octopus Energy integration or Predbat's Octopus Component
 - **futurerate_peak_start** and **futurerate_peak_end** - start/end times for peak-rate adjustment
 - **carbon_postcode** - Postcode to retrieve Carbon intensity grid information for
 - **carbon_automatic** - Retrieve Carbon intensity information automatically based upon postcode
@@ -1991,7 +2000,7 @@ rather than the usual *givtcp_SERIAL_NUMBER_soc* GivTCP entity so everything lin
 Default false. When set to true Predbat will automatically calculate `battery_scaling` based on historical charge data rather than using the static value above.
 
 The calculation uses `find_battery_size()` to estimate the actual usable battery capacity from historical charging periods and
-compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in a new sensor
+compares it to the nominal capacity (`soc_max`). A 7-day rolling history of daily estimates is stored in the sensor
 `sensor.predbat_soc_max_calculated` (or `sensor.predbat_soc_max_calculated_N` for inverter N > 0).
 The sensor state is the trimmed mean of the history (the highest and lowest samples are discarded when 3 or more data points exist,
 giving a stable average that is robust to occasional outliers).
@@ -2058,17 +2067,17 @@ This may be useful with GivTCP if you have time sync errors or lose the REST ser
 The auto_restart itself is a list of commands to run to trigger a restart.
 
 - The **shell** command will call a 'sh' shell and can be used to delete files and suchlike.
-- The **service** command is used to call a service and can contain arguments of **addon** and/or **entity_id**. The configuration below is for GivTCP v3.
+- The **service** command is used to call a service and can contain arguments of **app** and/or **entity_id**. The configuration below is for GivTCP v3.
 
 ```yaml
   auto_restart:
     - shell: 'rm -rf /homeassistant/GivTCP/*.pkl'
-    - service: hassio/addon_restart
-      addon: 533ea71a_givtcp
+    - service: hassio/app_restart
+      app: 533ea71a_givtcp
 ```
 
 NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
-as the slug-id (Home Assistant app identifier) is different between GivTCP v2 and v3.
+as the slug-id (Home Assistant App identifier) is different between GivTCP v2 and v3.
 
 ## Battery charge/discharge curves
 
@@ -2104,7 +2113,7 @@ or an edit being made to `apps.yaml`), then Predbat will automatically calculate
 
 You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
 
-The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
+The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if Predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
 If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
 
 The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg) explains how the curve works and shows how Predbat automatically creates it.

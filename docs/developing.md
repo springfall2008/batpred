@@ -24,7 +24,7 @@ Predbat now has some unit-level tests, to run them on your local machine:
 2. Copy `apps.yaml` to your test area
 3. Copy the files from github <https://github.com/springfall2008/batpred/tree/main/coverage> to this area
 4. Extract cases.tgz
-5. Have /Volumes/add_configs/6adb4f0d_predbat point to your Predbat app directory or edit run_all to change the path
+5. Have /Volumes/app_configs/6adb4f0d_predbat point to your Predbat app directory or edit run_all to change the path
 6. Run run_all
 
 You can add --quick to run just the faster tests. If the tests fail then debug them.

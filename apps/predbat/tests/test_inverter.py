@@ -3192,8 +3192,8 @@ charge_start_service:
         ha,
         inv,
         dummy_items,
-        service={"command": "service", "service": "restart_service", "addon": "adds"},
-        expected=[["restart_service", {"addon": "adds"}]],
+        service={"command": "service", "service": "restart_service", "app": "adds"},
+        expected=[["restart_service", {"app": "adds"}]],
         expect_notify=True,
     )
     if failed:

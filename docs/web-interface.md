@@ -80,12 +80,12 @@ You can also [create a Predbat Plan card](predbat-plan-card.md) to show Predbat'
 
 ### Entities View
 
-This view enables you to look at the history of any predbat output entity or (input) configuration setting.
+This view enables you to look at the history of any Predbat output entity or (input) configuration setting.
 
 Select the entity required to be viewed, the attributes to be charted (defaults to entity state) and the time period of history to view the entity over (but note you may need to [increase HA's purge_keep_days](apps-yaml.md#days_previous) first).
 
 You can select multiple entities and their attributes and Predbat will then display the current entity values, a chart of the selected attribute history, and then a list of prior historical values.
-The example below shows predbat import and export rates charted for the last 7 days:
+The example below shows Predbat import and export rates charted for the last 7 days:
 
 ![image](images/web-interface-entities-view.png)
 ![image](images/web-interface-entities-chart.png)
@@ -100,8 +100,9 @@ The chart also shows where charging is planned under the Base and Best scenarios
 - **Cost** - Shows the historic import, export and net total cost incurred for today and the predicted cost for the plan duration under the Base/Base10/Best and Best10 scenarios
 - **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
-- **PV** - Shows today's predicted solar generation under the PV, PV10 and PV90 scenarios alongside today's actual solar generation
-- **PV7** - Similar to the PV chart, but shows actual solar generation and forecast for the last 7 days including today
+- **PV** - Shows today's predicted solar power generation under the PV, PV10 and PV90 scenarios alongside today's actual solar power generation
+- **PV7** - Similar to the PV chart, but shows actual solar power generation and forecast for the last 7 days including today
+- **PVAccuracy** - Shows how accurate the PV energy forecast is, comparing cumulative PV forecast energy for today to today's actual cumulative solar energy generation
 - **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
 - **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 - **MarginalCosts** - Shows the marginal cost of consuming extra electricity at different load levels (1, 2, 4, 8 kWh) across upcoming time windows.
@@ -170,8 +171,7 @@ You can restart individual Predbat components if required.
 
 ### Editor View
 
-The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save
-will be disabled pending a fix.
+The editor view allows you to edit `apps.yaml` as text directly within the web interface. If you make a syntax error then the error will be highlighted and save will be disabled pending a fix.
 
 <img alt="image of Predbat Editor view" src="https://github.com/user-attachments/assets/17383694-2300-4c81-996e-63970671b903" />
 
@@ -191,9 +191,18 @@ These are intended for debugging and developer activities, in normal use you can
 
 ### Metrics View
 
-The Metrics view gives a dashboard of Predbat's internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
+The Metrics view provides a dashboard giving an overview of Predbat internal metrics, including application health, plan status, battery state, energy totals, costs, savings and API status.
+The dashboard auto-refreshes every 30 seconds and contains the following 5 sections:
 
+- **System Health** - shows a set of system health cards including confirming that Predbat is running, the configuration and plan are valid, how long since the last Predbat run, that there are no component errors and the amount of data history that Predbat is using.
 The System Health row includes a **Data Age** card, showing how many days of historical load data (`load_today`) Predbat was able to retrieve from Home Assistant, going back from now. This is a measure of how much history is *available*, not how stale the latest reading is - a higher number generally means better load forecasting, since day-of-week weighted forecasts (the `days_previous` setting) need enough history to match against. The card is only flagged as a warning when the retrieved depth falls short of what your `days_previous` configuration actually needs (shown in the "need Xd" sub-label) - for example, if `days_previous` includes `7`, Predbat needs at least 7 days of history, and a shortfall usually means Home Assistant's recorder purged old data before Predbat could read it, or a load sensor is newly added.
+- **Battery Status** - shows battery SoC doughnut and power meters for current battery charge, discharge, house load, PV, grid import and grid export
+- **Energy Today** - shows total energy today for house load, grid import, grid export and PV generation
+- **Cost & Savings** - shows electricity cost today and yesterday, and savings achieved yesterday from having solar and battery and from using predbat
+- **API & Solar Status** - shows API health (requests, failures and last call) made by Predbat to Axle, Solcast/Forecast.Solar, GivEnergy Cloud, Fox ESS Cloud, Solis Cloud, and Open Meteo (Temperature for LoadML). Data is only shown for components that are active, i.e. if Predbat is not using the GivEnergy Cloud integration, no API call metrics are shown.<BR>
+Solar status shows Solcast API calls (Predbat Solcast direct only) and PV Calibration Scaling (worst day, best day and total)
+
+![image](images/web-interface-metrics-view.png)
 
 ### Docs View
 

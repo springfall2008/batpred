@@ -257,7 +257,7 @@ def kernel_library_candidates():
     # Local development/Docker build (named _lib so Python's importer never picks it up in place of this module)
     candidates.append(os.path.join(base_dir, "prediction_kernel_lib.so"))
     # Cross-built per-architecture binaries (see build_kernel_cross.sh, delivered by
-    # self-update); Linux ones are glibc-based as the addon images are Ubuntu
+    # self-update); Linux ones are glibc-based as the app images are Ubuntu
     machine = platform.machine().lower()
     if machine and sys.platform == "linux":
         candidates.append(os.path.join(base_dir, "prediction_kernel_lib_{}.so".format(machine)))

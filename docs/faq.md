@@ -5,8 +5,8 @@
 - First look at **predbat.status** in Home Assistant and the Predbat App log (which can be found in the list of log files in the System/Log area of the GUI).
 See if any errors are warnings are found. If you see an error something is likely configured incorrectly,
 check your entity settings are correct.
-- Make sure Solcast is installed and it's auto-updated at least a couple of times a day (see the [Solcast instructions](install.md#solcast-install)).
-The default Solcast sensor names may be wrong, you might need to update the `apps.yaml` config to match your own names
+- Make sure a Solar Forecast is installed and it's auto-updated at least a couple of times a day (see the [Solar Forecast instructions](install.md#solar-forecast-install)).
+If you are using the Solcast Integration then the default Solcast sensor names may be wrong, you might need to update the `apps.yaml` config to match your own names
 (some people don't have the solcast_ bit in their entity names).
 
 ## Predbat is failing with Warn: Service call select/select_option data failed
@@ -179,7 +179,7 @@ Predbat can only work on the information it's given, although it does run every 
 
 The plan Predbat produces assumes that your average load and PV forecasts are accurate and Predbat will aim to give you the maximum return.
 
-Make sure you have set up your [Solcast solar forecast correctly](install.md#solcast-install) with the number of panels, orientation, output, etc.
+Make sure you have set up your [Solar forecast correctly](install.md#solar-forecast-install) with the number of panels, orientation, output, etc.
 
 Projected daily load is determined from historical load information so make sure you have set [days_previous and days_previous_weight in apps.yaml](apps-yaml.md#basics)
 to give appropriately representative load history to Predbat, and read the [longer explanation of how days_previous works](apps-yaml.md#understanding-how-days_previous-works).
@@ -326,7 +326,7 @@ delete all the old Octopus sensors, and [re-install the Octopus Integration](ins
 
 If you get this warning message in the Predbat log file or you see that the 'PV kWh' column in the [Predbat plan card](predbat-plan-card.md) is completely blank:
 
-- Ensure that you have [installed and configured Solcast correctly](install.md#solcast-install)
+- Ensure that you have [installed and configured a Solar Forecast correctly](install.md#solar-forecast-install)
 - Check the Solcast integration in Home Assistant is configured and enabled (go to Settings / Integrations / Solcast)
 - Check that there are no errors relating to Solcast in the Home Assistant log (go to Settings / System / Logs and view the 'Home Assistant Core' log).
 If you see an error 429 message in the log then this is as a result of  Solcast's rate limiting for Hobbyist accounts.
@@ -397,7 +397,7 @@ In the GivEnergy portal, go to My Inverters / Remote Control (cog symbol) / clic
 - Finally, check how often your inverter integration is polling your inverter for new data. For [GivTCP the Self Run Loop Timer](apps-yaml.md#rest-interface-inverter-control)
 is recommended to be set to a value of between 20 and 60 seconds.
 
-If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/predbat isn’t getting the same time from the inverter as it is expecting.
+If you have checked the above and keep getting “time is skewed” warnings then it means Home Assistant/Predbat isn’t getting the same time from the inverter as it is expecting.
 Either GivTCP has lost communications with the inverter or the inverter has stopped talking to the world.
 
 If you look at the Logbook in Home Assistant you should see a steady stream of entities changing in HA.

@@ -422,10 +422,15 @@ class HAInterface(ComponentBase):
                 self.log("Info: Using SQL Lite database as primary data source, no HA interface available")
 
         if self.ha_key:
-            # Get the current addon info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            # Get the current app info, but suppress warning message if the API call fails as non-HAOS installs won't have supervisor running
+            #
+            # HA changed terminology from 'addons' to 'apps' in HA 2026.2 but retained the old service calls for transition
+            #
+            # At present have not changed Predbat API call in order to not break installations that are still using an older HA supervisor
+            # Propose in Feb 2027 that Predbat be changed to use the new service call
             res = self.api_call("/addons/self/info", core=False, silent=True)
             if res:
-                # get app slug name which is the actual directory name under /addon_configs that /config is mounted to
+                # get app slug name which is the actual directory name under /apps_configs that /config is mounted to
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 

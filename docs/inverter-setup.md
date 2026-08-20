@@ -87,7 +87,7 @@ It's recommended that you first watch the [Installing GivTCP and Mosquitto Apps 
 '[https://github.com/britkat1980/ha-addons](https://github.com/britkat1980/ha-addons')' into the text box and click 'Add' then 'Close'<BR>
 NB: this URL is for GivTCP v3, not v2 as covered in the video.
 - Click the back button and then re-navigate to Settings / Apps / Install app so Home Assistant picks up the GivTCP app from the custom repository
-- Scroll down the app list, to find 'GivTCP-V3', you should see the three addons; the production version, the latest beta and the latest dev versions.
+- Scroll down the app list, to find 'GivTCP-V3', you should see the three apps; the production version, the latest beta and the latest dev versions.
 Click on the 'GivTCP' app, then click 'INSTALL'
 - Once GivTCP has been installed, ensure that the 'Start on boot' and 'Watchdog' options are turned on
 
@@ -105,7 +105,7 @@ Click on the 'GivTCP' app, then click 'INSTALL'
   For example, if you have a gateway and two AIOs you could use the prefixes 'GW', 'AIO-1' and 'AIO-2'.
   The prefixes should be set before you start using GivTCP in anger
   as changing the prefixes later on will result in both the old and new sensor names appearing in Home Assistant with the 'old' sensors being "unavailable".<BR>
-  Note that if you do change the givtcp prefixes then you will also have to edit the apps.yaml configuration file to match,
+  Note that if you do change the givtcp prefixes then you will also have to edit the `apps.yaml` configuration file to match,
   and change the sensor names that Predbat is looking for (by default prefixed 'givtcp_xxx') to your new sensor naming structure
 
 - Click Next and Next to get to the Selfrun page, and turn on Self Run so that GivTCP automatically retrieves data from your inverter. The Self Run Loop Timer is how often GivTCP will retrieve data - it's
@@ -660,7 +660,7 @@ Max value: (Inverter Battery max charge in watt)
 input_number.predbat_discharge_rate     # this is used to set battery discharge to zero
 Min value: 0
 Max value: (Inverter Battery max discharge in watt)
-```text
+```
 
 - To control the Kostal inverter you need to use a modbus/tcp connection, this is not a part of the Kostal integration. Add the following modbus configuration to your `configuration.yaml`:
 
@@ -1419,8 +1419,7 @@ triggers:
       entity_id: automation.luxpower_freeze_charge_watchdog
 
   mode: single
-
-  ```
+```
 
 **Enable Freeze Charging**
 
@@ -1438,7 +1437,7 @@ If you have a LuxPower inverter with the **Charge Last** feature, enable the Pre
 **Note**
 Freeze Exporting requires fewer supporting automations than Freeze Charging, as it relies primarily on inverter-side behaviour. No additional watchdog or guard logic is required.
 
- In your `apps.yaml` file:
+In your `apps.yaml` file:
 
 - Look for `support_discharge_freeze` in the inverter section and change `False` to `True`
     - Uncomment the last two lines of the `discharge_stop_service` section so Predbat turns `switch.lux_charge_last` off when Freeze exporting stops.
@@ -1461,7 +1460,7 @@ After Predbat recomputes, you may see some dark grey **FrzExp** slots in the sta
 ```yaml
 name: Predbat Ready
 entity_id: input_boolean.predbat_ready
-```text
+```
 
 The `predbat_ready` helper prevents automation actions until LuxPower entities are fully available after startup. Ensure it is On after it has been created.
 
@@ -2008,7 +2007,7 @@ sensor:
 
 If you have multiple batteries connected to your SolarEdge inverter and are using the SolarEdge Modbus Multi integration, this enumerates the multiple batteries as b1, b2, b3, etc with separate entities per battery.
 
-You will need to make a number of changes to the solaredge apps.yaml, replacing the following entries:
+You will need to make a number of changes to the solaredge `apps.yaml`, replacing the following entries:
 
 ```yaml
   battery_rate_max:
