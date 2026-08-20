@@ -1008,7 +1008,8 @@ class Output:
         soc = self.predict_soc_best.get(minute_relative_start, self.soc_kw)
         pv_window_kwh = 0.0
         if self.set_charge_low_power:
-            pv_window_kwh = sum(pv_forecast_minute_step.get(m, 0.0) for m in range(minute_start, window["end"], PREDICT_STEP))
+            window_end_rel = min(window["end"] - self.minutes_now, self.forecast_minutes)
+            pv_window_kwh = sum(pv_forecast_minute_step.get(m, 0.0) for m in range(minute_relative_start, window_end_rel, PREDICT_STEP))
         _, charge_rate_now_curve = find_charge_rate(
             minute_start,
             soc,
