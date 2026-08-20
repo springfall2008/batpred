@@ -46,6 +46,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
+   | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
@@ -558,6 +559,173 @@ Edit `apps.yaml`:
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
 Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
+
+## Hanchu iESS
+
+The Hanchu iESS has no native Predbat integration. Control is implemented via Predbat's generic Service API: Predbat calls four service hooks (`charge_start_service`, `charge_stop_service`, `discharge_start_service`, `discharge_stop_service`), all of which point at a single Home Assistant script that writes the corresponding time slots directly to the device via `hanchuess.device_control`.
+
+Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) over your `apps.yaml` and follow the steps below.
+
+### Prerequisites
+
+Install the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration via HACS and configure it with your Hanchu cloud account credentials. Confirm that inverter and battery sensors are appearing in Home Assistant before proceeding.
+
+### Step 1 — Create helpers
+
+Create the following helpers in Home Assistant (Settings → Devices & Services → Helpers):
+
+**Toggle helpers** (toggle type):
+
+| Entity ID | Name |
+| --------- | ---- |
+| `input_boolean.predbat_charge_start` | Predbat Charge Start |
+| `input_boolean.predbat_discharge_start` | Predbat Discharge Start |
+
+**Text helper** (text type):
+
+| Entity ID | Name |
+| --------- | ---- |
+| `input_text.hanchu_last_mode_action` | Hanchu Last Mode Action |
+
+`input_text.hanchu_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant API call when Predbat reasserts a state that is already active.
+
+### Step 2 — Create the bridge script
+
+All four of Predbat's service hooks call the same script, `script.hanchu_set_state_queued`, passing a `mode_action` field to indicate which state to apply. The script runs with `mode: queued` so if Predbat fires two calls close together — for example stopping a discharge and starting a charge in the same plan-evaluation cycle — Home Assistant queues the second call behind the first rather than letting both `device_control` calls race each other.
+
+Create a new script (Settings → Automations & Scenes → Scripts → Add Script → Edit in YAML) and paste the following, replacing `YOURSERIAL` with your device serial number as it appears in your HA entity IDs, and replacing `notify.notify` with your own mobile notification service:
+
+```yaml
+alias: Hanchu Set State Queued
+mode: queued
+fields:
+  mode_action:
+    required: true
+    selector:
+      select:
+        options:
+          - charge_start
+          - charge_stop
+          - discharge_start
+          - discharge_stop
+sequence:
+  - variables:
+      # mode_action is sometimes only populated under `data` rather than as a
+      # bare template variable, depending on whether the script is invoked from
+      # the HA UI or by a real service call from Predbat's AppDaemon dispatch.
+      # Check both so it works reliably either way.
+      act: >-
+        {% if mode_action is defined %}{{ mode_action }}
+        {% elif data is defined and data.mode_action is defined %}{{ data.mode_action }}
+        {% else %}unknown{% endif %}
+  - if:
+      - condition: template
+        value_template: "{{ act == states('input_text.hanchu_last_mode_action') }}"
+    then:
+      - stop: "No change — same action already applied, skipping API call"
+  - variables:
+      start_seconds: "{{ (now() - now().replace(hour=0, minute=0, second=0, microsecond=0)).seconds }}"
+      tct_start: "{{ start_seconds if act == 'charge_start' else 0 }}"
+      tct_end: "{{ 39600 if act == 'charge_start' else 0 }}"      # 11:00:00
+      tdt_start: "{{ start_seconds if act == 'discharge_start' else 0 }}"
+      tdt_end: "{{ 86340 if act == 'discharge_start' else 0 }}"   # 23:59:00
+  - action: hanchuess.device_control
+    data:
+      sn: YOURSERIAL
+      dev_type: "2"
+      value:
+        TCT_START_1: "{{ tct_start }}"
+        TCT_END_1: "{{ tct_end }}"
+        TDT_START_1: "{{ tdt_start }}"
+        TDT_END_1: "{{ tdt_end }}"
+    response_variable: result
+  - if:
+      - condition: template
+        value_template: "{{ not result.success }}"
+    then:
+      - delay:
+          seconds: 5
+      - action: hanchuess.device_control
+        data:
+          sn: YOURSERIAL
+          dev_type: "2"
+          value:
+            TCT_START_1: "{{ tct_start }}"
+            TCT_END_1: "{{ tct_end }}"
+            TDT_START_1: "{{ tdt_start }}"
+            TDT_END_1: "{{ tdt_end }}"
+        response_variable: result2
+      - if:
+          - condition: template
+            value_template: "{{ not result2.success }}"
+        then:
+          - action: notify.notify  # Replace with your own notification service
+            data:
+              title: "⚠️ Hanchu {{ act }} FAILED"
+              message: >-
+                {{ act }} write failed after retry ({{ result2.message }})
+                — check manually.
+          - stop: "Both attempts failed — leaving last_mode_action unchanged for retry"
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.hanchu_last_mode_action
+    data:
+      value: "{{ act }}"
+  - choose:
+      - conditions: "{{ act == 'charge_start' }}"
+        sequence:
+          - action: input_boolean.turn_on
+            entity_id: input_boolean.predbat_charge_start
+      - conditions: "{{ act == 'charge_stop' }}"
+        sequence:
+          - action: input_boolean.turn_off
+            entity_id: input_boolean.predbat_charge_start
+      - conditions: "{{ act == 'discharge_start' }}"
+        sequence:
+          - action: input_boolean.turn_on
+            entity_id: input_boolean.predbat_discharge_start
+      - conditions: "{{ act == 'discharge_stop' }}"
+        sequence:
+          - action: input_boolean.turn_off
+            entity_id: input_boolean.predbat_discharge_start
+```
+
+The script always writes all four time slot fields (`TCT_START_1`, `TCT_END_1`, `TDT_START_1`, `TDT_END_1`) on every call, zeroing whichever pair is not the active mode. This keeps charge and discharge mutually exclusive on the device without relying on separate stop/start calls landing in the right order.
+
+### Step 3 — Add the soc_kw template sensor
+
+Predbat requires a `soc_kw` sensor reporting battery state of charge in kWh. Add the following to your `configuration.yaml`:
+
+```yaml
+template:
+  - sensor:
+      - name: "Home Battery State of Charge kWh"
+        unique_id: home_battery_soc_kwh
+        unit_of_measurement: "kWh"
+        state_class: measurement
+        device_class: energy
+        state: >
+          {{ ((states('sensor.hanchuess_YOURSERIAL_battery_soc') | float(0)) / 100 * NN.NN) | round(2) }}
+```
+
+Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total battery capacity in kWh (for example `18.80` for a dual 9.4 kWh system). Restart Home Assistant after adding this.
+
+### Step 4 — Configure apps.yaml
+
+- Replace `YOURSERIAL` throughout the template with your device serial number as it appears in your HA entity IDs
+- Adjust `inverter_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export` and `battery_rate_max` to match your inverter and battery rated capacity in watts
+- Delete the `template: True` line to allow Predbat to start
+- Configure your energy rates — see [Energy Rates](https://springfall2008.github.io/batpred/energy-rates/)
+
+> **Note:** Double-check that `inverter_limit` is spelled exactly as shown — an accented character (for example `é` instead of `e` from autocorrect) will cause Predbat to silently ignore the setting and fall back to its own default.
+
+### Hanchu Notes
+
+- **Skipping redundant calls:** Predbat re-evaluates its plan on its normal cycle and can re-issue the same service call mid-window, simply reasserting the plan rather than changing anything. The `input_text.hanchu_last_mode_action` check skips the API call entirely when the requested mode is already the last one successfully applied. The tracker only updates after a confirmed successful write, so a failed attempt still retries correctly on the next cycle.
+- **Behaviour on Predbat restart:** Whenever Predbat restarts it issues both `charge_stop_service` and `discharge_stop_service` in quick succession to put the inverter into a known neutral state. This is expected behaviour. The queued script handles this cleanly — if one of the calls matches the already-active state it is skipped as redundant; the other runs if it represents a real change. You may see one or both fire immediately after any restart.
+- **Automation latency:** Start/stop commands are occasionally delayed by up to ~2 minutes due to HA scheduling. This has not caused any practical issues in production use.
+- **No charge/discharge enable toggle:** Hanchu has no explicit enable/disable for charge or discharge. The slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
+- **Min SOC:** Managed via `battery_min_soc` pointing directly to the Hanchu entity — no separate Predbat reserve setting needed.
 
 ## Huawei
 
