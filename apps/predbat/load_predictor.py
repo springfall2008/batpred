@@ -412,8 +412,8 @@ class LoadPredictor:
             self.biases[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
 
             # Ensure weights and biases remain finite
-            self.weights[i] = np.nan_to_num(self.weights[i], copy=False, nan=0.0)
-            self.biases[i] = np.nan_to_num(self.biases[i], copy=False, nan=0.0)
+            self.weights[i] = np.nan_to_num(self.weights[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            self.biases[i] = np.nan_to_num(self.biases[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _create_time_features(self, minute_of_day, day_of_week, day_of_year=1):
         """

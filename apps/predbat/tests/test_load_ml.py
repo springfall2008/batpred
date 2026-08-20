@@ -3182,9 +3182,20 @@ def _test_nan_inf_robustness():
     assert not np.isinf(val_mae), "val_mae must not be Inf"
     assert predictor.validation_bias is not None and not np.isnan(predictor.validation_bias), "validation_bias must not be NaN"
 
+    # Test that _adam_update safely clamps +/-Inf weights and biases to finite values
+    predictor._initialize_weights()
+    predictor.weights[0][0, 0] = float("inf")
+    predictor.weights[0][0, 1] = float("-inf")
+    predictor.biases[0][0] = float("inf")
+    w_grads = [np.zeros_like(w) for w in predictor.weights]
+    b_grads = [np.zeros_like(b) for b in predictor.biases]
+    predictor._adam_update(w_grads, b_grads)
+    assert np.isfinite(predictor.weights[0]).all(), "Weights must be finite after _adam_update with Inf inputs"
+    assert np.isfinite(predictor.biases[0]).all(), "Biases must be finite after _adam_update with Inf inputs"
+
 
 def _test_database_zero_preservation():
-    """Test that save_database_history and load_database_history preserve valid 0.0 entries."""
+    """Test that save_database_history and load_database_history preserve valid 0.0 entries across sparse, fully-populated, and dirty inputs."""
     import asyncio
     import tempfile
     from load_ml_component import LoadMLComponent
@@ -3217,10 +3228,11 @@ def _test_database_zero_preservation():
             base = MockBase(config_root=tmpdir)
             component = LoadMLComponent(base, load_ml_enable=True)
             component.database_filepath = os.path.join(tmpdir, "predbat_ml_history.npz")
+            component.load_ml_database_days = 1  # 288 5-min steps
 
-            # Create history with explicit 0.0 values at specific minutes
+            # Case 1: Fully-populated history (288 steps, no NaNs in saved array, containing explicit 0.0)
             test_load = {m: (0.0 if m % 30 == 0 else 0.25) for m in range(0, 1440, 5)}
-            test_temp = {m: 0.0 for m in range(0, 1440, 5)}  # Freezing temperature everywhere
+            test_temp = {m: 0.0 for m in range(0, 1440, 5)}  # Freezing temperature everywhere (all 0.0)
             test_pv = {m: 0.0 for m in range(0, 1440, 5)}
 
             component.load_data = test_load
@@ -3230,6 +3242,10 @@ def _test_database_zero_preservation():
 
             await component.save_database_history()
 
+            # Verify saved array has zero NaNs (fully populated)
+            with np.load(component.database_filepath, allow_pickle=False) as saved_npz:
+                assert not np.isnan(saved_npz["load"]).any(), "Test array should have no NaNs to test nan_sentinel metadata flag"
+
             # Create a fresh component instance and load history
             component2 = LoadMLComponent(base, load_ml_enable=True)
             component2.database_filepath = os.path.join(tmpdir, "predbat_ml_history.npz")
@@ -3237,10 +3253,41 @@ def _test_database_zero_preservation():
             await component2.load_database_history()
 
             assert component2.load_data is not None, "load_data should be loaded"
-            assert 0 in component2.load_data, "Minute 0 (value 0.0) must be preserved in load_data"
+            assert len(component2.load_data) == 288, f"Expected all 288 steps in load_data, got {len(component2.load_data)}"
+            assert 0 in component2.load_data, "Minute 0 (value 0.0) must be preserved in fully populated load_data"
             assert component2.load_data[0] == 0.0, f"Minute 0 load should be 0.0, got {component2.load_data[0]}"
+            assert component2.load_data[30] == 0.0, f"Minute 30 load should be 0.0, got {component2.load_data[30]}"
+            assert len(component2.temperature_data) == 288, f"Expected all 288 steps in temperature_data, got {len(component2.temperature_data)}"
             assert 0 in component2.temperature_data, "Minute 0 (0.0°C) must be preserved in temperature_data"
             assert component2.temperature_data[0] == 0.0, f"Minute 0 temp should be 0.0, got {component2.temperature_data[0]}"
+
+            # Case 2: Dirty / unparsable history entries (None, "unavailable", NaN, Inf)
+            test_load_dirty = {0: 0.0, 5: 0.5, 10: None, 15: "unavailable", 20: float("nan"), 25: float("inf"), 30: 0.0}
+            component.load_data = test_load_dirty
+            component.temperature_data = {0: 10.0, 5: None, 10: "error"}
+            component.pv_data = {0: float("nan"), 5: 1.5}
+            component.database_filepath = os.path.join(tmpdir, "predbat_ml_history_dirty.npz")
+
+            # Must complete cleanly without raising TypeError or ValueError
+            await component.save_database_history()
+
+            component3 = LoadMLComponent(base, load_ml_enable=True)
+            component3.database_filepath = os.path.join(tmpdir, "predbat_ml_history_dirty.npz")
+            await component3.load_database_history()
+
+            assert component3.load_data is not None
+            assert component3.load_data.get(0) == 0.0, "Valid 0.0 must be preserved"
+            assert component3.load_data.get(5) == 0.5, "Valid 0.5 must be preserved"
+            assert component3.load_data.get(30) == 0.0, "Valid 0.0 at minute 30 must be preserved"
+            assert 10 not in component3.load_data, "None value must not be present in reconstructed dict"
+            assert 15 not in component3.load_data, "String value must not be present in reconstructed dict"
+            assert 20 not in component3.load_data, "NaN value must not be present in reconstructed dict"
+            assert 25 not in component3.load_data, "Inf value must not be present in reconstructed dict"
+            assert component3.temperature_data.get(0) == 10.0
+            assert 5 not in component3.temperature_data
+            assert 10 not in component3.temperature_data
+            assert component3.pv_data.get(5) == 1.5
+            assert 0 not in component3.pv_data
 
     asyncio.run(run_test())
 
