@@ -103,8 +103,12 @@ class Inverter:
             for command in restart_command:
                 shell = command.get("shell", None)
                 service = command.get("service", None)
+                app = command.get("app", None)
+                # retain addon service parameter for backwards compatibility with configs using the pre HA 2026.2 nomenclature
                 addon = command.get("addon", None)
-                if addon:
+                if app:
+                    app = self.base.resolve_arg(service, app, indirect=False)
+                elif addon:
                     addon = self.base.resolve_arg(service, addon, indirect=False)
                 entity_id = command.get("entity_id", None)
                 if entity_id:
@@ -113,7 +117,10 @@ class Inverter:
                     self.log("Warn: Calling restart shell command: {}".format(shell))
                     os.system(shell)
                 if service:
-                    if addon:
+                    if app:
+                        self.log("Warn: Calling restart service {} with app {}".format(service, app))
+                        self.base.call_service_wrapper(service, app=app)
+                    elif addon:
                         self.log("Warn: Calling restart service {} with addon {}".format(service, addon))
                         self.base.call_service_wrapper(service, addon=addon)
                     elif entity_id:

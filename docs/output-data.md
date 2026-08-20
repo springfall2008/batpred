@@ -20,7 +20,7 @@ Each Predbat configuration item is named *input_number.predbat_xxx*, *switch.pre
 Each time Predbat runs it auto-generates a dashboard with the filename **predbat_dashboard.yaml** that can be used as a starter for your own Predbat dashboard.
 Depending on how you installed Predbat this predbat_dashboard.yaml file will be held in one of three different directories in Home Assistant:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), it will be in the directory `/addon_configs/6adb4f0d_predbat/`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), it will be in the directory `/app_configs/6adb4f0d_predbat/`,
 
 or,
 
@@ -698,11 +698,11 @@ If you are using the Predbat app then the logfile can easily be viewed via the '
 
 To directly view the physical logfile, it can be found in one of three different directories in Home Assistant with slightly different filenames depending on how you installed Predbat:
 
-- if you have used the [Predbat app installation method](install.md#predbat-app-install), the logfile will be `/addon_configs/6adb4f0d_predbat/predbat.log`,
+- if you have used the [Predbat app installation method](install.md#predbat-app-install), the logfile will be `/app_configs/6adb4f0d_predbat/predbat.log`,
 
-- if the [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
+- if the original (but now deprecated) [HACS, Appdaemon app then Predbat installation method](install.md#predbat-installation-into-appdaemon), it's `/homeassistant/appdaemon/appdaemon.log`, or
 
-- if the combined AppDaemon/Predbat app installation method was used, it's `/addon_configs/46f69597_appdaemon-predbat/predbat.log`.
+- if the (also deprecated) combined AppDaemon/Predbat app installation method was used, it's `/app_configs/46f69597_appdaemon-predbat/predbat.log`.
 
 You will need to use a file editor within Home Assistant (e.g. either the File editor or Studio Code Server apps)
 to view Predbat's logfile if you are not using the Predbat app.
@@ -821,17 +821,17 @@ actions:
             value_template: "{{ restart_app == 'GivTCP' }}"
         sequence:
           - alias: Restart GivTCP app
-            action: hassio.addon_restart
+            action: hassio.app_restart
             data:
-              addon: 533ea71a_givtcp
+              app: 533ea71a_givtcp
       - conditions:
           - condition: template
             value_template: "{{ restart_app == 'Mosquitto' }}"
         sequence:
           - alias: Restart Mosquitto app
-            action: hassio.addon_restart
+            action: hassio.app_restart
             data:
-              addon: core_mosquitto
+              app: core_mosquitto
 trace:
   stored_traces: 20
 mode: single
@@ -995,9 +995,9 @@ actions:
       - condition: template
         value_template: "{{ restart_predbat == 'Y' }}"
     then:
-      - action: hassio.addon_restart
+      - action: hassio.app_restart
         data:
-          addon: 6adb4f0d_predbat
+          app 6adb4f0d_predbat
         alias: Restart Predbat app
 mode: single
 ```

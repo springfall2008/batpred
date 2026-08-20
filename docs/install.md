@@ -78,12 +78,12 @@ Ensure 'start on boot' is enabled and click 'start'.
 
 **Note:** Throughout the rest of the Predbat documentation you will find reference to the Predbat configuration file `apps.yaml` and the Predbat logfile.
 
-These are located under the Home Assistant directory `/addon_configs/6adb4f0d_predbat` which contains:
+These are located under the Home Assistant directory `/apps_configs/6adb4f0d_predbat` which contains:
 
 - **predbat.log** - Predbat's active logfile that reports details of what Predbat is doing, and details of any errors
 - **apps.yaml** - Predbat's configuration file which will need to be customised to your system and requirements. This configuration process is described below.
 
-You can use your file editor (i.e. 'File editor' or 'Studio Code Server' app) to open the directory `/addon_configs/6adb4f0d_predbat` and view these files.
+You can use your file editor (i.e. 'File editor' or 'Studio Code Server' app) to open the directory `/apps_configs/6adb4f0d_predbat` and view these files.
 
 The Predbat web interface will work through the Predbat app, you can click on the 'Web UI' button to open it once Predbat is running.
 
@@ -99,7 +99,7 @@ Installation instructions can be found at [https://github.com/nipar4/predbat_add
 
 Installing HACS, Appdaemon and then Predbat within Appdaemon has been deprecated, please swap to either the Predbat app or Docker installation methods.
 
-The process to [upgrade from Predbat within Appdaemon to Predbat addon](#upgrading-from-appdaemon-to-predbat-app) is described below.
+The process to [upgrade from Predbat within Appdaemon to Predbat App](#upgrading-from-appdaemon-to-predbat-app) is described below.
 
 ## Solar Forecast Install
 
@@ -448,12 +448,12 @@ From the Assets list, download the source code (zip) file:
 - Unzip the source code file you have downloaded
 - Navigate to the release sub folder, then `apps`, and finally the `predbat` sub-folder
 - Shutdown Predbat
-- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat app then the destination folder will be `/addon_configs/6adb4f0d_predbat`
+- Copy all the .py files from the `predbat` sub-folder into your Predbat application folder in Home Assistant  and overwrite the existing .py files. If you are running the Predbat app then the destination folder will be `/apps_configs/6adb4f0d_predbat`
 - Restart Predbat
 
 ## Upgrading from AppDaemon to Predbat app
 
-These steps assume you already have a working Predbat system and want to upgrade to using the Predbat app instead of using either the AppDaemon or the AppDaemon-predbat app.
+These steps assume you already have a working Predbat system and want to upgrade to using the Predbat app instead of using either the (now deprecated) AppDaemon or the AppDaemon-predbat apps.
 
 Using the Predbat app is the strategic direction for Predbat and resolves some performance and data load issues that can occur with AppDaemon.
 The Predbat code that runs is the same and the configuration is exactly the same, it is just changing the 'container' that Predbat runs within.
@@ -474,20 +474,20 @@ The Predbat code that runs is the same and the configuration is exactly the same
     - Click on the existing AppDaemon/AppDaemon-predbat app
     - Click STOP, and untick 'Start on boot'
 
-6. Briefly start the new Predbat app so that it creates the addon_config folder and the template `apps.yaml` file:
+6. Briefly start the new Predbat app so that it creates the app_config folder and the template `apps.yaml` file:
     - Go to Settings/Apps
     - Click on the Predbat app
     - Click START, wait a minute for the app to initialise itself, then click STOP. A Predbat status warning that you have a template `apps.yaml` file is normal and can be ignored
 
 7. Open your file editor and open your existing `apps.yaml` file:
-    - If you are using the old 'combined AppDaemon/Predbat app installation method' it's in the directory `/addon_configs/46f69597_appdaemon-predbat/apps`,
+    - If you are using the 'combined AppDaemon/Predbat app installation method' it's in the directory `/app_configs/46f69597_appdaemon-predbat/apps`,
     or
 
-    - with the old HACS Appdaemon app then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
+    - with the original HACS Appdaemon app then Predbat installation method it's in `/config/appdaemon/apps/batpred/config/`
 
 8. Select all the contents of the `apps.yaml` file and 'copy' (control-C, command-C, etc as appropriate)
 
-9. Now open the template `apps.yaml` file that's supplied with the Predbat app and has been created in the directory `/addon_configs/6adb4f0d_predbat`,
+9. Now open the template `apps.yaml` file that's supplied with the Predbat app and has been created in the directory `/app_configs/6adb4f0d_predbat`,
 select all the contents of the template `apps.yaml` file, and paste in the contents of your existing `apps.yaml`, overwriting the template with your specific configuration
 
 10. Now you are ready to swap from running the AppDaemon or AppDaemon-predbat app to the Predbat app:
