@@ -42,6 +42,7 @@ class MockDeye(DeyeAPI):
         self.station_ids = []
         self.device_values = {}
         self.device_battery_config = {}
+        self.device_tou_config = {}
         self.device_capacity = {}
         self.device_pack_voltage = {}
         self.device_energy = {}
