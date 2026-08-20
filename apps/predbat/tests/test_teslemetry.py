@@ -572,7 +572,10 @@ def test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow():
     api.base = _rate_base(import_p=28.0, export_p=15.0)
     tariff = api.build_tariff((1020, 1080), now_min=600)  # 17:00-18:00 window, now 10:00 -> today
     sell_periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
-    today_dow = api._tesla_dow(api.base.now.weekday())
+    # Absolute, independent expectation (GH#4610): Tesla's fromDayOfWeek uses Monday=0, the same
+    # convention as plain datetime.weekday() - deliberately NOT routed through _tesla_dow, the
+    # function under test, so a wrong mapping there cannot make this assertion trivially pass.
+    today_dow = api.base.now.weekday()
     assert set(p["fromDayOfWeek"] for p in sell_periods["ON_PEAK"]["periods"]) == {today_dow}
     boost = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]["ON_PEAK"]
     real = [v for t, v in tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"].items() if t != "ON_PEAK"]
@@ -664,7 +667,8 @@ def test_teslemetry_saving_session_spike_keeps_daily_shape():
     tariff = api.build_tariff((17 * 60, 18 * 60 + 30), now_min=12 * 60)
     sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
     periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
-    today = api._tesla_dow(api._local_today_weekday())
+    # Absolute, independent expectation (GH#4610) - see test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow.
+    today = api._local_today_weekday()
 
     def sell_price_at(minute):
         """Return the sell tier price applying on today's day at the given minute-of-day."""
@@ -704,7 +708,8 @@ def test_teslemetry_quantise_in_range_excluded_price_no_keyerror():
     tariff = api.build_tariff((17 * 60, 17 * 60 + 30), now_min=12 * 60)  # must not raise
     sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
     periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
-    today = api._tesla_dow(api._local_today_weekday())
+    # Absolute, independent expectation (GH#4610) - see test_teslemetry_build_tariff_boost_is_strict_max_on_today_dow.
+    today = api._local_today_weekday()
 
     def tier_at(minute):
         """Return the sell tier applying on today at the given minute-of-day."""
@@ -1891,11 +1896,47 @@ def test_teslemetry_quantise_agile_three_bands_clamped_rounded():
     assert len(today) == 48 and len(tomorrow) == 48
 
 
-def test_teslemetry_tesla_dow_sunday_zero():
-    """Python weekday (Mon=0..Sun=6) maps to Tesla fromDayOfWeek (Sun=0..Sat=6)."""
-    assert TeslemetryAPI._tesla_dow(6) == 0  # Sunday
-    assert TeslemetryAPI._tesla_dow(0) == 1  # Monday
-    assert TeslemetryAPI._tesla_dow(5) == 6  # Saturday
+def test_teslemetry_tesla_dow_matches_python_weekday():
+    """Tesla's tariff_content_v2 fromDayOfWeek/toDayOfWeek use Monday=0..Sunday=6, the same convention
+    as datetime.weekday() (GH#4610) - so _tesla_dow must be the identity function. The previous
+    (Sunday=0) mapping shifted every boost band one day late: during the actual export window the
+    Powerwall saw only the ordinary off-peak tariff and had no reason to export."""
+    for python_weekday in range(7):
+        assert TeslemetryAPI._tesla_dow(python_weekday) == python_weekday
+
+
+def test_teslemetry_build_tariff_boost_resolves_at_the_real_tesla_day_index():
+    """Resolver-style regression for GH#4610: independently resolve the built tariff's sell price at a
+    moment inside the boost window using Tesla's real day convention (Monday=0, i.e. plain
+    datetime.weekday(), never routed through _tesla_dow) and assert the boosted ON_PEAK price applies.
+    This is the property that actually matters - a real Powerwall evaluating fromDayOfWeek against its
+    own Monday=0 clock must land on the boosted band, not the ordinary off-peak one next to it. Before
+    the fix this failed: the boost was carved onto (weekday+1)%7, one day away from where a real
+    Powerwall would look for it, so the device saw only off-peak rates during the actual window."""
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)  # now = 2026-07-20 12:00, a Monday
+    window = (17 * 60, 18 * 60)  # 17:00-18:00, still ahead of now (12:00) -> lands on today
+    tariff = api.build_tariff(window, now_min=12 * 60)
+    sell = tariff["sell_tariff"]["energy_charges"]["AllYear"]["rates"]
+    periods = tariff["sell_tariff"]["seasons"]["AllYear"]["tou_periods"]
+
+    real_dow = api.base.now.weekday()  # Tesla's actual day index for "today" - independent of _tesla_dow
+    minute = 17 * 60 + 30  # inside the window
+
+    def resolve_tier(dow, minute):
+        """Mimic how a real Powerwall would resolve which tier applies at (dow, minute)."""
+        for tier, block in periods.items():
+            for period in block["periods"]:
+                if period["fromDayOfWeek"] <= dow <= period["toDayOfWeek"]:
+                    start = period["fromHour"] * 60 + period["fromMinute"]
+                    end = (period["toHour"] * 60 + period["toMinute"]) or 1440
+                    if start <= minute < end:
+                        return tier
+        return None
+
+    tier = resolve_tier(real_dow, minute)
+    assert tier == "ON_PEAK", "a real Powerwall resolving fromDayOfWeek={} at minute={} would see tier={}, not ON_PEAK".format(real_dow, minute, tier)
+    assert sell[tier] == sell["ON_PEAK"]
 
 
 def test_teslemetry_boost_price_floor_wins_on_low_rates():
@@ -2173,7 +2214,8 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_quantise_flat_single_tier()
     test_teslemetry_quantise_two_distinct_exact()
     test_teslemetry_quantise_agile_three_bands_clamped_rounded()
-    test_teslemetry_tesla_dow_sunday_zero()
+    test_teslemetry_tesla_dow_matches_python_weekday()
+    test_teslemetry_build_tariff_boost_resolves_at_the_real_tesla_day_index()
     test_teslemetry_boost_price_floor_wins_on_low_rates()
     test_teslemetry_side_layout_partitions_every_day()
     test_teslemetry_render_side_matched_sets_and_day_end()
