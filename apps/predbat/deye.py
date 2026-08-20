@@ -1267,6 +1267,15 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.set_arg("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
         self.set_arg("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
         self.set_arg("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
+        # Own the sign flags rather than leaving them to whatever else configured this
+        # install. base.args is shared and NOT namespaced per inverter type, so a component
+        # that legitimately inverts its own grid sensor - teslemetry sets grid_power_invert
+        # True, fox does the same - leaves that key set for every inverter index, and a DEYE
+        # inverter that never claims it inherits the flip, turning a correct export into an
+        # apparent import. All three are False because publish_data already emits Predbat's
+        # conventions (see DEYE_TELEMETRY_NEGATE).
+        for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+            self.set_arg(flag, [False for _ in devices])
         self.set_arg("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
         if not self.automatic_ignore_pv:
             self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
