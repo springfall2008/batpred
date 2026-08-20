@@ -822,7 +822,7 @@ class Execute:
                     # False for them, so they get no passive-hold protection from it at all and depend
                     # entirely on discharge_freeze_service. Without it, adjust_export_immediate() would
                     # silently fall back to a real discharge_start_service call instead of a passive hold.
-                    self.log("Note: No discharge_freeze_service configured - discharge freeze disabled")
+                    self.log("Warn: No discharge_freeze_service configured - discharge freeze disabled")
                     self.set_export_freeze = False
                     self.set_export_freeze_only = False
                 if not inverter.inv_support_charge_freeze:
@@ -838,7 +838,7 @@ class Execute:
                     # adjust_charge_immediate() silently falls back to a real charge_start_service call
                     # instead of a passive hold (#4424), so treat it the same as an inverter type with no
                     # support at all.
-                    self.log("Note: No charge_freeze_service configured - charge freeze disabled")
+                    self.log("Warn: No charge_freeze_service configured - charge freeze disabled")
                     self.set_charge_freeze = False
                 if not inverter.inv_has_reserve_soc:
                     self.log("Note: Inverter does not support reserve - disabling reserve functions")
