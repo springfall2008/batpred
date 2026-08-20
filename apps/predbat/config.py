@@ -2068,9 +2068,12 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         # "Feed-in first"/freeze export mode does not hold SoC flat on FoxESS - PV above the
-        # export limit still charges the battery instead of being clipped (#4207) - matching
-        # FoxCloud's entry below, which was already correctly set False for the same hardware.
-        "support_discharge_freeze": False,
+        # export limit still charges the battery instead of being clipped (#4207). That's now
+        # correctly modelled (prediction.py's freeze branch, gated on
+        # inverter_can_charge_during_export) rather than treated as a reason to disable freeze
+        # outright, so this can stay True - see FoxCloud's entry below for the same hardware via
+        # a different connection method.
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
@@ -2099,7 +2102,8 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
-        "support_discharge_freeze": False,
+        # See FoxESS's entry above - same hardware, correctly modelled rather than disabled (#4207).
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -2438,6 +2442,7 @@ APPS_SCHEMA = {
     "pause_start_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "pause_end_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "inverter_limit": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
+    "inverter_can_charge_during_export": {"type": "boolean"},
     "pv_ac_limit": {"type": "float", "zero": True},
     "inverter_limit_charge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_charge_dc": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
