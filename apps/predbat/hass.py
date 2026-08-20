@@ -147,6 +147,39 @@ class Hass:
     and file change detection for development hot-reload.
     """
 
+    def _rotate_log_if_needed(self, max_logs=9):
+        """
+        Rotate log files if current logfile exceeds size threshold.
+        """
+        if self.logfile.tell() <= 10000000 or threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            for num_logs in range(max_logs - 1, 0, -1):
+                filename = "predbat." + format(num_logs) + ".log"
+                if os.path.isfile(filename):
+                    newfile = "predbat." + format(num_logs + 1) + ".log"
+                    try:
+                        if os.path.isfile(newfile):
+                            os.remove(newfile)
+                        os.rename(filename, newfile)
+                    except OSError:
+                        pass
+
+            self.logfile.close()
+            try:
+                if os.path.isfile("predbat.1.log"):
+                    os.remove("predbat.1.log")
+                os.rename("predbat.log", "predbat.1.log")
+            except OSError:
+                pass
+            self.logfile = open("predbat.log", "w")
+        except Exception:
+            try:
+                if self.logfile.closed:
+                    self.logfile = open("predbat.log", "a")
+            except Exception:
+                pass
+
     def log(self, msg, quiet=True):
         """
         Log a message to the logfile
@@ -158,22 +191,7 @@ class Hass:
         if not quiet or msg_lower.startswith("error") or msg_lower.startswith("warn") or msg_lower.startswith("info"):
             print(message, end="")
 
-        # maximum number of historic logfiles to retain
-        max_logs = 9
-
-        log_size = self.logfile.tell()
-        if log_size > 10000000 and threading.current_thread() is threading.main_thread():
-            # Only rotate from the main thread to avoid race conditions with
-            # component threads that also call log().
-            for num_logs in range(max_logs - 1, 0, -1):
-                filename = "predbat." + format(num_logs) + ".log"
-                if os.path.isfile(filename):
-                    newfile = "predbat." + format(num_logs + 1) + ".log"
-                    os.rename(filename, newfile)
-
-            self.logfile.close()
-            os.rename("predbat.log", "predbat.1.log")
-            self.logfile = open("predbat.log", "w")
+        self._rotate_log_if_needed()
 
     async def run_in_executor(self, callback, *args):
         """

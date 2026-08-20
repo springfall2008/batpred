@@ -295,7 +295,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Eco mode should write the reserve as minSoc 10, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
                 failed = True
             else:
-                print(f"✓ ECO mode applied correctly at 12:00")
+                print(f"PASS: ECO mode applied correctly at 12:00")
 
     # Test 2: Charge mode (inside charge window) at 03:00
     print("\n--- Test 2: Charge mode (03:00) ---")
@@ -338,7 +338,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                     print(f"**** ERROR: Wrong charge power, expected 5000 got {power} ****")
                     failed = True
                 else:
-                    print(f"✓ Charge mode applied correctly at 03:00 (power=5000W, target_soc=95%)")
+                    print(f"PASS: Charge mode applied correctly at 03:00 (power=5000W, target_soc=95%)")
 
     # Test 3: Export mode (inside export window) at 18:00
     print("\n--- Test 3: Export mode (18:00) ---")
@@ -381,7 +381,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                     print(f"**** ERROR: Wrong export power, expected -4500 got {power} ****")
                     failed = True
                 else:
-                    print(f"✓ Export mode applied correctly at 18:00 (power=-4500W, target_soc=15%)")
+                    print(f"PASS: Export mode applied correctly at 18:00 (power=-4500W, target_soc=15%)")
 
     # Test 4: Hash prevents re-application (same charge mode at 03:00)
     print("\n--- Test 4: Hash caching (repeat charge at 03:00) ---")
@@ -405,7 +405,7 @@ async def test_apply_controls(solax_api, test_plant_id):
             print(f"**** ERROR: send_command_and_wait called {mock_send.call_count} times when hash should have prevented it ****")
             failed = True
         else:
-            print(f"✓ Hash correctly prevented re-application of same mode")
+            print(f"PASS: Hash correctly prevented re-application of same mode")
 
     # Test 5: Hash expires after 15 minutes
     print("\n--- Test 5: Hash expiry (16 minutes later) ---")
@@ -430,7 +430,7 @@ async def test_apply_controls(solax_api, test_plant_id):
             print(f"**** ERROR: Expected 2 API calls when hash expired, got {mock_send.call_count} ****")
             failed = True
         else:
-            print(f"✓ Hash correctly expired after 15 minutes, mode re-applied")
+            print(f"PASS: Hash correctly expired after 15 minutes, mode re-applied")
 
     # Test 6: Charge disabled - should use eco mode
     print("\n--- Test 6: Charge disabled (03:00) ---")
@@ -464,7 +464,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
                 failed = True
             else:
-                print(f"✓ ECO mode correctly applied when charge disabled at 03:00")
+                print(f"PASS: ECO mode correctly applied when charge disabled at 03:00")
 
     # Test 7: Freeze charge mode (inside charge window, target_soc == current_soc)
     print("\n--- Test 7: Freeze charge mode (03:00, target_soc == current_soc) ---")
@@ -503,7 +503,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Freeze charge should hold minSoc at the current SOC 50, got {mock_send.call_args_list[0][0][1].get('minSoc')} ****")
                 failed = True
             else:
-                print(f"✓ Freeze charge mode applied correctly at 03:00 (target_soc == current_soc)")
+                print(f"PASS: Freeze charge mode applied correctly at 03:00 (target_soc == current_soc)")
 
     # Test 8: Freeze export mode (inside export window, target_soc >= current_soc)
     print("\n--- Test 8: Freeze export mode (18:00, target_soc >= current_soc) ---")
@@ -538,7 +538,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Second call not exit_vpp_mode, got {second_call_endpoint} ****")
                 failed = True
             else:
-                print(f"✓ Freeze export mode applied correctly at 18:00 (target_soc >= current_soc)")
+                print(f"PASS: Freeze export mode applied correctly at 18:00 (target_soc >= current_soc)")
 
     # Test 9: Midnight-spanning charge window - currently after midnight (00:30) inside 23:30-05:30 window
     # This was the bug: charge_start (23:30 today) > now (00:30 today) so the window was missed
@@ -572,7 +572,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Expected soc_target_control_mode (charge mode) after midnight, got: {calls_str} ****")
                 failed = True
             else:
-                print(f"✓ Midnight-spanning charge window correctly detected at 00:30")
+                print(f"PASS: Midnight-spanning charge window correctly detected at 00:30")
 
     # Test 10: Midnight-spanning charge window - currently before midnight (23:45) inside 23:30-05:30 window
     print("\n--- Test 10: Midnight-spanning charge window at 23:45 (window 23:30-05:30) ---")
@@ -598,7 +598,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Expected soc_target_control_mode (charge mode) before midnight, got: {calls_str} ****")
                 failed = True
             else:
-                print(f"✓ Midnight-spanning charge window correctly detected at 23:45")
+                print(f"PASS: Midnight-spanning charge window correctly detected at 23:45")
 
     # Test 11: After window end (06:00) should be eco mode, not charge mode
     print("\n--- Test 11: After midnight-spanning window end at 06:00 (window 23:30-05:30) ---")
@@ -627,7 +627,7 @@ async def test_apply_controls(solax_api, test_plant_id):
                 print(f"**** ERROR: Expected eco mode (exit_vpp_mode) at 06:00, got: {calls_str} ****")
                 failed = True
             else:
-                print(f"✓ After midnight-spanning window end (06:00) correctly uses eco mode")
+                print(f"PASS: After midnight-spanning window end (06:00) correctly uses eco mode")
 
     return failed
 
@@ -1436,7 +1436,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Reserve not updated. Expected {new_value}, got {solax_api.controls[test_plant_id]['reserve']} ****")
         failed = True
     else:
-        print(f"✓ Reserve setting updated to {new_value}")
+        print(f"PASS: Reserve setting updated to {new_value}")
 
     # Test 1b: A value outside the range the entity advertises is clamped rather than stored as given,
     # a service call can bypass the min and max that the number entity publishes
@@ -1462,7 +1462,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Reserve changed on invalid entity ID ****")
         failed = True
     else:
-        print(f"✓ Invalid entity ID handled gracefully")
+        print(f"PASS: Invalid entity ID handled gracefully")
 
     # Test 3: Plant not in controls
     missing_plant_id = "9999999999999999999"
@@ -1474,7 +1474,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Missing plant incorrectly added to controls ****")
         failed = True
     else:
-        print(f"✓ Missing plant handled correctly")
+        print(f"PASS: Missing plant handled correctly")
 
     # Test 4: Invalid number value
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_setting_reserve"
@@ -1485,7 +1485,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Reserve changed on invalid number value ****")
         failed = True
     else:
-        print(f"✓ Invalid number value handled gracefully")
+        print(f"PASS: Invalid number value handled gracefully")
 
     # Test 5: Update charge start_time (battery schedule)
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_start_time"
@@ -1496,7 +1496,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Charge start_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['charge']['start_time']} ****")
         failed = True
     else:
-        print(f"✓ Charge start_time updated to {new_time}")
+        print(f"PASS: Charge start_time updated to {new_time}")
 
     # Test 6: Update charge end_time
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_end_time"
@@ -1507,7 +1507,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Charge end_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['charge']['end_time']} ****")
         failed = True
     else:
-        print(f"✓ Charge end_time updated to {new_time}")
+        print(f"PASS: Charge end_time updated to {new_time}")
 
     # Test 7: Update charge enable (switch - turn_on service)
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_enable"
@@ -1517,7 +1517,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Charge enable not set to True ****")
         failed = True
     else:
-        print(f"✓ Charge enable turned on")
+        print(f"PASS: Charge enable turned on")
 
     # Test 8: Update charge enable (switch - turn_off service)
     await solax_api.switch_event(entity_id, "turn_off")
@@ -1526,7 +1526,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Charge enable not set to False ****")
         failed = True
     else:
-        print(f"✓ Charge enable turned off")
+        print(f"PASS: Charge enable turned off")
 
     # Test 9: Update export start_time
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_start_time"
@@ -1537,7 +1537,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Export start_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['export']['start_time']} ****")
         failed = True
     else:
-        print(f"✓ Export start_time updated to {new_time}")
+        print(f"PASS: Export start_time updated to {new_time}")
 
     # Test 10: Update charge target_soc
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_target_soc"
@@ -1548,7 +1548,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Charge target_soc not updated. Expected {new_soc}, got {solax_api.controls[test_plant_id]['charge']['target_soc']} ****")
         failed = True
     else:
-        print(f"✓ Charge target_soc updated to {new_soc}")
+        print(f"PASS: Charge target_soc updated to {new_soc}")
 
     # Test 11: Update charge rate
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_rate"
@@ -1559,7 +1559,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Charge rate not updated. Expected {new_rate}, got {solax_api.controls[test_plant_id]['charge']['rate']} ****")
         failed = True
     else:
-        print(f"✓ Charge rate updated to {new_rate}")
+        print(f"PASS: Charge rate updated to {new_rate}")
 
     # Test 12: Invalid time format (HH:MM instead of HH:MM:SS) - should be auto-fixed
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_charge_start_time"
@@ -1571,7 +1571,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Time format conversion failed. Expected {expected_time}, got {solax_api.controls[test_plant_id]['charge']['start_time']} ****")
         failed = True
     else:
-        print(f"✓ Time format auto-converted from {new_time_short} to {expected_time}")
+        print(f"PASS: Time format auto-converted from {new_time_short} to {expected_time}")
 
     # Test 13: Update export target_soc
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_target_soc"
@@ -1582,7 +1582,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Export target_soc not updated. Expected {new_export_soc}, got {solax_api.controls[test_plant_id]['export']['target_soc']} ****")
         failed = True
     else:
-        print(f"✓ Export target_soc updated to {new_export_soc}")
+        print(f"PASS: Export target_soc updated to {new_export_soc}")
 
     # Test 14: Update export rate
     entity_id = f"number.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_rate"
@@ -1593,7 +1593,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Export rate not updated. Expected {new_export_rate}, got {solax_api.controls[test_plant_id]['export']['rate']} ****")
         failed = True
     else:
-        print(f"✓ Export rate updated to {new_export_rate}")
+        print(f"PASS: Export rate updated to {new_export_rate}")
 
     # Test 15: Update export end_time
     entity_id = f"select.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_end_time"
@@ -1604,7 +1604,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Export end_time not updated. Expected {new_time}, got {solax_api.controls[test_plant_id]['export']['end_time']} ****")
         failed = True
     else:
-        print(f"✓ Export end_time updated to {new_time}")
+        print(f"PASS: Export end_time updated to {new_time}")
 
     # Test 16: Update export enable (switch - turn_on service)
     entity_id = f"switch.{solax_api.prefix}_solax_{test_plant_id}_battery_schedule_export_enable"
@@ -1614,7 +1614,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Export enable not set to True ****")
         failed = True
     else:
-        print(f"✓ Export enable turned on")
+        print(f"PASS: Export enable turned on")
 
     # Test 17: Update export enable (switch - toggle service)
     await solax_api.switch_event(entity_id, "toggle")
@@ -1623,7 +1623,7 @@ async def test_write_setting_from_event(my_predbat):
         print(f"**** ERROR: Export enable not toggled to False ****")
         failed = True
     else:
-        print(f"✓ Export enable toggled off")
+        print(f"PASS: Export enable toggled off")
 
     return failed
 
@@ -1668,7 +1668,7 @@ async def test_fetch_controls(solax_api, test_plant_id):
         print(f"**** ERROR: Reserve not fetched correctly. Expected 25, got {solax_api.controls[test_plant_id].get('reserve')} ****")
         failed = True
     else:
-        print("✓ Reserve fetched correctly (25)")
+        print("PASS: Reserve fetched correctly (25)")
 
     # Verify charge schedule
     charge_controls = solax_api.controls[test_plant_id]["charge"]
@@ -1676,31 +1676,31 @@ async def test_fetch_controls(solax_api, test_plant_id):
         print(f"**** ERROR: Charge start_time not fetched correctly. Expected 02:30:00, got {charge_controls.get('start_time')} ****")
         failed = True
     else:
-        print("✓ Charge start_time fetched correctly (02:30:00)")
+        print("PASS: Charge start_time fetched correctly (02:30:00)")
 
     if charge_controls.get("end_time") != "06:00:00":
         print(f"**** ERROR: Charge end_time not fetched correctly. Expected 06:00:00, got {charge_controls.get('end_time')} ****")
         failed = True
     else:
-        print("✓ Charge end_time fetched correctly (06:00:00)")
+        print("PASS: Charge end_time fetched correctly (06:00:00)")
 
     if charge_controls.get("enable") != True:
         print(f"**** ERROR: Charge enable not fetched correctly. Expected True, got {charge_controls.get('enable')} ****")
         failed = True
     else:
-        print("✓ Charge enable fetched correctly (True)")
+        print("PASS: Charge enable fetched correctly (True)")
 
     if charge_controls.get("target_soc") != 90:
         print(f"**** ERROR: Charge target_soc not fetched correctly. Expected 90, got {charge_controls.get('target_soc')} ****")
         failed = True
     else:
-        print("✓ Charge target_soc fetched correctly (90)")
+        print("PASS: Charge target_soc fetched correctly (90)")
 
     if charge_controls.get("rate") != 5000:
         print(f"**** ERROR: Charge rate not fetched correctly. Expected 5000, got {charge_controls.get('rate')} ****")
         failed = True
     else:
-        print("✓ Charge rate fetched correctly (5000)")
+        print("PASS: Charge rate fetched correctly (5000)")
 
     # Verify export schedule
     export_controls = solax_api.controls[test_plant_id]["export"]
@@ -1708,31 +1708,31 @@ async def test_fetch_controls(solax_api, test_plant_id):
         print(f"**** ERROR: Export start_time not fetched correctly. Expected 16:30:00, got {export_controls.get('start_time')} ****")
         failed = True
     else:
-        print("✓ Export start_time fetched correctly (16:30:00)")
+        print("PASS: Export start_time fetched correctly (16:30:00)")
 
     if export_controls.get("end_time") != "19:00:00":
         print(f"**** ERROR: Export end_time not fetched correctly. Expected 19:00:00, got {export_controls.get('end_time')} ****")
         failed = True
     else:
-        print("✓ Export end_time fetched correctly (19:00:00)")
+        print("PASS: Export end_time fetched correctly (19:00:00)")
 
     if export_controls.get("enable") != False:
         print(f"**** ERROR: Export enable not fetched correctly. Expected False, got {export_controls.get('enable')} ****")
         failed = True
     else:
-        print("✓ Export enable fetched correctly (False)")
+        print("PASS: Export enable fetched correctly (False)")
 
     if export_controls.get("target_soc") != 20:
         print(f"**** ERROR: Export target_soc not fetched correctly. Expected 20, got {export_controls.get('target_soc')} ****")
         failed = True
     else:
-        print("✓ Export target_soc fetched correctly (20)")
+        print("PASS: Export target_soc fetched correctly (20)")
 
     if export_controls.get("rate") != 4500:
         print(f"**** ERROR: Export rate not fetched correctly. Expected 4500, got {export_controls.get('rate')} ****")
         failed = True
     else:
-        print("✓ Export rate fetched correctly (4500)")
+        print("PASS: Export rate fetched correctly (4500)")
 
     return failed
 
@@ -1881,7 +1881,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Battery SOC unit incorrect ****")
             failed = True
         else:
-            print(f"✓ Battery SOC sensor published correctly ({expected_soc} kWh)")
+            print(f"PASS: Battery SOC sensor published correctly ({expected_soc} kWh)")
 
     # Test 2: Battery capacity sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_capacity"
@@ -1894,7 +1894,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Battery capacity incorrect. Expected 15.0, got {item['state']} ****")
             failed = True
         else:
-            print(f"✓ Battery capacity sensor published correctly (15.0 kWh)")
+            print(f"PASS: Battery capacity sensor published correctly (15.0 kWh)")
 
     # Test 3: Battery temperature sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_temperature"
@@ -1910,7 +1910,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Battery temperature unit incorrect ****")
             failed = True
         else:
-            print(f"✓ Battery temperature sensor published correctly (18.5°C)")
+            print(f"PASS: Battery temperature sensor published correctly (18.5°C)")
 
     # Test 4: Battery max power sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_battery_max_power"
@@ -1927,7 +1927,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Battery max power unit incorrect ****")
             failed = True
         else:
-            print(f"✓ Battery max power sensor published correctly ({expected_power}W)")
+            print(f"PASS: Battery max power sensor published correctly ({expected_power}W)")
 
     # Test 5: Inverter max power sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_inverter_max_power"
@@ -1944,7 +1944,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Inverter max power unit incorrect ****")
             failed = True
         else:
-            print(f"✓ Inverter max power sensor published correctly ({expected_power}W)")
+            print(f"PASS: Inverter max power sensor published correctly ({expected_power}W)")
 
     # Test 6: PV capacity sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_pv_capacity"
@@ -1960,7 +1960,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: PV capacity unit incorrect ****")
             failed = True
         else:
-            print(f"✓ PV capacity sensor published correctly (8.5 kWp)")
+            print(f"PASS: PV capacity sensor published correctly (8.5 kWp)")
 
     # Test 7: Total yield sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_yield"
@@ -1976,7 +1976,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total yield unit incorrect ****")
             failed = True
         else:
-            print(f"✓ Total yield sensor published correctly (3250.5 kWh)")
+            print(f"PASS: Total yield sensor published correctly (3250.5 kWh)")
 
     # Test 8: Total charged sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_charged"
@@ -1989,7 +1989,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total charged incorrect. Expected 1850.2, got {item['state']} ****")
             failed = True
         else:
-            print(f"✓ Total charged sensor published correctly (1850.2 kWh)")
+            print(f"PASS: Total charged sensor published correctly (1850.2 kWh)")
 
     # Test 9: Total discharged sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_discharged"
@@ -2002,7 +2002,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total discharged incorrect. Expected 1720.8, got {item['state']} ****")
             failed = True
         else:
-            print(f"✓ Total discharged sensor published correctly (1720.8 kWh)")
+            print(f"PASS: Total discharged sensor published correctly (1720.8 kWh)")
 
     # Test 10: Total imported sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_imported"
@@ -2015,7 +2015,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total imported incorrect. Expected 4200.3, got {item['state']} ****")
             failed = True
         else:
-            print(f"✓ Total imported sensor published correctly (4200.3 kWh)")
+            print(f"PASS: Total imported sensor published correctly (4200.3 kWh)")
 
     # Test 11: Total exported sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_exported"
@@ -2028,7 +2028,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total exported incorrect. Expected 2800.7, got {item['state']} ****")
             failed = True
         else:
-            print(f"✓ Total exported sensor published correctly (2800.7 kWh)")
+            print(f"PASS: Total exported sensor published correctly (2800.7 kWh)")
 
     # Test 12: Total load sensor (calculated)
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_load"
@@ -2044,7 +2044,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total load incorrect. Expected {expected_load}, got {item['state']} ****")
             failed = True
         else:
-            print(f"✓ Total load sensor published correctly ({expected_load} kWh)")
+            print(f"PASS: Total load sensor published correctly ({expected_load} kWh)")
 
     # Test 13: Total earnings sensor
     entity_id = f"sensor.{prefix}_solax_{test_plant_id}_total_earnings"
@@ -2060,7 +2060,7 @@ async def test_publish_plant_info(solax_api, test_plant_id, test_plant_name):
             print(f"**** ERROR: Total earnings unit incorrect ****")
             failed = True
         else:
-            print(f"✓ Total earnings sensor published correctly (485.50)")
+            print(f"PASS: Total earnings sensor published correctly (485.50)")
 
     return failed
 
@@ -2105,7 +2105,7 @@ async def test_get_access_token_main(my_predbat):
                 print(f"**** ERROR: error_count should be 0, got {solax_api.error_count} ****")
                 failed = True
             else:
-                print(f"✓ Successful authentication test passed")
+                print(f"PASS: Successful authentication test passed")
 
     # Test 2: Invalid credentials (10402)
     print("Test 2: Invalid credentials (code 10402)")
@@ -2133,7 +2133,7 @@ async def test_get_access_token_main(my_predbat):
             print(f"**** ERROR: error_count should be 1, got {solax_api.error_count} ****")
             failed = True
         else:
-            print(f"✓ Invalid credentials test passed")
+            print(f"PASS: Invalid credentials test passed")
 
     # Test 3: Other error codes
     print("Test 3: Other API error codes")
@@ -2153,7 +2153,7 @@ async def test_get_access_token_main(my_predbat):
             print(f"**** ERROR: error_count should be 1, got {solax_api.error_count} ****")
             failed = True
         else:
-            print(f"✓ Other error codes test passed")
+            print(f"PASS: Other error codes test passed")
 
     # Test 4: Network timeout
     print("Test 4: Network timeout")
@@ -2172,7 +2172,7 @@ async def test_get_access_token_main(my_predbat):
             print(f"**** ERROR: error_count should be 1, got {solax_api.error_count} ****")
             failed = True
         else:
-            print(f"✓ Network timeout test passed")
+            print(f"PASS: Network timeout test passed")
 
     # Test 5: HTTP errors
     print("Test 5: HTTP 500 error")
@@ -2192,7 +2192,7 @@ async def test_get_access_token_main(my_predbat):
             print(f"**** ERROR: error_count should be 1, got {solax_api.error_count} ****")
             failed = True
         else:
-            print(f"✓ HTTP error test passed")
+            print(f"PASS: HTTP error test passed")
 
     # Test 6: JSON decode errors
     print("Test 6: JSON decode error")
@@ -2212,7 +2212,7 @@ async def test_get_access_token_main(my_predbat):
             print(f"**** ERROR: error_count should be 1, got {solax_api.error_count} ****")
             failed = True
         else:
-            print(f"✓ JSON decode error test passed")
+            print(f"PASS: JSON decode error test passed")
 
     # Test 7: Missing access_token
     print("Test 7: Missing access_token in response")
@@ -2232,7 +2232,7 @@ async def test_get_access_token_main(my_predbat):
             print(f"**** ERROR: error_count should be 1, got {solax_api.error_count} ****")
             failed = True
         else:
-            print(f"✓ Missing access_token test passed")
+            print(f"PASS: Missing access_token test passed")
 
     # Test 8: Default expires_in
     print("Test 8: Default expires_in fallback")
@@ -2270,10 +2270,10 @@ async def test_get_access_token_main(my_predbat):
                 print(f"**** ERROR: token_expiry time difference too large for default: {time_diff} seconds ****")
                 failed = True
             else:
-                print(f"✓ Default expires_in test passed")
+                print(f"PASS: Default expires_in test passed")
 
     if not failed:
-        print("✓ Authentication tests passed")
+        print("PASS: Authentication tests passed")
 
     return failed
 
@@ -2309,7 +2309,7 @@ async def test_request_wrapper_main(my_predbat):
         print(f"**** ERROR: Expected 1 call, got {call_count} ****")
         failed = True
     else:
-        print(f"✓ Successful call test passed")
+        print(f"PASS: Successful call test passed")
 
     # Test 2: ClientError with retry and eventual success
     print("\n--- Test 2: ClientError with retry and eventual success ---")
@@ -2331,7 +2331,7 @@ async def test_request_wrapper_main(my_predbat):
         print(f"**** ERROR: Expected 2 calls (1 failure + 1 success), got {call_count} ****")
         failed = True
     else:
-        print(f"✓ ClientError retry test passed")
+        print(f"PASS: ClientError retry test passed")
 
     # Test 3: TimeoutError with retry and eventual success
     print("\n--- Test 3: TimeoutError with retry and eventual success ---")
@@ -2353,7 +2353,7 @@ async def test_request_wrapper_main(my_predbat):
         print(f"**** ERROR: Expected 2 calls (1 timeout + 1 success), got {call_count} ****")
         failed = True
     else:
-        print(f"✓ TimeoutError retry test passed")
+        print(f"PASS: TimeoutError retry test passed")
 
     # Test 4: Max retries exceeded (SOLAX_RETRIES)
     print("\n--- Test 4: Max retries exceeded ---")
@@ -2383,7 +2383,7 @@ async def test_request_wrapper_main(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ Max retries test passed (SOLAX_RETRIES={SOLAX_RETRIES})")
+        print(f"PASS: Max retries test passed (SOLAX_RETRIES={SOLAX_RETRIES})")
 
     # Test 5: Unexpected exception breaks retry loop
     print("\n--- Test 5: Unexpected exception breaks retry loop ---")
@@ -2407,7 +2407,7 @@ async def test_request_wrapper_main(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ Unexpected exception test passed")
+        print(f"PASS: Unexpected exception test passed")
 
     # Test 6: Verify exponential backoff (retry * 0.5)
     # Note: We mock asyncio.sleep to speed up the test
@@ -2433,10 +2433,10 @@ async def test_request_wrapper_main(my_predbat):
         print(f"**** ERROR: Expected 3 calls (2 failures + 1 success), got {call_count} ****")
         failed = True
     else:
-        print(f"✓ Multiple retry test passed (exponential backoff pattern verified)")
+        print(f"PASS: Multiple retry test passed (exponential backoff pattern verified)")
 
     if not failed:
-        print("✓ request_wrapper tests passed")
+        print("PASS: request_wrapper tests passed")
 
     return failed
 
@@ -2563,7 +2563,7 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected success response, got {result} ****")
         failed = True
     else:
-        print(f"✓ Successful GET with valid token test passed")
+        print(f"PASS: Successful GET with valid token test passed")
 
     # Test 2: Token expired - should refresh
     print("\n--- Test 2: Token expired - should refresh ---")
@@ -2623,7 +2623,7 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected success after refresh, got {result} ****")
         failed = True
     else:
-        print(f"✓ Token expired and refreshed test passed")
+        print(f"PASS: Token expired and refreshed test passed")
 
     # Test 3: HTTP 404 error
     print("\n--- Test 3: HTTP 404 error ---")
@@ -2646,7 +2646,7 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ HTTP 404 error test passed")
+        print(f"PASS: HTTP 404 error test passed")
 
     # Test 4: HTTP 500 error
     print("\n--- Test 4: HTTP 500 error ---")
@@ -2669,7 +2669,7 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ HTTP 500 error test passed")
+        print(f"PASS: HTTP 500 error test passed")
 
     # Test 5: Authentication error in response (code 10401)
     print("\n--- Test 5: Authentication error in response (code 10401) ---")
@@ -2701,7 +2701,7 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ Authentication error (10401) test passed")
+        print(f"PASS: Authentication error (10401) test passed")
 
     # Test 6: JSON decode error
     print("\n--- Test 6: JSON decode error ---")
@@ -2726,7 +2726,7 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ JSON decode error test passed")
+        print(f"PASS: JSON decode error test passed")
 
     # Test 7: No token available and refresh fails
     print("\n--- Test 7: No token available and refresh fails ---")
@@ -2745,10 +2745,10 @@ async def test_request_get_impl_get(my_predbat):
         print(f"**** ERROR: Expected None when token refresh fails, got {result} ****")
         failed = True
     else:
-        print(f"✓ Failed token refresh test passed")
+        print(f"PASS: Failed token refresh test passed")
 
     if not failed:
-        print("✓ _request_get_impl GET tests passed")
+        print("PASS: _request_get_impl GET tests passed")
 
     return failed
 
@@ -2784,7 +2784,7 @@ async def test_request_get_impl_post(my_predbat):
         print(f"**** ERROR: Expected success response, got {result} ****")
         failed = True
     else:
-        print(f"✓ Successful POST with JSON body test passed")
+        print(f"PASS: Successful POST with JSON body test passed")
 
     # Test 2: POST with Content-Type header verification
     print("\n--- Test 2: POST with Content-Type header ---")
@@ -2806,7 +2806,7 @@ async def test_request_get_impl_post(my_predbat):
         print(f"**** ERROR: Expected success response, got {result} ****")
         failed = True
     else:
-        print(f"✓ POST with Content-Type header test passed")
+        print(f"PASS: POST with Content-Type header test passed")
 
     # Test 3: POST HTTP 400 error (bad request)
     print("\n--- Test 3: POST HTTP 400 error ---")
@@ -2830,7 +2830,7 @@ async def test_request_get_impl_post(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ POST HTTP 400 error test passed")
+        print(f"PASS: POST HTTP 400 error test passed")
 
     # Test 4: POST with authentication error in response
     print("\n--- Test 4: POST with authentication error (code 10400) ---")
@@ -2863,7 +2863,7 @@ async def test_request_get_impl_post(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1 ****")
         failed = True
     else:
-        print(f"✓ POST authentication error test passed")
+        print(f"PASS: POST authentication error test passed")
 
     # Test 5: POST with JSON decode error
     print("\n--- Test 5: POST with JSON decode error ---")
@@ -2889,7 +2889,7 @@ async def test_request_get_impl_post(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1 ****")
         failed = True
     else:
-        print(f"✓ POST JSON decode error test passed")
+        print(f"PASS: POST JSON decode error test passed")
 
     # Test 6: POST with empty body
     print("\n--- Test 6: POST with empty body ---")
@@ -2908,10 +2908,10 @@ async def test_request_get_impl_post(my_predbat):
         print(f"**** ERROR: Expected success response, got {result} ****")
         failed = True
     else:
-        print(f"✓ POST with empty body test passed")
+        print(f"PASS: POST with empty body test passed")
 
     if not failed:
-        print("✓ _request_get_impl POST tests passed")
+        print("PASS: _request_get_impl POST tests passed")
 
     return failed
 
@@ -2963,7 +2963,7 @@ async def test_fetch_paginated_data(my_predbat):
         print(f"**** ERROR: Record data mismatch ****")
         failed = True
     else:
-        print(f"✓ Single page with records test passed")
+        print(f"PASS: Single page with records test passed")
 
     # Test 2: Multiple pages (3 pages)
     print("\n--- Test 2: Multiple pages (3 pages) ---")
@@ -3056,7 +3056,7 @@ async def test_fetch_paginated_data(my_predbat):
         print(f"**** ERROR: Records not collected correctly across pages ****")
         failed = True
     else:
-        print(f"✓ Multiple pages (3 pages) test passed")
+        print(f"PASS: Multiple pages (3 pages) test passed")
 
     # Test 3: Empty result (no records)
     print("\n--- Test 3: Empty result (no records) ---")
@@ -3089,7 +3089,7 @@ async def test_fetch_paginated_data(my_predbat):
         print(f"**** ERROR: Expected 0 records, got {len(result)} ****")
         failed = True
     else:
-        print(f"✓ Empty result test passed")
+        print(f"PASS: Empty result test passed")
 
     # Test 4: API error on first page
     print("\n--- Test 4: API error on first page ---")
@@ -3112,7 +3112,7 @@ async def test_fetch_paginated_data(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ API error on first page test passed")
+        print(f"PASS: API error on first page test passed")
 
     # Test 5: Network failure on second page
     print("\n--- Test 5: Network failure on second page ---")
@@ -3175,7 +3175,7 @@ async def test_fetch_paginated_data(my_predbat):
         print(f"**** ERROR: Expected None when second page fails, got {result} ****")
         failed = True
     else:
-        print(f"✓ Network failure on second page test passed")
+        print(f"PASS: Network failure on second page test passed")
 
     # Test 6: Missing result field in response
     print("\n--- Test 6: Missing result field in response ---")
@@ -3203,10 +3203,10 @@ async def test_fetch_paginated_data(my_predbat):
         print(f"**** ERROR: Expected 0 records for missing result field, got {len(result)} ****")
         failed = True
     else:
-        print(f"✓ Missing result field test passed")
+        print(f"PASS: Missing result field test passed")
 
     if not failed:
-        print("✓ fetch_paginated_data tests passed")
+        print("PASS: fetch_paginated_data tests passed")
 
     return failed
 
@@ -3254,7 +3254,7 @@ async def test_fetch_single_result(my_predbat):
         print(f"**** ERROR: Expected requestId 'req-123-456', got {request_id} ****")
         failed = True
     else:
-        print(f"✓ Successful GET request test passed")
+        print(f"PASS: Successful GET request test passed")
 
     # Test 2: Successful POST request with result
     print("\n--- Test 2: Successful POST request with result ---")
@@ -3287,7 +3287,7 @@ async def test_fetch_single_result(my_predbat):
         print(f"**** ERROR: Expected requestId 'req-789', got {request_id} ****")
         failed = True
     else:
-        print(f"✓ Successful POST request test passed")
+        print(f"PASS: Successful POST request test passed")
 
     # Test 3: Empty result field
     print("\n--- Test 3: Empty result field ---")
@@ -3318,7 +3318,7 @@ async def test_fetch_single_result(my_predbat):
         print(f"**** ERROR: Expected requestId 'req-empty', got {request_id} ****")
         failed = True
     else:
-        print(f"✓ Empty result field test passed")
+        print(f"PASS: Empty result field test passed")
 
     # Test 4: API error code
     print("\n--- Test 4: API error code (10001) ---")
@@ -3344,7 +3344,7 @@ async def test_fetch_single_result(my_predbat):
         print(f"**** ERROR: Expected error_count to increment by 1, got {solax_api.error_count - initial_error_count} ****")
         failed = True
     else:
-        print(f"✓ API error code test passed")
+        print(f"PASS: API error code test passed")
 
     # Test 5: Network failure (response is None)
     print("\n--- Test 5: Network failure (response is None) ---")
@@ -3366,7 +3366,7 @@ async def test_fetch_single_result(my_predbat):
         print(f"**** ERROR: Expected None requestId for network failure, got {request_id} ****")
         failed = True
     else:
-        print(f"✓ Network failure test passed")
+        print(f"PASS: Network failure test passed")
 
     # Test 6: Missing requestId field
     print("\n--- Test 6: Missing requestId field ---")
@@ -3398,10 +3398,10 @@ async def test_fetch_single_result(my_predbat):
         print(f"**** ERROR: Expected empty string for missing requestId, got {request_id} ****")
         failed = True
     else:
-        print(f"✓ Missing requestId field test passed")
+        print(f"PASS: Missing requestId field test passed")
 
     if not failed:
-        print("✓ fetch_single_result tests passed")
+        print("PASS: fetch_single_result tests passed")
 
     return failed
 
@@ -3457,7 +3457,7 @@ async def test_query_plant_info(my_predbat):
         print(f"**** ERROR: plant_info not updated correctly ****")
         failed = True
     else:
-        print(f"✓ Successful query with multiple plants test passed")
+        print(f"PASS: Successful query with multiple plants test passed")
 
     # Test 2: Query with plant ID filter
     print("\n--- Test 2: Query with plant ID filter ---")
@@ -3494,7 +3494,7 @@ async def test_query_plant_info(my_predbat):
         print(f"**** ERROR: Wrong plant returned ****")
         failed = True
     else:
-        print(f"✓ Query with plant ID filter test passed")
+        print(f"PASS: Query with plant ID filter test passed")
 
     # Test 3: Empty result (no plants found)
     print("\n--- Test 3: Empty result (no plants found) ---")
@@ -3531,7 +3531,7 @@ async def test_query_plant_info(my_predbat):
         print(f"**** ERROR: plant_info should be empty list ****")
         failed = True
     else:
-        print(f"✓ Empty result test passed")
+        print(f"PASS: Empty result test passed")
 
     # Test 4: API error during query
     print("\n--- Test 4: API error during query (code 10001) ---")
@@ -3555,7 +3555,7 @@ async def test_query_plant_info(my_predbat):
         print(f"**** ERROR: plant_info should not be updated on error ****")
         failed = True
     else:
-        print(f"✓ API error during query test passed")
+        print(f"PASS: API error during query test passed")
 
     # Test 5: Multi-page plant results
     print("\n--- Test 5: Multi-page plant results ---")
@@ -3636,10 +3636,10 @@ async def test_query_plant_info(my_predbat):
         print(f"**** ERROR: Plants not collected correctly across pages ****")
         failed = True
     else:
-        print(f"✓ Multi-page plant results test passed")
+        print(f"PASS: Multi-page plant results test passed")
 
     if not failed:
-        print("✓ query_plant_info tests passed")
+        print("PASS: query_plant_info tests passed")
 
     return failed
 
@@ -3710,7 +3710,7 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: deviceType not set correctly ****")
         failed = True
     else:
-        print(f"✓ Inverter devices query test passed")
+        print(f"PASS: Inverter devices query test passed")
 
     # Test 2: Query battery devices (device_type=2)
     print("\n--- Test 2: Query battery devices (device_type=2) ---")
@@ -3757,7 +3757,7 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: Battery deviceType not set correctly ****")
         failed = True
     else:
-        print(f"✓ Battery devices query test passed")
+        print(f"PASS: Battery devices query test passed")
 
     # Test 3: Query with device serial number filter
     print("\n--- Test 3: Query with device serial number filter ---")
@@ -3798,7 +3798,7 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: Wrong device returned ****")
         failed = True
     else:
-        print(f"✓ Device serial number filter test passed")
+        print(f"PASS: Device serial number filter test passed")
 
     # Test 4: Empty result (no devices found)
     print("\n--- Test 4: Empty result (no devices found) ---")
@@ -3831,7 +3831,7 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: Expected 0 devices, got {len(result)} ****")
         failed = True
     else:
-        print(f"✓ Empty result test passed")
+        print(f"PASS: Empty result test passed")
 
     # Test 5: API error during query
     print("\n--- Test 5: API error during query (code 10001) ---")
@@ -3850,7 +3850,7 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: Expected None for API error, got {result} ****")
         failed = True
     else:
-        print(f"✓ API error during query test passed")
+        print(f"PASS: API error during query test passed")
 
     # Test 6: Multiple device types in same plant
     print("\n--- Test 6: Multiple device types in same plant ---")
@@ -3937,7 +3937,7 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: Battery not in plant_batteries ****")
         failed = True
     else:
-        print(f"✓ Multiple device types in same plant test passed")
+        print(f"PASS: Multiple device types in same plant test passed")
 
     # Test 7: Device without serial number (edge case)
     print("\n--- Test 7: Device without serial number (edge case) ---")
@@ -3976,10 +3976,10 @@ async def test_query_device_info(my_predbat):
         print(f"**** ERROR: Device with SN should be stored ****")
         failed = True
     else:
-        print(f"✓ Device without serial number test passed")
+        print(f"PASS: Device without serial number test passed")
 
     if not failed:
-        print("✓ query_device_info tests passed")
+        print("PASS: query_device_info tests passed")
 
     return failed
 
@@ -4034,7 +4034,7 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Stored data mismatch ****")
         failed = True
     else:
-        print(f"✓ Successful fetch test passed")
+        print(f"PASS: Successful fetch test passed")
 
     # Test 2: API error response (non-10000 code)
     print("Test 2: API error response")
@@ -4056,7 +4056,7 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Data should not be stored on error ****")
         failed = True
     else:
-        print(f"✓ API error test passed")
+        print(f"PASS: API error test passed")
 
     # Test 3: Multiple plants with different data
     print("Test 3: Multiple plants with different data")
@@ -4099,7 +4099,7 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Plant 2 data mismatch ****")
         failed = True
     else:
-        print(f"✓ Multiple plants test passed")
+        print(f"PASS: Multiple plants test passed")
 
     # Test 4: Custom business_type parameter
     print("Test 4: Custom business_type parameter")
@@ -4124,7 +4124,7 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Expected business_type 1, got {captured_params[0].get('businessType')} ****")
         failed = True
     else:
-        print(f"✓ Default business_type test passed")
+        print(f"PASS: Default business_type test passed")
 
     # Test with custom business_type
     captured_params.clear()
@@ -4137,7 +4137,7 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Expected business_type 4, got {captured_params[0].get('businessType')} ****")
         failed = True
     else:
-        print(f"✓ Custom business_type test passed")
+        print(f"PASS: Custom business_type test passed")
 
     # Test 5: Empty result (valid API response but no data)
     print("Test 5: Empty result dictionary")
@@ -4158,7 +4158,7 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Empty result should still be stored ****")
         failed = True
     else:
-        print(f"✓ Empty result test passed")
+        print(f"PASS: Empty result test passed")
 
     # Test 6: Overwrite existing data with new fetch
     print("Test 6: Overwrite existing data with new fetch")
@@ -4193,10 +4193,10 @@ async def test_query_plant_realtime_data_main():
         print(f"**** ERROR: Data not overwritten correctly ****")
         failed = True
     else:
-        print(f"✓ Overwrite existing data test passed")
+        print(f"PASS: Overwrite existing data test passed")
 
     if not failed:
-        print("✓ query_plant_realtime_data tests passed")
+        print("PASS: query_plant_realtime_data tests passed")
 
     return failed
 
@@ -4256,7 +4256,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Stored data mismatch ****")
         failed = True
     else:
-        print(f"✓ Successful inverter fetch test passed")
+        print(f"PASS: Successful inverter fetch test passed")
 
     # Test 2: Successful fetch for battery device (device_type=2)
     print("Test 2: Successful fetch for battery device")
@@ -4303,7 +4303,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Stored battery data mismatch ****")
         failed = True
     else:
-        print(f"✓ Successful battery fetch test passed")
+        print(f"PASS: Successful battery fetch test passed")
 
     # Test 3: API error response (fetch_single_result returns None)
     print("Test 3: API error response")
@@ -4324,7 +4324,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Data should not be stored on error ****")
         failed = True
     else:
-        print(f"✓ API error test passed")
+        print(f"PASS: API error test passed")
 
     # Test 4: Empty result list
     print("Test 4: Empty result list")
@@ -4345,7 +4345,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Data should not be stored for empty result ****")
         failed = True
     else:
-        print(f"✓ Empty result test passed")
+        print(f"PASS: Empty result test passed")
 
     # Test 5: Custom business_type parameter
     print("Test 5: Custom business_type parameter")
@@ -4376,7 +4376,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Expected snList ['TEST_SN'], got {captured_params[0].get('snList')} ****")
         failed = True
     else:
-        print(f"✓ Default business_type test passed")
+        print(f"PASS: Default business_type test passed")
 
     # Test with custom business_type
     captured_params.clear()
@@ -4392,7 +4392,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Expected device_type 2, got {captured_params[0].get('deviceType')} ****")
         failed = True
     else:
-        print(f"✓ Custom business_type test passed")
+        print(f"PASS: Custom business_type test passed")
 
     # Test 6: Multiple devices queried separately
     print("Test 6: Multiple devices queried separately")
@@ -4425,7 +4425,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: DEV_003 data mismatch ****")
         failed = True
     else:
-        print(f"✓ Multiple devices test passed")
+        print(f"PASS: Multiple devices test passed")
 
     # Test 7: Overwrite existing device data
     print("Test 7: Overwrite existing device data with new fetch")
@@ -4454,7 +4454,7 @@ async def test_query_device_realtime_data_main():
         print(f"**** ERROR: Data not overwritten correctly ****")
         failed = True
     else:
-        print(f"✓ Overwrite existing device data test passed")
+        print(f"PASS: Overwrite existing device data test passed")
 
     # Test 8: real_sn != sn (shared Device ID / fake battery suffix)
     # When real_sn differs from sn, snList must use real_sn and requestSnType must be set.
@@ -4487,7 +4487,7 @@ async def test_query_device_realtime_data_main():
             print(f"**** ERROR: Result stored under wrong key or data incorrect ****")
             failed = True
         else:
-            print(f"✓ real_sn != sn request params test passed")
+            print(f"PASS: real_sn != sn request params test passed")
 
     # Also verify that when real_sn == sn, requestSnType is NOT added to params
     print("Test 8b: real_sn == sn - requestSnType is absent")
@@ -4516,10 +4516,10 @@ async def test_query_device_realtime_data_main():
             print(f"**** ERROR: requestSnType should not be present when real_sn == sn, got {p.get('requestSnType')} ****")
             failed = True
         else:
-            print(f"✓ real_sn == sn no requestSnType test passed")
+            print(f"PASS: real_sn == sn no requestSnType test passed")
 
     if not failed:
-        print("✓ query_device_realtime_data tests passed")
+        print("PASS: query_device_realtime_data tests passed")
 
     return failed
 
@@ -4566,7 +4566,7 @@ async def test_query_device_realtime_data_all_main():
         print(f"**** ERROR: Unexpected device SNs called ****")
         failed = True
     else:
-        print(f"✓ Successful fetch with multiple devices test passed")
+        print(f"PASS: Successful fetch with multiple devices test passed")
 
     # Test 2: Empty device_info (no devices)
     print("Test 2: Empty device_info (no devices)")
@@ -4592,7 +4592,7 @@ async def test_query_device_realtime_data_all_main():
         print(f"**** ERROR: query_device_realtime_data should not be called when no devices ****")
         failed = True
     else:
-        print(f"✓ Empty device_info test passed")
+        print(f"PASS: Empty device_info test passed")
 
     # Test 3: Some devices return None (error handling)
     print("Test 3: Some devices return None (error handling)")
@@ -4621,7 +4621,7 @@ async def test_query_device_realtime_data_all_main():
         print(f"**** ERROR: Result data mismatch ****")
         failed = True
     else:
-        print(f"✓ Error handling test passed")
+        print(f"PASS: Error handling test passed")
 
     # Test 4: Custom business_type parameter
     print("Test 4: Custom business_type parameter")
@@ -4650,7 +4650,7 @@ async def test_query_device_realtime_data_all_main():
         print(f"**** ERROR: Expected business_type None, got {captured_business_type[0]} ****")
         failed = True
     else:
-        print(f"✓ Default business_type test passed")
+        print(f"PASS: Default business_type test passed")
 
     # Test with custom business_type
     captured_business_type.clear()
@@ -4660,7 +4660,7 @@ async def test_query_device_realtime_data_all_main():
         print(f"**** ERROR: Expected business_type 4, got {captured_business_type[0]} ****")
         failed = True
     else:
-        print(f"✓ Custom business_type test passed")
+        print(f"PASS: Custom business_type test passed")
 
     # Test 5: Mixed device types (verify deviceType extracted correctly)
     print("Test 5: Mixed device types verification")
@@ -4702,7 +4702,7 @@ async def test_query_device_realtime_data_all_main():
             print(f"**** ERROR: Meter device_type incorrect ****")
             failed = True
         else:
-            print(f"✓ Mixed device types verification test passed")
+            print(f"PASS: Mixed device types verification test passed")
 
     # Test 6: Results are aggregated correctly (extend not append)
     print("Test 6: Results aggregation (extend behavior)")
@@ -4726,7 +4726,7 @@ async def test_query_device_realtime_data_all_main():
         print(f"**** ERROR: Expected 4 total records (2 devices x 2 records), got {len(result6)} ****")
         failed = True
     else:
-        print(f"✓ Results aggregation test passed")
+        print(f"PASS: Results aggregation test passed")
 
     # Test 7: Shared Device ID (battery SN has _battery suffix, real_sn strips it)
     print("Test 7: Shared Device ID - battery uses inverter SN with _battery suffix")
@@ -4770,10 +4770,10 @@ async def test_query_device_realtime_data_all_main():
             print(f"**** ERROR: Battery real_sn should be 'INV001' (suffix stripped), got '{bat_call['real_sn']}' ****")
             failed = True
         else:
-            print(f"✓ Shared Device ID real_sn test passed")
+            print(f"PASS: Shared Device ID real_sn test passed")
 
     if not failed:
-        print("✓ query_device_realtime_data_all tests passed")
+        print("PASS: query_device_realtime_data_all tests passed")
 
     return failed
 
@@ -4832,7 +4832,7 @@ async def test_query_plant_statistics_daily_main():
         print(f"**** ERROR: Expected date format YYYY-MM, got {captured_calls[0]['date']} ****")
         failed = True
     else:
-        print(f"✓ Successful fetch for current month test passed")
+        print(f"PASS: Successful fetch for current month test passed")
 
     # Test 2: API error response (None returned)
     print("Test 2: API error response")
@@ -4850,7 +4850,7 @@ async def test_query_plant_statistics_daily_main():
         print(f"**** ERROR: Expected None on API error, got {result2} ****")
         failed = True
     else:
-        print(f"✓ API error response test passed")
+        print(f"PASS: API error response test passed")
 
     # Test 3: Custom business_type parameter
     print("Test 3: Custom business_type parameter")
@@ -4875,7 +4875,7 @@ async def test_query_plant_statistics_daily_main():
         print(f"**** ERROR: Expected business_type None, got {captured_business_type[0]} ****")
         failed = True
     else:
-        print(f"✓ Default business_type test passed")
+        print(f"PASS: Default business_type test passed")
 
     # Test with custom business_type
     captured_business_type.clear()
@@ -4885,7 +4885,7 @@ async def test_query_plant_statistics_daily_main():
         print(f"**** ERROR: Expected business_type 4, got {captured_business_type[0]} ****")
         failed = True
     else:
-        print(f"✓ Custom business_type test passed")
+        print(f"PASS: Custom business_type test passed")
 
     # Test 4: Empty plantEnergyStatDataList (no data for month)
     print("Test 4: Empty plantEnergyStatDataList (no data for month)")
@@ -4906,7 +4906,7 @@ async def test_query_plant_statistics_daily_main():
         print(f"**** ERROR: Expected empty list, got {len(result4['plantEnergyStatDataList'])} records ****")
         failed = True
     else:
-        print(f"✓ Empty plantEnergyStatDataList test passed")
+        print(f"PASS: Empty plantEnergyStatDataList test passed")
 
     # Test 5: Verify date format passed to query_plant_statistics
     print("Test 5: Verify date format passed to query_plant_statistics")
@@ -4932,10 +4932,10 @@ async def test_query_plant_statistics_daily_main():
         print(f"**** ERROR: Expected YYYY-MM format, got {captured_date_formats[0]} ****")
         failed = True
     else:
-        print(f"✓ Date format verification test passed")
+        print(f"PASS: Date format verification test passed")
 
     if not failed:
-        print("✓ query_plant_statistics_daily tests passed")
+        print("PASS: query_plant_statistics_daily tests passed")
 
     return failed
 
@@ -4971,7 +4971,7 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected True for successful execution, got {result} ****")
         failed = True
     else:
-        print(f"✓ Immediate success test passed")
+        print(f"PASS: Immediate success test passed")
 
     # Test 2: Command issuance failed (device offline)
     print("Test 2: Command issuance failed (device offline)")
@@ -4989,7 +4989,7 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected False for offline device, got {result2} ****")
         failed = True
     else:
-        print(f"✓ Device offline test passed")
+        print(f"PASS: Device offline test passed")
 
     # Test 3: fetch_single_result returns None (network error)
     print("Test 3: fetch_single_result returns None (network error)")
@@ -5007,7 +5007,7 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected False for None result, got {result3} ****")
         failed = True
     else:
-        print(f"✓ Network error test passed")
+        print(f"PASS: Network error test passed")
 
     # Test 4: Successful after polling retries
     print("Test 4: Successful after polling retries")
@@ -5039,7 +5039,7 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected 3 polling attempts, got {poll_count[0]} ****")
         failed = True
     else:
-        print(f"✓ Polling retry test passed")
+        print(f"PASS: Polling retry test passed")
 
     # Test 5: Execution failed after polling
     print("Test 5: Execution failed after polling")
@@ -5060,7 +5060,7 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected False for execution failure, got {result5} ****")
         failed = True
     else:
-        print(f"✓ Execution failed test passed")
+        print(f"PASS: Execution failed test passed")
 
     # Test 6: Timeout after max retries
     print("Test 6: Timeout after max retries")
@@ -5089,7 +5089,7 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected {SOLAX_COMMAND_MAX_RETRIES} polling attempts, got {retry_count[0]} ****")
         failed = True
     else:
-        print(f"✓ Timeout after max retries test passed")
+        print(f"PASS: Timeout after max retries test passed")
 
     # Test 7: No request_id returned (edge case)
     print("Test 7: No request_id returned (edge case)")
@@ -5107,10 +5107,10 @@ async def test_send_command_and_wait_main():
         print(f"**** ERROR: Expected False for missing request_id, got {result7} ****")
         failed = True
     else:
-        print(f"✓ Missing request_id test passed")
+        print(f"PASS: Missing request_id test passed")
 
     if not failed:
-        print("✓ send_command_and_wait tests passed")
+        print("PASS: send_command_and_wait tests passed")
 
     return failed
 
@@ -5160,7 +5160,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Wrong command_name: {captured_calls[0]['command_name']} ****")
         failed = True
     else:
-        print(f"✓ self_consume_mode successful execution test passed")
+        print(f"PASS: self_consume_mode successful execution test passed")
 
     # Test 2: self_consume_mode() - command failed
     print("Test 2: self_consume_mode() - command failed")
@@ -5178,7 +5178,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Expected False for failed command, got {result2} ****")
         failed = True
     else:
-        print(f"✓ self_consume_mode command failed test passed")
+        print(f"PASS: self_consume_mode command failed test passed")
 
     # Test 3: self_consume_mode() - custom business_type
     print("Test 3: self_consume_mode() - custom business_type")
@@ -5194,7 +5194,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Expected business_type 4, got {captured_calls[0]['payload']['businessType']} ****")
         failed = True
     else:
-        print(f"✓ self_consume_mode custom business_type test passed")
+        print(f"PASS: self_consume_mode custom business_type test passed")
 
     # Test 4: soc_target_control_mode() - charge mode (positive power)
     print("Test 4: soc_target_control_mode() - charge mode (positive power)")
@@ -5222,7 +5222,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Wrong command_name ****")
         failed = True
     else:
-        print(f"✓ soc_target_control_mode charge mode test passed")
+        print(f"PASS: soc_target_control_mode charge mode test passed")
 
     # Test 5: soc_target_control_mode() - discharge mode (negative power)
     print("Test 5: soc_target_control_mode() - discharge mode (negative power)")
@@ -5244,7 +5244,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Expected power -4500, got {captured_calls[0]['payload']['chargeDischargPower']} ****")  # cspell:disable-line
         failed = True
     else:
-        print(f"✓ soc_target_control_mode discharge mode test passed")
+        print(f"PASS: soc_target_control_mode discharge mode test passed")
 
     # Test 6: set_work_mode() - selfuse mode
     print("Test 6: set_work_mode() - selfuse mode")
@@ -5278,7 +5278,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Wrong command_name ****")
         failed = True
     else:
-        print(f"✓ set_work_mode selfuse mode test passed")
+        print(f"PASS: set_work_mode selfuse mode test passed")
 
     # Test 7: set_work_mode() - backup mode
     print("Test 7: set_work_mode() - backup mode")
@@ -5300,7 +5300,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Wrong command_name ****")
         failed = True
     else:
-        print(f"✓ set_work_mode backup mode test passed")
+        print(f"PASS: set_work_mode backup mode test passed")
 
     # Test 8: set_work_mode() - feedin mode
     print("Test 8: set_work_mode() - feedin mode")
@@ -5322,7 +5322,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Wrong command_name ****")
         failed = True
     else:
-        print(f"✓ set_work_mode feedin mode test passed")
+        print(f"PASS: set_work_mode feedin mode test passed")
 
     # Test 9: set_work_mode() - unknown mode
     print("Test 9: set_work_mode() - unknown mode")
@@ -5341,7 +5341,7 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Expected no calls for unknown mode, got {len(captured_calls)} ****")
         failed = True
     else:
-        print(f"✓ set_work_mode unknown mode test passed")
+        print(f"PASS: set_work_mode unknown mode test passed")
 
     # Test 10: Multiple devices in sn_list
     print("Test 10: Multiple devices in sn_list")
@@ -5360,10 +5360,10 @@ async def test_control_mode_functions_main():
         print(f"**** ERROR: Wrong sn_list in payload ****")
         failed = True
     else:
-        print(f"✓ Multiple devices test passed")
+        print(f"PASS: Multiple devices test passed")
 
     if not failed:
-        print("✓ control mode functions tests passed")
+        print("PASS: control mode functions tests passed")
 
     return failed
 
@@ -5411,7 +5411,7 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Incorrect friendly_name: {attrs.get('friendly_name')} ****")
             failed = True
         else:
-            print(f"✓ Inverter device info publishing test passed")
+            print(f"PASS: Inverter device info publishing test passed")
 
     # Test 2: Battery device info publishing
     print("Test 2: Battery device info publishing")
@@ -5439,7 +5439,7 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Expected rated_power 5000W, got {attrs.get('rated_power')} ****")
             failed = True
         else:
-            print(f"✓ Battery device info publishing test passed")
+            print(f"PASS: Battery device info publishing test passed")
 
     # Test 3: Meter device info publishing
     print("Test 3: Meter device info publishing")
@@ -5463,7 +5463,7 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Expected device_model 'Meter X', got {attrs.get('device_model')} ****")
             failed = True
         else:
-            print(f"✓ Meter device info publishing test passed")
+            print(f"PASS: Meter device info publishing test passed")
 
     # Test 4: EV Charger device info publishing
     print("Test 4: EV Charger device info publishing")
@@ -5487,7 +5487,7 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Expected rated_power 7000W, got {attrs.get('rated_power')} ****")
             failed = True
         else:
-            print(f"✓ EV Charger device info publishing test passed")
+            print(f"PASS: EV Charger device info publishing test passed")
 
     # Test 5: Unknown device type
     print("Test 5: Unknown device type")
@@ -5508,7 +5508,7 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Expected device_model 'Unknown Device', got {attrs.get('device_model')} ****")
             failed = True
         else:
-            print(f"✓ Unknown device type test passed")
+            print(f"PASS: Unknown device type test passed")
 
     # Test 6: Multiple devices
     print("Test 6: Multiple devices")
@@ -5550,7 +5550,7 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Wrong meter model: {mtr_attrs.get('device_model')} ****")
             failed = True
         else:
-            print(f"✓ Multiple devices test passed")
+            print(f"PASS: Multiple devices test passed")
 
     # Test 7: Empty device_info (no devices to publish)
     print("Test 7: Empty device_info")
@@ -5567,7 +5567,7 @@ async def test_publish_device_info_main():
         print(f"**** ERROR: Expected no sensors, got {len(api7.dashboard_items)} ****")
         failed = True
     else:
-        print(f"✓ Empty device_info test passed")
+        print(f"PASS: Empty device_info test passed")
 
     # Test 8: Missing optional fields (should use defaults)
     print("Test 8: Missing optional fields")
@@ -5601,10 +5601,10 @@ async def test_publish_device_info_main():
             print(f"**** ERROR: Expected plant_id None, got {attrs.get('plant_id')} ****")
             failed = True
         else:
-            print(f"✓ Missing optional fields test passed")
+            print(f"PASS: Missing optional fields test passed")
 
     if not failed:
-        print("✓ publish_device_info tests passed")
+        print("PASS: publish_device_info tests passed")
 
     return failed
 
@@ -5652,7 +5652,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected status_value 102, got {api.dashboard_items[sensor_id]['attributes']['status_value']} ****")
         failed = True
     else:
-        print(f"✓ Inverter device status sensor correct")
+        print(f"PASS: Inverter device status sensor correct")
 
     # Verify AC power sensor (sum of 3 phases)
     sensor_id = "sensor.predbat_solax_1618699116555534337_H1231231932123_ac_power"
@@ -5663,7 +5663,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected AC power 3000, got {api.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Inverter AC power sensor correct")
+        print(f"PASS: Inverter AC power sensor correct")
 
     # Verify PV power sensor (sum from pvMap)
     sensor_id = "sensor.predbat_solax_1618699116555534337_H1231231932123_pv_power"
@@ -5674,7 +5674,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected PV power 3500, got {api.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Inverter PV power sensor correct")
+        print(f"PASS: Inverter PV power sensor correct")
 
     # Verify grid power sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_H1231231932123_grid_power"
@@ -5685,7 +5685,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected grid power -2500, got {api.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Inverter grid power sensor correct")
+        print(f"PASS: Inverter grid power sensor correct")
 
     # Verify total yield sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_H1231231932123_total_yield"
@@ -5696,7 +5696,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected total yield 12500.5, got {api.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Inverter total yield sensor correct")
+        print(f"PASS: Inverter total yield sensor correct")
 
     # Test 2: Battery realtime data publishing
     print("Test 2: Battery realtime data publishing")
@@ -5720,7 +5720,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected status 'Work', got {api2.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Battery device status sensor correct")
+        print(f"PASS: Battery device status sensor correct")
 
     # Verify battery SOC sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_TP123456123123_battery_soc"
@@ -5734,7 +5734,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Wrong SOC unit ****")
         failed = True
     else:
-        print(f"✓ Battery SOC sensor correct")
+        print(f"PASS: Battery SOC sensor correct")
 
     # Verify battery voltage sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_TP123456123123_battery_voltage"
@@ -5745,7 +5745,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected voltage 450.5V, got {api2.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Battery voltage sensor correct")
+        print(f"PASS: Battery voltage sensor correct")
 
     # Verify charge/discharge power sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_TP123456123123_charge_discharge_power"
@@ -5756,7 +5756,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected power 2500W, got {api2.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Battery charge/discharge power sensor correct")
+        print(f"PASS: Battery charge/discharge power sensor correct")
 
     # Verify battery current sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_TP123456123123_battery_current"
@@ -5767,7 +5767,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected current 5.5A, got {api2.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Battery current sensor correct")
+        print(f"PASS: Battery current sensor correct")
 
     # Verify battery temperature sensor
     sensor_id = "sensor.predbat_solax_1618699116555534337_TP123456123123_battery_temperature"
@@ -5781,7 +5781,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Wrong temperature unit ****")
         failed = True
     else:
-        print(f"✓ Battery temperature sensor correct")
+        print(f"PASS: Battery temperature sensor correct")
 
     # Test 3: Inverter with mpptMap instead of pvMap
     print("Test 3: Inverter with mpptMap instead of pvMap")
@@ -5814,7 +5814,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected PV power 1500 from mpptMap, got {api3.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Inverter mpptMap PV power sensor correct")
+        print(f"PASS: Inverter mpptMap PV power sensor correct")
 
     # Test 4: Device with no pvMap or mpptMap
     print("Test 4: Device with no pvMap or mpptMap")
@@ -5847,7 +5847,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected PV power 0 (no map), got {api4.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Inverter with no PV map defaults to 0")
+        print(f"PASS: Inverter with no PV map defaults to 0")
 
     # Test 5: Unknown device status codes
     print("Test 5: Unknown device status codes")
@@ -5868,7 +5868,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected 'Unknown Status', got {api5.dashboard_items[sensor_id]['state']} ****")
         failed = True
     else:
-        print(f"✓ Unknown device status handled correctly")
+        print(f"PASS: Unknown device status handled correctly")
 
     # Test 6: Empty realtime_device_data
     print("Test 6: Empty realtime_device_data")
@@ -5886,7 +5886,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected no sensors, got {len(api6.dashboard_items)} ****")
         failed = True
     else:
-        print(f"✓ Empty realtime_device_data test passed")
+        print(f"PASS: Empty realtime_device_data test passed")
 
     # Test 7: Multiple devices (inverter + battery)
     print("Test 7: Multiple devices (inverter + battery)")
@@ -5917,7 +5917,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Wrong battery SOC ****")
         failed = True
     else:
-        print(f"✓ Multiple devices test passed")
+        print(f"PASS: Multiple devices test passed")
 
     # Test 8: load_power is calculated correctly from inverter + battery data
     # load_power = pv - battery_charge_discharge - grid
@@ -5965,7 +5965,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Wrong load_power unit_of_measurement ****")
         failed = True
     else:
-        print(f"✓ load_power sensor calculated correctly ({expected_load}W)")
+        print(f"PASS: load_power sensor calculated correctly ({expected_load}W)")
 
     # Test 9: load_power with None battery power (API returns None for chargeDischargePower)
     # load_power should treat None as 0: load = pv - 0 - grid
@@ -6009,7 +6009,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected load_power {expected_load9}W with None battery, got {api9.dashboard_items[load_sensor9]['state']} ****")
         failed = True
     else:
-        print(f"✓ load_power with None chargeDischargePower treated as 0 ({expected_load9}W)")
+        print(f"PASS: load_power with None chargeDischargePower treated as 0 ({expected_load9}W)")
 
     # Test 10: Multi-inverter plant — PV and grid are aggregated; entity SN uses plant_inverters[0]
     # Plant has two inverters: INV_A (PV=1500W, grid=-200W) and INV_B (PV=500W, grid=-100W)
@@ -6073,7 +6073,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected aggregated load_power {expected_load10}W, got {api10.dashboard_items[load_sensor10]['state']} ****")
         failed = True
     else:
-        print(f"✓ Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
+        print(f"PASS: Multi-inverter load_power aggregated correctly ({expected_load10}W) and tied to first inverter SN")
 
     # Test 11: Battery SOH sensor published correctly, including zero-SOH guard and aggregate
     print("Test 11: Battery SOH sensor published correctly")
@@ -6099,7 +6099,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Wrong battery_soh unit ****")
         failed = True
     else:
-        print(f"✓ Per-device battery_soh sensor correct (0.92)")
+        print(f"PASS: Per-device battery_soh sensor correct (0.92)")
 
     # Per-inverter aggregate SOH sensor (updated in second pass)
     agg_soh_sensor = "sensor.predbat_solax_soh_plant_INV_SOH_battery_soh"
@@ -6110,7 +6110,7 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected aggregate battery_soh 0.92, got {api11.dashboard_items[agg_soh_sensor]['state']} ****")
         failed = True
     else:
-        print(f"✓ Aggregate battery_soh sensor correct (0.92)")
+        print(f"PASS: Aggregate battery_soh sensor correct (0.92)")
 
     # Verify batterySOH=0 is treated as 1.0 (guard against bad API data)
     api11b = MockSolaxAPI()
@@ -6131,10 +6131,10 @@ async def test_publish_device_realtime_data_main():
         print(f"**** ERROR: Expected battery_soh 1.0 for batterySOH=0, got {api11b.dashboard_items[zero_soh_sensor]['state']} ****")
         failed = True
     else:
-        print(f"✓ batterySOH=0 correctly guarded to 1.0")
+        print(f"PASS: batterySOH=0 correctly guarded to 1.0")
 
     if not failed:
-        print("✓ publish_device_realtime_data tests passed")
+        print("PASS: publish_device_realtime_data tests passed")
 
     return failed
 
@@ -6159,7 +6159,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 10000W, got {result}W ****")
         failed = True
     else:
-        print(f"✓ Single inverter power calculation correct (10000W)")
+        print(f"PASS: Single inverter power calculation correct (10000W)")
 
     # Test 2: get_max_power_inverter - multiple inverters
     print("Test 2: get_max_power_inverter - multiple inverters")
@@ -6176,7 +6176,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 23500W, got {result2}W ****")
         failed = True
     else:
-        print(f"✓ Multiple inverter power calculation correct (23500W)")
+        print(f"PASS: Multiple inverter power calculation correct (23500W)")
 
     # Test 3: get_max_power_inverter - no inverters
     print("Test 3: get_max_power_inverter - no inverters")
@@ -6188,7 +6188,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 0W for no inverters, got {result3}W ****")
         failed = True
     else:
-        print(f"✓ No inverters returns 0W")
+        print(f"PASS: No inverters returns 0W")
 
     # Test 4: get_max_power_battery - single battery
     print("Test 4: get_max_power_battery - single battery")
@@ -6203,7 +6203,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 5000W, got {result4}W ****")
         failed = True
     else:
-        print(f"✓ Single battery power calculation correct (5000W)")
+        print(f"PASS: Single battery power calculation correct (5000W)")
 
     # Test 5: get_max_power_battery - multiple batteries
     print("Test 5: get_max_power_battery - multiple batteries")
@@ -6219,7 +6219,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 10000W, got {result5}W ****")
         failed = True
     else:
-        print(f"✓ Multiple battery power calculation correct (10000W)")
+        print(f"PASS: Multiple battery power calculation correct (10000W)")
 
     # Test 6: get_max_power_battery - fallback to inverter power
     print("Test 6: get_max_power_battery - fallback to inverter power")
@@ -6235,7 +6235,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 12000W (inverter fallback), got {result6}W ****")
         failed = True
     else:
-        print(f"✓ Battery power fallback to inverter correct (12000W)")
+        print(f"PASS: Battery power fallback to inverter correct (12000W)")
 
     # Test 7: get_max_soc_battery
     print("Test 7: get_max_soc_battery")
@@ -6249,7 +6249,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 15.0 kWh, got {result7} kWh ****")
         failed = True
     else:
-        print(f"✓ Max SOC battery correct (15.0 kWh)")
+        print(f"PASS: Max SOC battery correct (15.0 kWh)")
 
     # Test 8: get_current_soc_battery_kwh - single battery
     print("Test 8: get_current_soc_battery_kwh - single battery")
@@ -6266,7 +6266,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected {expected8} kWh, got {result8} kWh ****")
         failed = True
     else:
-        print(f"✓ Single battery current SOC correct (11.25 kWh)")
+        print(f"PASS: Single battery current SOC correct (11.25 kWh)")
 
     # Test 9: get_current_soc_battery_kwh - multiple batteries (average)
     print("Test 9: get_current_soc_battery_kwh - multiple batteries (average)")
@@ -6284,7 +6284,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected {expected9} kWh, got {result9} kWh ****")
         failed = True
     else:
-        print(f"✓ Multiple battery current SOC average correct (14.0 kWh)")
+        print(f"PASS: Multiple battery current SOC average correct (14.0 kWh)")
 
     # Test 10: get_current_soc_battery_kwh - no batteries
     print("Test 10: get_current_soc_battery_kwh - no batteries")
@@ -6296,7 +6296,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 0 kWh for no batteries, got {result10} kWh ****")
         failed = True
     else:
-        print(f"✓ No batteries returns 0 kWh")
+        print(f"PASS: No batteries returns 0 kWh")
 
     # Test 11: get_battery_temperature - single battery
     print("Test 11: get_battery_temperature - single battery")
@@ -6311,7 +6311,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 22.5°C, got {result11}°C ****")
         failed = True
     else:
-        print(f"✓ Single battery temperature correct (22.5°C)")
+        print(f"PASS: Single battery temperature correct (22.5°C)")
 
     # Test 12: get_battery_temperature - multiple batteries (minimum)
     print("Test 12: get_battery_temperature - multiple batteries (minimum)")
@@ -6328,7 +6328,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected minimum temperature 18.5°C, got {result12}°C ****")
         failed = True
     else:
-        print(f"✓ Multiple battery temperature minimum correct (18.5°C)")
+        print(f"PASS: Multiple battery temperature minimum correct (18.5°C)")
 
     # Test 13: get_battery_temperature - no temperature data
     print("Test 13: get_battery_temperature - no temperature data")
@@ -6343,7 +6343,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected None for no temperature data, got {result13}°C ****")
         failed = True
     else:
-        print(f"✓ No temperature data returns None")
+        print(f"PASS: No temperature data returns None")
 
     # Test 14: get_charge_discharge_power_battery - single battery
     print("Test 14: get_charge_discharge_power_battery - single battery")
@@ -6358,7 +6358,7 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected 2500W, got {result14}W ****")
         failed = True
     else:
-        print(f"✓ Single battery charge/discharge power correct (2500W)")
+        print(f"PASS: Single battery charge/discharge power correct (2500W)")
 
     # Test 15: get_charge_discharge_power_battery - multiple batteries (sum)
     print("Test 15: get_charge_discharge_power_battery - multiple batteries (sum)")
@@ -6374,10 +6374,10 @@ async def test_helper_methods_main():
         print(f"**** ERROR: Expected -500W, got {result15}W ****")
         failed = True
     else:
-        print(f"✓ Multiple battery charge/discharge power sum correct (-500W)")
+        print(f"PASS: Multiple battery charge/discharge power sum correct (-500W)")
 
     if not failed:
-        print("✓ helper methods tests passed")
+        print("PASS: helper methods tests passed")
 
     return failed
 
@@ -6419,7 +6419,7 @@ async def test_automatic_config_main():
         print(f"**** ERROR: battery_min_soc should be [{SOLAX_MIN_RESERVE_PERCENT}] so Predbat's reserve logic never targets below what SolaX allows, got {api.get_arg('battery_min_soc')} ****")
         failed = True
     else:
-        print(f"✓ Single plant configuration correct")
+        print(f"PASS: Single plant configuration correct")
 
     # Test 2: Multiple plants with inverters and batteries
     print("Test 2: Multiple plants with inverters and batteries")
@@ -6449,7 +6449,7 @@ async def test_automatic_config_main():
         print(f"**** ERROR: battery_min_soc should have one entry per plant, got {api2.get_arg('battery_min_soc')} ****")
         failed = True
     else:
-        print(f"✓ Multiple plant configuration correct")
+        print(f"PASS: Multiple plant configuration correct")
 
     # Test 3: Plant with inverter but no battery (should be skipped)
     print("Test 3: Plant with inverter but no battery (should be skipped)")
@@ -6472,7 +6472,7 @@ async def test_automatic_config_main():
         print(f"**** ERROR: Expected num_inverters=1 (only plant with battery), got {api3.get_arg('num_inverters')} ****")
         failed = True
     else:
-        print(f"✓ Plant without battery correctly skipped")
+        print(f"PASS: Plant without battery correctly skipped")
 
     # Test 4: No plants with both inverter and battery (should raise error)
     print("Test 4: No plants with both inverter and battery (should raise error)")
@@ -6488,7 +6488,7 @@ async def test_automatic_config_main():
         failed = True
     except ValueError as e:
         if "No plants with inverters and batteries found" in str(e):
-            print(f"✓ Correctly raised ValueError for no valid plants")
+            print(f"PASS: Correctly raised ValueError for no valid plants")
         else:
             print(f"**** ERROR: Wrong error message: {e} ****")
             failed = True
@@ -6508,13 +6508,13 @@ async def test_automatic_config_main():
     # Entity names should use plant ID directly
     battery_power_entity = api5.get_arg("battery_power")
     if battery_power_entity and "Test_Plant_123" in battery_power_entity[0]:
-        print(f"✓ Entity names correctly use plant ID")
+        print(f"PASS: Entity names correctly use plant ID")
     else:
         print(f"**** ERROR: Entity name incorrect: {battery_power_entity} ****")
         failed = True
 
     if not failed:
-        print("✓ automatic_config tests passed")
+        print("PASS: automatic_config tests passed")
 
     return failed
 
@@ -6576,7 +6576,7 @@ async def test_publish_controls_main():
         print(f"**** ERROR: Reserve incorrect: {api.dashboard_items[reserve]['state']} ****")
         failed = True
     else:
-        print(f"✓ Control entities created correctly")
+        print(f"PASS: Control entities created correctly")
 
     # Test 2: Verify export controls
     print("Test 2: Verify export controls")
@@ -6596,7 +6596,7 @@ async def test_publish_controls_main():
         print(f"**** ERROR: Export rate incorrect: {api.dashboard_items[export_rate]['state']} ****")
         failed = True
     else:
-        print(f"✓ Export control entities correct")
+        print(f"PASS: Export control entities correct")
 
     # Test 3: Multiple plants
     print("Test 3: Multiple plants")
@@ -6633,7 +6633,7 @@ async def test_publish_controls_main():
         print(f"**** ERROR: Plant B reserve incorrect ****")
         failed = True
     else:
-        print(f"✓ Multiple plant controls correct")
+        print(f"PASS: Multiple plant controls correct")
 
     # Test 4: Verify attributes (min, max, units, options)
     print("Test 4: Verify attributes")
@@ -6651,7 +6651,7 @@ async def test_publish_controls_main():
             print(f"**** ERROR: Target SOC units incorrect: {attrs.get('unit_of_measurement')} ****")
             failed = True
         else:
-            print(f"✓ Entity attributes correct")
+            print(f"PASS: Entity attributes correct")
 
     # Test 5: Verify time options
     print("Test 5: Verify time options")
@@ -6669,10 +6669,10 @@ async def test_publish_controls_main():
             print(f"**** ERROR: Start time options count incorrect: {len(attrs.get('options', []))} ****")
             failed = True
         else:
-            print(f"✓ Time options correct")
+            print(f"PASS: Time options correct")
 
     if not failed:
-        print("✓ publish_controls tests passed")
+        print("PASS: publish_controls tests passed")
 
     return failed
 
@@ -6719,7 +6719,7 @@ async def test_run_main():
         print(f"**** ERROR: query_plant_info not called on first run ****")
         failed = True
     else:
-        print(f"✓ First run initialization correct")
+        print(f"PASS: First run initialization correct")
 
     # Test 2: Subsequent run (no first-time actions)
     print("Test 2: Subsequent run (no first-time actions)")
@@ -6751,7 +6751,7 @@ async def test_run_main():
         print(f"**** ERROR: query_device_info should not be called at 2 minutes ****")
         failed = True
     else:
-        print(f"✓ Subsequent run correct")
+        print(f"PASS: Subsequent run correct")
 
     # Test 3: 60-second cycle (realtime data refresh)
     print("Test 3: 60-second cycle (realtime data refresh)")
@@ -6782,7 +6782,7 @@ async def test_run_main():
         print(f"**** ERROR: publish methods not called at 60 seconds ****")
         failed = True
     else:
-        print(f"✓ 60-second cycle correct")
+        print(f"PASS: 60-second cycle correct")
 
     # Test 4: 30-minute cycle (device info refresh)
     print("Test 4: 30-minute cycle (device info refresh)")
@@ -6810,7 +6810,7 @@ async def test_run_main():
         print(f"**** ERROR: query_device_info not called enough times (expected 2+, got {mock_device.call_count}) ****")
         failed = True
     else:
-        print(f"✓ 30-minute cycle correct")
+        print(f"PASS: 30-minute cycle correct")
 
     # Test 5: Read-only mode (controls disabled)
     print("Test 5: Read-only mode (controls disabled)")
@@ -6839,7 +6839,7 @@ async def test_run_main():
         print(f"**** ERROR: apply_controls called in read-only mode ****")
         failed = True
     else:
-        print(f"✓ Read-only mode correct")
+        print(f"PASS: Read-only mode correct")
 
     # Test 6: Automatic config on first run
     print("Test 6: Automatic config on first run")
@@ -6869,7 +6869,7 @@ async def test_run_main():
         print(f"**** ERROR: automatic_config not called when automatic=True on first run ****")
         failed = True
     else:
-        print(f"✓ Automatic config triggered correctly")
+        print(f"PASS: Automatic config triggered correctly")
 
     # Test 7: Failed plant info fetch
     print("Test 7: Failed plant info fetch")
@@ -6884,10 +6884,10 @@ async def test_run_main():
         print(f"**** ERROR: Should return False when plant_info is None ****")
         failed = True
     else:
-        print(f"✓ Failed plant info handled correctly")
+        print(f"PASS: Failed plant info handled correctly")
 
     if not failed:
-        print("✓ run loop tests passed")
+        print("PASS: run loop tests passed")
 
     return failed
 
@@ -6934,7 +6934,7 @@ async def test_set_default_work_mode_main():
             print(f"**** ERROR: Expected charge_upper_soc 100, got {call_args[0][3]} ****")
             failed = True
         else:
-            print(f"✓ Successful call invokes set_work_mode with correct parameters")
+            print(f"PASS: Successful call invokes set_work_mode with correct parameters")
 
     # Test 2: Failed set_work_mode should not set flag
     print("Test 2: Failed set_work_mode should not set flag")
@@ -6950,7 +6950,7 @@ async def test_set_default_work_mode_main():
         print(f"**** ERROR: Should return False when set_work_mode fails ****")
         failed = True
     else:
-        print(f"✓ Failed set_work_mode correctly does not set flag")
+        print(f"PASS: Failed set_work_mode correctly does not set flag")
 
     # Test 3: Verify success log messages
     print("Test 3: Verify success log messages")
@@ -6968,7 +6968,7 @@ async def test_set_default_work_mode_main():
         print(f"**** ERROR: Success log message not found ****")
         failed = True
     else:
-        print(f"✓ Success log message generated correctly")
+        print(f"PASS: Success log message generated correctly")
 
     # Test 4: Failed call should generate warning log
     print("Test 4: Failed call should generate warning log")
@@ -6986,7 +6986,7 @@ async def test_set_default_work_mode_main():
         print(f"**** ERROR: Warning log message not found ****")
         failed = True
     else:
-        print(f"✓ Warning log message generated correctly")
+        print(f"PASS: Warning log message generated correctly")
 
     # Test 5: Verify business_type parameter is passed through
     print("Test 5: Verify business_type parameter is passed through")
@@ -7004,7 +7004,7 @@ async def test_set_default_work_mode_main():
         print(f"**** ERROR: Expected business_type=4, got {call_kwargs.get('business_type')} ****")
         failed = True
     else:
-        print(f"✓ business_type parameter passed through correctly")
+        print(f"PASS: business_type parameter passed through correctly")
 
     # Test 6: Verify mode parameter is passed through (backup mode)
     print("Test 6: Verify mode parameter is passed through (backup mode)")
@@ -7022,10 +7022,10 @@ async def test_set_default_work_mode_main():
         print(f"**** ERROR: Expected mode 'backup', got {call_args6[0][0]} ****")
         failed = True
     else:
-        print(f"✓ mode parameter passed through correctly")
+        print(f"PASS: mode parameter passed through correctly")
 
     if not failed:
-        print("✓ set_default_work_mode tests passed")
+        print("PASS: set_default_work_mode tests passed")
 
     return failed
 
@@ -7083,7 +7083,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: Wrong command_name: {command_name} ****")
             failed = True
         else:
-            print(f"✓ Charge mode parameters correct")
+            print(f"PASS: Charge mode parameters correct")
 
     # Test 2: Discharge mode (positive battery_power)
     print("Test 2: Discharge mode (positive battery_power)")
@@ -7105,7 +7105,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: Wrong battery_power for discharge: {payload2.get('batteryPower')} ****")
             failed = True
         else:
-            print(f"✓ Discharge mode parameters correct")
+            print(f"PASS: Discharge mode parameters correct")
 
     # Test 3: Default next_motion parameter
     print("Test 3: Default next_motion parameter")
@@ -7128,7 +7128,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: Default next_motion should be 161, got {payload3.get('nextMotion')} ****")
             failed = True
         else:
-            print(f"✓ Default next_motion (161) correct")
+            print(f"PASS: Default next_motion (161) correct")
 
     # Test 4: Custom next_motion parameter (Exit Remote Control)
     print("Test 4: Custom next_motion parameter (Exit Remote Control)")
@@ -7150,7 +7150,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: next_motion should be 160, got {payload4.get('nextMotion')} ****")
             failed = True
         else:
-            print(f"✓ Custom next_motion (160) correct")
+            print(f"PASS: Custom next_motion (160) correct")
 
     # Test 5: Default business_type (residential)
     print("Test 5: Default business_type (residential)")
@@ -7173,7 +7173,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: Default business_type should be 1, got {payload5.get('businessType')} ****")
             failed = True
         else:
-            print(f"✓ Default business_type (residential) correct")
+            print(f"PASS: Default business_type (residential) correct")
 
     # Test 6: Custom business_type (commercial)
     print("Test 6: Custom business_type (commercial)")
@@ -7195,7 +7195,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: business_type should be 4 (commercial), got {payload6.get('businessType')} ****")
             failed = True
         else:
-            print(f"✓ Custom business_type (commercial) correct")
+            print(f"PASS: Custom business_type (commercial) correct")
 
     # Test 7: Failed command execution
     print("Test 7: Failed command execution")
@@ -7211,7 +7211,7 @@ async def test_positive_or_negative_mode_main():
         print(f"**** ERROR: Should return False on failure ****")
         failed = True
     else:
-        print(f"✓ Failed command execution handled correctly")
+        print(f"PASS: Failed command execution handled correctly")
 
     # Test 8: Zero battery power (edge case)
     print("Test 8: Zero battery power (edge case)")
@@ -7233,7 +7233,7 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: Zero battery_power should be preserved, got {payload8.get('batteryPower')} ****")
             failed = True
         else:
-            print(f"✓ Zero battery power handled correctly")
+            print(f"PASS: Zero battery power handled correctly")
 
     # Test 9: Large duration value
     print("Test 9: Large duration value")
@@ -7255,10 +7255,10 @@ async def test_positive_or_negative_mode_main():
             print(f"**** ERROR: Duration should be 43200, got {payload9.get('timeOfDuration')} ****")
             failed = True
         else:
-            print(f"✓ Large duration value handled correctly")
+            print(f"PASS: Large duration value handled correctly")
 
     if not failed:
-        print("✓ positive_or_negative_mode tests passed")
+        print("PASS: positive_or_negative_mode tests passed")
 
     return failed
 
@@ -7316,7 +7316,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Wrong sn_list passed to send_command_and_wait: {sn_list} ****")
             failed = True
         else:
-            print(f"✓ Single inverter parameters correct")
+            print(f"PASS: Single inverter parameters correct")
 
     # Test 2: Multiple inverters
     print("Test 2: Multiple inverters")
@@ -7338,7 +7338,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Wrong snList for multiple inverters: {payload2.get('snList')} ****")
             failed = True
         else:
-            print(f"✓ Multiple inverters handled correctly")
+            print(f"PASS: Multiple inverters handled correctly")
 
     # Test 3: Default next_motion parameter (Back to Self-Consume)
     print("Test 3: Default next_motion parameter (Back to Self-Consume)")
@@ -7361,7 +7361,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Default next_motion should be 161 (Back to Self-Consume), got {payload3.get('nextMotion')} ****")
             failed = True
         else:
-            print(f"✓ Default next_motion (161) correct")
+            print(f"PASS: Default next_motion (161) correct")
 
     # Test 4: Custom next_motion (Exit Remote Control)
     print("Test 4: Custom next_motion (Exit Remote Control)")
@@ -7383,7 +7383,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: next_motion should be 160 (Exit Remote Control), got {payload4.get('nextMotion')} ****")
             failed = True
         else:
-            print(f"✓ Custom next_motion (160) correct")
+            print(f"PASS: Custom next_motion (160) correct")
 
     # Test 5: Default business_type (residential)
     print("Test 5: Default business_type (residential)")
@@ -7406,7 +7406,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Default business_type should be 1 (residential), got {payload5.get('businessType')} ****")
             failed = True
         else:
-            print(f"✓ Default business_type (residential) correct")
+            print(f"PASS: Default business_type (residential) correct")
 
     # Test 6: Custom business_type (commercial)
     print("Test 6: Custom business_type (commercial)")
@@ -7428,7 +7428,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: business_type should be 4 (commercial), got {payload6.get('businessType')} ****")
             failed = True
         else:
-            print(f"✓ Custom business_type (commercial) correct")
+            print(f"PASS: Custom business_type (commercial) correct")
 
     # Test 7: Failed command execution
     print("Test 7: Failed command execution")
@@ -7444,7 +7444,7 @@ async def test_self_consume_charge_only_mode_main():
         print(f"**** ERROR: Should return False on failure ****")
         failed = True
     else:
-        print(f"✓ Failed command execution handled correctly")
+        print(f"PASS: Failed command execution handled correctly")
 
     # Test 8: Short duration (edge case)
     print("Test 8: Short duration (edge case)")
@@ -7466,7 +7466,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Short duration should be preserved, got {payload8.get('timeOfDuration')} ****")
             failed = True
         else:
-            print(f"✓ Short duration handled correctly")
+            print(f"PASS: Short duration handled correctly")
 
     # Test 9: Long duration (edge case)
     print("Test 9: Long duration (edge case)")
@@ -7488,7 +7488,7 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Long duration should be preserved, got {payload9.get('timeOfDuration')} ****")
             failed = True
         else:
-            print(f"✓ Long duration handled correctly")
+            print(f"PASS: Long duration handled correctly")
 
     # Test 10: Empty inverter list (edge case)
     print("Test 10: Empty inverter list (edge case)")
@@ -7510,10 +7510,10 @@ async def test_self_consume_charge_only_mode_main():
             print(f"**** ERROR: Empty list should be preserved, got {payload10.get('snList')} ****")
             failed = True
         else:
-            print(f"✓ Empty inverter list handled correctly")
+            print(f"PASS: Empty inverter list handled correctly")
 
     if not failed:
-        print("✓ self_consume_charge_only_mode tests passed")
+        print("PASS: self_consume_charge_only_mode tests passed")
 
     return failed
 
@@ -7559,7 +7559,7 @@ async def test_query_request_result_main():
             print(f"**** ERROR: Wrong requestId: {json_data.get('requestId')} ****")
             failed = True
         else:
-            print(f"✓ Single device success status returned correctly")
+            print(f"PASS: Single device success status returned correctly")
 
     # Test 2: Multiple devices - all successful
     print("Test 2: Multiple devices - all successful")
@@ -7575,7 +7575,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return status 4 for all successful, got {result2} ****")
         failed = True
     else:
-        print(f"✓ Multiple devices all successful")
+        print(f"PASS: Multiple devices all successful")
 
     # Test 3: Multiple devices - one device offline
     print("Test 3: Multiple devices - one device offline")
@@ -7591,7 +7591,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return first non-success status 2, got {result3} ****")
         failed = True
     else:
-        print(f"✓ Non-success status detected correctly")
+        print(f"PASS: Non-success status detected correctly")
 
     # Test 4: Empty result array
     print("Test 4: Empty result array")
@@ -7607,7 +7607,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return default status 4 for empty result, got {result4} ****")
         failed = True
     else:
-        print(f"✓ Empty result array handled correctly")
+        print(f"PASS: Empty result array handled correctly")
 
     # Test 5: API error response
     print("Test 5: API error response")
@@ -7623,7 +7623,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return None on API error, got {result5} ****")
         failed = True
     else:
-        print(f"✓ API error handled correctly")
+        print(f"PASS: API error handled correctly")
 
     # Test 6: request_get returns None (network error)
     print("Test 6: request_get returns None (network error)")
@@ -7639,7 +7639,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return None on network error, got {result6} ****")
         failed = True
     else:
-        print(f"✓ Network error handled correctly")
+        print(f"PASS: Network error handled correctly")
 
     # Test 7: Missing result field in response
     print("Test 7: Missing result field in response")
@@ -7658,7 +7658,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return default status 4 when result missing, got {result7} ****")
         failed = True
     else:
-        print(f"✓ Missing result field handled correctly")
+        print(f"PASS: Missing result field handled correctly")
 
     # Test 8: First device fails, others succeed
     print("Test 8: First device fails, others succeed")
@@ -7674,7 +7674,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return first device status 1, got {result8} ****")
         failed = True
     else:
-        print(f"✓ First device failure detected correctly")
+        print(f"PASS: First device failure detected correctly")
 
     # Test 9: Device result with missing fields
     print("Test 9: Device result with missing fields")
@@ -7691,7 +7691,7 @@ async def test_query_request_result_main():
         print(f"**** ERROR: Should return None when device has missing status field ****")
         failed = True
     else:
-        print(f"✓ Missing status field returns None correctly")
+        print(f"PASS: Missing status field returns None correctly")
 
     # Test 10: Long request ID
     print("Test 10: Long request ID")
@@ -7714,10 +7714,10 @@ async def test_query_request_result_main():
             print(f"**** ERROR: Long request ID not preserved ****")
             failed = True
         else:
-            print(f"✓ Long request ID handled correctly")
+            print(f"PASS: Long request ID handled correctly")
 
     if not failed:
-        print("✓ query_request_result tests passed")
+        print("PASS: query_request_result tests passed")
 
     return failed
 
@@ -7783,7 +7783,7 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected reserve 20, got {api.controls[plant_id]['reserve']} ****")
         failed = True
     else:
-        print(f"✓ Text values converted to numbers correctly")
+        print(f"PASS: Text values converted to numbers correctly")
 
     # Test 2: Values bounded by min/max
     print("Test 2: Values bounded by min/max")
@@ -7822,7 +7822,7 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected charge_rate floored at 0, got {api2.controls[plant_id]['charge']['rate']} ****")
         failed = True
     else:
-        print(f"✓ Out-of-range values bounded correctly")
+        print(f"PASS: Out-of-range values bounded correctly")
 
     # Test 3: Default values used when state not available
     print("Test 3: Default values used when state not available")
@@ -7854,7 +7854,7 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected default reserve 10, got {api3.controls[plant_id]['reserve']} ****")
         failed = True
     else:
-        print(f"✓ Default values used correctly")
+        print(f"PASS: Default values used correctly")
 
     # Test 4: Invalid text values fall back to defaults
     print("Test 4: Invalid text values fall back to defaults")
@@ -7884,7 +7884,7 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected default reserve 10 for invalid input, got {api4.controls[plant_id]['reserve']} ****")
         failed = True
     else:
-        print(f"✓ Invalid text values fall back to defaults")
+        print(f"PASS: Invalid text values fall back to defaults")
 
     # Test 5: Mixed valid numeric and text values
     print("Test 5: Mixed valid numeric and text values")
@@ -7923,7 +7923,7 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected reserve 15, got {api5.controls[plant_id]['reserve']} ****")
         failed = True
     else:
-        print(f"✓ Mixed numeric and text values handled correctly")
+        print(f"PASS: Mixed numeric and text values handled correctly")
 
     # Test 6: Switch entities return "on"/"off" strings from HA — must be normalised to bool
     print("Test 6: Switch 'on'/'off' strings normalised to bool")
@@ -7950,7 +7950,7 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected export enable False from 'off' string, got {api6.controls[plant_id]['export']['enable']!r} ****")
         failed = True
     else:
-        print("✓ Switch 'on'/'off' strings normalised to bool correctly")
+        print("PASS: Switch 'on'/'off' strings normalised to bool correctly")
 
     # Test 7: Switch entities return uppercase "ON"/"OFF" — case-insensitive normalisation
     print("Test 7: Switch uppercase 'ON'/'OFF' strings normalised to bool")
@@ -7977,10 +7977,10 @@ async def test_fetch_controls_value_conversion_main():
         print(f"**** ERROR: Expected export enable False from 'OFF' string, got {api7.controls[plant_id]['export']['enable']!r} ****")
         failed = True
     else:
-        print("✓ Uppercase switch strings normalised correctly")
+        print("PASS: Uppercase switch strings normalised correctly")
 
     if not failed:
-        print("✓ fetch_controls value conversion tests passed")
+        print("PASS: fetch_controls value conversion tests passed")
 
     return failed
 
@@ -8031,7 +8031,7 @@ async def test_exit_vpp_mode_main():
             print(f"**** ERROR: Wrong sn_list passed: {sn_list} ****")
             failed = True
         else:
-            print(f"✓ Single inverter exit VPP mode correct")
+            print(f"PASS: Single inverter exit VPP mode correct")
 
     # Test 2: Multiple inverters
     print("Test 2: Multiple inverters")
@@ -8053,7 +8053,7 @@ async def test_exit_vpp_mode_main():
             print(f"**** ERROR: Wrong snList for multiple inverters: {payload2.get('snList')} ****")
             failed = True
         else:
-            print(f"✓ Multiple inverters handled correctly")
+            print(f"PASS: Multiple inverters handled correctly")
 
     # Test 3: Default business_type (residential)
     print("Test 3: Default business_type (residential)")
@@ -8075,7 +8075,7 @@ async def test_exit_vpp_mode_main():
             print(f"**** ERROR: Default business_type should be 1, got {payload3.get('businessType')} ****")
             failed = True
         else:
-            print(f"✓ Default business_type (residential) correct")
+            print(f"PASS: Default business_type (residential) correct")
 
     # Test 4: Custom business_type (commercial)
     print("Test 4: Custom business_type (commercial)")
@@ -8097,7 +8097,7 @@ async def test_exit_vpp_mode_main():
             print(f"**** ERROR: business_type should be 4 (commercial), got {payload4.get('businessType')} ****")
             failed = True
         else:
-            print(f"✓ Custom business_type (commercial) correct")
+            print(f"PASS: Custom business_type (commercial) correct")
 
     # Test 5: Failed command execution
     print("Test 5: Failed command execution")
@@ -8113,7 +8113,7 @@ async def test_exit_vpp_mode_main():
         print(f"**** ERROR: Should return False on failure ****")
         failed = True
     else:
-        print(f"✓ Failed command execution handled correctly")
+        print(f"PASS: Failed command execution handled correctly")
 
     # Test 6: Maximum 10 devices
     print("Test 6: Maximum 10 devices")
@@ -8136,7 +8136,7 @@ async def test_exit_vpp_mode_main():
             print(f"**** ERROR: Expected 10 devices, got {len(payload6.get('snList'))} ****")
             failed = True
         else:
-            print(f"✓ Maximum 10 devices handled correctly")
+            print(f"PASS: Maximum 10 devices handled correctly")
 
     # Test 7: Empty list (edge case)
     print("Test 7: Empty list (edge case)")
@@ -8158,9 +8158,9 @@ async def test_exit_vpp_mode_main():
             print(f"**** ERROR: Empty list should be preserved, got {payload7.get('snList')} ****")
             failed = True
         else:
-            print(f"✓ Empty list handled correctly")
+            print(f"PASS: Empty list handled correctly")
 
     if not failed:
-        print("✓ exit_vpp_mode tests passed")
+        print("PASS: exit_vpp_mode tests passed")
 
     return failed

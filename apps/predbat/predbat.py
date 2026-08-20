@@ -22,7 +22,6 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 import traceback
-import sys
 import gc
 import random
 import time
@@ -337,6 +336,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.max_days_previous = max(self.days_previous) + 1
         self.forecast_days = 0
         self.forecast_minutes = 0
+        self.inverter_clock_skew_start = 0
+        self.inverter_clock_skew_end = 0
+        self.inverter_clock_skew_discharge_start = 0
+        self.inverter_clock_skew_discharge_end = 0
         self.soc_kw = 0
         self.soc_percent = 0
         self.soc_max = 10.0
@@ -1641,7 +1644,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 self.record_status("Error: Some components failed to start (phase 2)", had_errors=True)
 
             self.load_user_config(quiet=False, register=True)
-            self.auto_config(final=True)
+            self.auto_config(final=False)
             self.validate_config_schedule_retry(self.validate_config())
 
             # Restore the last saved plan so it is immediately active before the first calculation
@@ -1798,6 +1801,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                     self.load_user_config()
                     self.validate_config_schedule_retry(self.validate_config())
                     config_changed = True
+
+                # Retry auto config (and finalise after 10 minutes from startup)
+                time_since_start = (self.now_utc_real - self.started_time).total_seconds() / 60.0
+                self.auto_config(final=(time_since_start > 10))
 
                 # Run the prediction
                 self.update_pred(scheduled=True)

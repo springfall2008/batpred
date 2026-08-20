@@ -278,6 +278,7 @@ mode: single
 Manually run the automation and then make sure the Solcast integration is working in Home Assistant by going to 'Settings' / 'Developer Tools' / 'States', filtering on 'solcast',
 and check that you can see the half-hourly solar forecasts in the Solcast entities.
 
+
 ### No solar
 
 If you don't have any solar generation then use a file editor to comment out the following lines from the Solar forecast part of the `apps.yaml` configuration:

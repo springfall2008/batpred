@@ -50,13 +50,13 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates("https://api.octopus.energy/v1/products/AGILE-24-04-03/electricity-tariffs/E-1R-AGILE-24-04-03-A/standard-unit-rates/")
 
     if result != mock_rate_data:
-        print(f"✗ Test 1 failed - Expected rate data, got {result}")
+        print(f"FAIL: Test 1 failed - Expected rate data, got {result}")
         failed = True
     elif "https://api.octopus.energy/v1/products/AGILE-24-04-03/electricity-tariffs/E-1R-AGILE-24-04-03-A/standard-unit-rates/" not in my_predbat.octopus_url_cache:
-        print("✗ Test 1 failed - URL not in cache")
+        print("FAIL: Test 1 failed - URL not in cache")
         failed = True
     else:
-        print("✓ Test 1 passed - Single page download successful")
+        print("PASS: Test 1 passed - Single page download successful")
 
     # Test 2: Cache hit - returns cached data when fresh
     print("\nTest 2: Cache hit - returns cached data when fresh")
@@ -77,13 +77,13 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates(test_url)
 
     if result != cached_data:
-        print(f"✗ Test 2 failed - Expected cached data {cached_data}, got {result}")
+        print(f"FAIL: Test 2 failed - Expected cached data {cached_data}, got {result}")
         failed = True
     elif mock_download.called:
-        print("✗ Test 2 failed - download_octopus_rates_func should not be called")
+        print("FAIL: Test 2 failed - download_octopus_rates_func should not be called")
         failed = True
     else:
-        print("✓ Test 2 passed - Cache hit returns fresh data")
+        print("PASS: Test 2 passed - Cache hit returns fresh data")
 
     # Test 3: Cache miss - downloads when cache expired (>30 min)
     print("\nTest 3: Cache miss - downloads when cache expired")
@@ -104,13 +104,13 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates(test_url)
 
     if result != new_data:
-        print(f"✗ Test 3 failed - Expected new data {new_data}, got {result}")
+        print(f"FAIL: Test 3 failed - Expected new data {new_data}, got {result}")
         failed = True
     elif my_predbat.octopus_url_cache[test_url]["data"] != new_data:
-        print("✗ Test 3 failed - Cache not updated with new data")
+        print("FAIL: Test 3 failed - Cache not updated with new data")
         failed = True
     else:
-        print("✓ Test 3 passed - Cache miss triggers download")
+        print("PASS: Test 3 passed - Cache miss triggers download")
 
     # Test 4: Download failure - returns stale cache when available
     print("\nTest 4: Download failure - returns stale cache when available")
@@ -129,10 +129,10 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates(test_url)
 
     if result != cached_data:
-        print(f"✗ Test 4 failed - Expected stale cached data {cached_data}, got {result}")
+        print(f"FAIL: Test 4 failed - Expected stale cached data {cached_data}, got {result}")
         failed = True
     else:
-        print("✓ Test 4 passed - Download failure returns stale cache")
+        print("PASS: Test 4 passed - Download failure returns stale cache")
 
     # Test 4a: Cache invalidation - midnight crossing
     print("\nTest 4a: Cache invalidation - midnight crossing")
@@ -155,16 +155,16 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates(test_url)
 
     if result != new_data:
-        print(f"✗ Test 4a failed - Expected new data {new_data}, got {result}")
+        print(f"FAIL: Test 4a failed - Expected new data {new_data}, got {result}")
         failed = True
     elif not mock_download.called:
-        print("✗ Test 4a failed - download_octopus_rates_func should be called after midnight crossing")
+        print("FAIL: Test 4a failed - download_octopus_rates_func should be called after midnight crossing")
         failed = True
     elif my_predbat.octopus_url_cache[test_url]["midnight_utc"] != my_predbat.midnight_utc:
-        print(f"✗ Test 4a failed - Cache should be updated with new midnight_utc {my_predbat.midnight_utc}, got {my_predbat.octopus_url_cache[test_url]['midnight_utc']}")
+        print(f"FAIL: Test 4a failed - Cache should be updated with new midnight_utc {my_predbat.midnight_utc}, got {my_predbat.octopus_url_cache[test_url]['midnight_utc']}")
         failed = True
     else:
-        print("✓ Test 4a passed - Cache invalidated after midnight crossing")
+        print("PASS: Test 4a passed - Cache invalidated after midnight crossing")
 
     # Test 5: Download failure - raises ValueError when no cache available
     print("\nTest 5: Download failure - raises ValueError when no cache")
@@ -174,10 +174,10 @@ def test_octopus_download_rates(my_predbat):
     with patch.object(my_predbat, 'download_octopus_rates_func', return_value={}):
         try:
             result = my_predbat.download_octopus_rates(test_url)
-            print("✗ Test 5 failed - Expected ValueError to be raised")
+            print("FAIL: Test 5 failed - Expected ValueError to be raised")
             failed = True
         except ValueError:
-            print("✓ Test 5 passed - ValueError raised when no cache available")
+            print("PASS: Test 5 passed - ValueError raised when no cache available")
 
     # Test 6: Retry mechanism - succeeds on second attempt
     print("\nTest 6: Retry mechanism - succeeds on second attempt")
@@ -190,10 +190,10 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates(test_url)
 
     if result != success_data:
-        print(f"✗ Test 6 failed - Expected success data {success_data}, got {result}")
+        print(f"FAIL: Test 6 failed - Expected success data {success_data}, got {result}")
         failed = True
     else:
-        print("✓ Test 6 passed - Retry mechanism works correctly")
+        print("PASS: Test 6 passed - Retry mechanism works correctly")
 
     # Test 7: download_octopus_rates_func - successful single page
     print("\nTest 7: download_octopus_rates_func - successful single page")
@@ -220,10 +220,10 @@ def test_octopus_download_rates(my_predbat):
 
     # minute_data expands to every minute in the range, so check key points
     if result.get(0) != 10.5 or result.get(29) != 10.5 or result.get(30) != 12.0 or result.get(59) != 12.0:
-        print(f"✗ Test 7 failed - Expected rate data at key minutes, got {result.get(0)}, {result.get(29)}, {result.get(30)}, {result.get(59)}")
+        print(f"FAIL: Test 7 failed - Expected rate data at key minutes, got {result.get(0)}, {result.get(29)}, {result.get(30)}, {result.get(59)}")
         failed = True
     else:
-        print("✓ Test 7 passed - download_octopus_rates_func single page success")
+        print("PASS: Test 7 passed - download_octopus_rates_func single page success")
 
     # Test 8: download_octopus_rates_func - pagination (multiple pages)
     print("\nTest 8: download_octopus_rates_func - pagination")
@@ -256,10 +256,10 @@ def test_octopus_download_rates(my_predbat):
 
     # Check that both pages were fetched and combined
     if result.get(0) != 10.5 or result.get(29) != 10.5 or result.get(30) != 12.0 or result.get(59) != 12.0:
-        print(f"✗ Test 8 failed - Expected combined rate data, got minute 0: {result.get(0)}, minute 29: {result.get(29)}, minute 30: {result.get(30)}, minute 59: {result.get(59)}")
+        print(f"FAIL: Test 8 failed - Expected combined rate data, got minute 0: {result.get(0)}, minute 29: {result.get(29)}, minute 30: {result.get(30)}, minute 59: {result.get(59)}")
         failed = True
     else:
-        print("✓ Test 8 passed - Pagination works correctly")
+        print("PASS: Test 8 passed - Pagination works correctly")
 
     # Test 9: download_octopus_rates_func - ConnectionError
     print("\nTest 9: download_octopus_rates_func - ConnectionError")
@@ -271,10 +271,10 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
-        print(f"✗ Test 9 failed - Expected empty dict, got {result}")
+        print(f"FAIL: Test 9 failed - Expected empty dict, got {result}")
         failed = True
     else:
-        print("✓ Test 9 passed - ConnectionError handled correctly")
+        print("PASS: Test 9 passed - ConnectionError handled correctly")
 
     # Test 10: download_octopus_rates_func - HTTP error status
     print("\nTest 10: download_octopus_rates_func - HTTP error status")
@@ -289,10 +289,10 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
-        print(f"✗ Test 10 failed - Expected empty dict, got {result}")
+        print(f"FAIL: Test 10 failed - Expected empty dict, got {result}")
         failed = True
     else:
-        print("✓ Test 10 passed - HTTP error status handled")
+        print("PASS: Test 10 passed - HTTP error status handled")
 
     # Test 11: download_octopus_rates_func - JSON decode error
     print("\nTest 11: download_octopus_rates_func - JSON decode error")
@@ -308,13 +308,13 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
-        print(f"✗ Test 11 failed - Expected empty dict, got {result}")
+        print(f"FAIL: Test 11 failed - Expected empty dict, got {result}")
         failed = True
     elif my_predbat.failures_total != 1:
-        print(f"✗ Test 11 failed - Expected failures_total=1, got {my_predbat.failures_total}")
+        print(f"FAIL: Test 11 failed - Expected failures_total=1, got {my_predbat.failures_total}")
         failed = True
     else:
-        print("✓ Test 11 passed - JSON decode error handled")
+        print("PASS: Test 11 passed - JSON decode error handled")
 
     # Test 12: download_octopus_rates_func - missing 'results' key
     print("\nTest 12: download_octopus_rates_func - missing 'results' key")
@@ -330,10 +330,10 @@ def test_octopus_download_rates(my_predbat):
         result = my_predbat.download_octopus_rates_func(test_url)
 
     if result != {}:
-        print(f"✗ Test 12 failed - Expected empty dict, got {result}")
+        print(f"FAIL: Test 12 failed - Expected empty dict, got {result}")
         failed = True
     else:
-        print("✓ Test 12 passed - Missing 'results' key handled")
+        print("PASS: Test 12 passed - Missing 'results' key handled")
 
     if failed:
         print("\n=== Some download_octopus_rates tests FAILED ===")

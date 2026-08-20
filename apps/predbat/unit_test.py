@@ -11,10 +11,17 @@
 import os
 import time
 import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import glob
 import argparse
 
 from predbat import PredBat
+from tests.test_auto_config import run_auto_config_tests
+from tests.test_ml_load_fallback import run_ml_load_fallback_tests
 from tests.test_infra import TestHAInterface
 from tests.test_compute_metric import run_compute_metric_tests
 from tests.test_pv90 import run_pv90_tests
@@ -333,6 +340,8 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("auto_config", run_auto_config_tests, "Auto Config regex tests", False),
+        ("ml_load_fallback", run_ml_load_fallback_tests, "ML Load Fallback tests", False),
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),

@@ -547,7 +547,7 @@ def test_battery_scaling_auto_basic(my_predbat):
     day0 = str(today - td(days=3))
     day1 = str(today - td(days=2))
     day2 = str(today - td(days=1))
-    # Values: 9.0, 9.5, 10.0; today adds 9.4 → trimmed mean of [9.0,9.4,9.5,10.0] drops extremes → (9.4+9.5)/2 = 9.45
+    # Values: 9.0, 9.5, 10.0; today adds 9.4 -> trimmed mean of [9.0,9.4,9.5,10.0] drops extremes -> (9.4+9.5)/2 = 9.45
     existing_history = {day0: 9.0, day1: 9.5, day2: 10.0}
     my_predbat.ha_interface.dummy_items[sensor_name] = {"state": "9.5", "history": existing_history}
 
@@ -627,7 +627,7 @@ def test_battery_scaling_auto_clamping(my_predbat):
     my_predbat.battery_scaling_auto = True
     sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
 
-    # Test lower clamp: find_battery_size returns 7.0, ratio 0.7 → clamped to 0.8 → soc_max=8.0
+    # Test lower clamp: find_battery_size returns 7.0, ratio 0.7 -> clamped to 0.8 -> soc_max=8.0
     inv = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
     inv.find_battery_size = lambda _nc=0: 7.0
@@ -642,7 +642,7 @@ def test_battery_scaling_auto_clamping(my_predbat):
     else:
         print("SUCCESS: lower clamp to 0.8 correct")
 
-    # Test upper clamp: find_battery_size returns 11.0, ratio 1.1 → clamped to 1.0 → soc_max=10.0
+    # Test upper clamp: find_battery_size returns 11.0, ratio 1.1 -> clamped to 1.0 -> soc_max=10.0
     inv2 = _make_inv_for_scaling(my_predbat, nominal)
     my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
     inv2.find_battery_size = lambda _nc=0: 11.0
@@ -742,7 +742,7 @@ def test_battery_scaling_auto_skip_today(my_predbat):
         if calls[0] > 0:
             print("ERROR: find_battery_size was called {} time(s) but should have been skipped".format(calls[0]))
             failed = True
-        # stored mean=9.0, nominal=10.0 → scaling=0.9 → soc_max=9.0
+        # stored mean=9.0, nominal=10.0 -> scaling=0.9 -> soc_max=9.0
         expected_scaling = _clamped_auto_scaling(9.0, nominal)
         expected_soc_max = round(nominal * expected_scaling, 3)
         if abs(inv.soc_max - expected_soc_max) > 0.001:
@@ -1062,7 +1062,7 @@ def test_battery_size_tracking_no_nominal(my_predbat):
 
     try:
         inv.battery_size_tracking()
-        # nominal_in_sensor=0 \u2192 use trimmed_mean directly without clamping
+        # nominal_in_sensor=0 -> use trimmed_mean directly without clamping
         expected_soc_max = round(9.2, 3)
         if abs(inv.soc_max - expected_soc_max) > 0.001:
             print("ERROR: soc_max {} does not match expected {:.3f} (no-nominal path)".format(inv.soc_max, expected_soc_max))
@@ -1201,7 +1201,7 @@ def test_update_soc_max_calculated_sensor_all_none(my_predbat):
             # (so the HA entity shows a sensible value rather than 'unknown')
             sensor_state = my_predbat.ha_interface.dummy_items.get(sensor_name, {})
             state_value = sensor_state.get("state") if isinstance(sensor_state, dict) else sensor_state
-            expected_state = nominal  # nominal_capacity > 0 → state = nominal_capacity
+            expected_state = nominal  # nominal_capacity > 0 -> state = nominal_capacity
             if state_value != expected_state:
                 print("ERROR: expected sensor state {}, got '{}'".format(expected_state, state_value))
                 failed = True
@@ -1248,8 +1248,8 @@ def test_update_soc_max_calculated_sensor_mixed_none(my_predbat):
 
     from datetime import timedelta as td
 
-    # 2 valid days + 1 None day; calling with a new valid value → 3 real values total
-    # values: 9.0, 9.5, 9.2 → sorted [9.0, 9.2, 9.5] → trimmed mean = 9.2
+    # 2 valid days + 1 None day; calling with a new valid value -> 3 real values total
+    # values: 9.0, 9.5, 9.2 -> sorted [9.0, 9.2, 9.5] -> trimmed mean = 9.2
     today = my_predbat.now_utc.date()
     existing_history = {
         str(today - td(days=3)): 9.0,
@@ -1264,7 +1264,7 @@ def test_update_soc_max_calculated_sensor_mixed_none(my_predbat):
             print("ERROR: expected a valid mean when real values exist alongside None entries")
             failed = True
         else:
-            # Sorted real values: [9.0, 9.2, 9.5] → trimmed drops 9.0 and 9.5 → mean=9.2
+            # Sorted real values: [9.0, 9.2, 9.5] -> trimmed drops 9.0 and 9.5 -> mean=9.2
             expected_mean = 9.2
             if abs(result - expected_mean) > 0.05:
                 print("ERROR: expected trimmed mean ~{:.2f}, got {:.3f}".format(expected_mean, result))
