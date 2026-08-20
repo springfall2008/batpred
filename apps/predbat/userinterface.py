@@ -875,11 +875,19 @@ class UserInterface:
     async def trigger_callback(self, service_data):
         """
         Trigger a callback for a service via HA Interface
+
+        Returns True if a matching listener was found and run, False otherwise - callers
+        (e.g. HAInterface.call_service()'s loopback branch) use this as the success signal
+        for the same True/success, False/None-failure contract the websocket branch provides,
+        since loopback mode only ever simulates the entity-control services in EVENT_LISTEN_LIST,
+        not arbitrary third-party integration services.
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
                 # self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
+                return True
+        return False
 
     def define_service_list(self):
         self.SERVICE_REGISTER_LIST = [

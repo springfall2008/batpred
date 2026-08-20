@@ -2999,7 +2999,21 @@ class Octopus:
                                 # one is removed in January 2027, so this fallback is a temporary bridge,
                                 # not a permanent branch.
                                 # TODO(#4599): remove this fallback once the old service name is retired upstream.
-                                if not self.call_service_wrapper("octopus_energy/join_octoplus_power_down_session_event", event_code=code, entity_id=entity_id):
+                                # Once the current service name is confirmed to exist it can't stop existing
+                                # again for the life of this run (it only depends on the installed integration
+                                # version), so a confirmed success is cached to skip re-probing it on every
+                                # future join. A falsy result is deliberately *not* cached the same way and
+                                # still re-probes every time - the underlying call can return a false negative
+                                # on an ambiguous timeout (see async_call_service_websocket_command), and an
+                                # occasional harmless extra probe is a much smaller cost than permanently
+                                # mis-classifying someone who genuinely has the current service.
+                                if self.octopus_join_service_power_down is True:
+                                    # Already confirmed to exist - still call it to actually perform the join,
+                                    # just without needing to check the result to decide on a fallback.
+                                    self.call_service_wrapper("octopus_energy/join_octoplus_power_down_session_event", event_code=code, entity_id=entity_id)
+                                elif self.call_service_wrapper("octopus_energy/join_octoplus_power_down_session_event", event_code=code, entity_id=entity_id):
+                                    self.octopus_join_service_power_down = True
+                                else:
                                     self.log("Note: octopus_energy/join_octoplus_power_down_session_event not available, falling back to the deprecated join_octoplus_saving_session_event service")
                                     self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                             if self.get_arg("set_event_notify"):

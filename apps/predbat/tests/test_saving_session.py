@@ -10,6 +10,7 @@
 import yaml
 import json
 from datetime import datetime, timedelta
+from ha import run_async
 
 
 def test_saving_session(my_predbat):
@@ -552,6 +553,7 @@ friendly_name: Octoplus Saving Session Events
         if "octopus_saving_session_join" in my_predbat.args:
             del my_predbat.args["octopus_saving_session_join"]
         my_predbat.octopus_last_joined_try = None
+        my_predbat.octopus_join_service_power_down = None
 
     # Test 1: current service available -> used directly, no fallback
     print("  Test 1: Current service used when available")
@@ -559,9 +561,14 @@ friendly_name: Octoplus Saving Session Events
     ha.service_store_fail = set()
     ha.service_store_enable = True
     ha.service_store = []
-    my_predbat.fetch_octopus_sessions()
-    service_result = ha.get_service_store()
-    ha.service_store_enable = False
+    try:
+        my_predbat.fetch_octopus_sessions()
+        service_result = ha.get_service_store()
+    finally:
+        # TestHAInterface is a shared singleton across the whole test run - an exception mid-test
+        # must not leak service_store_enable/service_store_fail into unrelated later tests.
+        ha.service_store_enable = False
+        ha.service_store_fail = set()
 
     services_called = [svc[0] for svc in service_result]
     if "octopus_energy/join_octoplus_power_down_session_event" not in services_called:
@@ -579,10 +586,12 @@ friendly_name: Octoplus Saving Session Events
     ha.service_store_fail = {"octopus_energy/join_octoplus_power_down_session_event"}
     ha.service_store_enable = True
     ha.service_store = []
-    my_predbat.fetch_octopus_sessions()
-    service_result = ha.get_service_store()
-    ha.service_store_enable = False
-    ha.service_store_fail = set()
+    try:
+        my_predbat.fetch_octopus_sessions()
+        service_result = ha.get_service_store()
+    finally:
+        ha.service_store_enable = False
+        ha.service_store_fail = set()
 
     services_called = [svc[0] for svc in service_result]
     if "octopus_energy/join_octoplus_saving_session_event" not in services_called:
@@ -591,10 +600,87 @@ friendly_name: Octoplus Saving Session Events
     else:
         print("  PASS: Fell back to the deprecated service")
 
+    # Test 3: once the current service is confirmed to work, a later join doesn't re-probe it - it's
+    # called directly and no fallback is attempted even if the mock would otherwise report failure
+    print("  Test 3: A confirmed-working current service is cached, not re-probed")
+    setup_items()
+    ha.service_store_fail = set()
+    ha.service_store_enable = True
+    ha.service_store = []
+    try:
+        my_predbat.fetch_octopus_sessions()
+    finally:
+        ha.service_store_enable = False
+    if my_predbat.octopus_join_service_power_down is not True:
+        print(f"ERROR: Expected octopus_join_service_power_down to be cached True after a successful join, got {my_predbat.octopus_join_service_power_down}")
+        failed = True
+
+    # Re-arm the same available event without resetting the cache, and make the mock report the
+    # current service as failing - if the cache is respected, it's still the only one called.
+    ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+    my_predbat.octopus_last_joined_try = None
+    ha.service_store_fail = {"octopus_energy/join_octoplus_power_down_session_event"}
+    ha.service_store_enable = True
+    ha.service_store = []
+    try:
+        my_predbat.fetch_octopus_sessions()
+        service_result = ha.get_service_store()
+    finally:
+        ha.service_store_enable = False
+        ha.service_store_fail = set()
+
+    services_called = [svc[0] for svc in service_result]
+    if "octopus_energy/join_octoplus_power_down_session_event" not in services_called:
+        print(f"ERROR: Expected the cached current service to still be called to perform the join, got {services_called}")
+        failed = True
+    elif "octopus_energy/join_octoplus_saving_session_event" in services_called:
+        print(f"ERROR: Expected no fallback/re-probe once the current service is cached as working, got {services_called}")
+        failed = True
+    else:
+        print("  PASS: Cached current service used directly, no re-probe or fallback")
+
     if not failed:
         print("PASS: All join service fallback tests passed")
 
     my_predbat.octopus_last_joined_try = None
+    my_predbat.octopus_join_service_power_down = None
+
+    return failed
+
+
+def test_trigger_callback_success_signal(my_predbat):
+    """
+    Test that UserInterface.trigger_callback() itself returns a real True/False success signal,
+    not just the TestHAInterface mock used by test_saving_session_join_service_fallback.
+
+    trigger_callback() is the production code HAInterface.call_service()'s loopback branch (used
+    whenever websocket_active is False - standalone/Predbat.com/Docker installs with no linked HA,
+    or transiently during a reconnect) delegates to. Before this fix it had no return statement at
+    all, so it always returned None regardless of success - meaning octopus.py's
+    `if not self.call_service_wrapper(...)` join-fallback logic would treat every loopback service
+    call as "unavailable" and always fire the deprecated fallback service too, on every single join,
+    indefinitely. This test exercises the real function directly so a regression here can't hide
+    behind the mock the way it did before (issue raised in #4601 review).
+    """
+    print("Test trigger_callback returns a real success signal")
+    failed = False
+
+    result = run_async(my_predbat.trigger_callback({"domain": "switch", "service": "turn_on", "service_data": {}}))
+    if result is not True:
+        print(f"ERROR: Expected True for a matching EVENT_LISTEN_LIST entry, got {result}")
+        failed = True
+    else:
+        print("  PASS: Matching listener returns True")
+
+    result = run_async(my_predbat.trigger_callback({"domain": "octopus_energy", "service": "join_octoplus_power_down_session_event", "service_data": {}}))
+    if result:
+        print(f"ERROR: Expected a falsy result for a service with no matching listener (e.g. a third-party integration service loopback can't simulate), got {result}")
+        failed = True
+    else:
+        print("  PASS: Unmatched service returns a falsy result")
+
+    if not failed:
+        print("PASS: All trigger_callback success signal tests passed")
 
     return failed
 
