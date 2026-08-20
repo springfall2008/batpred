@@ -934,13 +934,6 @@ class Prediction(PredictionBatch):
             # Count load
             load_kwh += load_yesterday
 
-            # discharge freeze, reset charge rate by default
-            if set_export_freeze:
-                # Freeze mode
-                is_anti_clipping_export = export_window_active and "clipping_target_soc_pct" in export_window[export_window_n]
-                if (export_window_active) and not is_anti_clipping_export and export_limit_now < 100.0 and (set_export_freeze and (export_limit_now == 99.0 or set_export_freeze_only)):
-                    charge_rate_now = battery_rate_min  # 0
-
             # Set discharge during charge?
             if charge_window_active:
                 if not set_discharge_during_charge:
@@ -1138,6 +1131,36 @@ class Prediction(PredictionBatch):
                         pv_in_period = pv_compare / step * charge_time_remains
                         potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
                         metric_keep += max(potential_import * import_rate, 0)
+            elif set_export_freeze and export_window_active and not is_anti_clipping and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
+                # Freeze - the battery is not actively discharged to help export, but genuine PV
+                # surplus beyond what load+export_limit can absorb still charges it on some
+                # inverters rather than being clipped (#4207) - e.g. FoxESS "Feed-in First"
+                # prioritises load, then export, then the battery. Only the genuine overflow is
+                # charged (not the full charge rate), so freeze still holds SoC flat whenever the
+                # export limit alone can absorb all the surplus - matching the equivalent recapture
+                # logic in the force export branch above, just without any active discharge.
+                battery_draw = 0
+                pv_ac = pv_now * inverter_loss_ac
+                pv_dc = 0
+
+                diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
+                if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export:
+                    over_limit = abs(diff) - export_limit
+                    if inverter_hybrid:
+                        charge_rate_now_curve_dc = (
+                            get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
+                            * battery_rate_max_scaling
+                        )
+                        charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
+                        battery_draw = max(-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
+                    else:
+                        battery_draw = max(-over_limit * inverter_loss, -battery_to_max, -charge_rate_now_curve_step)
+
+                    if battery_draw < 0:
+                        pv_dc = min(abs(battery_draw), pv_now)
+                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac
+
+                battery_state = "fz+" if battery_draw < 0 else "fz~"
             else:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
@@ -1160,10 +1183,6 @@ class Prediction(PredictionBatch):
                     # Battery draw is only subject to inverter limit for the AC part
                     if inverter_hybrid:
                         charge_rate_now_dc = battery_rate_max_charge_dc
-                        # Freeze mode
-                        is_anti_clipping_export = export_window_active and "clipping_target_soc_pct" in export_window[export_window_n]
-                        if set_export_freeze and export_window_active and not is_anti_clipping_export and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
-                            charge_rate_now_dc = battery_rate_min  # 0
 
                         charge_rate_now_curve_dc = (
                             get_charge_rate_curve_cached(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
