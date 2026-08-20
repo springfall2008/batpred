@@ -1923,20 +1923,29 @@ def test_teslemetry_build_tariff_boost_resolves_at_the_real_tesla_day_index():
     real_dow = api.base.now.weekday()  # Tesla's actual day index for "today" - independent of _tesla_dow
     minute = 17 * 60 + 30  # inside the window
 
-    def resolve_tier(dow, minute):
-        """Mimic how a real Powerwall would resolve which tier applies at (dow, minute)."""
+    def resolve_tiers(dow, minute):
+        """Mimic how a real Powerwall would resolve which tier(s) apply at (dow, minute).
+
+        Collects every match rather than returning the first: a real device faced with overlapping
+        periods would be ambiguous too, and returning only the first match here would let a future
+        partitioning regression (overlapping tiers) pass silently depending on dict insertion order.
+        """
+        matches = []
         for tier, block in periods.items():
             for period in block["periods"]:
                 if period["fromDayOfWeek"] <= dow <= period["toDayOfWeek"]:
                     start = period["fromHour"] * 60 + period["fromMinute"]
                     end = (period["toHour"] * 60 + period["toMinute"]) or 1440
                     if start <= minute < end:
-                        return tier
-        return None
+                        matches.append(tier)
+        return matches
 
-    tier = resolve_tier(real_dow, minute)
-    assert tier == "ON_PEAK", "a real Powerwall resolving fromDayOfWeek={} at minute={} would see tier={}, not ON_PEAK".format(real_dow, minute, tier)
-    assert sell[tier] == sell["ON_PEAK"]
+    matches = resolve_tiers(real_dow, minute)
+    assert matches == ["ON_PEAK"], 'a real Powerwall resolving fromDayOfWeek={} at minute={} would see tier(s)={}, expected exactly ["ON_PEAK"]'.format(real_dow, minute, matches)
+    # Not just present - genuinely the boosted (highest) price, so this also validates magnitude,
+    # not merely that day-indexing happened to land on a tier named ON_PEAK.
+    other_prices = [price for tier, price in sell.items() if tier != "ON_PEAK"]
+    assert sell["ON_PEAK"] > max(other_prices)
 
 
 def test_teslemetry_boost_price_floor_wins_on_low_rates():
