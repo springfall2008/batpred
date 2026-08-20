@@ -462,4 +462,25 @@ def test_annual_config(my_predbat):
         print("  ERROR: non-secret values should survive scrubbing")
         failed = True
 
+    print("Test: fast_mode defaults to False")
+    if validate_config(base_config())["fast_mode"] is not False:
+        print("  ERROR: fast_mode should default to False, got {!r}".format(validate_config(base_config())["fast_mode"]))
+        failed = True
+
+    print("Test: fast_mode accepts a real True")
+    config = base_config()
+    config["annual"]["fast_mode"] = True
+    if validate_config(config)["fast_mode"] is not True:
+        print("  ERROR: fast_mode True should survive validation")
+        failed = True
+
+    print("Test: an explicit 'false' string does not become truthy")
+    # Same trap as "debug"/"hybrid": bool("false") is True, so a YAML value quoted by
+    # hand would silently enable fast mode for someone who explicitly turned it off.
+    config = base_config()
+    config["annual"]["fast_mode"] = "false"
+    if validate_config(config)["fast_mode"] is not False:
+        print("  ERROR: fast_mode 'false' must coerce to False, not a truthy string")
+        failed = True
+
     return failed
