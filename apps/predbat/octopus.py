@@ -305,6 +305,9 @@ octoplus_saving_session_query = """query {{
 			startAt
 			endAt
       devEvent
+      targetRegion {{
+        regionId
+      }}
 		}}
 		account(accountNumber: "{account_id}") {{
 			hasJoinedCampaign
@@ -314,6 +317,9 @@ octoplus_saving_session_query = """query {{
 				endAt
         rewardGivenInOctoPoints
 			}}
+      signedUpMeterPoint {{
+        regionId
+      }}
 		}}
 	}}
 }}"""
@@ -1000,6 +1006,13 @@ class OctopusAPI(ComponentBase):
             self.log("OctopusAPI: User has not joined Octopus saving sessions campaign")
             available_events = []
 
+        # Some saving sessions are only valid for specific NESO grid regions - Octopus still lists
+        # them as available to every account regardless of region, so joining one the account isn't
+        # eligible for is rejected by the API (matches BottleCapDave/HomeAssistant-OctopusEnergy#1737).
+        # An empty/missing targetRegion means the event is nationwide, not region-restricted.
+        account_region_id = (self.saving_sessions.get("account", {}) or {}).get("signedUpMeterPoint", {}) or {}
+        account_region_id = account_region_id.get("regionId", None)
+
         for event in joined_events:
             event_id = event.get("eventId", None)
             if event_id:
@@ -1016,6 +1029,10 @@ class OctopusAPI(ComponentBase):
             if event_id:
                 event_reward[event_id] = reward
                 event_code[event_id] = code
+            target_regions = [region.get("regionId") for region in (event.get("targetRegion", None) or []) if region]
+            if target_regions and account_region_id not in target_regions:
+                self.log("OctopusAPI: Skipping saving event code {} - not eligible for account region {} (event targets regions {})".format(code, account_region_id, target_regions))
+                continue
             if start and end and event_id not in joined_ids:
                 endDataTime = parse_date_time(end)
                 if endDataTime > self.now_utc_exact:

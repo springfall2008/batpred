@@ -330,6 +330,7 @@ mypy
 nattribute
 ncalls
 nearr
+NESO
 newtok
 njpwerner
 nobat
