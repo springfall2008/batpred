@@ -1518,6 +1518,20 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
         self.set_arg_auto("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
         self.set_arg_auto("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
+        # Own the sign flags rather than leaving them to whatever else configured this
+        # install. base.args is shared and NOT namespaced per inverter type, so a component
+        # that legitimately inverts its own grid sensor - teslemetry sets grid_power_invert
+        # True, fox does the same - leaves that key set for every inverter index, and a
+        # Sunsynk inverter that never claims it inherits the flip. The published sensor is
+        # then correct and inverter.py negates it again, so an export reads as an import and
+        # the power-flow arrow points the wrong way.
+        #
+        # All three are False because publish_data already emits Predbat's conventions:
+        # grid negative on import (SUNSYNK_TELEMETRY_NEGATE), battery positive on discharge
+        # and load positive, each confirmed live. Set explicitly, not left to the default,
+        # so the value cannot depend on which components happen to share the install.
+        for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+            self.set_arg_auto(flag, [False for _ in devices])
         self.set_arg_auto("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
         self.set_arg_auto("battery_temperature", [self._sensor_name(sn, "temperature") for sn in devices])
         if not self.automatic_ignore_pv:
