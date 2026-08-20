@@ -582,8 +582,16 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if charge_soc > current_soc and charge_soc > reserve:
                 return {"behaviour": "charge", "work_mode": DEYE_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
             if charge_soc == reserve:
-                # Zero power IS the freeze: the slot is enabled for grid charge but given no
-                # power, so the battery neither charges nor discharges and simply holds.
+                # A freeze charge holds via the RESERVE, not this rate: Predbat sets the
+                # reserve to soc_percent + 1 for the duration (execute.py) and the slot SoC
+                # follows it, which is what stops the battery discharging below where it
+                # started. Solar charging above that is allowed and expected - a freeze
+                # charge only bars discharge.
+                #
+                # The zero rate is not what makes this a hold. CONFIRMED live on Sunsynk,
+                # the same registers behind a different cloud, that a zero slot rate does
+                # NOT stop the battery charging. What it stops is the battery being SOLD to
+                # the grid - see _freeze_export_state.
                 return {"behaviour": "freeze_charge", "work_mode": DEYE_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": 0}
             # The battery is already at or above the requested target, so grid charge stays
             # off — the charge is simply not triggered. The slot still carries Predbat's
@@ -658,11 +666,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     def _self_use_slot(self, start_time, reserve, self_use_power):
         """Build a self-use TOU slot holding at the reserve SoC.
 
-        self_use_power must NOT be zero. Zero power is how a slot expresses a freeze — the
-        battery neither charges nor discharges — so a zero-power self-use slot would stop
-        the battery serving the house for the whole interval and push the load onto the
-        grid. Self-use slots cover every interval Predbat is not actively charging or
-        exporting, so that would be the battery's default state.
+        self_use_power must NOT be zero. The rate is the battery's power limit for the
+        slot, so a zero-rate self-use slot risks stopping the battery serving the house for
+        the whole interval and pushing the load onto the grid. Self-use slots cover every
+        interval Predbat is not actively charging or exporting, so that would be the
+        battery's default state and not somewhere to take the risk.
+
+        Precisely what a zero rate does is only half known. CONFIRMED live on Sunsynk (the
+        same registers behind a different cloud, 2026-08-20) that it does NOT stop CHARGING,
+        and that it DOES stop the battery being sold to the grid under Selling First - which
+        is what _freeze_export_state relies on. Its effect on discharge to the HOUSE was
+        never measured. This guard stays because that is the untested direction.
         """
         return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: False, TOU_FIELD["sell"]: False}
 
