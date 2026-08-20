@@ -1308,10 +1308,15 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     else:
         my_predbat.args["discharge_freeze_service"] = None
     my_predbat.args["device_id"] = "DID0"
-    power = int(inv.battery_rate_max_discharge * MINUTE_WATT)
+    my_predbat.args["discharge_rate"] = "number.discharge_rate"
+    if "discharge_rate_percent" in my_predbat.args:
+        del my_predbat.args["discharge_rate_percent"]
 
     dummy_items["select.discharge_start_time"] = discharge_start_time
     dummy_items["select.discharge_end_time"] = discharge_end_time
+    dummy_items["number.discharge_rate"] = 1802
+
+    power = 1802
 
     inv.adjust_export_immediate(soc, freeze=freeze)
     result = ha.get_service_store()

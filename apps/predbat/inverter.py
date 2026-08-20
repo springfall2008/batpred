@@ -1469,7 +1469,7 @@ class Inverter:
 
         if not quiet:
             self.base.log(
-                "Inverter {} SoC: {}kW {}%, current charge rate {}W, current discharge rate {}W, current battery power {}W, current battery voltage {}V, grid power {}W, load power {}W, PV Power {}W".format(
+                "Inverter {} SoC: {}kWh {}%, current charge rate {}W, current discharge rate {}W, current battery power {}W, current battery voltage {}V, grid power {}W, load power {}W, PV Power {}W".format(
                     self.id,
                     dp2(self.soc_kw),
                     self.soc_percent,
@@ -2858,10 +2858,14 @@ class Inverter:
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}
         if target_soc < 100:
+            # Mirrors adjust_charge_immediate()'s charge_start_service payload just above - the
+            # actual (possibly low-power-scaled) rate already set via adjust_discharge_rate(), not
+            # always the inverter's maximum, which produced a full-power discharge_start_service
+            # call even during a planned low-power export (batpred#4619).
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
                 "target_soc": int(target_soc),
-                "power": int(self.battery_rate_max_discharge * MINUTE_WATT),
+                "power": int(self.get_current_discharge_rate()),
             }
 
             # Stop charge
