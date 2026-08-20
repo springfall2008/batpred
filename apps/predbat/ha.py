@@ -529,7 +529,7 @@ class HAInterface(ComponentBase):
         if return_response:
             return result_holder.get("response")
 
-        return None
+        return True
 
     async def socketLoop(self):
         """
