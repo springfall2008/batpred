@@ -354,6 +354,7 @@ def test_find_charge_window(my_predbat):
     my_predbat.plan_interval_minutes = old_plan_interval
 
     failed |= test_calc_dawn(my_predbat)
+    failed |= test_calc_pv_light_dark(my_predbat)
     return failed
 
 
@@ -488,5 +489,72 @@ def test_calc_dawn(my_predbat):
 
     my_predbat.pv_forecast_minute = old_pv_forecast_minute
     my_predbat.plan_interval_minutes = old_plan_interval
+    my_predbat.set_charge_low_power = old_low_power
+    return failed
+
+
+def test_calc_pv_light_dark(my_predbat):
+    """
+    Tests for calc_pv_light_dark: decides whether calc_dawn is worth computing at all.
+
+    Only combine_charge_slots can merge a charge window across dawn, so that's what gates the split -
+    not set_charge_low_power. With combine_charge_slots off, find_charge_window already forces a break
+    every charge_slot_split (=plan_interval_minutes) minutes regardless, so the dawn boundary could
+    never be reached and computing it would be a no-op:
+
+      - combine_charge_slots=True, set_charge_low_power=False -> dawn split still runs (the new case -
+        the optimizer can pick the dark portion of a combined window on its own merits)
+      - combine_charge_slots=True, set_charge_low_power=True -> dawn split runs (unchanged behaviour)
+      - combine_charge_slots=False, regardless of set_charge_low_power -> {} (moot, skipped)
+    """
+    failed = 0
+    old_pv_forecast_minute = my_predbat.pv_forecast_minute
+    old_plan_interval = my_predbat.plan_interval_minutes
+    old_combine_charge = my_predbat.combine_charge_slots
+    old_low_power = my_predbat.set_charge_low_power
+
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.pv_forecast_minute = {}
+    for m in range(0, 30, 5):
+        my_predbat.pv_forecast_minute[m] = 0.0  # dark
+    for m in range(30, 60, 5):
+        my_predbat.pv_forecast_minute[m] = 1.0  # light, crosses the threshold
+
+    print("Test calc_pv_light_dark: combine_charge_slots=True, set_charge_low_power=False -> dawn split still runs")
+    my_predbat.combine_charge_slots = True
+    my_predbat.set_charge_low_power = False
+    result = my_predbat.calc_pv_light_dark()
+    if result != my_predbat.calc_dawn():
+        print("ERROR: calc_pv_light_dark: expected calc_dawn's result when combine_charge_slots is True, got {}".format(result))
+        failed = 1
+    if result.get(0) != 0 or result.get(30) != 1:
+        print("ERROR: calc_pv_light_dark: expected a dark->light split at minute 30, got {}".format({m: result.get(m) for m in (0, 30)}))
+        failed = 1
+
+    print("Test calc_pv_light_dark: combine_charge_slots=True, set_charge_low_power=True -> dawn split runs")
+    my_predbat.set_charge_low_power = True
+    result = my_predbat.calc_pv_light_dark()
+    if result != my_predbat.calc_dawn():
+        print("ERROR: calc_pv_light_dark: expected calc_dawn's result when combine_charge_slots is True, got {}".format(result))
+        failed = 1
+
+    print("Test calc_pv_light_dark: combine_charge_slots=False, set_charge_low_power=True -> {} (moot, skipped)")
+    my_predbat.combine_charge_slots = False
+    my_predbat.set_charge_low_power = True
+    result = my_predbat.calc_pv_light_dark()
+    if result != {}:
+        print("ERROR: calc_pv_light_dark: expected {{}} when combine_charge_slots is False, got {}".format(result))
+        failed = 1
+
+    print("Test calc_pv_light_dark: combine_charge_slots=False, set_charge_low_power=False -> {}")
+    my_predbat.set_charge_low_power = False
+    result = my_predbat.calc_pv_light_dark()
+    if result != {}:
+        print("ERROR: calc_pv_light_dark: expected {{}} when combine_charge_slots is False, got {}".format(result))
+        failed = 1
+
+    my_predbat.pv_forecast_minute = old_pv_forecast_minute
+    my_predbat.plan_interval_minutes = old_plan_interval
+    my_predbat.combine_charge_slots = old_combine_charge
     my_predbat.set_charge_low_power = old_low_power
     return failed

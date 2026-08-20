@@ -11,6 +11,7 @@
 
 import asyncio
 import builtins
+import calendar
 import copy
 import json
 import re
@@ -1180,6 +1181,69 @@ def test_web_annual_form(my_predbat):
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(saved_args)
+
+    return failed
+
+
+def test_web_annual_fast_mode(my_predbat):
+    """The fast mode checkbox renders, round-trips, and interpolated months are marked."""
+    failed = False
+    print("**** Testing annual web tab fast mode ****")
+    page = make_page(my_predbat)
+
+    print("Test: the Advanced block offers a fast mode checkbox")
+    form = page.render_form(dict(DEFAULT_CONFIG))
+    if 'name="fast_mode"' not in form:
+        print("  ERROR: the form should contain a fast_mode checkbox")
+        failed = True
+
+    print("Test: a ticked box round-trips into the config")
+    postdata = valid_postdata()
+    postdata["fast_mode"] = "on"
+    config = page.config_from_post(postdata)
+    if config.get("fast_mode") is not True:
+        print("  ERROR: a ticked fast_mode box should set fast_mode True, got {!r}".format(config.get("fast_mode")))
+        failed = True
+
+    print("Test: an absent box means off")
+    # A checkbox absent from postdata means unchecked - there is no "off" value to read.
+    config = page.config_from_post(valid_postdata())
+    if config.get("fast_mode") is not False:
+        print("  ERROR: an absent fast_mode box should set fast_mode False, got {!r}".format(config.get("fast_mode")))
+        failed = True
+
+    print("Test: an interpolated month renders as interpolated, not unavailable")
+    results = sample_run_results()
+    first = results["months"][0]
+    results["months"][0] = {
+        "month": first["month"],
+        "status": "interpolated",
+        "days": first["days"],
+        "standing_charge_p": first["standing_charge_p"],
+        "scenarios": first["scenarios"],
+        "interpolated_from": {"anchors": [3, 6, 9, 12], "basis": "solar_affine"},
+    }
+    table = page._render_month_table(results)
+    name = calendar.month_abbr[first["month"]]
+    cell = table.split(name, 1)[1][:400] if name in table else ""
+    if "unavailable" in cell:
+        print("  ERROR: an interpolated month must not render as unavailable")
+        failed = True
+    if "interpolated" not in table.lower():
+        print("  ERROR: an interpolated month should be labelled as such")
+        failed = True
+
+    print("Test: an interpolated month is charted rather than dropped")
+    chart = page._render_chart(results)
+    if name not in chart:
+        print("  ERROR: an interpolated month should appear in the chart categories")
+        failed = True
+
+    print("Test: the run details table reports fast mode")
+    details = page._render_run_details({"config": {"fast_mode": True, "samples_per_month": 2}, "annual": {"fast_mode": True, "months_interpolated": 8}})
+    if "Fast mode" not in details:
+        print("  ERROR: 'what this run used' should report fast mode")
+        failed = True
 
     return failed
 

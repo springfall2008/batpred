@@ -95,7 +95,7 @@ from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
-from tests.test_web_functions import run_web_functions_tests
+from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
@@ -103,6 +103,7 @@ from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution
 from tests.test_web_annual import (
     test_web_annual,
     test_web_annual_error_isolation,
+    test_web_annual_fast_mode,
     test_web_annual_form,
     test_web_annual_pages,
     test_web_annual_plan_route,
@@ -237,10 +238,12 @@ from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
 from tests.test_annual_sampling import test_annual_sampling
+from tests.test_annual_interpolate import test_annual_fast_mode_assembly, test_annual_interpolate
+from tests.test_annual_curve_reference import test_annual_curve_reference
 from tests.test_annual_scenarios import test_annual_scenarios
 from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
-from tests.test_annual_cli import test_annual_cli, test_annual_cli_machine, test_annual_cli_machine_end_to_end
+from tests.test_annual_cli import test_annual_cli, test_annual_cli_fast_flag, test_annual_cli_machine, test_annual_cli_machine_end_to_end
 from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
@@ -414,8 +417,10 @@ def main():
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
+        ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
         ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),
+        ("web_annual_fast_mode", test_web_annual_fast_mode, "Annual web tab fast mode tests", False),
         ("web_annual_routes", test_web_annual_routes, "Annual web tab route tests", False),
         ("web_annual_results", test_web_annual_results, "Annual web tab results tests", False),
         ("web_annual_terminal_state", test_web_annual_terminal_state, "Annual web tab terminal-state claim/no-redirect-loop tests", False),
@@ -578,6 +583,10 @@ def main():
         ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
         ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
         ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
+        ("annual_cli_fast_flag", test_annual_cli_fast_flag, "Annual CLI --fast flag tests", False),
+        ("annual_interpolate", test_annual_interpolate, "Annual fast-mode interpolation curve tests", False),
+        ("annual_fast_mode_assembly", test_annual_fast_mode_assembly, "Annual fast-mode assembly tests", False),
+        ("annual_curve_reference", test_annual_curve_reference, "Annual fast-mode curve reference scoring", False),
         ("annual_cli_machine", test_annual_cli_machine, "Annual CLI machine mode tests", False),
         ("annual_cli_machine_end_to_end", test_annual_cli_machine_end_to_end, "Annual CLI machine mode end-to-end tests", False),
         ("annual_job", test_annual_job, "Annual subprocess job control tests", False),

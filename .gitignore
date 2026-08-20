@@ -87,6 +87,8 @@ plan_*.html
 
 # Generated PNG files
 *.png
+!apps/predbat/bat_logo_light.png
+!apps/predbat/bat_logo_dark.png
 
 # Build artifacts
 a.out

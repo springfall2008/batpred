@@ -1190,9 +1190,11 @@ Global setting, defaults to `true`.
 
 Controls the way Predbat models your inverter, this does not change the way it is controlled.
 
-During a force export period if the generated solar exceeds the inverter limit or the export limit then the inverter will scale back the export rate.
-If this setting is `true` then the inverter is able to charge the battery from excess PV while still in Force Export mode.
+During a force export **or freeze export** period, if the generated solar exceeds the inverter limit or the export limit then the inverter will scale back the export rate.
+If this setting is `true` then the inverter is able to charge the battery from excess PV while still in Force Export or Freeze Export mode.
 If this setting is `false` then the inverter will not charge the battery and the excess PV will be lost.
+
+For Freeze Export specifically, this means the battery still holds its SoC flat while the export limit alone can absorb all the surplus solar - it only starts charging once solar genuinely exceeds what load and the export limit together can use, matching how many hybrid inverters actually behave (e.g. FoxESS's "Feed-in First" mode prioritises house load, then export, then the battery).
 
 ## Controlling the Inverter
 

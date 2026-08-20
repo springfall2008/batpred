@@ -364,6 +364,14 @@ class AnnualTariff:
         last sampled day of the month complete its 48 hour plan.
         """
         key = (year, month)
+        if key in self.available:
+            # Rates for a past month cannot change mid-run, and callers ask for the same
+            # month more than once: run()'s loop fetches month N and then N+1 for the 48
+            # hour plan spill, so every month but the first is requested twice even in a
+            # full run, and fast mode's tariff check asks for the anchors ahead of that.
+            # Without this, each repeat re-reads the cached rows from storage and rebuilds
+            # the whole stamped-rate structure for nothing.
+            return True
         if self.import_url or self.export_url:
             days_in_month = calendar.monthrange(year, month)[1]
             start_utc = pytz.utc.localize(datetime(year, month, 1))

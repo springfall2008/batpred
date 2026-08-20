@@ -211,15 +211,22 @@ SUNSYNK_ENERGY = {
 # battery -> house with PV at 0 W while the API reported power +484, so positive already
 # means discharging, matching DEYE and Predbat. No flip.
 #
-# grid_power's FIELD is confirmed - `pac` read 0 W at the same moment the app did, while
-# grid vip[0].power read -418 W and is evidently something else (a CT or per-phase sense,
-# not whole-house flow). Its SIGN is aligned with DEYE on the Deye-parity rule rather than
-# on direct evidence: every sample so far was at night with the grid idle, so 0 negates to
-# 0 and nothing distinguished the two. DEYE reports grid positive when importing and
-# negates to reach Predbat's negative-for-import convention, and Sunsynk is rebadged DEYE
-# hardware, so it is assumed to match. VERIFY@SPIKE - one daytime sample with real import
-# or export confirms or refutes it; if grid power comes back negative while importing,
-# remove "grid_power" here.
+# grid_power CONFIRMED live (inverter 2405116013, 2026-08-20 11:25) and negated, which
+# settles the VERIFY@SPIKE this line used to carry: Sunsynk reports `pac` NEGATIVE when
+# exporting, so it must be flipped to reach Predbat's negative-for-import convention. The
+# DEYE-parity guess was right after all.
+#
+# The sample that settles it, and the trap to avoid repeating: pac -1939 W at a moment when
+# PV 2708 W served a 117 W load and charged the battery at 544 W - a 2047 W surplus, whose
+# magnitude matches - with etodayFrom (import) sitting at 0.0 kWh for the whole day against
+# etodayTo (export) at 2.8 kWh and climbing. Only a sample with real power flowing can show
+# this. Two earlier readings taken near the balance point (pac +19 W and +20 W against a
+# computed surplus of ~0 W) look like the opposite conclusion and are pure noise; do not
+# re-decide this from a sample under a few hundred watts.
+#
+# `pac` is also the right FIELD: it read 0 W at the same moment the app did, while grid
+# vip[0].power read -418 W and is evidently something else (a CT or per-phase sense, not
+# whole-house flow).
 SUNSYNK_TELEMETRY_NEGATE = ("grid_power",)
 
 # Fields used to derive ratings rather than published directly.

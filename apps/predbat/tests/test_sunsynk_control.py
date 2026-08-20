@@ -26,10 +26,19 @@ from tests.test_sunsynk_api import MockSunsynk
 from tests.test_infra import run_async as run_async_local
 
 
-def _schedule(reserve=10, charge=None, export=None):
-    """Build a schedule dict in the shape the control entities produce."""
-    idle = {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"}
-    return {"reserve": reserve, "charge": charge or dict(idle), "export": export or dict(idle)}
+def _schedule(reserve=10, charge=None, export=None, charge_power=3000, export_power=3000):
+    """Build a schedule dict in the shape the control entities produce.
+
+    A DISABLED window still carries a power, because the real control entities do:
+    adjust_charge_rate/adjust_discharge_rate write Predbat's rates every cycle whether or
+    not a window is enabled. That matters because a zero charge rate against a non-zero
+    export rate is precisely how Predbat signals Freeze Export (see derive_control_state),
+    so a fixture that left both at zero would silently be testing a freeze instead of the
+    demand state it reads as.
+    """
+    idle_charge = {"enable": False, "soc": 0, "power": charge_power, "start": "00:00:00", "end": "00:00:00"}
+    idle_export = {"enable": False, "soc": 0, "power": export_power, "start": "00:00:00", "end": "00:00:00"}
+    return {"reserve": reserve, "charge": charge or idle_charge, "export": export or idle_export}
 
 
 def test_derive_control_state_table():
@@ -42,7 +51,16 @@ def test_derive_control_state_table():
         ("freeze_charge", _schedule(reserve=50, charge={"enable": True, "soc": 50, "power": 3000}), 50, ("freeze_charge", SUNSYNK_WORKMODE["zero_export_ct"], True, False, 50)),
         ("hold_charge", _schedule(reserve=50, charge={"enable": True, "soc": 40, "power": 3000}), 50, ("hold_charge", SUNSYNK_WORKMODE["zero_export_ct"], False, False, 50)),
         ("export", _schedule(reserve=10, export={"enable": True, "soc": 20, "power": 3000}), 80, ("export", SUNSYNK_WORKMODE["selling_first"], False, True, 20)),
-        ("freeze_export", _schedule(reserve=10, export={"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000}), 80, ("freeze_export", SUNSYNK_WORKMODE["selling_first"], False, True, FREEZE_EXPORT_SOC)),
+        # A freeze export caps at the RESERVE, not the 99 sentinel: the battery needs that
+        # room to cover the house, and the zero sell rate is what keeps it from being pushed
+        # to the grid instead. Confirmed live - see _freeze_export_state.
+        ("freeze_export", _schedule(reserve=10, export={"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000}), 80, ("freeze_export", SUNSYNK_WORKMODE["selling_first"], False, True, 10)),
+        # The signal Predbat actually sends: both windows off, charge rate zeroed, export
+        # rate left alone. Without this the freeze never reached the inverter at all.
+        ("freeze_export_by_rate", _schedule(reserve=10, charge_power=0), 80, ("freeze_export", SUNSYNK_WORKMODE["selling_first"], False, True, 10)),
+        # Both rates zero is an absence of a plan, not a freeze - do not strand an
+        # unconfigured system holding its battery all day.
+        ("no_rates_is_not_a_freeze", _schedule(reserve=15, charge_power=0, export_power=0), 60, ("idle", SUNSYNK_WORKMODE["zero_export_ct"], False, False, 15)),
         ("idle", _schedule(reserve=15), 60, ("idle", SUNSYNK_WORKMODE["zero_export_ct"], False, False, 15)),
     ]
     for name, schedule, soc, expect in cases:
@@ -937,6 +955,92 @@ def test_freeze_states_are_expressed_as_zero_power():
     assert not failed, "test_freeze_states_are_expressed_as_zero_power"
 
 
+def test_freeze_export_reaches_the_inverter_from_the_charge_rate():
+    """A Freeze Export written the way execute.py writes it must reach the inverter.
+
+    This is the regression that mattered. Predbat expresses Freeze Export by turning the
+    forced-export window OFF and calling adjust_charge_rate(0), because SunsynkCloud
+    declares has_timed_pause False. It never writes 99 to the export SoC entity, so the
+    export-SoC route into the freeze state could not fire, and charge_rate maps to a
+    per-WINDOW field that a disabled window never reads. The result was a settings object
+    byte-identical to plain Demand, leaving the inverter in self-use charging the battery
+    from the very solar the freeze existed to export - confirmed live 2026-08-20, a 99%
+    battery still taking 540 W of PV.
+
+    So the fixture is the entity state after a freeze export, not a synthetic one, and the
+    expected payload is the one confirmed live: m0 p0 c<reserve> s1.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    s.device_settings["INV1"] = {"sn": "INV1", "batteryLowCap": "20"}
+    # Both windows off, charge rate zeroed, export rate untouched.
+    sched = _schedule(reserve=20, charge_power=0, export_power=1229)
+    payload = s.build_settings_payload("INV1", sched, current_soc=95, now_minutes=12 * 60)
+
+    if payload.get(SUNSYNK_WORKMODE_FIELD) != SUNSYNK_WORKMODE["selling_first"]:
+        print(f"ERROR: freeze export left the work mode at {payload.get(SUNSYNK_WORKMODE_FIELD)!r}, expected selling_first - Limited to Home charges the battery from the surplus")
+        failed = True
+    for n in range(1, TOU_SLOT_COUNT + 1):
+        power = int(payload[TOU_FIELD["power"].format(n=n)])
+        soc = int(payload[TOU_FIELD["soc"].format(n=n)])
+        sell = payload[TOU_FIELD["sell"].format(n=n)]
+        grid_charge = payload[TOU_FIELD["grid_charge"].format(n=n)]
+        # Every slot, not just the one covering now: Predbat never says when a freeze ends,
+        # so a self-use filler left in the programme would defeat it the moment the clock
+        # reached it.
+        #
+        # The rate is the safety property. At 8000 W with a cap below the SoC the battery
+        # drained to the grid at 4.7 kW; at 0 W it held. Never relax this to the rating.
+        if power != 0:
+            print(f"ERROR: freeze export slot {n} carries {power}W, expected 0 - a non-zero sell rate exports the battery")
+            failed = True
+        # The cap is the reserve, which is the room the battery needs to cover the house.
+        if soc != 20:
+            print(f"ERROR: freeze export slot {n} caps at {soc}%, expected the 20% reserve")
+            failed = True
+        if sell != "1":
+            print(f"ERROR: freeze export slot {n} sell flag {sell!r}, expected '1'")
+            failed = True
+        if grid_charge != "false":
+            print(f"ERROR: freeze export slot {n} has grid charge {grid_charge!r}, a freeze must not charge")
+            failed = True
+    assert not failed, "test_freeze_export_reaches_the_inverter_from_the_charge_rate"
+
+
+def test_freeze_export_caps_at_the_reserve_never_the_sentinel():
+    """The freeze cap is the reserve, and never FREEZE_EXPORT_SOC whatever the SoC.
+
+    99 is Predbat's MARKER for "this export window is a freeze" (export_limits_best of 99),
+    not a battery level. Writing it through to cap{n} told a Selling First inverter to drive
+    the battery to 99% - charging it from the solar the freeze exists to export, or selling
+    down to 99% from above. That single field is the whole of the original bug; the rest of
+    the mapping was right.
+    """
+    failed = False
+    s = MockSunsynk()
+    s.device_rated_power["INV1"] = 8000.0
+    for current_soc in (30, 55, 80, 95, 99, 100):
+        for reserve in (5, 10, 20):
+            for sched in (_schedule(reserve=reserve, export={"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000}), _schedule(reserve=reserve, charge_power=0)):
+                state = s.derive_control_state(sched, current_soc)
+                if state["behaviour"] != "freeze_export":
+                    print(f"ERROR: expected a freeze export at {current_soc}%, got {state['behaviour']}")
+                    failed = True
+                    continue
+                if state["slot_soc"] != reserve:
+                    print(f"ERROR: freeze export with reserve {reserve} capped at {state['slot_soc']}%, expected {reserve}")
+                    failed = True
+                if state["slot_soc"] == FREEZE_EXPORT_SOC and reserve != FREEZE_EXPORT_SOC:
+                    print(f"ERROR: freeze export wrote the {FREEZE_EXPORT_SOC} sentinel as a battery level")
+                    failed = True
+                # The zero rate is what makes a cap below the SoC safe.
+                if state["power"] != 0:
+                    print(f"ERROR: freeze export carries rate {state['power']}, expected 0")
+                    failed = True
+    assert not failed, "test_freeze_export_caps_at_the_reserve_never_the_sentinel"
+
+
 def test_hold_charge_keeps_predbat_rate_without_charging():
     """A charge target at or below current SoC must not trigger a charge, but keeps the rate.
 
@@ -1095,6 +1199,8 @@ def run_sunsynk_control_tests(my_predbat):
         ("tou_slots_shape", test_build_tou_slots_shape),
         ("self_use_never_zero", test_self_use_slots_are_never_zero_power),
         ("freeze_zero_power", test_freeze_states_are_expressed_as_zero_power),
+        ("freeze_export_reaches_inverter", test_freeze_export_reaches_the_inverter_from_the_charge_rate),
+        ("freeze_export_cap", test_freeze_export_caps_at_the_reserve_never_the_sentinel),
         ("hold_charge_rate", test_hold_charge_keeps_predbat_rate_without_charging),
         ("tou_slots_seconds", test_build_tou_slots_seconds_are_dropped),
         ("tou_slots_idle", test_build_tou_slots_idle_is_still_six_distinct),

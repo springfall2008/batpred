@@ -279,4 +279,67 @@ def run_optimise_solar_tests(my_predbat):
         threshold=100.0,
     )
 
+    failed |= run_freeze_export_recapture_tests(my_predbat)
+
+    return failed
+
+
+def test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export, expect_charge):
+    """
+    Freeze Export (target 99.0) with PV well above load + the hardware export limit: the genuine
+    spillover should charge the battery when the inverter can recapture it (#4207 - e.g. FoxESS
+    "Feed-in First" prioritises load, then export, then the battery), and leave SoC untouched
+    (clipped) when it can't.
+    """
+    reset_inverter(my_predbat)
+    my_predbat.forecast_minutes = 24 * 60
+    end_record = my_predbat.forecast_minutes
+    my_predbat.end_record = end_record
+    my_predbat.set_export_freeze = True
+    my_predbat.set_export_freeze_only = False
+    my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+
+    # PV well above load + the 1kW hardware export limit (reset_inverter sets export_limit to
+    # 10/60.0 kW; override it low here so the spillover condition is easy to trigger). inverter_limit
+    # raised too so it never becomes the binding constraint instead of export_limit.
+    my_predbat.export_limit = 1 / 60.0
+    my_predbat.inverter_limit = 10 / 60.0
+    my_predbat.battery_rate_max_charge = 10 / 60.0
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 2.0
+
+    pv_step = {}
+    load_step = {}
+    for minute in range(0, my_predbat.forecast_minutes, 5):
+        pv_step[minute] = 5.0 / 12  # 5kW
+        load_step[minute] = 0.5 / 12  # 0.5kW
+
+    reset_rates(my_predbat, 10.0, 15.0)
+    # Freeze window spans the whole forecast so final_soc reflects only what happened under freeze,
+    # not a subsequent full-day Idle period charging the battery regardless of this test's outcome.
+    export_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + my_predbat.forecast_minutes, "average": 15.0}]
+    update_rates_export(my_predbat, export_window_best)
+
+    my_predbat.load_minutes_step = load_step
+    my_predbat.load_minutes_step10 = load_step
+    my_predbat.pv_forecast_minute_step = pv_step
+    my_predbat.pv_forecast_minute10_step = pv_step
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+
+    result = my_predbat.prediction.run_prediction([], [], export_window_best, [99.0], False, end_record=end_record)
+    final_soc = result[5]
+
+    charged = final_soc > (my_predbat.soc_kw + 0.01)
+    if charged != expect_charge:
+        print("ERROR: inverter_can_charge_during_export={} - expected charged={}, got final_soc={} (started at {})".format(inverter_can_charge_during_export, expect_charge, final_soc, my_predbat.soc_kw))
+        return True
+    return False
+
+
+def run_freeze_export_recapture_tests(my_predbat):
+    failed = False
+    print("Test: freeze export recapture - inverter_can_charge_during_export=True charges from genuine spillover")
+    failed |= test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export=True, expect_charge=True)
+    print("Test: freeze export recapture - inverter_can_charge_during_export=False still clips (old behaviour)")
+    failed |= test_freeze_export_recapture_beyond_limit(my_predbat, inverter_can_charge_during_export=False, expect_charge=False)
     return failed

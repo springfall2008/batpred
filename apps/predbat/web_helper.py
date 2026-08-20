@@ -7349,8 +7349,8 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
-    text += '<link rel="icon" type="image/svg+xml" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo.svg">'
-    text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
+    text += '<link rel="icon" type="image/svg+xml" href="./images/bat_logo.svg">'
+    text += '<link rel="icon" type="image/png" href="./images/bat_logo_light.png">'
 
     text += """
 <script>
@@ -7704,8 +7704,8 @@ function flyBat() {
     // Get the appropriate bat image based on dark/light mode
     const isDarkMode = document.body.classList.contains('dark-mode');
     const batImage = isDarkMode
-        ? 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png'
-        : 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png';
+        ? './images/bat_logo_dark.png'
+        : './images/bat_logo_light.png';
 
     bat.style.backgroundImage = `url('${batImage}')`;
 
@@ -8180,9 +8180,9 @@ setTimeout(function() {
 <div class="menu-bar">
 <div class="logo">
     <img id="logo-image"
-            src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
-            data-light-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
-            data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
+            src="./images/bat_logo_light.png"
+            data-light-src="./images/bat_logo_light.png"
+            data-dark-src="./images/bat_logo_dark.png"
             alt="Predbat Logo"
             onclick="flyBat()"
             style="cursor: pointer;"

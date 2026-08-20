@@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 4
-KERNEL_PARITY_REVISION = 6
+KERNEL_PARITY_REVISION = 7
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS

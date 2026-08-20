@@ -919,11 +919,14 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
 
     @staticmethod
     def _tesla_dow(python_weekday):
-        """Map a Python weekday (0=Mon..6=Sun) to Tesla's fromDayOfWeek (0=Sun..6=Sat).
+        """Return Tesla's fromDayOfWeek for a Python weekday.
 
-        Isolated so any future convention change is a one-line fix.
+        Tesla's tariff_content_v2 fromDayOfWeek/toDayOfWeek use Monday=0..Sunday=6, the same
+        convention as datetime.weekday(), so this is the identity mapping (GH#4610 - the previous
+        Sunday=0 mapping shifted every boost band one day late). Kept as a named helper so the
+        convention is stated in exactly one place.
         """
-        return (python_weekday + 1) % 7
+        return python_weekday
 
     @staticmethod
     def _coalesce_day(slot_tiers):

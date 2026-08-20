@@ -239,6 +239,38 @@ def test_automatic_config_maps_all_inverters():
     assert not failed, "test_automatic_config_maps_all_inverters"
 
 
+def test_sign_flags_are_claimed_not_inherited():
+    """DEYE owns the invert flags, so another component cannot flip its sign.
+
+    base.args is shared and NOT namespaced per inverter type. teslemetry and fox both set
+    grid_power_invert True for their own hardware, quite correctly - but that leaves the key
+    set for every inverter index, and a DEYE inverter that never claimed it inherited the
+    flip. inverter.py then negated an already-correct sensor, so an export read as an import
+    and the power-flow arrow pointed the wrong way on any install running both.
+
+    All three are False because publish_data already emits Predbat's conventions: grid
+    negative on import (DEYE_TELEMETRY_NEGATE), battery positive on discharge, load positive.
+    """
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INVA", "INVB"]
+    d.device_capacity = {"INVA": 61.44, "INVB": 61.44}
+    d.device_battery_config = {"INVA": {}, "INVB": {}}
+    d.set_args = {}
+    d.set_arg = lambda k, v: d.set_args.__setitem__(k, v)
+    import tests.test_infra as ti
+
+    ti.run_async(d.automatic_config())
+    for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+        if flag not in d.set_args:
+            print(f"ERROR: {flag} was never set, so it is inherited from whatever else configured the install")
+            failed = True
+        elif d.set_args[flag] != [False, False]:
+            print(f"ERROR: {flag} = {d.set_args[flag]}, expected [False, False] - one entry per inverter")
+            failed = True
+    assert not failed, "test_sign_flags_are_claimed_not_inherited"
+
+
 def test_automatic_config_skips_unavailable_capability_args():
     """With no capacity source, soc_max/battery_min_soc are left unset rather than aimed at missing sensors."""
     failed = False
@@ -588,6 +620,7 @@ def run_deye_publish_tests(my_predbat):
         ("write_button", test_write_button_applies_schedule),
         ("sn_from_entity", test_sn_from_entity_disambiguates_prefix_colliding_serials),
         ("automatic_config", test_automatic_config_maps_all_inverters),
+        ("sign_flags_claimed", test_sign_flags_are_claimed_not_inherited),
         ("automatic_config_skips_capability", test_automatic_config_skips_unavailable_capability_args),
         ("publish_derived_capacity", test_publish_data_publishes_derived_capacity),
         ("automatic_config_ratings", test_automatic_config_maps_ratings),

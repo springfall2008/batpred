@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 4
-#define PK_PARITY_REVISION 6
+#define PK_PARITY_REVISION 7
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -906,14 +906,6 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             }
         }
 
-        // Discharge freeze - prediction.py:764-768
-        if (c->set_export_freeze) {
-            bool is_anti_clipping_export = export_window_active && (export_window_n >= 0) && scenario->export_flags[export_window_n];
-            if (export_window_active && !is_anti_clipping_export && export_limit_now < 100.0 && (c->set_export_freeze && (export_limit_now == 99.0 || c->set_export_freeze_only))) {
-                charge_rate_now = battery_rate_min; // 0
-            }
-        }
-
         // Set discharge during charge - prediction.py:770-775
         if (charge_window_active) {
             if (!c->set_discharge_during_charge) {
@@ -1067,6 +1059,31 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     metric_keep += std::max(potential_import * import_rate, 0.0);
                 }
             }
+        } else if (c->set_export_freeze && export_window_active && !is_anti_clipping && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only)) {
+            // Freeze - not an active discharge, but genuine PV surplus beyond what
+            // load+export_limit can absorb still charges the battery on some inverters rather
+            // than being clipped (#4207) - mirrors the recapture logic in the force export
+            // branch above, without any active discharge. prediction.py's matching elif.
+            battery_draw = 0;
+            pv_ac = pv_now * inverter_loss_ac;
+            pv_dc = 0;
+
+            const double diff_freeze = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
+            if (diff_freeze < 0 && std::fabs(diff_freeze) > export_limit && c->inverter_can_charge_during_export) {
+                const double over_limit = std::fabs(diff_freeze) - export_limit;
+                if (inverter_hybrid) {
+                    const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                    const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
+                    battery_draw = std::max({-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
+                } else {
+                    battery_draw = std::max({-over_limit * inverter_loss, -battery_to_max, -charge_rate_now_curve_step});
+                }
+
+                if (battery_draw < 0) {
+                    pv_dc = std::min(std::fabs(battery_draw), pv_now);
+                    pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
+                }
+            }
         } else {
             // ECO Mode - prediction.py:951-997
             pv_ac = pv_now * inverter_loss_ac;
@@ -1083,12 +1100,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 battery_draw = std::min({diff, discharge_rate_now_curve_step, inverter_limit, battery_to_min});
             } else {
                 if (inverter_hybrid) {
-                    double charge_rate_now_dc = battery_rate_max_charge_dc;
-                    // Freeze mode - prediction.py:973-975
-                    bool is_anti_clipping_export = export_window_active && (export_window_n >= 0) && scenario->export_flags[export_window_n];
-                    if (c->set_export_freeze && export_window_active && !is_anti_clipping_export && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only)) {
-                        charge_rate_now_dc = battery_rate_min; // 0
-                    }
+                    const double charge_rate_now_dc = battery_rate_max_charge_dc;
                     // Note: Python passes the un-rounded soc for the DC-rate lookup here
                     const double charge_rate_now_curve_dc = rate_curve(soc, charge_rate_now_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
                     const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
