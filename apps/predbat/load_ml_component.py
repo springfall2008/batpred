@@ -492,8 +492,10 @@ class LoadMLComponent(ComponentBase):
                 )
 
             # try to retrieve import and export rate history to detect rate-based load patterns
-            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False)
-            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False)
+            # This is optional - it only adds features to the model, and Home Assistant has no history
+            # for these entities unless its recorder is configured to store them
+            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False, required=False)
+            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False, required=False)
 
             # Merge import_rates_history with import_rates_data
             if import_rates_history is None:

@@ -11,6 +11,7 @@
 import asyncio
 
 from web import WebInterface
+from web_helper import get_plan_renderer_js
 
 
 def make_web(my_predbat):
@@ -184,6 +185,8 @@ def run_web_functions_tests(my_predbat):
     # "Loading chart (please wait)..." messages forever, since nothing will ever load.
     failed += run_compare_empty_state_tests(my_predbat, web)
 
+    failed += run_plan_empty_state_tests(my_predbat, web)
+
     print("**** Web functions tests completed ****")
     return failed
 
@@ -225,6 +228,57 @@ def run_compare_empty_state_tests(my_predbat, web):
     my_predbat.args = original_args
 
     print("**** Compare empty state tests completed ****")
+    return failed
+
+
+def run_plan_empty_state_tests(my_predbat, web):
+    """Unit tests for the Plan page's empty-state messaging (issue #4583).
+
+    The History and Yesterday Without Predbat views are only populated once calculate_yesterday()
+    has run, which it can't do when Home Assistant has no history for predbat.cost_today. Showing
+    'Plan data is loading, please wait...' forever tells the user nothing about why.
+    """
+    failed = 0
+    print("**** Running plan empty state tests ****")
+
+    renderer_js = get_plan_renderer_js()
+
+    # Scope the checks to refreshPlan(), which is what decides what an empty view shows
+    start = renderer_js.index("function refreshPlan(")
+    end = renderer_js.index("function checkStaleness(", start)
+    refresh_plan_src = renderer_js[start:end]
+
+    empty_branch_start = refresh_plan_src.find("if (!data)")
+    if empty_branch_start < 0:
+        print("  ERROR: expected refreshPlan() to handle a view with no data")
+        failed += 1
+    else:
+        # Slice to the branch's own return so the assertions can't be satisfied by later code
+        empty_branch = refresh_plan_src[empty_branch_start : refresh_plan_src.index("return;", empty_branch_start)]
+
+        print("Test: the History / Yesterday views explain themselves instead of loading forever")
+        if "currentView" not in empty_branch:
+            print("  ERROR: the empty-data branch should distinguish the plan view from the yesterday/baseline views")
+            failed += 1
+        if "cost_today" not in empty_branch:
+            print("  ERROR: the empty-data message should name the predbat.cost_today history it needs")
+            failed += 1
+        if "recorder" not in empty_branch:
+            print("  ERROR: the empty-data message should point at the Home Assistant recorder as the thing to check")
+            failed += 1
+
+        print("Test: the plan view itself keeps its genuine loading message")
+        if "Plan data is loading" not in empty_branch:
+            print("  ERROR: the plan view should still show a loading message while it waits for its first plan")
+            failed += 1
+
+    print("Test: the rendered plan page carries the explanation")
+    response = asyncio.run(web.html_plan(None))
+    if "cost_today" not in response.text:
+        print("  ERROR: the plan page should carry the empty-state explanation for the yesterday views")
+        failed += 1
+
+    print("**** Plan empty state tests completed ****")
     return failed
 
 

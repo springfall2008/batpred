@@ -52,6 +52,16 @@ MINUTE_WATT = 60 * 1000
 # which increases the cost of the plan over the full rate charge the planner costed the window at.
 LOW_POWER_PV_THRESHOLD = 0.1
 
+# Fraction of the peak forecast PV power above which a plan_interval_minutes bucket is classed as
+# "light" rather than "dark" when deciding where to split a charge window (calc_dawn). A charge window
+# otherwise built from a single long cheap-rate period spanning sunrise would apply LOW_POWER_PV_THRESHOLD
+# across the whole thing and abandon low power charging even for the still-dark hours before the sun is
+# up (#4557) - splitting at dawn keeps the dark portion as its own window, genuinely PV-free, so it stays
+# throttled. A fraction of that forecast's own peak, rather than a fixed Watts figure, scales with the
+# site - a fixed threshold picked for a typical system would be noise-level for a large array and
+# unreachable for a small one.
+LOW_POWER_PV_LIGHT_FRACTION = 0.1
+
 INVERTER_TEST = False  # Run inverter control self test
 
 # Create an array of times in the day in 5-minute intervals

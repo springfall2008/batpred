@@ -39,6 +39,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud](#givenergy-with-ge-cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [Canadian Solar EP Cube](#canadian-solar-ep-cube) | [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) | [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) |
    | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
    | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
@@ -192,6 +193,16 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
+
+## Canadian Solar EP Cube
+
+The EP Cube has no local Modbus; the only published control interface is the vendor cloud REST API. The [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) custom integration (HACS Default store, MIT-licensed) bridges this to a Predbat-shaped set of entities and services:
+
+- Install via HACS - search "Canadian Solar EP Cube", Download, then restart Home Assistant. Configure the integration with your EP Cube cloud account email + password (captcha is handled automatically).
+- Copy the template [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) over your `apps.yaml`. No additional helpers or template sensors are needed - entity IDs are stable (no per-account devId substitution).
+- The integration exposes the standard 7 Predbat services (`charge_start`, `charge_stop`, `discharge_start`, `discharge_stop`, `charge_freeze`, `discharge_freeze`, `idle`) and translates each rate + window into a TOU-schedule rewrite on the cube.
+- Writes are idempotent (no cloud call if the requested state is already active) and budgeted to a low number of writes per day. The integration snapshots your normal mode + TOU schedule on the first override and auto-reverts at the slot end.
+- Restart Predbat after saving `apps.yaml` and check its log to confirm it sees the `sensor.ep_cube_*` entities and successfully calls the `ep_cube.*` services.
 
 ## DEYE Cloud
 

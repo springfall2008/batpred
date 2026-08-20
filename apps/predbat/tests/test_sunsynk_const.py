@@ -152,14 +152,15 @@ def test_encode_setting_types():
         if day not in SUNSYNK_BOOL_FIELDS:
             print(f"ERROR: day field {day} must be declared a boolean field")
             failed = True
+    # Booleans are sent QUOTED - a bare JSON boolean is silently discarded by the API.
     cases = [
-        ("time1on", True, True),
-        ("time1on", "true", True),
-        ("time1on", 1, True),
-        ("time1on", False, False),
-        ("time1on", "false", False),
-        ("time1on", 0, False),
-        ("mondayOn", True, True),
+        ("time1on", True, "true"),
+        ("time1on", "true", "true"),
+        ("time1on", 1, "true"),
+        ("time1on", False, "false"),
+        ("time1on", "false", "false"),
+        ("time1on", 0, "false"),
+        ("mondayOn", True, "true"),
         ("cap1", 95, "95"),
         ("cap1", "95", "95"),
         ("sellTime1", "02:00", "02:00"),

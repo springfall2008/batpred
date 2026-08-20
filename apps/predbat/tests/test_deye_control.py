@@ -10,7 +10,7 @@
 
 from unittest.mock import patch
 from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, TOU_FILLER_TIMES, DEYE_ORDER_MAX_POLLS
-from deye_const import CONFIG_BATTERY_KEYS
+from deye_const import CONFIG_BATTERY_KEYS, DEYE_TOU_DAYS
 from tests.test_deye_api import MockDeye, MOCK_RATED_POWER
 from tests.test_infra import run_async as run_async_local
 
@@ -854,6 +854,203 @@ def test_control_write_fails_closed_without_a_self_use_power():
     assert not failed, "test_control_write_fails_closed_without_a_self_use_power"
 
 
+def test_payload_names_every_day_the_schedule_runs_on():
+    """The control payload carries touDays for all seven days.
+
+    DEYE's TOU programme only runs on the days named in touDays, and Predbat's plan is a
+    24h programme it re-derives every cycle — it has no notion of a day the schedule should
+    be dormant. Every one of the four official strategy samples
+    (clientcode/strategy/dynamic_control_*.py) sends the full seven-day list; Predbat sent
+    none, leaving the active days at whatever the inverter happened to hold. If that is
+    empty, or missing the day the plan is for, the whole schedule silently never runs — the
+    slots are stored and simply not applied. Sunsynk, on the same registers, has the same
+    field as its seven mondayOn..sundayOn flags and Predbat sets all of them there.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    payload = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=3 * 60)
+    days = payload.get("touDays")
+    if sorted(days or []) != sorted(DEYE_TOU_DAYS):
+        print(f"ERROR: touDays must name all seven days, got {days!r}")
+        failed = True
+    if len(DEYE_TOU_DAYS) != 7 or any(day != day.upper() for day in DEYE_TOU_DAYS):
+        print(f"ERROR: DEYE names its days as seven upper-case strings, got {DEYE_TOU_DAYS!r}")
+        failed = True
+    # Every payload, not just an active one: the slots are a 24h programme whatever state
+    # the top level is in.
+    idle = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    if d.build_dynamic_payload("INV1", idle, current_soc=40, now_minutes=12 * 60).get("touDays") != DEYE_TOU_DAYS:
+        print("ERROR: an idle payload must still name the days its slots apply on")
+        failed = True
+    assert not failed, "test_payload_names_every_day_the_schedule_runs_on"
+
+
+def test_every_slot_carries_the_complete_field_set():
+    """Every TOU item carries all five documented fields, none of them omitted.
+
+    Sunsynk, the same hardware behind a different cloud, validates the per-slot field set as
+    a whole and silently discards the flags when it is incomplete: with one flag left out,
+    the grid-charge flag vanished on six consecutive writes across every encoding tried
+    while the rest of each write persisted, and the API reported success throughout. DEYE
+    cannot hit that while every item carries the full set its own samples post, so this
+    pins the set rather than trusting each call site to remember it.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    # Compared against TOU_FIELD, which is what the slot builders use, so this asks "does
+    # every slot carry the whole set" rather than "are the names right". The names
+    # themselves are pinned against DEYE's published model in test_deye_const.py, which is
+    # the check an edit to TOU_FIELD has to get past.
+    expected = set(TOU_FIELD.values())
+    schedules = [
+        {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}},
+        {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": 20, "power": 3000, "start": "16:00", "end": "19:00"}},
+        {"reserve": 20, "charge": {"enable": True, "soc": 20, "power": 3000, "start": "01:00", "end": "02:00"}, "export": {"enable": False, "soc": 0, "power": 0}},
+        {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}},
+    ]
+    for index, sched in enumerate(schedules):
+        for slot in d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=3 * 60)["timeUseSettingItems"]:
+            if set(slot) != expected:
+                print(f"ERROR: schedule {index} produced a slot with fields {sorted(slot)}, expected {sorted(expected)}")
+                failed = True
+    assert not failed, "test_every_slot_carries_the_complete_field_set"
+
+
+def test_export_slots_arm_the_sell_flag():
+    """Only export slots carry enableSell, and every slot carries the field.
+
+    enableSell is TimeUseSettingItem's per-slot forced-export enable — the same register bit
+    Sunsynk exposes as sellTime{n}En, where a live write test proved a forced export slot
+    does not arm without it. Predbat never sent it, so DEYE export windows had the work mode
+    and the SOC target but not the slot flag that makes the slot an export slot.
+
+    It is written on every slot, not just export ones: on Sunsynk an absent per-slot flag
+    made the API silently discard the OTHER flags in the same item, grid charge included, on
+    six consecutive writes that each reported success.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    sell = TOU_FIELD["sell"]
+    export = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": 20, "power": 3000, "start": "16:00", "end": "19:00"}}
+    slots = d.build_dynamic_payload("INV1", export, current_soc=80, now_minutes=17 * 60)["timeUseSettingItems"]
+    armed = [slot for slot in slots if slot[sell]]
+    if [slot[TOU_FIELD["time"]] for slot in armed] != ["16:00"]:
+        print(f"ERROR: only the export window should arm the sell flag, got {[s[TOU_FIELD['time']] for s in armed]}")
+        failed = True
+    if not armed or armed[0][TOU_FIELD["soc"]] != 20:
+        print(f"ERROR: the armed slot should be the export target: {armed}")
+        failed = True
+
+    # A freeze-export holds the battery but still sells, so it arms too.
+    freeze = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": True, "soc": FREEZE_EXPORT_SOC, "power": 3000, "start": "16:00", "end": "19:00"}}
+    frozen = [slot for slot in d.build_dynamic_payload("INV1", freeze, current_soc=80, now_minutes=17 * 60)["timeUseSettingItems"] if slot[sell]]
+    if len(frozen) != 1 or frozen[0][TOU_FIELD["power"]] != 0:
+        print(f"ERROR: freeze-export should arm one zero-power sell slot: {frozen}")
+        failed = True
+
+    # A charge window never sells, and neither does an idle day.
+    charge = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": False, "soc": 0, "power": 0}}
+    idle = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    for name, sched in (("charge", charge), ("idle", idle)):
+        slots = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=3 * 60)["timeUseSettingItems"]
+        if any(slot[sell] for slot in slots):
+            print(f"ERROR: a {name} schedule must not arm any sell slot: {slots}")
+            failed = True
+        if any(sell not in slot for slot in slots):
+            print(f"ERROR: every slot must carry the sell field even when off: {slots}")
+            failed = True
+    assert not failed, "test_export_slots_arm_the_sell_flag"
+
+
+def test_generator_charging_is_never_switched_on_by_predbat():
+    """enableGeneration is off in every slot Predbat writes when the inverter's own value is unknown.
+
+    It authorises charging the battery from an EXTERNAL GENERATOR. Predbat has no model of a
+    generator — no fuel cost, no run hours, nothing it can plan against — so it must never
+    be the thing that switches one on. Predbat previously wrote True on every slot, which
+    authorised generator charging across the whole day on any system with one wired in.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    generate = TOU_FIELD["generate"]
+    sched = {"reserve": 10, "charge": {"enable": True, "soc": 95, "power": 3000, "start": "02:00", "end": "05:00"}, "export": {"enable": True, "soc": 20, "power": 3000, "start": "16:00", "end": "19:00"}}
+    for now_minutes in (3 * 60, 12 * 60, 17 * 60):
+        slots = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=now_minutes)["timeUseSettingItems"]
+        if any(slot[generate] for slot in slots):
+            print(f"ERROR: at {now_minutes} Predbat authorised generator charging: {slots}")
+            failed = True
+        if any(generate not in slot for slot in slots):
+            print(f"ERROR: the field must still be present on every slot: {slots}")
+            failed = True
+    assert not failed, "test_generator_charging_is_never_switched_on_by_predbat"
+
+
+def test_generator_charging_the_owner_configured_is_carried_through():
+    """The inverter's own enableGeneration survives, slot by slot, rather than being cleared.
+
+    Predbat owns the TOU programme but not this flag, so an owner who has generator charging
+    configured keeps it. Read from config/tou and carried across by slot position — the same
+    thing the Sunsynk component does with genTime{n}on through its read-modify-write.
+    """
+    failed = False
+    d = MockDeye().with_rating("INV1")
+    generate = TOU_FIELD["generate"]
+    # The owner runs the generator on the 2nd and 5th slots of the day.
+    d.device_tou_config["INV1"] = [{"time": f"{n * 4:02d}:00", generate: n in (1, 4), "enableGridCharge": False, "power": 5000, "soc": 20} for n in range(6)]
+    sched = {"reserve": 10, "charge": {"enable": False, "soc": 0, "power": 0}, "export": {"enable": False, "soc": 0, "power": 0}}
+    slots = d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=12 * 60)["timeUseSettingItems"]
+    if [slot[generate] for slot in slots] != [False, True, False, False, True, False]:
+        print(f"ERROR: the owner's generator slots were not carried through: {[s[generate] for s in slots]}")
+        failed = True
+
+    # A short read is padded rather than trusted, and never invents an enable.
+    d.device_tou_config["INV1"] = [{generate: True}]
+    got = [slot[generate] for slot in d.build_dynamic_payload("INV1", sched, current_soc=40, now_minutes=12 * 60)["timeUseSettingItems"]]
+    if got != [True, False, False, False, False, False]:
+        print(f"ERROR: a short read should pad with off, got {got}")
+        failed = True
+    assert not failed, "test_generator_charging_the_owner_configured_is_carried_through"
+
+
+def test_fetch_tou_config_caches_and_survives_an_unsupported_model():
+    """config/tou is read into the cache, and a model that rejects it leaves generator charging off."""
+    failed = False
+    d = MockDeye()
+    items = [{"time": "00:00", "enableGeneration": True, "enableGridCharge": False, "power": 5000, "soc": 20}]
+
+    async def fake_post(endpoint_key, body):
+        """Return a TOU read for the config point, mirroring DeviceTimeOfUseResponse."""
+        if endpoint_key != "config_tou":
+            return {"success": True}
+        return {"success": True, "timeUseSettingItems": items, "touAction": "on"}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        got = run_async_local(d.fetch_tou_config("INV1"))
+    if got != items or d.device_tou_config.get("INV1") != items:
+        print(f"ERROR: the TOU read should be cached: {d.device_tou_config}")
+        failed = True
+
+    # Some models answer "config point not supported" — that must not clear what is known,
+    # nor raise, and the flags fall back to off for a serial that was never read.
+    async def fake_fail(endpoint_key, body):
+        """Reject the config point the way a model without it does."""
+        return {"success": False, "code": "2106001", "msg": "config point not supported"}
+
+    with patch.object(d, "_post", side_effect=fake_fail):
+        got = run_async_local(d.fetch_tou_config("INV2"))
+    if got != []:
+        print(f"ERROR: a rejected read should report nothing, got {got}")
+        failed = True
+    if d.device_tou_config.get("INV1") != items:
+        print("ERROR: a failure for one serial must not disturb another's cached read")
+        failed = True
+    if any(d._generation_flags("INV2")):
+        print(f"ERROR: an unread serial must default to no generator charging: {d._generation_flags('INV2')}")
+        failed = True
+    assert not failed, "test_fetch_tou_config_caches_and_survives_an_unsupported_model"
+
+
 def run_deye_control_tests(my_predbat):
     """Run all DEYE control-logic tests."""
     failed = False
@@ -886,6 +1083,12 @@ def run_deye_control_tests(my_predbat):
         ("self_use_slot_power", test_self_use_slots_carry_the_inverter_rating),
         ("freeze_zero_power", test_freeze_states_hold_with_zero_power),
         ("no_self_use_power_fails_closed", test_control_write_fails_closed_without_a_self_use_power),
+        ("tou_days", test_payload_names_every_day_the_schedule_runs_on),
+        ("slot_field_set", test_every_slot_carries_the_complete_field_set),
+        ("sell_flag", test_export_slots_arm_the_sell_flag),
+        ("generation_never_on", test_generator_charging_is_never_switched_on_by_predbat),
+        ("generation_carried", test_generator_charging_the_owner_configured_is_carried_through),
+        ("tou_config_read", test_fetch_tou_config_caches_and_survives_an_unsupported_model),
     ]:
         try:
             if fn():

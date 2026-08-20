@@ -755,6 +755,24 @@ def test_teslemetry_set_tariff_posts_tou_settings():
     assert "tariff_content_v2" in body["tou_settings"]
 
 
+def test_teslemetry_set_tariff_asserts_optimization_strategy_economics():
+    """set_tariff must assert optimization_strategy=economics on every push (GH#4600).
+
+    Without this, the Fleet API tou_settings.optimization_strategy dial is left untouched (whatever
+    the customer's Tesla app happens to hold), so Time-Based Control can silently stay in Balanced
+    mode - which only offsets house load and never exports stored energy, no matter how high the
+    pushed sell price is. "economics" is the strategy that actually exports for price.
+    """
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    t = api.build_tariff(None)
+    result = run_async(api.set_tariff(t))
+    assert result is True
+    method, path, body = api.requests_made[-1]
+    assert body["tou_settings"]["optimization_strategy"] == "economics"
+
+
 def test_teslemetry_sync_tariff_dedupes_unchanged():
     """Two syncs with identical inputs push the tariff exactly once (monthly API-call budget)."""
     api = MockTeslemetryAPI()
@@ -1657,6 +1675,168 @@ def test_teslemetry_cli_harness_signals_failure_on_auth_error():
         teslemetry.TeslemetryAPI._request = original
 
 
+def test_teslemetry_cli_harness_wires_oauth_args():
+    """test_teslemetry_api must forward auth_method/token_expires_at/token_hash/user_id through to
+    the component (and user_id into MockBase.args, where OAuthMixin's refresh reads instance_id from)
+    so the standalone CLI harness can exercise OAuth mode, not just the default static api_key mode.
+    A live end-to-end refresh still needs SUPABASE_URL/SUPABASE_KEY and a real refresh token server-side
+    (GH#4600 follow-up) - this only confirms the harness plumbs the arguments through correctly."""
+    import io
+    import contextlib
+    from datetime import datetime
+    import teslemetry
+
+    captured = {}
+    original_run = teslemetry.TeslemetryAPI.run
+
+    async def capturing_run(self, seconds=0, first=False):
+        """Capture OAuth wiring instead of performing a real run."""
+        captured["auth_method"] = self.auth_method
+        captured["token_expires_at"] = self.token_expires_at
+        captured["token_hash"] = self.token_hash
+        captured["user_id"] = self.base.args.get("user_id")
+        self.api_auth_failed = True
+        return False
+
+    teslemetry.TeslemetryAPI.run = capturing_run
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_async(
+                teslemetry.test_teslemetry_api(
+                    "oauth-access-token",
+                    "site123",
+                    auth_method="oauth",
+                    token_expires_at="2026-08-17T03:02:31+00:00",
+                    token_hash="abc123",
+                    user_id="user-456",
+                )
+            )
+    finally:
+        teslemetry.TeslemetryAPI.run = original_run
+
+    assert captured["auth_method"] == "oauth"
+    assert captured["token_expires_at"] == datetime.fromisoformat("2026-08-17T03:02:31+00:00").timestamp()
+    assert captured["token_hash"] == "abc123"
+    assert captured["user_id"] == "user-456"
+
+
+def test_teslemetry_api_sets_supabase_env_vars_for_oauth_refresh():
+    """test_teslemetry_api must export SUPABASE_URL/SUPABASE_KEY into the environment when given
+    (mirrors fox.py's test_fox_api), because OAuthMixin._do_refresh reads them via os.environ rather
+    than through any argument the component itself accepts. Without this, supabase_url/supabase_key
+    loaded from --apps (or passed directly) had no way to actually reach the refresh call - the exact
+    gap that surfaced testing the CLI harness live against a real oauth apps.yaml (GH#4600 follow-up)."""
+    import io
+    import contextlib
+    import os
+    import teslemetry
+
+    original_run = teslemetry.TeslemetryAPI.run
+    captured = {}
+
+    async def capturing_run(self, seconds=0, first=False):
+        """Capture the environment instead of performing a real run."""
+        captured["SUPABASE_URL"] = os.environ.get("SUPABASE_URL")
+        captured["SUPABASE_KEY"] = os.environ.get("SUPABASE_KEY")
+        self.api_auth_failed = True
+        return False
+
+    saved_url = os.environ.pop("SUPABASE_URL", None)
+    saved_key = os.environ.pop("SUPABASE_KEY", None)
+    teslemetry.TeslemetryAPI.run = capturing_run
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            run_async(
+                teslemetry.test_teslemetry_api(
+                    "oauth-access-token",
+                    "site123",
+                    auth_method="oauth",
+                    supabase_url="https://example.supabase.co",
+                    supabase_key="service-key",
+                )
+            )
+    finally:
+        teslemetry.TeslemetryAPI.run = original_run
+        if saved_url is None:
+            os.environ.pop("SUPABASE_URL", None)
+        else:
+            os.environ["SUPABASE_URL"] = saved_url
+        if saved_key is None:
+            os.environ.pop("SUPABASE_KEY", None)
+        else:
+            os.environ["SUPABASE_KEY"] = saved_key
+
+    assert captured["SUPABASE_URL"] == "https://example.supabase.co"
+    assert captured["SUPABASE_KEY"] == "service-key"
+
+
+def test_teslemetry_load_args_from_apps_yaml_extracts_teslemetry_section():
+    """load_teslemetry_args_from_apps_yaml pulls the teslemetry_* keys (plus the top-level user_id)
+    out of a real Predbat apps.yaml's pred_bat: section, so the CLI harness can be pointed at a config
+    file (--apps path) instead of pasting a long OAuth token on the command line (GH#4600 follow-up)."""
+    import tempfile
+    import os
+    import teslemetry
+
+    content = """
+pred_bat:
+  supabase_url: https://example.supabase.co
+  supabase_key: the-supabase-service-key
+  teslemetry_auth_method: oauth
+  teslemetry_automatic: true
+  teslemetry_base_url: https://fleet-api.prd.eu.vn.cloud.tesla.com
+  teslemetry_key: the-access-token
+  teslemetry_site_id: '1689257309996718'
+  teslemetry_token_expires_at: '2026-08-17T03:02:31.016+00:00'
+  teslemetry_token_hash: the-token-hash
+  user_id: 80e510e4-8f58-4b66-b6ca-10f08ba16682
+  some_other_unrelated_key: ignored
+"""
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        result = teslemetry.load_teslemetry_args_from_apps_yaml(path)
+    finally:
+        os.remove(path)
+
+    assert result == {
+        "key": "the-access-token",
+        "site_id": "1689257309996718",
+        "base_url": "https://fleet-api.prd.eu.vn.cloud.tesla.com",
+        "auth_method": "oauth",
+        "token_expires_at": "2026-08-17T03:02:31.016+00:00",
+        "token_hash": "the-token-hash",
+        "user_id": "80e510e4-8f58-4b66-b6ca-10f08ba16682",
+        "supabase_url": "https://example.supabase.co",
+        "supabase_key": "the-supabase-service-key",
+    }
+
+
+def test_teslemetry_load_args_from_apps_yaml_omits_missing_keys():
+    """Absent teslemetry_* items (e.g. a static api_key setup with no oauth fields) must be omitted
+    from the result entirely, not defaulted to None/empty - so main() falls through to its own
+    argparse defaults / --key requirement rather than being overridden with a null."""
+    import tempfile
+    import os
+    import teslemetry
+
+    content = """
+pred_bat:
+  teslemetry_key: the-access-token
+  teslemetry_site_id: '12345'
+"""
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        result = teslemetry.load_teslemetry_args_from_apps_yaml(path)
+    finally:
+        os.remove(path)
+
+    assert result == {"key": "the-access-token", "site_id": "12345"}
+
+
 def test_teslemetry_quantise_flat_single_tier():
     """A flat rate collapses to one tier priced in GBP whole pence, all 48 slots the same."""
     rates = {m: 28.0 for m in range(0, 2880)}  # 28p flat
@@ -1927,6 +2107,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_day_runs_groups_replicated_days()
     test_teslemetry_day_runs_all_identical_single_run()
     test_teslemetry_set_tariff_posts_tou_settings()
+    test_teslemetry_set_tariff_asserts_optimization_strategy_economics()
     test_teslemetry_sync_tariff_dedupes_unchanged()
     test_teslemetry_sync_tariff_pushes_on_window_change()
     test_teslemetry_sync_tariff_read_only_no_push()
@@ -1975,6 +2156,10 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_automatic_config_skips_unpublished_rate_sensors()
     test_teslemetry_mock_base_get_arg_consults_args()
     test_teslemetry_cli_harness_signals_failure_on_auth_error()
+    test_teslemetry_cli_harness_wires_oauth_args()
+    test_teslemetry_api_sets_supabase_env_vars_for_oauth_refresh()
+    test_teslemetry_load_args_from_apps_yaml_extracts_teslemetry_section()
+    test_teslemetry_load_args_from_apps_yaml_omits_missing_keys()
     test_teslemetry_discover_site_uses_first_and_filters()
     test_teslemetry_discover_site_no_match_returns_false()
     test_teslemetry_run_discovers_site_before_polling()
