@@ -1049,7 +1049,7 @@ class Fetch:
 
         # Find charging windows
         if self.rate_import:
-            pv_light_dark = self.calc_dawn() if self.set_charge_low_power else {}
+            pv_light_dark = self.calc_pv_light_dark()
 
             # Find charging window
             self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
@@ -1562,12 +1562,30 @@ class Fetch:
 
         return rates, replicated_rates
 
+    def calc_pv_light_dark(self):
+        """
+        Decide whether a dawn light/dark boundary is worth computing at all, and return it via
+        calc_dawn if so - otherwise an empty dict (no split).
+
+        Only combine_charge_slots can merge a charge window across dawn in the first place - with it
+        off, find_charge_window already forces a break every charge_slot_split minutes (which equals
+        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary could
+        never be reached and computing it would be a pure no-op. This used to be gated on
+        set_charge_low_power instead, since that was the only feature that needed the split - but the
+        split also lets the plan optimizer charge just the dark portion of a combined window and skip
+        the daylight portion (where solar may cover the load) on its own merits, independent of low
+        power charging, so it now runs for any combine_charge_slots user.
+        """
+        return self.calc_dawn() if self.combine_charge_slots else {}
+
     def calc_dawn(self):
         """
         Find dawn in self.pv_forecast_minute and return a pv_light_dark dict classifying each minute
-        as light (1, at/after dawn) or dark (0, before it). Used by find_charge_window to split a
-        charge window at the light/dark boundary rather than abandoning low power charging for a whole
-        window just because its tail overlaps the sun - see #4557.
+        as light (1, at/after dawn) or dark (0, before it). Used by find_charge_window (via
+        calc_pv_light_dark) to split a charge window at the light/dark boundary - originally so it
+        wouldn't abandon low power charging for a whole window just because its tail overlaps the sun
+        (#4557), and now also so the plan optimizer can choose the dark portion of a combined window
+        independently of the light portion.
 
         Classified per plan_interval_minutes bucket (averaged), not per raw minute - a threshold
         compared minute to minute would let ordinary forecast noise near the cutoff (e.g. a patchy dawn
@@ -1592,6 +1610,9 @@ class Fetch:
         Built from whatever PV forecast is already in self.pv_forecast_minute, which at the point this
         is called from fetch_sensor_data is up to one cycle stale (refreshed later this same loop by
         fetch_pv_forecast()) - fine for a forecast that doesn't meaningfully change minute to minute.
+
+        Logs the calculated dawn time (today's, or the earliest day the forecast reaches if today's PV
+        data isn't there) each time it runs, so it's visible whether the detected dawn looks sane.
         """
         pv_light_dark = {}
         if not self.pv_forecast_minute:
@@ -1612,6 +1633,7 @@ class Fetch:
         bucket_crossed = {bucket: (1 if (bucket_sums[bucket] / bucket_counts[bucket]) >= light_threshold else 0) for bucket in bucket_sums}
 
         bucket_light = {}
+        dawn_minute_by_day = {}
         after_dawn = False
         current_day = None
         for bucket in sorted(bucket_crossed):
@@ -1620,8 +1642,20 @@ class Fetch:
                 after_dawn = False
                 current_day = bucket_day
             if bucket_crossed[bucket]:
+                if not after_dawn:
+                    dawn_minute_by_day[bucket_day] = bucket * interval
                 after_dawn = True
             bucket_light[bucket] = 1 if after_dawn else 0
+
+        # Day 0 is today (self.minutes_now is itself minutes since midnight_utc), so report today's
+        # dawn when the forecast reaches it; otherwise fall back to the earliest day that does (e.g. a
+        # forecast that only starts covering PV from tomorrow) so the log still says something useful.
+        report_day = 0 if 0 in dawn_minute_by_day else (min(dawn_minute_by_day) if dawn_minute_by_day else None)
+        if report_day is not None:
+            dawn_timestamp = self.midnight_utc + timedelta(minutes=dawn_minute_by_day[report_day])
+            self.log("Calculated dawn (start of daylight, used to split charge windows at) at {}".format(dawn_timestamp.strftime(TIME_FORMAT)))
+        else:
+            self.log("Calculated dawn (start of daylight, used to split charge windows at) - no dawn found in the PV forecast")
 
         pv_light_dark = {pv_minute: bucket_light[pv_minute // interval] for pv_minute in self.pv_forecast_minute}
         return pv_light_dark
@@ -1631,11 +1665,13 @@ class Fetch:
         Find the charging windows based on the low rate threshold (percent below average)
 
         pv_light_dark, when scanning for charge (not find_high) windows, is a minute-indexed dict of 0/1
-        marking whether PV forecast is at/after dawn ("light") or not ("dark") - see calc_dawn.
-        A transition between the two forces a window split, so a charge window that would otherwise
-        span sunrise (e.g. a single long cheap-rate period) is instead built as separate dark and
-        light windows - see #4557, where low power charging was defeated for the whole window,
-        including the still-dark hours, just because the window's tail overlapped PV later on.
+        marking whether PV forecast is at/after dawn ("light") or not ("dark") - see calc_dawn and
+        calc_pv_light_dark. A transition between the two forces a window split, so a charge window
+        that would otherwise span sunrise (e.g. a single long cheap-rate period) is instead built as
+        separate dark and light windows. Originally added (#4557) so low power charging wasn't
+        defeated for the whole window, including the still-dark hours, just because the window's tail
+        overlapped PV later on - it also lets the plan optimizer pick the dark portion of a combined
+        window without the light portion, regardless of low power charging.
         """
         alt_rates = alt_rates or {}
         pv_light_dark = pv_light_dark or {}
