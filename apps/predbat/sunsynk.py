@@ -640,12 +640,9 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
 
         if export.get("enable"):
             export_soc = int(export.get("soc", FREEZE_EXPORT_SOC))
-            behaviour = "freeze_export" if export_soc >= FREEZE_EXPORT_SOC else "export"
-            slot_soc = FREEZE_EXPORT_SOC if export_soc >= FREEZE_EXPORT_SOC else export_soc
-            # Zero power IS the freeze: selling-first with no power holds the battery while
-            # surplus solar still exports.
-            power = 0 if behaviour == "freeze_export" else int(export.get("power", 0))
-            return {"behaviour": behaviour, "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": slot_soc, "power": power}
+            if export_soc >= FREEZE_EXPORT_SOC:
+                return self._freeze_export_state(reserve)
+            return {"behaviour": "export", "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": export_soc, "power": int(export.get("power", 0))}
 
         if charge.get("enable"):
             charge_soc = int(charge.get("soc", 0))
@@ -662,7 +659,72 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             # different state, and the inverter's full rating would discard Predbat's rate.
             return {"behaviour": "hold_charge", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
+        # No window is active, so the only thing left that can distinguish demand from a
+        # freeze export is the charge rate. Predbat expresses Freeze Export - "demand mode,
+        # but with charging disabled" - by turning the forced-export window OFF and calling
+        # adjust_charge_rate(0), because SunsynkCloud declares has_timed_pause False and
+        # that is the only lever execute.py has left. A zero charge rate always means "do
+        # not charge the battery" (the same call backs set_freeze_export_during_demand and
+        # the cross-charging guards), so it is honoured here rather than dropped.
+        #
+        # Without this the freeze never reached the inverter at all: charge_rate maps to the
+        # per-window battery_schedule_charge_power, which derive_control_state only reads
+        # inside an ENABLED charge window - and a freeze export has none. Predbat said
+        # Freeze Export, Sunsynk wrote a byte-identical self-use programme to plain Demand,
+        # and surplus PV charged the battery instead of being exported.
+        #
+        # CONFIRMED live end to end (inverter 2405116013, 2026-08-20 11:30). Before the
+        # write the battery was taking 250 W of PV at 99% SoC; after it, battery power sat
+        # at 6, 5, 5, -6, -10 W across five polls while the grid export tracked PV minus
+        # load almost exactly (3620 W PV, 149 W load, 3347 W exported). The battery stopped
+        # charging, was not discharged, and every surplus watt reached the grid. Restoring
+        # the demand payload put it straight back to charging at 535 W.
+        #
+        # A zero charge rate is only read as a freeze while the EXPORT rate is non-zero,
+        # which is what makes the signal "charging disabled, discharging still allowed" -
+        # Freeze Export exactly - rather than just "zero". It also keeps a system whose
+        # battery rates were never derived (both entities still at their published 0, or
+        # battery_rate_max unmappable) out of a permanent freeze: all-zero is not a plan,
+        # it is an absence of one, and demand is the right thing to fall back to.
+        if int(charge.get("power", 0)) == 0 and int(export.get("power", 0)) > 0:
+            return self._freeze_export_state(reserve)
+
         return {"behaviour": "idle", "work_mode": SUNSYNK_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+
+    @staticmethod
+    def _freeze_export_state(reserve):
+        """Return the control state for a freeze export: sell the surplus, keep serving the house.
+
+        Selling First, the per-slot Sell flag ON, the slot rate at ZERO, and the cap at the
+        reserve. Each field earns its place, and all four were settled on live hardware
+        (inverter 2405116013, 2026-08-20) rather than inferred:
+
+          * Selling First is what stops the surplus solar charging the battery. Limited to
+            Home runs PV -> load -> battery -> grid, so the battery fills first: a 99%
+            battery was still taking 540 W of PV in that mode while the rest exported.
+          * The RATE is the sell-rate cap, and zero is what stops the battery being pushed
+            out to the grid. Two runs differing only in this field settle it - at 8000 W
+            with the cap 3% under the SoC the battery drained to the grid at up to 4715 W,
+            and at 0 W with the cap 5% under the SoC it held at 1-28 W across five polls
+            while the export still tracked PV minus load exactly. This is the field the
+            original code had right.
+          * The CAP is the reserve, so the battery keeps the room it needs to cover the
+            house when the load exceeds the solar. The rate is what makes that safe: a cap
+            below the SoC is only dangerous while the sell rate is non-zero.
+
+        The cap must NEVER be FREEZE_EXPORT_SOC. That constant is Predbat's SENTINEL for
+        "this export window is a freeze" (export_limits_best of 99), not a battery level,
+        and writing it through to cap{n} told a Selling First inverter to drive the battery
+        to 99% - charging it from the very solar the freeze exists to export. Conflating the
+        marker with the target is the whole of what made a freeze look like an export, and
+        it is the only field of the four that was ever wrong.
+
+        NOT confirmed live: that the battery still covers the house under this mode. It
+        needs the load to exceed the solar, and every run so far was midday sun against a
+        250 W house. The cap is what should allow it and nothing observed contradicts that,
+        but it is the one leg of this resting on reasoning rather than a measurement.
+        """
+        return {"behaviour": "freeze_export", "work_mode": SUNSYNK_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": int(reserve), "power": 0}
 
     @staticmethod
     def _to_slot_time(value):
@@ -715,6 +777,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         """Build a slot realising a derived control state."""
         return {"time": start_time, "power": int(state["power"]), "soc": int(state["slot_soc"]), "grid_charge": bool(state["grid_charge"]), "sell": bool(state.get("solar_sell"))}
 
+    def _slot_for(self, start_time, state, reserve, self_use_power):
+        """Build the slot for one derived state: an action slot, or self-use when idle.
+
+        A state that asks for nothing - no grid charge, no sell, no power - is demand, and
+        demand needs the inverter's full rating so the battery can serve the house (see
+        _self_use_slot). Anything else is written verbatim, which is what lets a freeze,
+        whose only non-default field is the sell flag, survive as a zero-power slot.
+        """
+        if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
+            return self._action_slot(start_time, state)
+        return self._self_use_slot(start_time, reserve, self_use_power)
+
     def build_tou_slots(self, schedule, current_soc, self_use_power):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows.
 
@@ -723,13 +797,28 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         distinct and ascending. A slot is an interval whatever its grid-charge flag says,
         which is what lets a filler slot terminate the charge window before it.
 
-        Segment boundaries are collected from a 00:00 self-use baseline plus each enabled
-        window's start (its action) and end (back to self-use), then padded with fillers
-        and trimmed to the earliest, most imminent TOU_SLOT_COUNT.
+        Segment boundaries are collected from a 00:00 baseline plus each enabled window's
+        start (its action) and end (back to the baseline), then padded with fillers and
+        trimmed to the earliest, most imminent TOU_SLOT_COUNT.
+
+        The baseline is DERIVED rather than assumed to be self-use, because "no window is
+        active" is not always demand: a freeze export is exactly that state plus a zero
+        charge rate (see derive_control_state). Every slot the schedule does not otherwise
+        claim - the 00:00 start, each window's end, and the fillers - therefore carries the
+        baseline, so a freeze covers the whole programme instead of being defeated by the
+        first filler that happens to cover the current time.
+
+        That coarseness is deliberate. Predbat never tells this component when a freeze
+        ends - it disables the export window rather than describing it - so there is no
+        boundary to write. Pinning the freeze to "now" instead would move every slot time
+        on every tick and turn the applied-payload change detection into a write per cycle.
+        The programme is rebuilt whenever Predbat's plan changes (run() applies each tick
+        for control_active inverters), so it reverts to self-use as soon as the charge rate
+        comes back.
         """
         reserve = int(schedule.get("reserve", 0))
-        idle = {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None}
-        segments = {"00:00": dict(idle)}
+        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
+        segments = {"00:00": dict(baseline)}
         for direction in ("charge", "export"):
             window = schedule.get(direction, {})
             if not (window.get("enable") and window.get("start") and window.get("end")):
@@ -748,21 +837,18 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
             intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
             intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
             segments[start_time] = self.derive_control_state(intent, current_soc)
-            segments.setdefault(end_time, dict(idle))
+            segments.setdefault(end_time, dict(baseline))
 
         slots = []
         for start_time, state in sorted(segments.items(), key=lambda item: item[0]):
-            if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
-                slots.append(self._action_slot(start_time, state))
-            else:
-                slots.append(self._self_use_slot(start_time, reserve, self_use_power))
+            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
 
         used = {slot["time"] for slot in slots}
         for filler in TOU_FILLER_TIMES:
             if len(slots) >= TOU_SLOT_COUNT:
                 break
             if filler not in used:
-                slots.append(self._self_use_slot(filler, reserve, self_use_power))
+                slots.append(self._slot_for(filler, baseline, reserve, self_use_power))
                 used.add(filler)
         return sorted(slots, key=lambda slot: slot["time"])[:TOU_SLOT_COUNT]
 
@@ -784,7 +870,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin):
         reserve = int(schedule.get("reserve", 0))
         charge = schedule.get("charge", {})
         export = schedule.get("export", {})
-        intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
+        # The charge rate is carried even when no window is active: with both windows shut
+        # a zero rate is Predbat's Freeze Export, and the mode has to follow it rather than
+        # sit in demand (see derive_control_state).
+        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
         if self._window_active(export, now_minutes):
             intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
         elif self._window_active(charge, now_minutes):
