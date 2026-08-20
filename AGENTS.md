@@ -76,7 +76,7 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 ### Core Modules
 
 | Module | Role |
-|--------|------|
+| -------- | ------ |
 | `plan.py` | Optimization engine — multi-threaded search across thousands of charge/discharge window scenarios |
 | `predict.py` / `prediction.py` | Battery SOC prediction models, PV generation, load forecasting |
 | `fetch.py` | Pulls PV forecasts, historical load, rate data, and inverter state |
