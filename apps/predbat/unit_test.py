@@ -22,6 +22,7 @@ from tests.test_performance_tweaks import run_performance_tweaks_tests
 from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
+from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
@@ -336,6 +337,7 @@ def main():
         ("perf", run_perf_test, "Performance tests", False),
         ("model", run_model_tests, "Model tests", False),
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
+        ("dashboard_device_class", test_dashboard_device_class, "Dashboard sensor device_class regression tests (#3352)", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
