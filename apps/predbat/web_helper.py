@@ -7364,6 +7364,16 @@ if (localStorage.getItem('darkMode') === 'true') {
     });
 }
 </script>
+<style>
+    /* Paint the correct background before the external font/chart resources below (which block
+       rendering while they load) have a chance to delay the full stylesheet - otherwise a slow or
+       uncached CDN fetch leaves the page showing its default white background until they resolve,
+       flashing bright white on every page load/refresh even with dark mode enabled (batpred#2256). */
+    html { background-color: #ffffff; }
+    html.dark-mode { background-color: #121212; }
+    body { background-color: #ffffff; color: #333; }
+    html.dark-mode body { background-color: #121212; color: #e0e0e0; }
+</style>
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <style>
