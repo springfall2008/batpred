@@ -631,7 +631,14 @@ class HAInterface(ComponentBase):
                                                     if result_id in self.ws_pending_requests:
                                                         request_info = self.ws_pending_requests.pop(result_id)
                                                         result_holder = request_info["result_holder"]
-                                                        result_holder["success"] = data.get("success", False)
+                                                        # #3460: .get()'s default only covers a *missing* key - some
+                                                        # services (observed for notify.notify) return a "result"
+                                                        # message with "success" explicitly present but null, which
+                                                        # .get("success", False) passes through as None rather than
+                                                        # False. That left success/error both None, indistinguishable
+                                                        # from a genuine 2-minute timeout to the caller and producing
+                                                        # a misleading "failed or timed out" warning immediately.
+                                                        result_holder["success"] = bool(data.get("success"))
                                                         result_holder["response"] = data.get("result", {}).get("response", None)
                                                         result_holder["error"] = None
                                                         # HA's own reported reason when success is False (e.g. {"code": "not_found", "message": "..."})
