@@ -2176,7 +2176,31 @@ class MockBase(SharedMockBase):  # pragma: no cover
         self.ha_interface = MockHAInterface()
 
 
-async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # pragma: no cover
+def find_registers_by_name(gecloud_direct, register_name, device=None):  # pragma: no cover
+    """
+    Find all (entity_id, device, key, raw_name) matches for a register name, optionally restricted to one device serial.
+
+    Matches case-insensitively against both the raw GivEnergy Cloud register name (e.g.
+    "Battery_Charge_Power") and its HA-style equivalent (e.g. "battery_charge_power"), so the
+    harness can be driven without knowing the API's exact casing. When 'device' is given, only
+    that device serial (case-insensitive) is considered, so a name shared by multiple inverters
+    can be aimed at a single one.
+    """
+    register_name_lower = register_name.lower()
+    device_lower = device.lower() if device else None
+    matches = []
+    for entity_id, mapping in gecloud_direct.register_entity_map.items():
+        this_device = mapping["device"]
+        if device_lower and this_device.lower() != device_lower:
+            continue
+        key = mapping["key"]
+        raw_name = gecloud_direct.settings.get(this_device, {}).get(key, {}).get("name", "")
+        if register_name_lower in (raw_name.lower(), regname_to_ha(raw_name)):
+            matches.append((entity_id, this_device, key, raw_name))
+    return matches
+
+
+async def test_gecloud_direct(api_key, write_entity=None, write_value=None, write_register_name=None, write_register_value=None, write_register_device=None):  # pragma: no cover
     """
     Test the GECloud Direct API
     """
@@ -2221,6 +2245,33 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # 
             else:
                 print(f"Write failed for entity '{write_entity}'")
 
+    if write_register_name and write_register_value is not None:
+        matches = find_registers_by_name(gecloud_direct, write_register_name, device=write_register_device)
+        if not matches:
+            if write_register_device:
+                print(f"ERROR: Register '{write_register_name}' not found on device '{write_register_device}'")
+            else:
+                print(f"ERROR: Register '{write_register_name}' not found on any device")
+            print("Available registers:")
+            seen = set()
+            for mapping in gecloud_direct.register_entity_map.values():
+                raw_name = gecloud_direct.settings.get(mapping["device"], {}).get(mapping["key"], {}).get("name", "")
+                label = f"{raw_name}  (ha_name={regname_to_ha(raw_name)}, device={mapping['device']})"
+                if label not in seen:
+                    seen.add(label)
+                    print(f"  {label}")
+        else:
+            distinct_devices = {device for _, device, _, _ in matches}
+            if not write_register_device and len(distinct_devices) > 1:
+                print(f"Warn: Register '{write_register_name}' matched {len(distinct_devices)} devices ({', '.join(sorted(distinct_devices))}) - writing to all of them. Pass --device to target just one.")
+            for entity_id, device, key, raw_name in matches:
+                print(f"Writing register '{raw_name}' (device={device}, setting_id={key}) = {write_register_value}")
+                result = await gecloud_direct.async_write_inverter_setting(device, key, write_register_value)
+                if result:
+                    print(f"Write succeeded: {result}")
+                else:
+                    print(f"Write failed for device {device} register '{raw_name}'")
+
     await gecloud_direct.final()
 
     print("Test completed")
@@ -2236,11 +2287,30 @@ def main():  # pragma: no cover
     parser.add_argument("--api-key", required=True, help="GECloud Direct API key")
     parser.add_argument("--write-entity", default=None, help="Entity ID to write (e.g. number.predbat_gecloud_SA1234_battery_charge_power)")
     parser.add_argument("--write-value", default=None, help="Value to write to the entity")
+    parser.add_argument(
+        "--write-register",
+        nargs=2,
+        default=None,
+        metavar=("NAME", "VALUE"),
+        help="Register name (raw or HA-style, e.g. Battery_Charge_Power or battery_charge_power) and value to write",
+    )
+    parser.add_argument("--device", default=None, help="Device serial to restrict --write-register to, when the register name is shared by more than one device")
 
     args = parser.parse_args()
 
+    write_register_name, write_register_value = args.write_register if args.write_register else (None, None)
+
     # Run the test
-    asyncio.run(test_gecloud_direct(args.api_key, write_entity=args.write_entity, write_value=args.write_value))
+    asyncio.run(
+        test_gecloud_direct(
+            args.api_key,
+            write_entity=args.write_entity,
+            write_value=args.write_value,
+            write_register_name=write_register_name,
+            write_register_value=write_register_value,
+            write_register_device=args.device,
+        )
+    )
 
 
 if __name__ == "__main__":
