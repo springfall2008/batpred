@@ -2642,70 +2642,89 @@ class Octopus:
         # Add in the current charging slot
         for slot in slots_sorted:
             start_minutes, end_minutes, kwh, source, location = slot
-            kwh_original = kwh
-            end_minutes_original = end_minutes
 
-            # Determine rate for this slot, applying the midday-to-midday cap
-            slot_average = self.rate_import.get(start_minutes, self.rate_min_base)
+            # Determine rate for this slot, applying the midday-to-midday cap. A slot that only
+            # partly fits the remaining daily budget is split at the point the budget runs out -
+            # e.g. a single 8-hour overnight IOG dispatch with only 4 of its 12 daily blocks left
+            # gets 4 blocks at the low rate and the other 12 at the max rate, not the whole 16
+            # blocks flipped to max rate the way an all-or-nothing check would (batpred#4624).
+            # kWh is apportioned to each chunk by its share of the slot's duration - an
+            # approximation (real draw isn't perfectly uniform across the slot) but matches how
+            # rate_add_io_slots() below treats rate as uniform per 30-min block too.
+            chunks = [(start_minutes, end_minutes, kwh, self.rate_import.get(start_minutes, self.rate_min_base))]
             if octopus_slot_low_rate and source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
-                # Count 30-min blocks for this slot against the midday-to-midday cap
                 slot_block_start = (start_minutes // 30) * 30
                 num_blocks = max(1, (end_minutes - slot_block_start + 29) // 30)
                 day_offset = (start_minutes - 720) // (24 * 60)
                 if day_offset not in slots_per_day:
                     slots_per_day[day_offset] = 0
-                if slots_per_day[day_offset] + num_blocks <= octopus_slot_max:
-                    slots_per_day[day_offset] += num_blocks
-                    slot_average = self.rate_min_base
+                available_blocks = max(0, octopus_slot_max - slots_per_day[day_offset])
+                slots_per_day[day_offset] += min(num_blocks, available_blocks)
+
+                if available_blocks >= num_blocks:
+                    chunks = [(start_minutes, end_minutes, kwh, self.rate_min_base)]
+                elif available_blocks <= 0:
+                    chunks = [(start_minutes, end_minutes, kwh, self.rate_max_base)]
                 else:
-                    slot_average = self.rate_max_base
+                    split_minute = min(slot_block_start + available_blocks * 30, end_minutes)
+                    span = end_minutes - start_minutes
+                    low_kwh = dp2(kwh * (split_minute - start_minutes) / span) if span > 0 else 0.0
+                    chunks = [
+                        (start_minutes, split_minute, low_kwh, self.rate_min_base),
+                        (split_minute, end_minutes, dp2(kwh - low_kwh), self.rate_max_base),
+                    ]
 
-            if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
-                kwh_expected = kwh * self.car_charging_loss
-                if octopus_intelligent_consider_full:
-                    kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
-                    kwh = dp2(kwh_expected / self.car_charging_loss)
+            for chunk_start, chunk_end, chunk_kwh, slot_average in chunks:
+                kwh_original = chunk_kwh
+                end_minutes_original = chunk_end
+                start_minutes, end_minutes, kwh = chunk_start, chunk_end, chunk_kwh
 
-                # Remove the remaining unused time
-                if octopus_intelligent_consider_full and kwh > 0 and (min(car_soc + kwh_expected, limit) >= limit):
-                    required_extra_soc = max(limit - car_soc, 0)
-                    required_minutes = int(required_extra_soc / (kwh_original * self.car_charging_loss) * (end_minutes - start_minutes) + 0.5)
-                    required_minutes = min(required_minutes, end_minutes - start_minutes)
-                    end_minutes = start_minutes + required_minutes
+                if (end_minutes > start_minutes) and (end_minutes > self.minutes_now) and (not location or location == "AT_HOME"):
+                    kwh_expected = kwh * self.car_charging_loss
+                    if octopus_intelligent_consider_full:
+                        kwh_expected = max(min(kwh_expected, limit - car_soc), 0)
+                        kwh = dp2(kwh_expected / self.car_charging_loss)
 
-                    car_soc = min(car_soc + kwh_expected, limit)
-                    new_slot = {}
-                    new_slot["start"] = start_minutes
-                    new_slot["end"] = end_minutes
-                    new_slot["kwh"] = kwh
-                    new_slot["average"] = slot_average
-                    new_slot["cost"] = dp2(new_slot["average"] * kwh)
-                    new_slot["soc"] = dp2(car_soc)
-                    new_slot["octopus"] = True
-                    new_slots.append(new_slot)
+                    # Remove the remaining unused time
+                    if octopus_intelligent_consider_full and kwh > 0 and (min(car_soc + kwh_expected, limit) >= limit):
+                        required_extra_soc = max(limit - car_soc, 0)
+                        required_minutes = int(required_extra_soc / (kwh_original * self.car_charging_loss) * (end_minutes - start_minutes) + 0.5) if kwh_original > 0 else 0
+                        required_minutes = min(required_minutes, end_minutes - start_minutes)
+                        end_minutes = start_minutes + required_minutes
 
-                    if end_minutes_original > end_minutes:
+                        car_soc = min(car_soc + kwh_expected, limit)
                         new_slot = {}
-                        new_slot["start"] = end_minutes
-                        new_slot["end"] = end_minutes_original
-                        new_slot["kwh"] = 0.0
+                        new_slot["start"] = start_minutes
+                        new_slot["end"] = end_minutes
+                        new_slot["kwh"] = kwh
                         new_slot["average"] = slot_average
-                        new_slot["cost"] = 0.0
+                        new_slot["cost"] = dp2(new_slot["average"] * kwh)
                         new_slot["soc"] = dp2(car_soc)
                         new_slot["octopus"] = True
                         new_slots.append(new_slot)
 
-                else:
-                    car_soc = min(car_soc + kwh_expected, limit)
-                    new_slot = {}
-                    new_slot["start"] = start_minutes
-                    new_slot["end"] = end_minutes
-                    new_slot["kwh"] = kwh
-                    new_slot["average"] = slot_average
-                    new_slot["cost"] = dp2(new_slot["average"] * kwh)
-                    new_slot["soc"] = dp2(car_soc)
-                    new_slot["octopus"] = True
-                    new_slots.append(new_slot)
+                        if end_minutes_original > end_minutes:
+                            new_slot = {}
+                            new_slot["start"] = end_minutes
+                            new_slot["end"] = end_minutes_original
+                            new_slot["kwh"] = 0.0
+                            new_slot["average"] = slot_average
+                            new_slot["cost"] = 0.0
+                            new_slot["soc"] = dp2(car_soc)
+                            new_slot["octopus"] = True
+                            new_slots.append(new_slot)
+
+                    else:
+                        car_soc = min(car_soc + kwh_expected, limit)
+                        new_slot = {}
+                        new_slot["start"] = start_minutes
+                        new_slot["end"] = end_minutes
+                        new_slot["kwh"] = kwh
+                        new_slot["average"] = slot_average
+                        new_slot["cost"] = dp2(new_slot["average"] * kwh)
+                        new_slot["soc"] = dp2(car_soc)
+                        new_slot["octopus"] = True
+                        new_slots.append(new_slot)
         return new_slots
 
     def rate_add_io_slots(self, car_n, rates, octopus_slots):
