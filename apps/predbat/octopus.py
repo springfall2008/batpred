@@ -759,6 +759,16 @@ class OctopusAPI(ComponentBase):
                     elif device_id not in self.intelligent_devices:
                         # First time seeing this device with no completed dispatches yet
                         self.intelligent_devices[device_id] = device
+
+                # Drop devices that Octopus no longer returns as LIVE. Without this a device that
+                # is deregistered/replaced (e.g. a re-paired charger leaving a stale registration
+                # behind - invisible in the Octopus app but still present via the API at some point
+                # in the past) stays cached and republished forever, permanently occupying a car
+                # slot and holding num_cars up even though only one real device remains.
+                removed = sorted(set(self.intelligent_devices) - set(intelligent_devices))
+                for device_id in removed:
+                    self.log("OctopusAPI: Intelligent device {} no longer live, removing".format(device_id))
+                    del self.intelligent_devices[device_id]
         return self.intelligent_devices
 
     def suffix_to_device_id(self, suffix):
