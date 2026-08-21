@@ -2310,6 +2310,19 @@ class Octopus:
             else:
                 raise ValueError
 
+        # Downloaded data with a valid response but nothing covering the current time onward -
+        # e.g. a retired Octopus product whose URL still returns historical results (#2726).
+        # Retrying wouldn't help (the URL isn't broken, the product behind it is stale), so this
+        # is checked once per fresh download rather than inside the retry loop above.
+        if max(pdata.keys(), default=-1) < self.minutes_now:
+            self.log("Warn: Octopus: Downloaded data from URL {} has no current or future rates - the product may have been retired, check the URL in apps.yaml".format(url))
+            self.record_status("Warn: Octopus: URL has no current rates, check apps.yaml", debug=url, had_errors=True)
+            if url in self.octopus_url_cache:
+                pdata = self.octopus_url_cache[url]["data"]
+                return pdata
+            else:
+                raise ValueError
+
         # Cache New Octopus data
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
