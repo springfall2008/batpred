@@ -103,6 +103,7 @@ daynumber
 daysymbol
 dedup
 dedupe
+delayedstart
 dend
 denorm
 derate
@@ -119,6 +120,7 @@ dimport
 dischargeenergytotal
 dischargefreeze
 Dischg
+dishcare
 diverter
 dlimit
 dnoregion
