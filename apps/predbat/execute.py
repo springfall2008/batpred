@@ -1007,6 +1007,7 @@ class Execute:
                 "friendly_name": "Current PV Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
+                "device_class": "power",
                 "icon": "mdi:battery",
             },
         )
@@ -1017,6 +1018,7 @@ class Execute:
                 "friendly_name": "Current Grid Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
+                "device_class": "power",
                 "icon": "mdi:battery",
             },
         )
@@ -1027,6 +1029,7 @@ class Execute:
                 "friendly_name": "Current Load Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
+                "device_class": "power",
                 "icon": "mdi:battery",
             },
         )
@@ -1037,6 +1040,7 @@ class Execute:
                 "friendly_name": "Current Battery Power",
                 "state_class": "measurement",
                 "unit_of_measurement": "kW",
+                "device_class": "power",
                 "icon": "mdi:battery",
             },
         )
