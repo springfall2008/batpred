@@ -332,6 +332,8 @@ mtok
 mult
 myenergi
 mypy
+nanmean
+nanstd
 nattribute
 ncalls
 nearr

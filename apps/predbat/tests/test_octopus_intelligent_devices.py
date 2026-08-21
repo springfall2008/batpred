@@ -29,6 +29,7 @@ async def test_octopus_intelligent_devices(my_predbat):
     - Test 7: Planned dispatch with missing start/end is skipped
     - Test 8: In-progress flex dispatch not promoted to completed but trimmed to remainder (issue #4114)
     - Test 9: Future flex dispatch is left untrimmed in planned
+    - Test 10: async_update_intelligent_devices prunes a device no longer returned as LIVE
     """
     print("**** Running Octopus intelligent devices tests ****")
     failed = 0
@@ -499,6 +500,44 @@ async def test_octopus_intelligent_devices(my_predbat):
             failed += 1
         else:
             print("PASS: Future flex dispatch left untrimmed in planned")
+
+    # ------------------------------------------------------------------
+    # Test 10: async_update_intelligent_devices prunes a device Octopus no longer returns as
+    # LIVE. Regression for a support ticket where a customer with one EV saw two Octopus
+    # Intelligent device IDs in Predbat: a stale/ghost registration (invisible in the Octopus
+    # app) was cached on a prior poll and never dropped once it stopped appearing in the live
+    # devices() response, permanently occupying a car slot and holding num_cars up.
+    # ------------------------------------------------------------------
+    print("\n*** Test 10: Stale device pruned when no longer live ***")
+    api = make_api()
+    api.tariffs = {"import": {"tariffCode": "E-1R-INTELLI-VAR-24-10-29-A", "deviceID": "meter-1"}}
+
+    # Cycle 1: Octopus returns two live devices
+    api.async_get_intelligent_devices = AsyncMock(
+        return_value={
+            "device-real": {"device_id": "device-real", "completed_dispatches": [], "planned_dispatches": []},
+            "device-ghost": {"device_id": "device-ghost", "completed_dispatches": [], "planned_dispatches": []},
+        }
+    )
+    await api.async_update_intelligent_devices("test-account")
+
+    if set(api.intelligent_devices.keys()) != {"device-real", "device-ghost"}:
+        print(f"ERROR: Expected both devices cached after cycle 1, got {list(api.intelligent_devices.keys())}")
+        failed += 1
+    else:
+        # Cycle 2: Octopus now only returns the real device - device-ghost has dropped out of
+        # the live list (re-paired charger, deregistered vehicle, etc.)
+        api.async_get_intelligent_devices = AsyncMock(return_value={"device-real": {"device_id": "device-real", "completed_dispatches": [], "planned_dispatches": []}})
+        await api.async_update_intelligent_devices("test-account")
+
+        if "device-ghost" in api.intelligent_devices:
+            print(f"ERROR: Stale device-ghost was not pruned, still in intelligent_devices: {list(api.intelligent_devices.keys())}")
+            failed += 1
+        elif "device-real" not in api.intelligent_devices:
+            print("ERROR: Real device was incorrectly removed along with the stale one")
+            failed += 1
+        else:
+            print("PASS: Stale device no longer live was pruned, real device retained")
 
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")

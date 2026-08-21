@@ -1506,6 +1506,7 @@ class Fetch:
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "°C",
+                "device_class": "temperature",
                 "icon": "mdi:temperature-celsius",
             },
         )

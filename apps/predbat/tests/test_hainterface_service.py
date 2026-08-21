@@ -142,6 +142,15 @@ def test_hainterface_async_call_service_basic(my_predbat=None):
     if test_failed == 0:
         print("✓ Command processed successfully")
 
+    # A successful call with no return_response requested must return a truthy success
+    # indicator, not None - callers (e.g. octopus.py's join-service fallback) distinguish
+    # "service call succeeded" from "service call failed" by truthiness of this return value.
+    if result is not True:
+        print(f"ERROR: Expected True on success with no return_response requested, got {result}")
+        failed += 1
+    else:
+        print("✓ Returned True on success with no return_response requested")
+
     return failed
 
 

@@ -602,6 +602,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
         self.octopus_last_joined_try = None
+        # None = not yet confirmed, True = the current Power Down join service is confirmed registered.
+        # Deliberately never set to False - a failed probe still re-tries every join rather than being
+        # cached, since the underlying result can be an ambiguous timeout, not just "not registered".
+        # See the join logic in octopus.py and TODO(#4599).
+        self.octopus_join_service_power_down = None
         self.calculate_savings_max_charge_slots = 1
         self.inverter_data_last_fetch = None
         self.octopus_url_cache_loaded = False
