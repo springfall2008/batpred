@@ -198,6 +198,7 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
     # slots are not filtered as past events (dynamic_load_car default is 720).
     now = datetime.now(tz=timezone.utc)
     my_predbat.now_utc = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    my_predbat.midnight_utc = my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
     my_predbat.minutes_now = 0
 
     # apps.yaml config args needed by fetch_sensor_data_cars
