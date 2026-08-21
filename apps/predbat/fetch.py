@@ -1799,7 +1799,18 @@ class Fetch:
                 rates[minute] = 0
             max_minute = 48 * 60
 
-        manual_items = self.get_manual_api(rtype)
+        # get_manual_api() returns each override wrapped as {"index": ..., "value": {...}}, not the
+        # flat {"start": ..., "end": ..., "rate": ...} shape this loop expects below - unwrap it here.
+        # Before this fix, an unwrapped entry's this_rate.get("start")/get("rate") always missed,
+        # falling through to the "00:00:00" start/end default (which, since end<=start, wraps to a
+        # full 24-hour range) and the rate=0/rate_increment=True default (a genuine no-op on the
+        # rate value) - silently marking every minute of the day as overridden in rate_replicate
+        # (and hence in the plan display) even for the narrowest override window (batpred#2578).
+        # For most callers (anything sourced via get_arg(..., default=[]), which already merges
+        # manual API overrides into its own return value) this duplicates an override that's already
+        # present in `info` - harmless once correctly shaped, since re-applying the same window with
+        # the same rate is idempotent.
+        manual_items = [item["value"] for item in self.get_manual_api(rtype) if isinstance(item, dict) and isinstance(item.get("value"), dict)]
         if manual_items:
             self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
 
