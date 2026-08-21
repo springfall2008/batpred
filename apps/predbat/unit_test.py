@@ -599,7 +599,7 @@ def main():
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),
         # Production-scale ML training harness against a captured history fixture
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
-        ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
+        ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", True),
     ]
 
     # Parse command line arguments
