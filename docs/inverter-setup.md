@@ -566,7 +566,7 @@ The Hanchu iESS has no native Predbat integration. Control is implemented via Pr
 
 Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) over your `apps.yaml` and follow the steps below.
 
-### Prerequisites
+### Hanchu iESS Prerequisites
 
 Install the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration via HACS and configure it with your Hanchu cloud account credentials. Confirm that inverter and battery sensors are appearing in Home Assistant before proceeding.
 
