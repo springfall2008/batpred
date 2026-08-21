@@ -1191,6 +1191,62 @@ def _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed):
     return failed
 
 
+def _test_missing_cost_today_history(my_predbat, failed):
+    """Test: no recorded history for predbat.cost_today (issue #4583).
+
+    Everything calculate_yesterday computes is anchored on yesterday's recorded cost, so when Home
+    Assistant has no history for predbat.cost_today it must give up *before* the expensive
+    step_data_history()/rate-scan work rather than after it, and must not repeat that work - and its
+    warning - on every 10 minute cycle. The reporter's 30 hour log carried 188 copies of it.
+    """
+    print("calculate_yesterday: Test - missing cost_today history bails out early and throttles")
+    now_utc = _setup_base(my_predbat)
+
+    step_calls = []
+    original_run_pred = my_predbat.run_prediction
+
+    def _counting_step_data(*args, **kwargs):
+        """Record that the yesterday step data was built, which shouldn't happen here."""
+        step_calls.append(args)
+        return {}
+
+    history_calls = []
+
+    def _no_history(entity_id, days=30, required=True, tracked=True):
+        """Mimic Home Assistant recording none of the predbat.* entities."""
+        history_calls.append(entity_id)
+        return None
+
+    my_predbat.step_data_history = _counting_step_data
+    my_predbat.get_history_wrapper = _no_history
+    my_predbat.savings_last_updated = None
+
+    my_predbat.calculate_yesterday()
+
+    if step_calls:
+        print("ERROR: calculate_yesterday built the yesterday step data {} times with no cost_today history to use it with".format(len(step_calls)))
+        failed = True
+
+    if my_predbat.savings_last_updated is None:
+        print("ERROR: calculate_yesterday did not record the attempt, so it will redo this work every cycle")
+        failed = True
+
+    # A second call ten minutes later must early-exit rather than fetching and warning all over again
+    history_calls.clear()
+    my_predbat.now_utc = now_utc + timedelta(minutes=10)
+
+    my_predbat.calculate_yesterday()
+
+    if history_calls:
+        print("ERROR: calculate_yesterday retried within the hour, fetching {}".format(history_calls))
+        failed = True
+
+    my_predbat.now_utc = now_utc
+    _restore_methods(my_predbat, original_run_pred)
+    my_predbat.savings_last_updated = None
+    return failed
+
+
 def _test_yesterday_slot_is_exporting(my_predbat, failed):
     """Test: yesterday_slot_is_exporting() recognises Cross-charging as export activity.
 
@@ -1241,6 +1297,7 @@ def test_calculate_yesterday(my_predbat):
     failed = _test_reconstruct_car_slots(my_predbat, failed)
     failed = _test_soc_not_mutated_and_override_passed(my_predbat, failed)
     failed = _test_soc_kw_h0_fallback(my_predbat, failed)
+    failed = _test_missing_cost_today_history(my_predbat, failed)
     failed = _test_yesterday_slot_is_exporting(my_predbat, failed)
     failed = _test_cross_charging_reconstructed_as_both_windows(my_predbat, failed)
 

@@ -16,6 +16,7 @@ import time
 import uuid
 import traceback
 from utils import calc_percent_limit
+from const import EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 import pytz as _pytz
 
 from component_base import ComponentBase
@@ -363,15 +364,15 @@ class GatewayMQTT(ComponentBase):
         # Convert export/discharge windows to plan entries
         for i, window in enumerate(export_windows or []):
             limit = export_limits[i] if i < len(export_limits or []) else 0
-            if limit >= 100:
+            if limit >= EXPORT_LIMIT_IDLE:
                 continue
             target_soc = int(limit)
             export_power_w = discharge_rate_w
-            # Freeze export (export limit == 99): hold SoC and export only surplus PV
+            # Freeze export (export limit == EXPORT_LIMIT_FREEZE): hold SoC and export only surplus PV
             # rather than force-discharge. There is no freeze mode, so express it as a
-            # discharge entry with rate 0 and target = reserve. Match core's exact == 99
+            # discharge entry with rate 0 and target = reserve. Match core's exact ==
             # check — a fractional limit (e.g. 99.5) is a normal export, not a freeze.
-            if limit == 99:
+            if limit == EXPORT_LIMIT_FREEZE:
                 target_soc = reserve_percent
                 export_power_w = 0
             else:

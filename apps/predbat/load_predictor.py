@@ -107,6 +107,7 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             out -= self.mean
             out /= self.std
+        np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return out.astype(dtype) if dtype is not None and dtype != np.float32 else out
 
     def _assemble(self, target_chunks, out):
@@ -142,6 +143,7 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             batch -= self.mean
             batch /= self.std
+        np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return batch[0] if scalar else batch
 
 
@@ -361,6 +363,10 @@ class LoadPredictor:
                 if dropout_masks is not None and (i - 1) < len(dropout_masks) and dropout_masks[i - 1] is not None:
                     delta = delta * dropout_masks[i - 1]
 
+        # Clip gradients to prevent exploding gradients and NaN weight updates
+        weight_grads = [np.clip(g, -10.0, 10.0) for g in weight_grads]
+        bias_grads = [np.clip(g, -10.0, 10.0) for g in bias_grads]
+
         return weight_grads, bias_grads
 
     def _adam_update(self, weight_grads, bias_grads, beta1=0.9, beta2=0.999, epsilon=1e-8, lr=None):
@@ -404,6 +410,10 @@ class LoadPredictor:
 
             # Update biases (no weight decay on biases)
             self.biases[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
+
+            # Ensure weights and biases remain finite
+            self.weights[i] = np.nan_to_num(self.weights[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            self.biases[i] = np.nan_to_num(self.biases[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _create_time_features(self, minute_of_day, day_of_week, day_of_year=1):
         """
@@ -533,12 +543,16 @@ class LoadPredictor:
             for j in range(CHUNK_STEPS):
                 m = minute + j * STEP_MINUTES
                 if m in energy_per_step:
-                    total += energy_per_step[m]
+                    val = energy_per_step[m]
+                    if val is None or np.isnan(val) or np.isinf(val):
+                        valid = False
+                        break
+                    total += float(val)
                 else:
                     valid = False
                     break
-            if valid:
-                chunked[chunk_idx] = total
+            if valid and np.isfinite(total):
+                chunked[chunk_idx] = float(total)
             chunk_idx += 1
             minute += CHUNK_MINUTES
 
@@ -572,9 +586,13 @@ class LoadPredictor:
             for j in range(CHUNK_STEPS):
                 m = minute + j * STEP_MINUTES
                 if m in values_per_step:
-                    vals.append(values_per_step[m])
+                    val = values_per_step[m]
+                    if val is not None and not np.isnan(val) and not np.isinf(val):
+                        vals.append(float(val))
             if vals:
-                chunked[chunk_idx] = float(np.mean(vals))
+                mean_val = float(np.mean(vals))
+                if np.isfinite(mean_val):
+                    chunked[chunk_idx] = mean_val
             chunk_idx += 1
             minute += CHUNK_MINUTES
 
@@ -909,7 +927,7 @@ class LoadPredictor:
         total = np.zeros(X.shape[1], dtype=np.float64)
         for start in range(0, rows, block):
             total += X[start : start + block].sum(axis=0, dtype=np.float64)
-        mean = total / rows
+        mean = np.nan_to_num(total / rows, nan=0.0, posinf=0.0, neginf=0.0)
 
         squares = np.zeros(X.shape[1], dtype=np.float64)
         for start in range(0, rows, block):
@@ -918,7 +936,7 @@ class LoadPredictor:
             # Square into the deviation buffer rather than allocating a second one of the
             # same size; the values are identical either way
             squares += np.square(deviation, out=deviation).sum(axis=0)
-        std = np.sqrt(squares / rows)
+        std = np.nan_to_num(np.sqrt(squares / rows), nan=1.0, posinf=1.0, neginf=1.0)
 
         return mean.astype(np.float32), std.astype(np.float32)
 
@@ -936,14 +954,14 @@ class LoadPredictor:
         total = np.zeros(TOTAL_FEATURES, dtype=np.float64)
         for block in dataset.blocks():
             total += block.sum(axis=0, dtype=np.float64)
-        mean = total / rows
+        mean = np.nan_to_num(total / rows, nan=0.0, posinf=0.0, neginf=0.0)
 
         squares = np.zeros(TOTAL_FEATURES, dtype=np.float64)
         for block in dataset.blocks():
             deviation = block.astype(np.float64)
             deviation -= mean
             squares += np.square(deviation, out=deviation).sum(axis=0)
-        std = np.sqrt(squares / rows)
+        std = np.nan_to_num(np.sqrt(squares / rows), nan=1.0, posinf=1.0, neginf=1.0)
 
         new_mean = mean.astype(np.float32)
         new_std = np.maximum(std.astype(np.float32), self._get_min_std_array(TOTAL_FEATURES))
@@ -1054,9 +1072,11 @@ class LoadPredictor:
         if in_place:
             X -= self.feature_mean
             X /= self.feature_std
+            np.nan_to_num(X, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
             return X
 
-        return (X - self.feature_mean) / self.feature_std
+        out = (X - self.feature_mean) / self.feature_std
+        return np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _normalize_targets(self, y, fit=False):
         """
@@ -1070,14 +1090,17 @@ class LoadPredictor:
             Normalized target array
         """
         if fit:
-            self.target_mean = np.mean(y)
-            self.target_std = np.std(y)
+            m = np.nanmean(y)
+            s = np.nanstd(y)
+            self.target_mean = float(m) if np.isfinite(m) else 0.0
+            self.target_std = float(s) if np.isfinite(s) else 1.0
             self.target_std = max(self.target_std, 1e-8)
 
         if self.target_mean is None or self.target_std is None:
             return y
 
-        return (y - self.target_mean) / self.target_std
+        out = (y - self.target_mean) / self.target_std
+        return np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _denormalize_predictions(self, y_pred):
         """
@@ -1364,8 +1387,9 @@ class LoadPredictor:
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)
         self.epochs_trained += epochs
-
-        self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)))
+        mean_y = float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8
+        pct_bias = 100.0 * float(best_val_bias) / mean_y
+        self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), pct_bias))
 
         # Autoregressive diagnostic: run a full AR rollout over the holdout period
         # to expose compounding error (teacher-forced val_mae won't show this)
@@ -1516,7 +1540,7 @@ class LoadPredictor:
             )
 
         total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
-        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}→{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
+        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}->{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
 
         val_mae = None
         for pass_idx, window in enumerate(window_sizes):
@@ -1542,7 +1566,7 @@ class LoadPredictor:
                 temp_minutes=temp_slice,
                 import_rates=import_slice,
                 export_rates=export_slice,
-                is_initial=(pass_idx == 0),
+                is_initial=(pass_idx == 0 and not self.model_initialized),
                 epochs=epochs,
                 time_decay_days=time_decay_days,
                 patience=patience,
@@ -1566,7 +1590,7 @@ class LoadPredictor:
             temp_minutes=temp_minutes,
             import_rates=import_rates,
             export_rates=export_rates,
-            is_initial=False,
+            is_initial=(not self.model_initialized),
             epochs=epochs,
             time_decay_days=time_decay_days,
             patience=patience,

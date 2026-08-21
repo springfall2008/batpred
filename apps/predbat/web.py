@@ -476,6 +476,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
         app.router.add_get("/download", self.html_download_file)
+        app.router.add_get("/images/{filename}", self.html_logo_image)
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
@@ -5210,6 +5211,34 @@ document.addEventListener('DOMContentLoaded', function() {
         except Exception as e:
             self.log(f"Error downloading file: {str(e)}")
             return web.Response(text=f"Error downloading file: {str(e)}", status=500)
+
+    async def html_logo_image(self, request):
+        """
+        Serve the bundled Predbat logo images locally.
+
+        The logos used to be loaded from raw.githubusercontent.com, which left the
+        dashboard hanging for ~15s whenever GitHub was unreachable or rate-limiting
+        (issue #4562). They now ship alongside the other app files so the page never
+        depends on internet access to render.
+        """
+        content_types = {
+            "bat_logo.svg": "image/svg+xml",
+            "bat_logo_light.png": "image/png",
+            "bat_logo_dark.png": "image/png",
+        }
+        filename = request.match_info.get("filename")
+        content_type = content_types.get(filename)
+        if not content_type:
+            return web.Response(text="Not found", status=404)
+
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        try:
+            with open(file_path, "rb") as handle:
+                content = handle.read()
+        except OSError:
+            return web.Response(text="Not found", status=404)
+
+        return web.Response(body=content, content_type=content_type, headers={"Cache-Control": "public, max-age=604800"})
 
     async def html_metrics_dashboard(self, request):
         """

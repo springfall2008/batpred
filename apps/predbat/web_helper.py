@@ -7190,7 +7190,19 @@ def get_plan_renderer_js():
         }
 
         if (!data) {
-            container.innerHTML = '<h2>Plan data is loading, please wait...</h2>';
+            if (currentView === 'plan') {
+                container.innerHTML = '<h2>Plan data is loading, please wait...</h2>';
+            } else {
+                // The yesterday/baseline views are only produced once calculate_yesterday() has run,
+                // which it can't do without the recorded history of predbat.cost_today - say so rather
+                // than sitting on a loading message that will never go away
+                container.innerHTML = '<h2>No data for this view yet</h2>' +
+                    '<p>This view is computed about once an hour from what actually happened yesterday, ' +
+                    'so it stays empty for the first hour after Predbat starts.</p>' +
+                    '<p>If it never fills in, Predbat could not read the history of <b>predbat.cost_today</b> ' +
+                    'from Home Assistant. Check that the Home Assistant recorder is storing the Predbat entities ' +
+                    '(see the recorder notes in the FAQ) and look for <i>Calculate yesterday</i> warnings in the Predbat log.</p>';
+            }
             return;
         }
 
@@ -7337,8 +7349,8 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
-    text += '<link rel="icon" type="image/svg+xml" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo.svg">'
-    text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
+    text += '<link rel="icon" type="image/svg+xml" href="./images/bat_logo.svg">'
+    text += '<link rel="icon" type="image/png" href="./images/bat_logo_light.png">'
 
     text += """
 <script>
@@ -7692,8 +7704,8 @@ function flyBat() {
     // Get the appropriate bat image based on dark/light mode
     const isDarkMode = document.body.classList.contains('dark-mode');
     const batImage = isDarkMode
-        ? 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png'
-        : 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png';
+        ? './images/bat_logo_dark.png'
+        : './images/bat_logo_light.png';
 
     bat.style.backgroundImage = `url('${batImage}')`;
 
@@ -8168,9 +8180,9 @@ setTimeout(function() {
 <div class="menu-bar">
 <div class="logo">
     <img id="logo-image"
-            src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
-            data-light-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
-            data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
+            src="./images/bat_logo_light.png"
+            data-light-src="./images/bat_logo_light.png"
+            data-dark-src="./images/bat_logo_dark.png"
             alt="Predbat Logo"
             onclick="flyBat()"
             style="cursor: pointer;"

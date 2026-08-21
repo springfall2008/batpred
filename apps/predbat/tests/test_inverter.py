@@ -25,14 +25,15 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
     """
     FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods - "feed-in
     first"/freeze export does not hold SoC flat on either, PV above the export limit still charges the
-    battery instead of being clipped (#4207). FoxCloud's entry was already correctly False; FoxESS's was
-    left True, so execute.py's fetch_inverter_data() never disabled set_export_freeze/set_export_freeze_only
-    for modbus users, letting the planner offer a freeze option that couldn't actually do anything on the
-    real inverter.
+    battery instead of being clipped (#4207). Both are now True: that spillover-charges-the-battery
+    behaviour is correctly modelled (prediction.py's freeze branch, gated on
+    inverter_can_charge_during_export) rather than being a reason to disable freeze outright for this
+    hardware - see test_freeze_export_recapture_beyond_limit in test_optimise_solar.py for the modelling
+    itself.
     """
     failed = False
-    if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] is not False:
-        print("ERROR: FoxESS support_discharge_freeze should be False, got {}".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"]))
+    if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] is not True:
+        print("ERROR: FoxESS support_discharge_freeze should be True, got {}".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"]))
         failed = True
     if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] != INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]:
         print("ERROR: FoxESS support_discharge_freeze ({}) should match FoxCloud ({}) - same hardware, different connection method".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"], INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]))
@@ -1307,10 +1308,15 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     else:
         my_predbat.args["discharge_freeze_service"] = None
     my_predbat.args["device_id"] = "DID0"
-    power = int(inv.battery_rate_max_discharge * MINUTE_WATT)
+    my_predbat.args["discharge_rate"] = "number.discharge_rate"
+    if "discharge_rate_percent" in my_predbat.args:
+        del my_predbat.args["discharge_rate_percent"]
 
     dummy_items["select.discharge_start_time"] = discharge_start_time
     dummy_items["select.discharge_end_time"] = discharge_end_time
+    dummy_items["number.discharge_rate"] = 1802
+
+    power = 1802
 
     inv.adjust_export_immediate(soc, freeze=freeze)
     result = ha.get_service_store()

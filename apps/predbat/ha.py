@@ -498,7 +498,7 @@ class HAInterface(ComponentBase):
 
         # Create event and result holder for this request
         event = threading.Event()
-        result_holder = {"response": None, "success": None, "error": None}
+        result_holder = {"response": None, "success": None, "error": None, "ha_error": None}
 
         # Add to command queue
         with self.ws_pending_lock:
@@ -515,21 +515,27 @@ class HAInterface(ComponentBase):
             self.log("Warn: Service call {}/{} failed: {}".format(domain, service, result_holder["error"]))
             return None
 
-        # Check for timeout (neither success nor error was set)
+        # Check for timeout (neither success nor error was set). This is indistinguishable here from
+        # a call that actually succeeded but whose response arrived (or was processed) just after the
+        # 2 minute deadline - callers that treat a falsy return as "try a different service name"
+        # (e.g. octopus.py's join fallback) can in principle be tricked into a harmless-but-redundant
+        # duplicate call by this specific edge case. Not fully resolved - the timeout window is long
+        # enough that this should be rare in practice, and the alternative (a real explicit failure)
+        # is by far the more common falsy case.
         if result_holder.get("success") is None and not result_holder.get("error"):
             self.log("Warn: Service call {}/{} failed or timed out: result {}".format(domain, service, result_holder))
             return None
 
         success = result_holder.get("success", False)
         if not success:
-            self.log("Warn: Service call {}/{} data {} failed".format(domain, service, service_data))
+            self.log("Warn: Service call {}/{} data {} failed: {}".format(domain, service, service_data, result_holder.get("ha_error")))
             return None
 
         # Return response data if requested
         if return_response:
             return result_holder.get("response")
 
-        return None
+        return True
 
     async def socketLoop(self):
         """
@@ -628,6 +634,9 @@ class HAInterface(ComponentBase):
                                                         result_holder["success"] = data.get("success", False)
                                                         result_holder["response"] = data.get("result", {}).get("response", None)
                                                         result_holder["error"] = None
+                                                        # HA's own reported reason when success is False (e.g. {"code": "not_found", "message": "..."})
+                                                        # - distinct from "error" above, which is reserved for a local send/transport failure.
+                                                        result_holder["ha_error"] = data.get("error")
                                                         request_info["event"].set()
 
                                             success = data.get("success", False)

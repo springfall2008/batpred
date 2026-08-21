@@ -63,6 +63,9 @@ def test_load_ml(my_predbat=None):
         ("car_subtraction_direct", _test_car_subtraction_direct, "Direct car_subtraction method with interpolation and smoothing"),
         ("component_run_data_merge", _test_component_run_data_merge, "LoadMLComponent run() data fetch, save and merge across two runs"),
         ("component_init_predictor_last_train_time", _test_component_init_predictor_sets_last_train_time, "LoadMLComponent _init_predictor sets last_train_time from embedded training_timestamp"),
+        ("nan_inf_robustness", _test_nan_inf_robustness, "LoadPredictor handles NaN, Inf, and None across input channels without NaN loss"),
+        ("database_zero_preservation", _test_database_zero_preservation, "Database save/load preserves 0.0 values across roundtrip"),
+        ("curriculum_90day_intermediate_passes", _test_curriculum_90day_intermediate_passes, "Curriculum training across 90-day window with 8 intermediate passes"),
         # ("real_data_training", _test_real_data_training, "Train on real data with chart"),
         # ("pretrained_model_prediction", _test_pretrained_model_prediction, "Load pre-trained model and generate predictions with chart"),
     ]
@@ -271,7 +274,7 @@ def _test_pv_energy_conversion():
 def _create_synthetic_pv_data(n_days=7, now_utc=None, forecast_hours=48):
     """Create synthetic PV data for testing (historical + forecast).
 
-    Returns per-5-min energy (kWh per step) — not cumulative.
+    Returns per-5-min energy (kWh per step) -- not cumulative.
     Positive keys = historical (minute 0 = now), negative keys = future.
     """
     if now_utc is None:
@@ -373,7 +376,7 @@ def _create_synthetic_temp_data(n_days=7, now_utc=None, forecast_hours=48):
 def _create_synthetic_load_data(n_days=7, now_utc=None):
     """Create synthetic load data for testing.
 
-    Returns per-5-min energy (kWh per step) — not cumulative.
+    Returns per-5-min energy (kWh per step) -- not cumulative.
     Positive keys = historical, minute 0 = most recent.
     """
     if now_utc is None:
@@ -820,7 +823,7 @@ def _test_curriculum_training():
 
     now_utc = datetime.now(timezone.utc)
 
-    # ── Happy-path: 28 days of data → 3 intermediate passes + 1 final ────────
+    # ── Happy-path: 28 days of data -> 3 intermediate passes + 1 final ────────
     np.random.seed(42)
     load_data_28 = _create_synthetic_load_data(n_days=28, now_utc=now_utc)
 
@@ -884,7 +887,7 @@ def _test_curriculum_training():
         now_utc,
         epochs=3,
         patience=3,
-        curriculum_window_days=14,  # Requires 14 days; only 5 days available → fallback
+        curriculum_window_days=14,  # Requires 14 days; only 5 days available -> fallback
         curriculum_step_days=7,
     )
     # Fallback should complete without crashing and return a MAE or None (if still
@@ -1081,7 +1084,7 @@ def _test_component_run_data_merge():
         component.save_database_history = mock_save_database_history
 
         # ── Run 1 (first=True, seconds=0) ───────────────────────────────────────
-        # Expect: data fetched and stored, but training deferred → no save, no training.
+        # Expect: data fetched and stored, but training deferred -> no save, no training.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_1, 28, 5.0, None, None, None, None))
 
         result = await component.run(seconds=0, first=True)
@@ -1096,13 +1099,13 @@ def _test_component_run_data_merge():
         assert save_call_count[0] == 0, f"save_database_history should NOT be called on first run (deferred), called {save_call_count[0]} times"
         assert training_call_count[0] == 0, f"Training should NOT run on first run, ran {training_call_count[0]} times"
 
-        print("    \u2713 Run 1: data populated, training deferred, no save")
+        print("    PASS: Run 1: data populated, training deferred, no save")
 
         # ── Advance time by ELAPSED_MINUTES ─────────────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
 
         # ── Run 2 (first=False, seconds=30) ─────────────────────────────────────
-        # last_train_time is None → retrain_age_seconds = RETRAIN_INTERVAL_SECONDS → should_train=True
+        # last_train_time is None -> retrain_age_seconds = RETRAIN_INTERVAL_SECONDS -> should_train=True
         # Expect: shift old keys, merge fresh data, run initial training, save once.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_2, 7, 3.0, None, None, None, None))
 
@@ -1114,9 +1117,9 @@ def _test_component_run_data_merge():
         assert save_call_count[0] == 1, f"save_database_history should be called once after second run, called {save_call_count[0]} times"
 
         # ── Verify time-shift: old keys shifted forward by ELAPSED_MINUTES ──
-        assert component.load_data.get(SHIFT) == 0.1, f"Old key 0 → key {SHIFT} after shift, got {component.load_data.get(SHIFT)}"
-        assert component.load_data.get(500 + SHIFT) == 0.1, f"Old key 500 → key {500 + SHIFT}, got {component.load_data.get(500 + SHIFT)}"
-        assert component.load_data.get(2000 + SHIFT) == 0.05, f"Old key 2000 → key {2000 + SHIFT}, got {component.load_data.get(2000 + SHIFT)}"
+        assert component.load_data.get(SHIFT) == 0.1, f"Old key 0 -> key {SHIFT} after shift, got {component.load_data.get(SHIFT)}"
+        assert component.load_data.get(500 + SHIFT) == 0.1, f"Old key 500 -> key {500 + SHIFT}, got {component.load_data.get(500 + SHIFT)}"
+        assert component.load_data.get(2000 + SHIFT) == 0.05, f"Old key 2000 -> key {2000 + SHIFT}, got {component.load_data.get(2000 + SHIFT)}"
         assert component.load_data.get(2000) is None, f"Key 2000 should be gone after shift (moved to {2000 + SHIFT})"
 
         # ── Verify fresh data from fetch_data_2 is at the expected keys ──
@@ -1124,15 +1127,15 @@ def _test_component_run_data_merge():
             actual = component.load_data.get(minute)
             assert actual == expected_value, f"At minute {minute}: expected {expected_value} (fetch_data_2) but got {actual}"
 
-        print("    \u2713 Run 2: initial training fired, keys shifted, fresh data merged, save called")
+        print("    PASS: Run 2: initial training fired, keys shifted, fresh data merged, save called")
 
         # ── Advance time by another ELAPSED_MINUTES ──────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
 
         # ── Run 3 (first=False, seconds=PREDICTION_INTERVAL_SECONDS) ─────────────
         # last_train_time = 30 min ago (set in mock_do_training to component.now_utc of Run 2).
-        # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) → should_train=False.
-        # seconds % PREDICTION_INTERVAL_SECONDS == 0 → should_fetch=True.
+        # retrain_age_seconds = 30*60 = 1800 < RETRAIN_INTERVAL_SECONDS (7200) -> should_train=False.
+        # seconds % PREDICTION_INTERVAL_SECONDS == 0 -> should_fetch=True.
         # Expect: fetch+predict+save only, no training.
         component._fetch_load_data = AsyncMock(return_value=(fetch_data_3, 7, 3.0, None, None, None, None))
 
@@ -1142,7 +1145,7 @@ def _test_component_run_data_merge():
         assert training_call_count[0] == 1, f"Training should NOT run again on third run (model too fresh), ran {training_call_count[0]} times total"
         assert save_call_count[0] == 2, f"save_database_history should be called again on third run, called {save_call_count[0]} times"
 
-        print("    \u2713 Run 3: fetch-only cycle (model fresh), save called without retraining")
+        print("    PASS: Run 3: fetch-only cycle (model fresh), save called without retraining")
 
     run_async(run_test())
 
@@ -1283,7 +1286,7 @@ def _test_real_data_training():
         history_hours = 7 * 24  # 7 days back
         prediction_hours = 48  # 2 days forward
 
-        # Read historical load_data (already per-5-min energy — not cumulative)
+        # Read historical load_data (already per-5-min energy -- not cumulative)
         # Going backwards in time: minute 0 is now, higher minutes are past
         historical_minutes = []
         historical_energy = []
@@ -1416,7 +1419,7 @@ def _test_real_data_training():
             pred_minutes.append(minute)
             pred_energy.append(energy_kwh)
 
-        # Read PV data (already per-5-min energy — not cumulative)
+        # Read PV data (already per-5-min energy -- not cumulative)
         # Historical PV (positive minutes, going back in time)
         pv_historical_minutes = []
         pv_historical_energy = []
@@ -1916,7 +1919,7 @@ def _test_component_fetch_load_data():
         assert result_age == 28, f"Expected 28 days, got {result_age}"
         assert len(result_data) > 0, "Load data should not be empty"
         assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
-        print("    ✓ Basic fetch successful")
+        print("    PASS: Basic fetch successful")
 
     # Test 2: Missing sensor (should return None)
     async def test_missing_sensor():
@@ -1952,7 +1955,7 @@ def _test_component_fetch_load_data():
         assert result_data is None, "Should return None when sensor missing"
         assert result_age == 0, "Age should be 0 when sensor missing"
         assert result_now == 0, "Current load should be 0 when sensor missing"
-        print("    ✓ Missing sensor handled correctly")
+        print("    PASS: Missing sensor handled correctly")
 
     # Test 3: Car charging subtraction
     async def test_car_charging_subtraction():
@@ -2034,7 +2037,7 @@ def _test_component_fetch_load_data():
             expected = 0.7  # One step of (1.0 - 0.3) in per-step format
             assert abs(value_1435 - expected) < 0.01, f"At minute 1435, expected ~{expected} kWh, got {value_1435:.4f}"
 
-        print("    ✓ Car charging subtraction works")
+        print("    PASS: Car charging subtraction works")
 
     # Test 3b: Car charging threshold-based detection (without sensor)
     async def test_car_charging_threshold_detection():
@@ -2133,7 +2136,7 @@ def _test_component_fetch_load_data():
             expected = 0.375  # Car detected, subtract estimate
             assert abs(value_1420 - expected) < 0.01, f"At minute 1420 (high load again), expected ~{expected} kWh, got {value_1420:.4f}"
 
-        print("    ✓ Car charging threshold detection works")
+        print("    PASS: Car charging threshold detection works")
 
     # Test 4: Load power fill
     async def test_load_power_fill():
@@ -2174,7 +2177,7 @@ def _test_component_fetch_load_data():
         assert result_data is not None, "Should return load data"
         assert mock_base_with_power.fill_load_from_power.called, "fill_load_from_power should be called"
         assert result_now >= 0, f"Current load should be non-negative, got {result_now}"
-        print("    ✓ Load power fill invoked")
+        print("    PASS: Load power fill invoked")
 
     # Test 5: Exception handling
     async def test_exception_handling():
@@ -2197,7 +2200,7 @@ def _test_component_fetch_load_data():
         assert result_data is None, "Should return None on exception"
         assert result_age == 0, "Age should be 0 on exception"
         assert result_now == 0, "Current load should be 0 on exception"
-        print("    ✓ Exception handling works")
+        print("    PASS: Exception handling works")
 
     # Test 6: Empty load data
     async def test_empty_load_data():
@@ -2221,7 +2224,7 @@ def _test_component_fetch_load_data():
         assert result_data is None, "Should return None when load data is empty"
         assert result_age == 0, "Age should be 0 when load data is empty"
         assert result_now == 0, "Current load should be 0 when load data is empty"
-        print("    ✓ Empty load data handled correctly")
+        print("    PASS: Empty load data handled correctly")
 
     # Test 7: Temperature data fetch with future predictions only
     async def test_temperature_data_fetch():
@@ -2278,7 +2281,7 @@ def _test_component_fetch_load_data():
         # Verify get_state_wrapper was called correctly
         assert mock_base_with_temp.get_state_wrapper.called, "get_state_wrapper should be called"
 
-        print("    ✓ Temperature data fetch (future predictions) works")
+        print("    PASS: Temperature data fetch (future predictions) works")
 
     # Test 8: Temperature data with no predictions (None return)
     async def test_temperature_no_data():
@@ -2308,7 +2311,7 @@ def _test_component_fetch_load_data():
         assert isinstance(result_temp, dict), "Temperature data should be a dict"
         assert len(result_temp) == 0, "Temperature data should be empty when no predictions available"
 
-        print("    ✓ Temperature data with no predictions handled correctly")
+        print("    PASS: Temperature data with no predictions handled correctly")
 
     # Test 9: Step-size calculation correctness (bug #3384 regression test)
     async def test_step_size_calculation():
@@ -2376,7 +2379,7 @@ def _test_component_fetch_load_data():
             assert abs(value_1440 - expected_value) < 0.01, f"Energy at minute 1440 should be ~{expected_value:.2f} kWh (got {value_1440:.4f}). Bug #3384 would cause 0.0."
             assert value_1440 > 0.01, f"Energy at minute 1440 should be > 0.01 kWh (got {value_1440:.4f}). Bug #3384 would cause near-zero."
 
-        # Check minute 1435 (per-step energy for that interval — NOT accumulated)
+        # Check minute 1435 (per-step energy for that interval -- NOT accumulated)
         if 1435 in result_data:
             value_1435 = result_data[1435]
             # delta = abs(load_data[1435] - load_data[1440]) = abs(1.0 - 0.5) = 0.5
@@ -2403,7 +2406,29 @@ def _test_component_fetch_load_data():
         # Verify current load is reasonable (not near-zero)
         assert result_now > 0.05, f"Current load should be > 0.05 kWh (got {result_now:.4f}). Bug #3384 would cause near-zero."
 
-        print("    ✓ Step-size calculation correct (bug #3384 regression test passed)")
+        print("    PASS: Step-size calculation correct (bug #3384 regression test passed)")
+
+    async def test_rate_history_is_optional():
+        """The import/export rate history only adds features to the model, so a missing history
+        must be fetched as optional - Home Assistant has no history for predbat.rates when its
+        recorder isn't storing that entity, and that isn't a Predbat error (issue #4583)."""
+        mock_base = MockBase()
+        load_data, age = create_load_minutes(28)
+        mock_base.minute_data_load = MagicMock(return_value=(load_data, age))
+        mock_base.minute_data_import_export = MagicMock(return_value=None)
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        component.ml_max_days_history = 28
+
+        await component._fetch_load_data()
+
+        rate_calls = [call for call in mock_base.minute_data_import_export.call_args_list if str(call.args[2]).endswith((".rates", ".rates_export"))]
+        assert len(rate_calls) == 2, f"Expected the import and export rate history to be fetched, got {rate_calls}"
+        for call in rate_calls:
+            assert call.kwargs.get("required") is False, f"Rate history must be fetched as optional data, got {call}"
+
+        print("    ✓ Rate history is fetched as optional data")
 
     # Run all sub-tests
     print("  Running LoadMLComponent._fetch_load_data tests:")
@@ -2417,6 +2442,7 @@ def _test_component_fetch_load_data():
     run_async(test_temperature_data_fetch())
     run_async(test_temperature_no_data())
     run_async(test_step_size_calculation())
+    run_async(test_rate_history_is_optional())
     print("  All _fetch_load_data tests passed!")
 
 
@@ -2592,7 +2618,7 @@ def _test_component_publish_entity():
     assert attrs["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
     assert attrs2["icon"] == "mdi:chart-line", "icon should be 'mdi:chart-line'"
 
-    print("    ✓ Entity published with correct attributes")
+    print("    PASS: Entity published with correct attributes")
 
     # Test 2: Empty predictions
     mock_base.dashboard_calls = []
@@ -2605,7 +2631,7 @@ def _test_component_publish_entity():
     assert call2["state"] == 0, "State should be 0 with empty predictions"
     assert call["attributes"]["results"] == {}, "results should be empty dict"
 
-    print("    ✓ Empty predictions handled correctly")
+    print("    PASS: Empty predictions handled correctly")
 
     print("  All _publish_entity tests passed!")
 
@@ -2693,7 +2719,7 @@ def _test_component_stale_midnight_baseline():
     assert abs(attrs2["load_today_h8"] - 5.15) < 0.01, f"Expected load_today_h8 5.15 (5.0 + 0.15), got {attrs2['load_today_h8']}"
     assert any("previous day" in msg for msg in mock_base.log_messages), "Stale baseline should be logged as a warning"
 
-    print("    ✓ Stale pre-midnight baseline re-derived from load history")
+    print("    PASS: Stale pre-midnight baseline re-derived from load history")
 
     # Same-day snapshot must be used verbatim, no re-derivation
     mock_base.dashboard_calls = []
@@ -2706,7 +2732,7 @@ def _test_component_stale_midnight_baseline():
     assert abs(attrs2["load_today"] - 0.4) < 0.01, f"Expected load_today 0.4 from the snapshot, got {attrs2['load_today']}"
     assert abs(attrs2["load_today_h1"] - 1.0) < 0.01, f"Expected load_today_h1 1.0 (0.6 + 0.4), got {attrs2['load_today_h1']}"
 
-    print("    ✓ Same-day baseline snapshot used unchanged")
+    print("    PASS: Same-day baseline snapshot used unchanged")
 
     # A missing snapshot timestamp (e.g. loaded from an older state) keeps the old behaviour
     mock_base.dashboard_calls = []
@@ -2717,7 +2743,7 @@ def _test_component_stale_midnight_baseline():
     attrs2 = mock_base.dashboard_calls[1]["attributes"]
     assert abs(attrs2["load_today"] - 0.4) < 0.01, f"Expected load_today 0.4 when no snapshot time is known, got {attrs2['load_today']}"
 
-    print("    ✓ Missing snapshot timestamp falls back to the stored baseline")
+    print("    PASS: Missing snapshot timestamp falls back to the stored baseline")
 
     # Re-fetch after a long training run must re-anchor the baseline before predicting
     async def run_stale_refetch():
@@ -2766,7 +2792,7 @@ def _test_component_stale_midnight_baseline():
 
     run_async(run_stale_refetch())
 
-    print("    ✓ Stale data re-fetched after training before predicting")
+    print("    PASS: Stale data re-fetched after training before predicting")
 
     assert PREDICT_STEP == 5, "Test assumes a 5 minute prediction step"
 
@@ -3086,7 +3112,7 @@ def _test_component_init_predictor_sets_last_train_time():
         now_utc = datetime.now(timezone.utc)
         load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
 
-        # --- Part 1: model with a known timestamp → last_train_time set to that timestamp ---
+        # --- Part 1: model with a known timestamp -> last_train_time set to that timestamp ---
         predictor = LoadPredictor(learning_rate=0.01)
         predictor.train(load_data, now_utc, is_initial=True, epochs=2, time_decay_days=7)
         known_timestamp = predictor.training_timestamp
@@ -3101,7 +3127,7 @@ def _test_component_init_predictor_sets_last_train_time():
         assert component.model_valid is True, "Model should be marked valid"
         assert component.initial_training_done is True, "initial_training_done should be True"
 
-        # --- Part 2: model with no timestamp → last_train_time stays None (triggers retrain) ---
+        # --- Part 2: model with no timestamp -> last_train_time stays None (triggers retrain) ---
         predictor2 = LoadPredictor(learning_rate=0.01)
         predictor2.train(load_data, now_utc, is_initial=True, epochs=2, time_decay_days=7)
         predictor2.training_timestamp = None  # Simulate a pre-timestamp model
@@ -3112,3 +3138,182 @@ def _test_component_init_predictor_sets_last_train_time():
 
         assert component2.last_train_time is None, "last_train_time should remain None when model has no embedded timestamp (triggers safe retrain)"
         assert component2.model_valid is True, "Model without timestamp should still be considered valid by is_valid()"
+
+
+def _test_nan_inf_robustness():
+    """Test that LoadPredictor handles NaN, Inf, and None across all channels without producing NaN loss."""
+    now_utc = datetime.now(timezone.utc)
+    load_data = _create_synthetic_load_data(n_days=7, now_utc=now_utc)
+    pv_data = _create_synthetic_pv_data(n_days=7, now_utc=now_utc)
+    temp_data = _create_synthetic_temp_data(n_days=7, now_utc=now_utc)
+    import_rates = {m: 25.0 for m in load_data}
+    export_rates = {m: 15.0 for m in load_data}
+
+    # Inject NaN, Inf, and None into a subset of minute keys
+    load_with_nan = dict(load_data)
+    load_with_nan[30] = float("nan")
+    load_with_nan[60] = float("inf")
+    load_with_nan[90] = None
+
+    temp_with_nan = dict(temp_data)
+    temp_with_nan[30] = float("nan")
+    temp_with_nan[60] = float("-inf")
+
+    pv_with_nan = dict(pv_data)
+    pv_with_nan[30] = float("nan")
+
+    import_rates_nan = dict(import_rates)
+    import_rates_nan[30] = float("nan")
+
+    predictor = LoadPredictor(learning_rate=0.001)
+    val_mae = predictor.train(
+        load_with_nan,
+        now_utc,
+        pv_minutes=pv_with_nan,
+        temp_minutes=temp_with_nan,
+        import_rates=import_rates_nan,
+        export_rates=export_rates,
+        is_initial=True,
+        epochs=3,
+    )
+
+    assert val_mae is not None, "Training should produce a valid float val_mae even when NaN/Inf are in inputs"
+    assert not np.isnan(val_mae), "val_mae must not be NaN"
+    assert not np.isinf(val_mae), "val_mae must not be Inf"
+    assert predictor.validation_bias is not None and not np.isnan(predictor.validation_bias), "validation_bias must not be NaN"
+
+    # Test that _adam_update safely clamps +/-Inf weights and biases to finite values
+    predictor._initialize_weights()
+    predictor.weights[0][0, 0] = float("inf")
+    predictor.weights[0][0, 1] = float("-inf")
+    predictor.biases[0][0] = float("inf")
+    w_grads = [np.zeros_like(w) for w in predictor.weights]
+    b_grads = [np.zeros_like(b) for b in predictor.biases]
+    predictor._adam_update(w_grads, b_grads)
+    assert np.isfinite(predictor.weights[0]).all(), "Weights must be finite after _adam_update with Inf inputs"
+    assert np.isfinite(predictor.biases[0]).all(), "Biases must be finite after _adam_update with Inf inputs"
+
+
+def _test_database_zero_preservation():
+    """Test that save_database_history and load_database_history preserve valid 0.0 entries across sparse, fully-populated, and dirty inputs."""
+    import asyncio
+    import tempfile
+    from load_ml_component import LoadMLComponent
+
+    class MockBase:
+        """Minimal base for LoadMLComponent."""
+
+        def __init__(self, config_root):
+            """Initialize MockBase."""
+            self.prefix = "predbat"
+            self.config_root = config_root
+            self.now_utc = datetime.now(timezone.utc)
+            self.midnight_utc = self.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+            self.minutes_now = (self.now_utc - self.midnight_utc).seconds // 60
+            self.local_tz = timezone.utc
+            self.args = {}
+            self.log_messages = []
+
+        def log(self, msg):
+            """Record log message."""
+            self.log_messages.append(msg)
+
+        def get_arg(self, key, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+            """Mock get_arg."""
+            return {"load_today": ["sensor.load_today"]}.get(key, default)
+
+    async def run_test():
+        """Run async save and reload assertions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = MockBase(config_root=tmpdir)
+            component = LoadMLComponent(base, load_ml_enable=True)
+            component.database_filepath = os.path.join(tmpdir, "predbat_ml_history.npz")
+            component.load_ml_database_days = 1  # 288 5-min steps
+
+            # Case 1: Fully-populated history (288 steps, no NaNs in saved array, containing explicit 0.0)
+            test_load = {m: (0.0 if m % 30 == 0 else 0.25) for m in range(0, 1440, 5)}
+            test_temp = {m: 0.0 for m in range(0, 1440, 5)}  # Freezing temperature everywhere (all 0.0)
+            test_pv = {m: 0.0 for m in range(0, 1440, 5)}
+
+            component.load_data = test_load
+            component.temperature_data = test_temp
+            component.pv_data = test_pv
+            component.load_data_age_days = 1.0
+
+            await component.save_database_history()
+
+            # Verify saved array has zero NaNs (fully populated)
+            with np.load(component.database_filepath, allow_pickle=False) as saved_npz:
+                assert not np.isnan(saved_npz["load"]).any(), "Test array should have no NaNs to test nan_sentinel metadata flag"
+
+            # Create a fresh component instance and load history
+            component2 = LoadMLComponent(base, load_ml_enable=True)
+            component2.database_filepath = os.path.join(tmpdir, "predbat_ml_history.npz")
+
+            await component2.load_database_history()
+
+            assert component2.load_data is not None, "load_data should be loaded"
+            assert len(component2.load_data) == 288, f"Expected all 288 steps in load_data, got {len(component2.load_data)}"
+            assert 0 in component2.load_data, "Minute 0 (value 0.0) must be preserved in fully populated load_data"
+            assert component2.load_data[0] == 0.0, f"Minute 0 load should be 0.0, got {component2.load_data[0]}"
+            assert component2.load_data[30] == 0.0, f"Minute 30 load should be 0.0, got {component2.load_data[30]}"
+            assert len(component2.temperature_data) == 288, f"Expected all 288 steps in temperature_data, got {len(component2.temperature_data)}"
+            assert 0 in component2.temperature_data, "Minute 0 (0.0°C) must be preserved in temperature_data"
+            assert component2.temperature_data[0] == 0.0, f"Minute 0 temp should be 0.0, got {component2.temperature_data[0]}"
+
+            # Case 2: Dirty / unparsable history entries (None, "unavailable", NaN, Inf)
+            test_load_dirty = {0: 0.0, 5: 0.5, 10: None, 15: "unavailable", 20: float("nan"), 25: float("inf"), 30: 0.0}
+            component.load_data = test_load_dirty
+            component.temperature_data = {0: 10.0, 5: None, 10: "error"}
+            component.pv_data = {0: float("nan"), 5: 1.5}
+            component.database_filepath = os.path.join(tmpdir, "predbat_ml_history_dirty.npz")
+
+            # Must complete cleanly without raising TypeError or ValueError
+            await component.save_database_history()
+
+            component3 = LoadMLComponent(base, load_ml_enable=True)
+            component3.database_filepath = os.path.join(tmpdir, "predbat_ml_history_dirty.npz")
+            await component3.load_database_history()
+
+            assert component3.load_data is not None
+            assert component3.load_data.get(0) == 0.0, "Valid 0.0 must be preserved"
+            assert component3.load_data.get(5) == 0.5, "Valid 0.5 must be preserved"
+            assert component3.load_data.get(30) == 0.0, "Valid 0.0 at minute 30 must be preserved"
+            assert 10 not in component3.load_data, "None value must not be present in reconstructed dict"
+            assert 15 not in component3.load_data, "String value must not be present in reconstructed dict"
+            assert 20 not in component3.load_data, "NaN value must not be present in reconstructed dict"
+            assert 25 not in component3.load_data, "Inf value must not be present in reconstructed dict"
+            assert component3.temperature_data.get(0) == 10.0
+            assert 5 not in component3.temperature_data
+            assert 10 not in component3.temperature_data
+            assert component3.pv_data.get(5) == 1.5
+            assert 0 not in component3.pv_data
+
+    asyncio.run(run_test())
+
+
+def _test_curriculum_90day_intermediate_passes():
+    """Test train_curriculum with 90 days of history and 8 intermediate passes."""
+    now_utc = datetime.now(timezone.utc)
+    load_data = _create_synthetic_load_data(n_days=90, now_utc=now_utc)
+    pv_data = _create_synthetic_pv_data(n_days=28, now_utc=now_utc)  # Only 28 days of PV history
+    temp_data = _create_synthetic_temp_data(n_days=28, now_utc=now_utc)
+
+    predictor = LoadPredictor(learning_rate=0.001)
+    val_mae = predictor.train_curriculum(
+        load_data,
+        now_utc,
+        pv_minutes=pv_data,
+        temp_minutes=temp_data,
+        epochs=1,
+        time_decay_days=30,
+        validation_holdout_hours=48,
+        patience=2,
+        curriculum_window_days=7,
+        curriculum_step_days=5,
+        max_intermediate_passes=8,
+    )
+
+    assert val_mae is not None, "90-day curriculum training should succeed"
+    assert not np.isnan(val_mae), "val_mae must not be NaN"
+    assert predictor.model_initialized, "Model must be initialized after curriculum training"

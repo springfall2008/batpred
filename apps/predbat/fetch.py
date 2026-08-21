@@ -20,7 +20,19 @@ dictionaries for use by the prediction engine.
 
 from datetime import datetime, timedelta
 from utils import minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray
-from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_SOC, PREDBAT_MODE_CONTROL_CHARGEDISCHARGE, PREDBAT_MODE_CONTROL_CHARGE, PREDBAT_MODE_MONITOR, LOAD_FORECAST_HISTORY_MAX_DAYS, PREDBAT_MAX_CARS
+from const import (
+    MINUTE_WATT,
+    PREDICT_STEP,
+    TIME_FORMAT,
+    PREDBAT_MODE_OPTIONS,
+    PREDBAT_MODE_CONTROL_SOC,
+    PREDBAT_MODE_CONTROL_CHARGEDISCHARGE,
+    PREDBAT_MODE_CONTROL_CHARGE,
+    PREDBAT_MODE_MONITOR,
+    LOAD_FORECAST_HISTORY_MAX_DAYS,
+    PREDBAT_MAX_CARS,
+    LOW_POWER_PV_LIGHT_FRACTION,
+)
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
@@ -563,9 +575,14 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, required=True):
         """
         Download one or more entities for import/export data
+
+        :param required: Set False when the data only improves the result rather than being needed for it,
+                         e.g. the rate history the ML load model adds as a training feature. A missing
+                         history is then reported once as information instead of as a fetch failure, as
+                         Home Assistant legitimately has no history for entities its recorder isn't storing.
         """
         if "." not in key:
             entity_ids = self.get_arg(key, indirect=False)
@@ -585,7 +602,7 @@ class Fetch:
                 continue
 
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous)
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required)
             except (ValueError, TypeError) as exc:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
@@ -618,7 +635,11 @@ class Fetch:
                     can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
                 )
             else:
-                if history is None:
+                if not required:
+                    # Optional data - Home Assistant simply has no history for this entity, which is
+                    # normal when its recorder isn't configured to store it, so don't cry wolf
+                    self.log("Info: No history available for {}, continuing without it".format(entity_id))
+                elif history is None:
                     # Only record as a failure if it was None (not just empty but failure)
                     self.log("Warn: Failure to fetch history for {}".format(entity_id))
                     self.record_status("Warn: Failure to fetch history from {}".format(entity_id), had_errors=True)
@@ -1028,8 +1049,10 @@ class Fetch:
 
         # Find charging windows
         if self.rate_import:
+            pv_light_dark = self.calc_pv_light_dark()
+
             # Find charging window
-            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export)
+            self.low_rates, lowest, highest = self.rate_scan_window(self.rate_import, 5, self.rate_import_cost_threshold, False, alt_rates=self.rate_export, pv_light_dark=pv_light_dark)
             self.log("Low Import rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
             # Update threshold automatically
             if self.rate_low_threshold == 0 and highest >= self.rate_min:
@@ -1409,6 +1432,7 @@ class Fetch:
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "°C",
+                "device_class": "temperature",
                 "icon": "mdi:temperature-celsius",
             },
         )
@@ -1539,10 +1563,119 @@ class Fetch:
 
         return rates, replicated_rates
 
-    def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates={}):
+    def calc_pv_light_dark(self):
+        """
+        Decide whether a dawn light/dark boundary is worth computing at all, and return it via
+        calc_dawn if so - otherwise an empty dict (no split).
+
+        Only combine_charge_slots can merge a charge window across dawn in the first place - with it
+        off, find_charge_window already forces a break every charge_slot_split minutes (which equals
+        plan_interval_minutes, the same granularity calc_dawn buckets at), so the dawn boundary could
+        never be reached and computing it would be a pure no-op. This used to be gated on
+        set_charge_low_power instead, since that was the only feature that needed the split - but the
+        split also lets the plan optimizer charge just the dark portion of a combined window and skip
+        the daylight portion (where solar may cover the load) on its own merits, independent of low
+        power charging, so it now runs for any combine_charge_slots user.
+        """
+        return self.calc_dawn() if self.combine_charge_slots else {}
+
+    def calc_dawn(self):
+        """
+        Find dawn in self.pv_forecast_minute and return a pv_light_dark dict classifying each minute
+        as light (1, at/after dawn) or dark (0, before it). Used by find_charge_window (via
+        calc_pv_light_dark) to split a charge window at the light/dark boundary - originally so it
+        wouldn't abandon low power charging for a whole window just because its tail overlaps the sun
+        (#4557), and now also so the plan optimizer can choose the dark portion of a combined window
+        independently of the light portion.
+
+        Classified per plan_interval_minutes bucket (averaged), not per raw minute - a threshold
+        compared minute to minute would let ordinary forecast noise near the cutoff (e.g. a patchy dawn
+        hovering around the threshold) retrigger the split repeatedly and chop the window into several
+        small pieces. Bucketing makes the classification a step function that can change at most once
+        per bucket boundary, at the same granularity the plan already displays.
+
+        Within each calendar day, light is a one-way latch: the first bucket that crosses the threshold
+        confirms dawn, and every later bucket that day stays light too, even if PV genuinely dips back
+        under the threshold later (a cloud passing). This is a dawn detector, not a tracker of every
+        rise and fall - it only cares about finding the first dawn each day, so an intermittently
+        cloudy morning can't chop the window into several flip-flopping pieces. The latch resets at
+        each day boundary so the next day's dawn is found independently rather than one early crossing
+        holding "light" for the rest of the multi-day forecast horizon - this also makes a polar-night
+        day correctly stay all-dark (dawn never crosses) and a polar-day day correctly stay all-light
+        (crossed from the very first bucket).
+
+        The threshold itself is LOW_POWER_PV_LIGHT_FRACTION of the peak PV forecast anywhere in
+        self.pv_forecast_minute, not a fixed Watts figure, so it scales with the site rather than being
+        picked for a "typical" system size.
+
+        Built from whatever PV forecast is already in self.pv_forecast_minute, which at the point this
+        is called from fetch_sensor_data is up to one cycle stale (refreshed later this same loop by
+        fetch_pv_forecast()) - fine for a forecast that doesn't meaningfully change minute to minute.
+
+        Logs the calculated dawn time (today's, or the earliest day the forecast reaches if today's PV
+        data isn't there) each time it runs, so it's visible whether the detected dawn looks sane.
+        """
+        pv_light_dark = {}
+        if not self.pv_forecast_minute:
+            return pv_light_dark
+
+        peak_pv = max(self.pv_forecast_minute.values())
+        if peak_pv <= 0:
+            return {pv_minute: 0 for pv_minute in self.pv_forecast_minute}
+
+        light_threshold = peak_pv * LOW_POWER_PV_LIGHT_FRACTION
+        interval = self.plan_interval_minutes
+        bucket_sums = {}
+        bucket_counts = {}
+        for pv_minute, pv in self.pv_forecast_minute.items():
+            bucket = pv_minute // interval
+            bucket_sums[bucket] = bucket_sums.get(bucket, 0.0) + pv
+            bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+        bucket_crossed = {bucket: (1 if (bucket_sums[bucket] / bucket_counts[bucket]) >= light_threshold else 0) for bucket in bucket_sums}
+
+        bucket_light = {}
+        dawn_minute_by_day = {}
+        after_dawn = False
+        current_day = None
+        for bucket in sorted(bucket_crossed):
+            bucket_day = (bucket * interval) // (24 * 60)
+            if bucket_day != current_day:
+                after_dawn = False
+                current_day = bucket_day
+            if bucket_crossed[bucket]:
+                if not after_dawn:
+                    dawn_minute_by_day[bucket_day] = bucket * interval
+                after_dawn = True
+            bucket_light[bucket] = 1 if after_dawn else 0
+
+        # Day 0 is today (self.minutes_now is itself minutes since midnight_utc), so report today's
+        # dawn when the forecast reaches it; otherwise fall back to the earliest day that does (e.g. a
+        # forecast that only starts covering PV from tomorrow) so the log still says something useful.
+        report_day = 0 if 0 in dawn_minute_by_day else (min(dawn_minute_by_day) if dawn_minute_by_day else None)
+        if report_day is not None:
+            dawn_timestamp = self.midnight_utc + timedelta(minutes=dawn_minute_by_day[report_day])
+            self.log("Calculated dawn (start of daylight, used to split charge windows at) at {}".format(dawn_timestamp.strftime(TIME_FORMAT)))
+        else:
+            self.log("Calculated dawn (start of daylight, used to split charge windows at) - no dawn found in the PV forecast")
+
+        pv_light_dark = {pv_minute: bucket_light[pv_minute // interval] for pv_minute in self.pv_forecast_minute}
+        return pv_light_dark
+
+    def find_charge_window(self, rates, minute, threshold_rate, find_high, alt_rates=None, pv_light_dark=None):
         """
         Find the charging windows based on the low rate threshold (percent below average)
+
+        pv_light_dark, when scanning for charge (not find_high) windows, is a minute-indexed dict of 0/1
+        marking whether PV forecast is at/after dawn ("light") or not ("dark") - see calc_dawn and
+        calc_pv_light_dark. A transition between the two forces a window split, so a charge window
+        that would otherwise span sunrise (e.g. a single long cheap-rate period) is instead built as
+        separate dark and light windows. Originally added (#4557) so low power charging wasn't
+        defeated for the whole window, including the still-dark hours, just because the window's tail
+        overlapped PV later on - it also lets the plan optimizer pick the dark portion of a combined
+        window without the light portion, regardless of low power charging.
         """
+        alt_rates = alt_rates or {}
+        pv_light_dark = pv_light_dark or {}
         rate_low_start = -1
         rate_low_end = -1
         rate_low_average = 0
@@ -1550,6 +1683,8 @@ class Fetch:
         rate_low_count = 0
         alternate_rate_boundary = False
         alt_rate_last = None
+        pv_boundary = False
+        pv_light_dark_last = None
 
         # Work out alternate rate threshold
         alt_rate_max = max(alt_rates.values()) if alt_rates else 0
@@ -1563,6 +1698,13 @@ class Fetch:
             if (alt_rate is not None) and (alt_rate_last is not None) and (abs(alt_rate - alt_rate_last) >= alt_rate_threshold):
                 # Create alternate rate boundary if the rate is different
                 alternate_rate_boundary = True
+            pv_state = pv_light_dark.get(minute, None)
+            if (rate_low_start >= 0) and (pv_state is not None) and (pv_light_dark_last is not None) and (pv_state != pv_light_dark_last):
+                # Create a PV boundary when the light/dark classification changes since the window
+                # started. Gated on rate_low_start so a transition crossed only during the pre-window
+                # search phase (e.g. scanning past last night's sunset before this window is even
+                # found) doesn't leave a stale boundary that breaks the window the moment it starts.
+                pv_boundary = True
             if minute in rates:
                 rate = rates[minute]
                 if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in self.manual_all_times) or (rate_low_start in self.manual_all_times):
@@ -1587,6 +1729,10 @@ class Fetch:
                         # Export slot can never be bigger than 4 hours
                         rate_low_end = minute
                         break
+                    if (not find_high) and (rate_low_start >= 0) and ((minute - rate_low_start) >= self.plan_interval_minutes) and pv_boundary:
+                        # Split a charge window where PV forecast crosses the light/dark threshold
+                        rate_low_end = minute
+                        break
                     if rate_low_start < 0:
                         rate_low_start = minute
                         rate_low_end = stop_at
@@ -1606,6 +1752,7 @@ class Fetch:
                     break
             minute += 5
             alt_rate_last = alt_rate
+            pv_light_dark_last = pv_state
 
         if rate_low_count:
             rate_low_average = dp2(rate_low_average / rate_low_count)
@@ -1876,10 +2023,12 @@ class Fetch:
 
         return rate_min_forward
 
-    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates={}):
+    def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None):
         """
         Scan for the next high/low rate window
         """
+        alt_rates = alt_rates or {}
+        pv_light_dark = pv_light_dark or {}
         minute = 0
         found_rates = []
         lowest = 99
@@ -1887,7 +2036,7 @@ class Fetch:
         upcoming_period = self.minutes_now + 4 * 60
 
         while True:
-            rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates)
+            rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
             window = {}
             window["start"] = rate_low_start
             window["end"] = rate_low_end

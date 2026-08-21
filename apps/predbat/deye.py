@@ -38,6 +38,7 @@ from deye_const import (
     TOU_FIELD,
     TOU_SLOT_COUNT,
     TOU_FILLER_TIMES,
+    DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
     DEYE_BUSY_CODES,
     DEYE_BUSY_MARKERS,
@@ -59,6 +60,7 @@ from deye_const import (
     DEYE_RESTORE_MAX_CONTROL,
     DEYE_CACHE_STATIC,
     DEYE_CACHE_CONFIG,
+    DEYE_CACHE_TOU,
     DEYE_CACHE_RATINGS,
     DEYE_CACHE_CONTROL,
 )
@@ -114,6 +116,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.station_ids = []
         self.device_values = {}
         self.device_battery_config = {}
+        self.device_tou_config = {}
         self.device_capacity = {}
         self.device_pack_voltage = {}
         self.device_energy = {}
@@ -487,6 +490,41 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.device_battery_config[sn] = data
         return data
 
+    async def fetch_tou_config(self, sn):
+        """Read the inverter's current TOU programme, for the one slot field Predbat does not own.
+
+        Only enableGeneration is taken from it (see _generation_flags). The read model
+        (DeviceTimeOfUseResponse -> TimeOfUseItem) carries no enableSell at all, so the sell
+        flag cannot be round-tripped this way even though the write model has it.
+        """
+        data = await self._post("config_tou", {"deviceSn": sn})
+        if not data.get("success", True):
+            # Not fatal, and the same config point some models reject outright: generator
+            # charging then stays off in everything Predbat writes, which is the safe way
+            # for this to be wrong.
+            self.log(f"Warn: DEYE config/tou failed for {sn}: {data.get('msg', 'unknown')} - generator charging will be left off in the slots Predbat writes")
+            return []
+        items = data.get("timeUseSettingItems") or []
+        self.device_tou_config[sn] = items
+        return items
+
+    def _generation_flags(self, sn):
+        """Return the per-slot enableGeneration flags to carry through, one per TOU slot.
+
+        enableGeneration authorises charging the battery from an EXTERNAL GENERATOR. Predbat
+        has no model of a generator - no fuel cost, no run hours, nothing it could plan
+        against - so it must never be what switches one on. It is equally not Predbat's
+        setting to throw away, so the inverter's own value is carried across by slot
+        position, exactly as the Sunsynk component carries genTime{n}on through its
+        read-modify-write.
+
+        Defaults to all-off when the programme has not been read, or the model rejects
+        config/tou: unknown has to fail towards not running someone's generator.
+        """
+        items = self.device_tou_config.get(sn) or []
+        flags = [bool(item.get(TOU_FIELD["generate"])) for item in items[:TOU_SLOT_COUNT]]
+        return flags + [False] * (TOU_SLOT_COUNT - len(flags))
+
     async def fetch_measure_points(self, sn):
         """Log the device's measure-point metadata (read-only, first cycle only).
 
@@ -524,7 +562,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         measures at the inverter's own output instead, so on a CT-clamp install it would
         stop the battery serving anything not wired to the inverter and the shortfall would
         come from the grid. Confirmed on Sunsynk hardware, which sits behind the same
-        registers.
+        registers, and since confirmed on DEYE's own side: the official
+        clientcode/strategy/dynamic_control_self_consumption.py sample is exactly
+        ZERO_EXPORT_TO_CT with solarSellAction on, and the fully-charge sample uses the same
+        mode with a high slot SOC.
         """
         reserve = int(schedule.get("reserve", 0))
         charge = schedule.get("charge", {})
@@ -533,9 +574,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if export.get("enable"):
             export_soc = int(export.get("soc", FREEZE_EXPORT_SOC))
             if export_soc >= FREEZE_EXPORT_SOC:
-                # Zero power IS the freeze: selling-first with no slot power holds the
-                # battery while surplus solar still exports.
-                return {"behaviour": "freeze_export", "work_mode": DEYE_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": FREEZE_EXPORT_SOC, "power": 0}
+                return self._freeze_export_state(reserve)
             return {"behaviour": "export", "work_mode": DEYE_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": export_soc, "power": int(export.get("power", 0))}
 
         if charge.get("enable"):
@@ -543,8 +582,16 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if charge_soc > current_soc and charge_soc > reserve:
                 return {"behaviour": "charge", "work_mode": DEYE_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": charge_soc, "power": int(charge.get("power", 0))}
             if charge_soc == reserve:
-                # Zero power IS the freeze: the slot is enabled for grid charge but given no
-                # power, so the battery neither charges nor discharges and simply holds.
+                # A freeze charge holds via the RESERVE, not this rate: Predbat sets the
+                # reserve to soc_percent + 1 for the duration (execute.py) and the slot SoC
+                # follows it, which is what stops the battery discharging below where it
+                # started. Solar charging above that is allowed and expected - a freeze
+                # charge only bars discharge.
+                #
+                # The zero rate is not what makes this a hold. CONFIRMED live on Sunsynk,
+                # the same registers behind a different cloud, that a zero slot rate does
+                # NOT stop the battery charging. What it stops is the battery being SOLD to
+                # the grid - see _freeze_export_state.
                 return {"behaviour": "freeze_charge", "work_mode": DEYE_WORKMODE["zero_export_ct"], "grid_charge": True, "solar_sell": False, "slot_soc": reserve, "power": 0}
             # The battery is already at or above the requested target, so grid charge stays
             # off — the charge is simply not triggered. The slot still carries Predbat's
@@ -552,7 +599,58 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             # mean freeze, which is a different state.
             return {"behaviour": "hold_charge", "work_mode": DEYE_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": int(charge.get("power", 0))}
 
+        # No window is active, so the only thing left that can distinguish demand from a
+        # freeze export is the charge rate. Predbat expresses Freeze Export - "demand mode,
+        # but with charging disabled" - by turning the forced-export window OFF and calling
+        # adjust_charge_rate(0), because DeyeCloud declares has_timed_pause False and that
+        # is the only lever execute.py has left.
+        #
+        # Without this the freeze never reached the inverter: charge_rate maps to the
+        # per-window battery_schedule_charge_power, which this method only reads inside an
+        # ENABLED charge window - and a freeze export has none. The payload came out
+        # byte-identical to plain Demand. Diagnosed and fixed on sunsynk.py first, which
+        # drives the same registers through a different cloud; see _freeze_export_state.
+        #
+        # The zero is only read as a freeze while the EXPORT rate is non-zero, which makes
+        # the signal "charging disabled, discharging still allowed" rather than just "zero",
+        # and keeps a system whose battery rates were never derived out of a permanent
+        # freeze: all-zero is an absence of a plan, not a plan.
+        if int(charge.get("power", 0)) == 0 and int(export.get("power", 0)) > 0:
+            return self._freeze_export_state(reserve)
+
         return {"behaviour": "idle", "work_mode": DEYE_WORKMODE["zero_export_ct"], "grid_charge": False, "solar_sell": False, "slot_soc": reserve, "power": 0}
+
+    @staticmethod
+    def _freeze_export_state(reserve):
+        """Return the control state for a freeze export: sell the surplus, keep serving the house.
+
+        Selling First, the slot Sell flag ON, the slot rate at ZERO, and the cap at the
+        RESERVE. The cap is the fix: FREEZE_EXPORT_SOC is Predbat's SENTINEL for "this
+        export window is a freeze" (export_limits_best of 99), not a battery level, and
+        writing it through as the slot SoC told a Selling First inverter to drive the
+        battery to 99% - charging it from the very solar the freeze exists to export.
+
+        Every leg of this was settled on live SUNSYNK hardware (inverter 2405116013,
+        2026-08-20) rather than inferred, and is inherited here on the register-parity rule:
+
+          * Zero-export-to-CT fills the battery from the surplus, so the mode must change -
+            a 99% battery still took 540 W of PV in that mode while the rest exported.
+          * The slot rate is the SELL-RATE cap, and zero is what stops the battery being
+            pushed to the grid. Two runs differing only in that field: at 8000 W with the
+            cap below the SoC the battery drained to the grid at up to 4715 W; at 0 W it
+            held at 1-28 W while the export still tracked PV minus load exactly.
+          * The cap can therefore sit at the reserve, leaving the battery the room it needs
+            to cover the house, because the zero rate is what makes that safe.
+
+        VERIFY@SPIKE on DEYE specifically. The parity argument is stronger than it was for
+        the grid sign - which is a CLOUD presentation choice, and so had to be measured per
+        cloud - because slot-rate and work-mode behaviour is a property of the inverter
+        FIRMWARE, and both clouds drive the same Deye registers. But it is still inherited
+        rather than measured here. The failure mode if DEYE's rate is not the sell-rate cap
+        is that a freeze export drains the battery to the reserve, so one live DEYE run
+        watching battery power against the solar surplus should confirm it.
+        """
+        return {"behaviour": "freeze_export", "work_mode": DEYE_WORKMODE["selling_first"], "grid_charge": False, "solar_sell": True, "slot_soc": int(reserve), "power": 0}
 
     def _self_use_power(self, sn):
         """Return the power to write on self-use slots for one inverter, or 0 when unknown.
@@ -568,24 +666,60 @@ class DeyeAPI(ComponentBase, OAuthMixin):
     def _self_use_slot(self, start_time, reserve, self_use_power):
         """Build a self-use TOU slot holding at the reserve SoC.
 
-        self_use_power must NOT be zero. Zero power is how a slot expresses a freeze — the
-        battery neither charges nor discharges — so a zero-power self-use slot would stop
-        the battery serving the house for the whole interval and push the load onto the
-        grid. Self-use slots cover every interval Predbat is not actively charging or
-        exporting, so that would be the battery's default state.
+        self_use_power must NOT be zero. The rate is the battery's power limit for the
+        slot, so a zero-rate self-use slot risks stopping the battery serving the house for
+        the whole interval and pushing the load onto the grid. Self-use slots cover every
+        interval Predbat is not actively charging or exporting, so that would be the
+        battery's default state and not somewhere to take the risk.
+
+        Precisely what a zero rate does is only half known. CONFIRMED live on Sunsynk (the
+        same registers behind a different cloud, 2026-08-20) that it does NOT stop CHARGING,
+        and that it DOES stop the battery being sold to the grid under Selling First - which
+        is what _freeze_export_state relies on. Its effect on discharge to the HOUSE was
+        never measured. This guard stays because that is the untested direction.
         """
-        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: True}
+        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(self_use_power), TOU_FIELD["soc"]: int(reserve), TOU_FIELD["grid_charge"]: False, TOU_FIELD["generate"]: False, TOU_FIELD["sell"]: False}
 
     def _action_slot(self, start_time, state):
-        """Build a TOU slot realising a derived control state."""
-        return {TOU_FIELD["time"]: start_time, TOU_FIELD["power"]: int(state["power"]), TOU_FIELD["soc"]: int(state["slot_soc"]), TOU_FIELD["grid_charge"]: bool(state["grid_charge"]), TOU_FIELD["generate"]: True}
+        """Build a TOU slot realising a derived control state.
+
+        enableSell is the slot's forced-export flag, so it follows solar_sell: on for the
+        two export states, off for charging and holding. It is written on self-use slots
+        too (as False) because the per-slot field set has to be complete — see TOU_FIELD.
+        """
+        return {
+            TOU_FIELD["time"]: start_time,
+            TOU_FIELD["power"]: int(state["power"]),
+            TOU_FIELD["soc"]: int(state["slot_soc"]),
+            TOU_FIELD["grid_charge"]: bool(state["grid_charge"]),
+            TOU_FIELD["generate"]: False,
+            TOU_FIELD["sell"]: bool(state.get("solar_sell")),
+        }
+
+    def _slot_for(self, start_time, state, reserve, self_use_power):
+        """Build the slot for one derived state: an action slot, or self-use when idle.
+
+        A state that asks for nothing - no grid charge, no sell, no power - is demand, and
+        demand needs the inverter's full rating so the battery can serve the house (see
+        _self_use_slot). Anything else is written verbatim, which is what lets a freeze
+        export, whose only non-default slot field is the sell flag, survive as a zero-rate
+        slot rather than being rewritten as self-use.
+        """
+        if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
+            return self._action_slot(start_time, state)
+        return self._self_use_slot(start_time, reserve, self_use_power)
 
     def build_tou_slots(self, schedule, current_soc, self_use_power):
         """Build exactly TOU_SLOT_COUNT ordered slots covering 24h from the schedule windows."""
         reserve = int(schedule.get("reserve", 0))
-        # Collect (start_time, state) segment boundaries. Baseline self-use at 00:00.
-        idle = {"behaviour": "idle", "power": 0, "slot_soc": reserve, "grid_charge": False, "solar_sell": False, "work_mode": None}
-        segments = {"00:00": dict(idle)}
+        # Collect (start_time, state) segment boundaries, from a DERIVED baseline at 00:00.
+        # "No window is active" is not always demand - a freeze export is exactly that state
+        # plus a zero charge rate (see derive_control_state) - so every slot the schedule
+        # does not otherwise claim carries the baseline, and a freeze covers the whole
+        # programme instead of being defeated by the first filler that covers the current
+        # time. Predbat never says when a freeze ends, so there is no boundary to write.
+        baseline = self.derive_control_state({"reserve": reserve, "charge": {"enable": False, "power": int(schedule.get("charge", {}).get("power", 0))}, "export": {"enable": False, "power": int(schedule.get("export", {}).get("power", 0))}}, current_soc)
+        segments = {"00:00": dict(baseline)}
         for direction in ("charge", "export"):
             window = schedule.get(direction, {})
             if window.get("enable") and window.get("start") and window.get("end"):
@@ -606,15 +740,12 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                 intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
                 intent[direction] = {"enable": True, "soc": window.get("soc", 0), "power": window.get("power", 0)}
                 segments[start_time] = self.derive_control_state(intent, current_soc)
-                # After the window, return to self-use at reserve.
-                segments.setdefault(end_time, dict(idle))
+                # After the window, return to the baseline.
+                segments.setdefault(end_time, dict(baseline))
         ordered = sorted(segments.items(), key=lambda kv: kv[0])
         slots = []
         for start_time, state in ordered:
-            if state.get("grid_charge") or state.get("solar_sell") or state.get("power"):
-                slots.append(self._action_slot(start_time, state))
-            else:
-                slots.append(self._self_use_slot(start_time, reserve, self_use_power))
+            slots.append(self._slot_for(start_time, state, reserve, self_use_power))
         # Normalise to exactly TOU_SLOT_COUNT slots, each with a DISTINCT ascending
         # start time (DEYE rejects/mis-applies duplicate slot times). Pad with
         # self-use slots at filler times not already used by a window boundary,
@@ -624,7 +755,7 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if len(slots) >= TOU_SLOT_COUNT:
                 break
             if filler_time not in used:
-                slots.append(self._self_use_slot(filler_time, reserve, self_use_power))
+                slots.append(self._slot_for(filler_time, baseline, reserve, self_use_power))
                 used.add(filler_time)
         slots = sorted(slots, key=lambda slot: slot[TOU_FIELD["time"]])[:TOU_SLOT_COUNT]
         return slots
@@ -685,7 +816,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         reserve = int(schedule.get("reserve", 0))
         charge = schedule.get("charge", {})
         export = schedule.get("export", {})
-        intent = {"reserve": reserve, "charge": {"enable": False}, "export": {"enable": False}}
+        # The rates are carried even when no window is active: with both windows shut a zero
+        # charge rate is Predbat's Freeze Export, and the mode has to follow it rather than
+        # sit in demand (see derive_control_state).
+        intent = {"reserve": reserve, "charge": {"enable": False, "power": int(charge.get("power", 0))}, "export": {"enable": False, "power": int(export.get("power", 0))}}
         if self._window_active(export, now_minutes):
             intent["export"] = {"enable": True, "soc": export.get("soc", 0), "power": export.get("power", 0)}
         elif self._window_active(charge, now_minutes):
@@ -736,6 +870,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             if lifted and sn not in self._soc_floor_warned:
                 self._soc_floor_warned.add(sn)
                 self.log(f"Info: DEYE {sn} raising requested slot SOC to the inverter's {floor}% floor (config/battery battLowCapacity)")
+        # enableGeneration is the external-generator charge flag, and it is the owner's
+        # setting rather than Predbat's - carried across by slot position from whatever
+        # config/tou last reported, defaulting to off. Applied here, on the finished slot
+        # list, so it lands on the slots the inverter actually receives (the same reason the
+        # SOC floor is clamped here) and no slot builder has to invent a value.
+        for slot, generation in zip(slots, self._generation_flags(sn)):
+            slot[TOU_FIELD["generate"]] = generation
         return {
             "deviceSn": sn,
             "workMode": active["work_mode"],
@@ -755,8 +896,17 @@ class DeyeAPI(ComponentBase, OAuthMixin):
             # the slot SoC targets, not from this flag. Turning it off is never useful here,
             # only harmful, so it is not derived at all. derive_control_state still carries
             # solar_sell because build_tou_slots uses it to classify action-vs-self-use slots.
+            #
+            # DEYE's own samples agree: three of the four strategy/dynamic_control_*.py
+            # samples send solarSellAction on, including self-consumption, which pairs it
+            # with ZERO_EXPORT_TO_CT. Only the fully-charge sample omits it.
             "solarSellAction": "on",
             "touAction": "on",
+            # The days the programme runs on. Predbat re-derives a 24h plan every cycle, so
+            # every day is one of them; omitting this left the active days at whatever the
+            # inverter already held, and a programme that names no days is stored and never
+            # applied. See DEYE_TOU_DAYS.
+            "touDays": list(DEYE_TOU_DAYS),
             "timeUseSettingItems": slots,
         }
 
@@ -1117,6 +1267,15 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.set_arg("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
         self.set_arg("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
         self.set_arg("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
+        # Own the sign flags rather than leaving them to whatever else configured this
+        # install. base.args is shared and NOT namespaced per inverter type, so a component
+        # that legitimately inverts its own grid sensor - teslemetry sets grid_power_invert
+        # True, fox does the same - leaves that key set for every inverter index, and a DEYE
+        # inverter that never claims it inherits the flip, turning a correct export into an
+        # apparent import. All three are False because publish_data already emits Predbat's
+        # conventions (see DEYE_TELEMETRY_NEGATE).
+        for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+            self.set_arg(flag, [False for _ in devices])
         self.set_arg("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
         if not self.automatic_ignore_pv:
             self.set_arg("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
@@ -1215,8 +1374,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return await self.save_cache(DEYE_CACHE_STATIC, {"station_ids": self.station_ids, "device_list": self.device_list})
 
     async def save_config(self):
-        """Cache the per-device config/battery responses."""
-        return await self.save_cache(DEYE_CACHE_CONFIG, self.device_battery_config)
+        """Cache the per-device config/battery and config/tou responses."""
+        saved = await self.save_cache(DEYE_CACHE_CONFIG, self.device_battery_config)
+        # A separate file so the existing config cache keeps its shape: a restart that finds
+        # only the old one still restores the battery config, and simply re-reads the TOU
+        # programme on the first config tier.
+        await self.save_cache(DEYE_CACHE_TOU, self.device_tou_config)
+        return saved
 
     def _ratings_payload(self):
         """Return the static per-device ratings in their cached shape."""
@@ -1266,6 +1430,13 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         if isinstance(config, dict) and config:
             self.device_battery_config = config
             self.mark_refreshed("config", age)
+
+        # Restored on the same tier clock as the battery config. Worth keeping across a
+        # restart: without it the first write of a cycle that beats the config refresh would
+        # clear a generator setting the inverter really does hold.
+        tou, _ = await self.load_cache(DEYE_CACHE_TOU)
+        if isinstance(tou, dict) and tou:
+            self.device_tou_config = tou
 
         # Ratings are static per install and carry no TTL of their own — device/latest
         # rewrites them on every live refresh. Restoring them unconditionally is the main
@@ -1339,7 +1510,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         return True
 
     async def refresh_config(self):
-        """Re-read config/battery for every device and cache it when anything came back."""
+        """Re-read config/battery and config/tou for every device, caching whatever came back.
+
+        config/tou is read for the settings Predbat does not own but must not clobber when it
+        rewrites the programme - see _generation_flags.
+        """
         got_any = False
         for sn in self.device_list:
             try:
@@ -1347,6 +1522,11 @@ class DeyeAPI(ComponentBase, OAuthMixin):
                     got_any = True
             except Exception as e:
                 self.log(f"Warn: DEYE config/battery failed for {sn}: {e}")
+            try:
+                if await self.fetch_tou_config(sn):
+                    got_any = True
+            except Exception as e:
+                self.log(f"Warn: DEYE config/tou failed for {sn}: {e}")
         # The clock is started either way so a model that rejects this config point
         # entirely retries on the tier cadence rather than on every single tick, but the
         # cache is only written when there is something worth keeping.
