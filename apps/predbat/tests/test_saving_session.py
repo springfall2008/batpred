@@ -495,6 +495,270 @@ friendly_name: Octoplus Saving Session Events
     return failed
 
 
+def test_saving_session_zero_rate_skip(my_predbat):
+    """
+    Test that an available Octopus saving event with a zero (or negative) octopoints_per_kwh is not
+    auto-joined, while a positive-rate event still is, and a null-rate event still falls back to the
+    default rate unaffected. Covers GitHub issue #4593.
+
+    The Octopus integration currently puts national Power Up (free electricity) events into the Power
+    Down available_events set at 0 p/kWh (#4548 point 5), so without this guard every one of those gets
+    join-attempted and rejected.
+    """
+    print("Test saving session zero reward rate is skipped (issue #4593)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = """
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    def setup_items(octopoints_per_kwh_yaml):
+        session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events:
+    - id: 9999
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: {octopoints_per_kwh_yaml}
+      code: TEST123
+joined_events: []
+friendly_name: Octoplus Saving Session Events
+"""
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        # Reset throttle so a join is attempted
+        my_predbat.octopus_last_joined_try = None
+
+    # Test 1: octopoints_per_kwh: 0 -> no join attempted
+    print("  Test 1: Zero reward rate blocks the join")
+    setup_items("0")
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join for a zero reward rate event, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped for a zero reward rate event")
+
+    # Test 2: octopoints_per_kwh: -10 -> no join attempted (defensive, matches saving_rate > 0 elsewhere)
+    print("  Test 2: Negative reward rate blocks the join")
+    setup_items("-10")
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join for a negative reward rate event, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped for a negative reward rate event")
+
+    # Test 3: octopoints_per_kwh: 500 -> join proceeds (unaffected)
+    print("  Test 3: Positive reward rate still allows the join")
+    setup_items("500")
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join for a positive reward rate event, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds for a positive reward rate event")
+
+    # Test 4: octopoints_per_kwh: null -> join proceeds using the default rate (unaffected)
+    print("  Test 4: Null reward rate still allows the join (falls back to default rate)")
+    setup_items("null")
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join for a null reward rate event (default rate applies), got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds for a null reward rate event")
+
+    if not failed:
+        print("PASS: All zero reward rate tests passed")
+
+    # Restore default throttle state so we do not leak it to other tests
+    my_predbat.octopus_last_joined_try = None
+
+    return failed
+
+
+def test_saving_session_min_octopoints_threshold(my_predbat):
+    """
+    Test that octopus_saving_session_min_octopoints_per_kwh gates the auto-join at a user-configured
+    reward level, not just the fixed >0 check covered by test_saving_session_zero_rate_skip. Covers
+    GitHub issue #4595 (gcoan's review of #4593): a user may want to also skip genuine but low-value
+    Power Down sessions, not just the integration's mis-categorised zero-reward Power Up events.
+    """
+    print("Test saving session minimum octopoints threshold (issue #4595)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_binary = """
+state: off
+current_joined_event_start: null
+current_joined_event_end: null
+current_joined_event_duration_in_minutes: null
+next_joined_event_start: null
+next_joined_event_end: null
+next_joined_event_duration_in_minutes: null
+icon: mdi:leaf
+friendly_name: Octoplus Saving Session
+"""
+
+    def setup_items(octopoints_per_kwh_yaml, min_threshold=None):
+        session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+event_types: octopus_energy_all_octoplus_saving_sessions
+event_type: octopus_energy_all_octoplus_saving_sessions
+account_id: A-4DD6C5EE
+available_events:
+    - id: 9999
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: {octopoints_per_kwh_yaml}
+      code: TEST123
+joined_events: []
+friendly_name: Octoplus Saving Session Events
+"""
+        ha.dummy_items.clear()
+        ha.dummy_items["binary_sensor.octopus_energy_test_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        if min_threshold is None:
+            my_predbat.args.pop("octopus_saving_session_min_octopoints_per_kwh", None)
+        else:
+            my_predbat.args["octopus_saving_session_min_octopoints_per_kwh"] = min_threshold
+        # Reset throttle so a join is attempted
+        my_predbat.octopus_last_joined_try = None
+
+    # Test 1: no threshold configured, moderate reward -> join proceeds (default threshold is 0)
+    print("  Test 1: Default threshold (unset, i.e. 0) still allows a moderate reward")
+    setup_items("50")
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join with the default threshold, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds with the default threshold")
+
+    # Test 2: threshold raised above the event's reward -> join is skipped
+    print("  Test 2: A threshold above the event's reward blocks the join")
+    setup_items("50", min_threshold=100)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when the reward does not exceed the configured threshold, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when the reward does not exceed the configured threshold")
+
+    # Test 3: threshold raised but the event's reward still exceeds it -> join proceeds
+    print("  Test 3: A reward that still exceeds a raised threshold still joins")
+    setup_items("500", min_threshold=100)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if len(join_calls) != 1:
+        print(f"ERROR: Expected 1 join when the reward exceeds the configured threshold, got {len(join_calls)}: {service_result}")
+        failed = True
+    else:
+        print("  PASS: Join proceeds when the reward exceeds the configured threshold")
+
+    # Test 4: reward exactly equal to the threshold -> join is skipped (exceeds, not meets)
+    print("  Test 4: A reward exactly equal to the threshold does not exceed it, so is skipped")
+    setup_items("100", min_threshold=100)
+    ha.service_store_enable = True
+    ha.service_store = []
+    my_predbat.fetch_octopus_sessions()
+    service_result = ha.get_service_store()
+    ha.service_store_enable = False
+
+    join_calls = [svc for svc in service_result if "join" in svc[0]]
+    if join_calls:
+        print(f"ERROR: Expected no join when the reward exactly equals the configured threshold, got {join_calls}")
+        failed = True
+    else:
+        print("  PASS: Join skipped when the reward exactly equals the configured threshold")
+
+    if not failed:
+        print("PASS: All minimum octopoints threshold tests passed")
+
+    # Restore default throttle/config state so we do not leak it to other tests
+    my_predbat.octopus_last_joined_try = None
+    my_predbat.args.pop("octopus_saving_session_min_octopoints_per_kwh", None)
+
+    return failed
+
+
 def test_saving_session_join_service_fallback(my_predbat):
     """
     Test that auto-join tries the current Bottle Cap Dave join service

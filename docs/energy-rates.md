@@ -170,6 +170,8 @@ available sessions on your behalf.
 
 If an available saving session overlaps an Axle VPP session (any overlap in time), Predbat will **not** auto-join the saving session, as the two events cannot both be honoured for the same period. The Axle session takes priority.
 
+Predbat will also **not** auto-join a session whose reward rate doesn't exceed the **octopus_saving_session_min_octopoints_per_kwh** configuration item in `apps.yaml` (default 0 octopoints/kWh - joins any session with a positive reward). Raise this if you want to also skip low-value sessions you don't consider worth the disruption. The default of 0 additionally works around the Octopus Energy integration currently reporting some non-joinable events (national Power Up/free electricity slots) inside the same data set at 0 p/kWh - see [#4593](https://github.com/springfall2008/batpred/issues/4593).
+
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
 using the **octopus_saving_session_octopoints_per_penny** configuration item in `apps.yaml` (default is 8).

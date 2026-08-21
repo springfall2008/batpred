@@ -185,6 +185,7 @@ freephase
 fronius
 funcs
 futurerate
+gcoan
 gecloud
 gekey
 generationmix

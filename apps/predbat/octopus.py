@@ -2945,6 +2945,7 @@ class Octopus:
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per found
+            octopoints_min_threshold = self.get_arg("octopus_saving_session_min_octopoints_per_kwh", 0)
 
             joined_events = []
             available_events = []
@@ -2989,6 +2990,24 @@ class Octopus:
                             saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
                         else:
                             saving_rate = saving_rate  # Use default if not specified
+                        # Skip an event whose reward doesn't exceed the configured minimum rather than
+                        # join-attempting it - the Octopus integration currently puts national Power Up
+                        # (free electricity) events into the Power Down available_events set at 0 p/kWh
+                        # (#4548 point 5), so with the default threshold of 0 every one of those gets
+                        # skipped instead of joined, rejected by the integration, and still firing a false
+                        # "joined" notification (#4593/#4595). Raising octopus_saving_session_min_octopoints_per_kwh
+                        # above 0 lets a user also skip genuine but low-value Power Down sessions they don't
+                        # consider worth the disruption (#4595 review, gcoan). None keeps its existing meaning
+                        # (rate not reported, default applies) - only an explicit reported rate is checked
+                        # against the threshold, matching the >0 requirement the planning side's joined_events
+                        # loop already applies (with its own fixed 0) when building octopus_saving_slots.
+                        if octopoints_kwh is not None and octopoints_kwh <= octopoints_min_threshold:
+                            self.log(
+                                "Octopus: Skipping saving event code {} {}-{} - reward rate {} does not exceed the configured minimum {}".format(
+                                    code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), octopoints_kwh, octopoints_min_threshold
+                                )
+                            )
+                            continue
                         # Do not auto-join a saving session that overlaps an Axle VPP session - we cannot honour both for the same period
                         if self._saving_event_conflicts_axle(start_time, end_time, axle_sessions):
                             self.log("Octopus: Skipping saving event code {} {}-{} - conflicts with an Axle VPP session".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M")))

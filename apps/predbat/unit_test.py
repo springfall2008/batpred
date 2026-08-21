@@ -80,6 +80,8 @@ from tests.test_saving_session import (
     test_trigger_callback_success_signal,
     test_saving_session_auto_join_toggle,
     test_saving_session_custom_entity_no_rewrite_match,
+    test_saving_session_zero_rate_skip,
+    test_saving_session_min_octopoints_threshold,
     test_saving_session_entity_regex_power_rename,
 )
 from tests.test_secrets import run_secrets_tests
@@ -464,6 +466,8 @@ def main():
         ("trigger_callback_success_signal", test_trigger_callback_success_signal, "trigger_callback loopback success signal test (PR #4601 review)", False),
         ("saving_session_auto_join_toggle", test_saving_session_auto_join_toggle, "Saving session auto-join toggle test (issue #4120)", False),
         ("saving_session_custom_entity_no_rewrite_match", test_saving_session_custom_entity_no_rewrite_match, "Saving session custom entity no rewrite match test (issue #4573)", False),
+        ("saving_session_zero_rate_skip", test_saving_session_zero_rate_skip, "Saving session zero reward rate skip test (issue #4593)", False),
+        ("saving_session_min_octopoints_threshold", test_saving_session_min_octopoints_threshold, "Saving session configurable minimum octopoints threshold test (issue #4595)", False),
         ("saving_session_entity_regex_power_rename", test_saving_session_entity_regex_power_rename, "Saving/free session entity regex Power Down/Up rename test (issue #4548 point 2)", False),
         ("alert_feed", test_alert_feed, "Alert feed tests", False),
         ("fox_api", run_fox_api_tests, "Fox API tests", False),
