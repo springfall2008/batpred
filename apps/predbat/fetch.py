@@ -1807,10 +1807,13 @@ class Fetch:
         # rate value) - silently marking every minute of the day as overridden in rate_replicate
         # (and hence in the plan display) even for the narrowest override window (batpred#2578).
         # For most callers (anything sourced via get_arg(..., default=[]), which already merges
-        # manual API overrides into its own return value) this duplicates an override that's already
-        # present in `info` - harmless once correctly shaped, since re-applying the same window with
-        # the same rate is idempotent.
-        manual_items = [item["value"] for item in self.get_manual_api(rtype) if isinstance(item, dict) and isinstance(item.get("value"), dict)]
+        # manual API overrides into its own return value) this would duplicate an override already
+        # present in `info`. Avoid double-applying, as incremental overrides would otherwise stack.
+        manual_items = []
+        for item in self.get_manual_api(rtype):
+            if isinstance(item, dict) and isinstance(item.get("value"), dict):
+                if item["value"] not in info:
+                    manual_items.append(item["value"])
         if manual_items:
             self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
 
