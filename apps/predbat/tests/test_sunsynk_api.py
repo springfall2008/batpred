@@ -571,7 +571,7 @@ def test_fetch_device_data_maps_telemetry_and_energy():
         if endpoint_key == "battery":
             return {"soc": 62, "power": -1500, "voltage": 51.2, "temp": 21.5, "capacity": 280, "chargeVolt": 56.8, "maxChargeCurrentLimit": 100, "etodayChg": 7.4, "etodayDischg": 5.1}
         if endpoint_key == "grid":
-            return {"pac": 430, "etodayFrom": 3.2, "etodayTo": 1.1}
+            return {"pac": -430, "etodayFrom": 3.2, "etodayTo": 1.1}
         if endpoint_key == "load":
             return {"totalPower": 900, "dailyUsed": 12.6}
         if endpoint_key == "input":
@@ -581,9 +581,10 @@ def test_fetch_device_data_maps_telemetry_and_energy():
     with patch.object(s, "_get", side_effect=fake_get):
         run_async_local(s.fetch_device_data("INV1"))
     values = s.device_values.get("INV1", {})
-    # grid_power is negated to reach Predbat's negative-for-import convention, matching
-    # deye.py: Sunsynk's pac of +430 (importing) must publish as -430.
-    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", -430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
+    # grid_power is negated to reach Predbat's negative-for-import convention: Sunsynk
+    # reports pac negative when EXPORTING, so -430 (an export) must publish as +430. See
+    # SUNSYNK_TELEMETRY_NEGATE for the live sample that confirmed it.
+    for leaf, expect in (("soc", 62), ("battery_power", -1500), ("grid_power", 430), ("load_power", 900), ("pv_power", 2100), ("temperature", 21.5)):
         if values.get(leaf) != expect:
             print(f"ERROR: telemetry {leaf} = {values.get(leaf)}, expected {expect}")
             failed = True
@@ -593,6 +594,54 @@ def test_fetch_device_data_maps_telemetry_and_energy():
             print(f"ERROR: energy {leaf} = {energy.get(leaf)}, expected {expect}")
             failed = True
     assert not failed, "test_fetch_device_data_maps_telemetry_and_energy"
+
+
+def test_grid_power_sign_matches_the_live_export_sample():
+    """An exporting site publishes POSITIVE grid power, as Predbat's convention requires.
+
+    Pinned to the live sample from inverter 2405116013 on 2026-08-20 11:25, the only kind
+    that can distinguish the two signs: pac -1939 W while PV 2708 W served a 117 W load and
+    charged the battery at 544 W - a 2047 W surplus whose magnitude matches - with the day's
+    counters reading 0.0 kWh imported against 2.8 kWh exported. Sunsynk reports export as
+    NEGATIVE, Predbat wants it positive (docs/apps-yaml.md), so this must publish +1939.
+
+    Deliberately a high-power sample. Readings taken near the balance point say nothing:
+    the same inverter read pac +19 W and +20 W against a computed surplus of ~0 W earlier
+    the same morning, which points the opposite way and is pure noise.
+    """
+    failed = False
+    s = MockSunsynk()
+
+    async def fake_get(endpoint_key, sn=None, params=None):
+        """Return the live 2026-08-20 11:25 sample for each realtime endpoint."""
+        if endpoint_key == "battery":
+            return {"soc": "98.0", "power": -544, "temp": "22.0", "voltage": "53.9"}
+        if endpoint_key == "grid":
+            return {"pac": -1939, "etodayFrom": "0.0", "etodayTo": "2.8"}
+        if endpoint_key == "load":
+            return {"totalPower": 117, "dailyUsed": 1.9}
+        if endpoint_key == "input":
+            return {"pac": 2708, "etoday": 6.4}
+        return {}
+
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data("INV1"))
+    values = s.device_values.get("INV1", {})
+    if values.get("grid_power") != 1939.0:
+        print(f"ERROR: exporting site published grid_power {values.get('grid_power')}, expected +1939.0")
+        failed = True
+    # The same sample also pins battery_power: negative while charging, so Predbat's
+    # positive-for-discharge convention needs no flip there either.
+    if values.get("battery_power") != -544.0:
+        print(f"ERROR: charging battery published battery_power {values.get('battery_power')}, expected -544.0")
+        failed = True
+    # Guard the fixture itself: PV must exceed load plus battery charge by roughly the
+    # published grid power, or this has stopped being a test of a real export.
+    surplus = values.get("pv_power", 0) - values.get("load_power", 0) + values.get("battery_power", 0)
+    if surplus < 1000 or abs(surplus - values.get("grid_power", 0)) > 250:
+        print(f"ERROR: the pinned sample no longer reads as a clear export: surplus {surplus} W vs grid {values.get('grid_power')} W")
+        failed = True
+    assert not failed, "test_grid_power_sign_matches_the_live_export_sample"
 
 
 def test_fetch_device_data_absent_fields_are_not_invented():
@@ -706,6 +755,11 @@ def _run_with_hard_timeout(coro, seconds=5):
     by ``SIGALRM``. SIGALRM is a genuine OS-level interrupt that CPython checks between
     bytecode instructions, so it fires even inside a loop that never truly yields.
     """
+
+    if not hasattr(signal, "SIGALRM"):
+        import asyncio
+
+        return run_async_local(asyncio.wait_for(coro, timeout=seconds))
 
     def _handler(signum, frame):
         """Convert the SIGALRM into a Python exception so pytest-free assertions can catch it."""
@@ -1127,6 +1181,7 @@ def run_sunsynk_api_tests(my_predbat):
         ("device_list_paging", test_get_device_list_pages_and_filters),
         ("device_list_unfiltered", test_get_device_list_unfiltered_returns_all),
         ("telemetry_mapping", test_fetch_device_data_maps_telemetry_and_energy),
+        ("grid_power_sign", test_grid_power_sign_matches_the_live_export_sample),
         ("telemetry_absent", test_fetch_device_data_absent_fields_are_not_invented),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),
         ("capacity_ah_to_kwh", test_battery_capacity_amp_hours_to_kwh),

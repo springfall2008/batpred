@@ -4624,6 +4624,7 @@ class Plan:
                         "friendly_name": "Predicted Battery Power Best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kW",
+                        "device_class": "power",
                         "icon": "mdi:battery",
                     },
                 )
@@ -4648,6 +4649,7 @@ class Plan:
                         "friendly_name": "Predicted PV Power Best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kW",
+                        "device_class": "power",
                         "icon": "mdi:battery",
                     },
                 )
@@ -4660,6 +4662,7 @@ class Plan:
                         "friendly_name": "Predicted Grid Power Best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kW",
+                        "device_class": "power",
                         "icon": "mdi:battery",
                     },
                 )
@@ -4672,6 +4675,7 @@ class Plan:
                         "friendly_name": "Predicted Load Power Best",
                         "state_class": "measurement",
                         "unit_of_measurement": "kW",
+                        "device_class": "power",
                         "icon": "mdi:battery",
                     },
                 )

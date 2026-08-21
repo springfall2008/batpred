@@ -25,7 +25,7 @@ import sys
 import yaml
 from aiohttp import web
 
-from annual import AnnualConfigError, validate_config
+from annual import INCLUDED_STATUSES, AnnualConfigError, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
 from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
@@ -65,6 +65,7 @@ DEFAULT_CONFIG = {
     "load": {"annual_kwh": 3800, "shape": "flat", "car_charging_kwh": 0, "car_rate_kw": 7.4},
     "tariff": {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}], "rates_export": [{"rate": SEG_EXPORT_P}], "standing_charge_p_per_day": PRICE_CAP_STANDING_CHARGE_P},
     "samples_per_month": 2,
+    "fast_mode": False,
 }
 
 CONFIG_FILENAME = "annual.yaml"
@@ -597,6 +598,8 @@ class AnnualPage:
         text += "<details><summary>Advanced</summary>\n"
         text += self._number_field("year", "Year to model (blank for the most recent complete year)", config.get("year"))
         text += self._number_field("samples_per_month", "Days sampled per month", config.get("samples_per_month", 2), step="1")
+        text += '<div class="annual-field"><label for="fast_mode">Fast mode</label><input type="checkbox" id="fast_mode" name="fast_mode" {}></div>\n'.format("checked" if config.get("fast_mode") else "")
+        text += "<p class=\"annual-note\">Plans March, June, September and December only and estimates the other eight months from this year's solar curve, which takes about 2.5&times; less time. Annual totals and payback stay close; individual months are approximate, so turn this off if you want to read one month's figure. A tariff whose daily prices move too much for this to work is planned in full automatically.</p>\n"
         text += '<div class="annual-field"><label for="debug">Save plans for debugging</label><input type="checkbox" id="debug" name="debug" {}></div>\n'.format("checked" if config.get("debug") else "")
         text += '<p class="annual-note">Keeps each sampled day\'s plan so you can inspect it below. Makes the saved run much larger.</p>\n'
         text += self._number_field("pv10_derate_fallback", "P10 fallback derate", config.get("pv10_derate_fallback", 0.7))
@@ -775,6 +778,7 @@ class AnnualPage:
         # A checkbox absent from postdata means unchecked - matches how battery_hybrid
         # is read above; there is no "off" value to see, only "on" or nothing at all.
         config["debug"] = postdata.get("debug") is not None
+        config["fast_mode"] = postdata.get("fast_mode") is not None
 
         costs = {}
         for key in DEFAULT_COSTS:
@@ -1242,6 +1246,14 @@ class AnnualPage:
 
         if config.get("samples_per_month"):
             rows.append(("Days sampled", html.escape("{} a month".format(config["samples_per_month"]), quote=True)))
+        if config.get("fast_mode"):
+            # Only stated when it actually applied: a run that asked for fast mode but was
+            # given a full one (a too-volatile tariff) reports fast_mode False in annual.
+            interpolated = ((results or {}).get("annual") or {}).get("months_interpolated") or 0
+            if ((results or {}).get("annual") or {}).get("fast_mode"):
+                rows.append(("Fast mode", html.escape("on - 4 months planned, {} estimated".format(interpolated), quote=True)))
+            else:
+                rows.append(("Fast mode", "requested, but this tariff needed a full run"))
 
         text = "<h2>What this run used</h2>\n<table class='comparison-table annual-details'>\n"
         for label, value in rows:
@@ -1425,7 +1437,7 @@ class AnnualPage:
         categories = []
         series = {key: [] for key in SCENARIO_ORDER}
         for entry in results.get("months", []):
-            if entry.get("status") not in ("ok", "degraded"):
+            if entry.get("status") not in INCLUDED_STATUSES:
                 continue
             categories.append(calendar.month_abbr[entry["month"]])
             for key in SCENARIO_ORDER:
@@ -1457,6 +1469,12 @@ class AnnualPage:
             # just costed against a fallback rate pattern - so a reader would otherwise
             # have no way to tell these months apart from any other bar in the chart.
             text += "<p class='annual-note'>Rates for {} were synthesised from today's rates because no historical rates were available (see caveats below) - treat those bars as indicative, not historical.</p>\n".format(", ".join(synthesised_months))
+        interpolated_months = [calendar.month_abbr[entry["month"]] for entry in results.get("months", []) if entry.get("status") == "interpolated"]
+        if interpolated_months:
+            # These bars are estimates, not plan output, and nothing else in the chart says so.
+            text += "<p class='annual-note'>{} were not planned - their bars are estimated from the planned months against this year's solar curve. The annual total stays close; individual months are approximate.</p>\n".format(
+                ", ".join(interpolated_months)
+            )
         text += "<script>\nvar annualOptions = {};\n".format(_json_for_script(payload))
         text += "annualOptions.tooltip.y = {formatter: function (v) { return '£' + v.toFixed(2); }};\n"
         text += "new ApexCharts(document.querySelector('#annual-chart'), annualOptions).render();\n</script>\n"
@@ -1474,11 +1492,18 @@ class AnnualPage:
         text += "<tr><th>Month</th><th>Scenario</th><th>Cost</th><th>Import</th><th>Export</th><th>PV</th><th>Battery</th><th>Battery cycles</th></tr>\n"
         for entry in results.get("months", []):
             name = calendar.month_abbr[entry["month"]]
-            if entry.get("status") not in ("ok", "degraded"):
+            if entry.get("status") not in INCLUDED_STATUSES:
                 reason = html.escape(str(entry.get("reason", "no result")), quote=True)
                 text += "<tr class='annual-unavailable'><td>{}</td><td colspan='7'>unavailable — {}</td></tr>\n".format(name, reason)
                 continue
             suffix = " (degraded — {} sampled day(s) failed)".format(len(entry.get("failed_days", []))) if entry.get("status") == "degraded" else ""
+            if entry.get("status") == "interpolated":
+                # Included in the totals and rendered with real-looking figures, so without
+                # this it is indistinguishable from a month that was actually planned.
+                anchors = (entry.get("interpolated_from") or {}).get("anchors") or []
+                suffix += " <span class='annual-synthesised-tag' title='This month was not planned; its figures were estimated from the planned months against this year&#39;s solar curve'>interpolated from {}</span>".format(
+                    html.escape(", ".join(calendar.month_abbr[anchor] for anchor in anchors), quote=True)
+                )
             synthesised = entry.get("rates_synthesised") or []
             if synthesised:
                 # A synthesised month is still "ok"/"degraded" - it produced a real,

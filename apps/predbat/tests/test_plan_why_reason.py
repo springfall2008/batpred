@@ -132,13 +132,14 @@ def run_test_plan_why_reason(my_predbat):
     _, raw_plan = render()
     templates = raw_plan["reason_templates"]
     row = _get_row(raw_plan, minutes_now)
+    expected_charge_rate_kw = "{:.2f}".format(my_predbat.battery_rate_max_charge * 60)
     if row is None or _codes(row) != ["charge_low_rate"]:
         print("ERROR: Chrg reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif row["reasons"][0]["params"] != {"target_percent": 80, "rate": "{:.2f}".format(row["import_rate"])}:
+    elif row["reasons"][0]["params"] != {"target_percent": 80, "rate": "{:.2f}".format(row["import_rate"]), "rate_kw": expected_charge_rate_kw}:
         print("ERROR: Chrg params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    elif "Charging up to 80" not in _render(row, templates):
+    elif "Charging up to 80" not in _render(row, templates) or "{}kW".format(expected_charge_rate_kw) not in _render(row, templates):
         print("ERROR: Chrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
 
@@ -188,6 +189,32 @@ def run_test_plan_why_reason(my_predbat):
         failed = True
     my_predbat.manual_charge_times = []
 
+    # --- Test 4b: Chrg low power (set_charge_low_power throttles the rate below max, computed
+    # dynamically via find_charge_rate() rather than a fixed fraction like export's snail encoding) ---
+    print("Test Chrg low power reason shows the throttled rate_kw, not the nameplate max")
+    low_power_window = [{"start": minutes_now, "end": minutes_now + 60, "average": 10.0}]
+    my_predbat.charge_window_best = low_power_window
+    my_predbat.charge_limit_best = [8.0]  # small gap above the 7.9 current SoC - easily reached even throttled
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 7.9)
+    my_predbat.set_charge_low_power = True
+    my_predbat.charge_low_power_margin = 10
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    max_rate_kw = my_predbat.battery_rate_max_charge * 60
+    rate_kw = float(row["reasons"][0]["params"]["rate_kw"]) if row is not None and _codes(row) == ["charge_low_rate"] else None
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg low power reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif rate_kw is None or rate_kw >= max_rate_kw:
+        print("ERROR: Chrg low power rate_kw not throttled below the {}kW max: got {}".format(max_rate_kw, rate_kw))
+        failed = True
+    elif "{:.2f}kW".format(rate_kw) not in _render(row, templates):
+        print("ERROR: Chrg low power rendered text missing the throttled rate: {}".format(_render(row, templates)))
+        failed = True
+    my_predbat.set_charge_low_power = False
+    my_predbat.charge_window_best = window
+    my_predbat.charge_limit_best = [8.0]
+
     # --- Test 5: Exp ---
     print("Test Exp reason")
     my_predbat.charge_window_best = []
@@ -197,15 +224,30 @@ def run_test_plan_why_reason(my_predbat):
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 9.0)  # 90%, well above the 50% target
     _, raw_plan = render()
     row = _get_row(raw_plan, minutes_now)
+    expected_export_rate_kw = "{:.2f}".format(my_predbat.battery_rate_max_export * 60)
     if row is None or _codes(row) != ["export_high_rate"]:
         print("ERROR: Exp reasons unexpected: {}".format(row and _codes(row)))
         failed = True
-    elif row["reasons"][0]["params"] != {"target_percent": 50.0, "rate": "{:.2f}".format(row["export_rate"])}:
+    elif row["reasons"][0]["params"] != {"target_percent": 50.0, "rate": "{:.2f}".format(row["export_rate"]), "rate_kw": expected_export_rate_kw}:
         print("ERROR: Exp params unexpected: {}".format(row["reasons"][0]["params"]))
         failed = True
-    elif "Exporting down to" not in _render(row, templates):
+    elif "Exporting down to" not in _render(row, templates) or "{}kW".format(expected_export_rate_kw) not in _render(row, templates):
         print("ERROR: Exp rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
+
+    # --- Test 5b: Exp slow (fractional limit -> reduced rate, the snail-symbol encoding) ---
+    print("Test Exp slow reason shows the reduced rate_kw, not the nameplate max")
+    my_predbat.export_limits_best = [50.3]  # limit.tens_of_percentage_rate_reduction -> 70% of max rate
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    expected_slow_export_rate_kw = "{:.2f}".format(my_predbat.battery_rate_max_export * 60 * 0.7)
+    if row is None or _codes(row) != ["export_high_rate"]:
+        print("ERROR: Exp slow reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"].get("rate_kw") != expected_slow_export_rate_kw:
+        print("ERROR: Exp slow rate_kw unexpected: expected {}, got {}".format(expected_slow_export_rate_kw, row["reasons"][0]["params"].get("rate_kw")))
+        failed = True
+    my_predbat.export_limits_best = [50.0]
 
     # --- Test 6: HoldExp ---
     print("Test HoldExp reason")
@@ -493,7 +535,7 @@ def run_test_plan_why_reason(my_predbat):
     # intended for JS must be doubled. A single "\{" raises SyntaxWarning today and becomes a
     # SyntaxError in a future Python.
     print("Test web_helper.py has no invalid escape sequences")
-    with open(web_helper.__file__, "r") as han:
+    with open(web_helper.__file__, "r", encoding="utf-8") as han:
         web_helper_source = han.read()
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
