@@ -1015,6 +1015,10 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         self.pending_orders.pop(sn, None)
         return "success"
 
+    def _is_read_only(self):
+        """Return True when Predbat is in read-only mode and must not write to the inverter."""
+        return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
+
     def _sensor_name(self, sn, leaf):
         """Return a namespaced DEYE sensor entity id."""
         return f"sensor.{self.prefix}_deye_{sn.lower()}_{leaf}"
@@ -1648,7 +1652,14 @@ class DeyeAPI(ComponentBase, OAuthMixin):
         an order-poll cache invalidation). Inverters Predbat has not yet driven via
         the write button (not in ``control_active``) are left untouched, so a startup
         cycle never clobbers an inverter before there is a plan.
+
+        A no-op while ``switch.predbat_set_read_only`` is on: the top-level work mode is
+        time-aware, so a window transition changes the payload even with no plan change,
+        and without this guard that transition would write to the inverter regardless of
+        read-only.
         """
+        if self._is_read_only():
+            return
         for sn in self.device_list:
             if sn not in self.control_active:
                 continue
