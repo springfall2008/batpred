@@ -1380,6 +1380,81 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_press_and_poll_button_side_scoping(my_predbat, inv):
+    """
+    Tests;
+        def press_and_poll_button(self, side="both")
+
+    Covers GitHub issue #2328: with separate charge_update_button/discharge_update_button
+    entities configured (rather than a single combined button), pressing one side must not also
+    press the other - the reporter's log showed both buttons pressed together even when only one
+    side had anything to update, and on hardware that counts button presses towards flash/EEPROM
+    wear this doubles the unnecessary writes. Bypasses the real button-press-and-poll mechanism
+    (its retry/timestamp-polling behaviour is a separate concern from the side-scoping this test
+    checks) by recording which entity_id(s) press_and_poll_button() actually tries to press.
+    """
+    failed = False
+    print("**** Running Test: press_and_poll_button_side_scoping ****")
+
+    pressed = []
+
+    def fake_press(entity_id):
+        pressed.append(entity_id)
+        return True
+
+    # my_predbat/inv are shared across the whole test run - save everything this test touches so
+    # it can be restored exactly, rather than leaking a changed/missing arg or method into later
+    # tests (e.g. test_force_export_unchanged_times_HM_format relies on schedule_write_button
+    # already being set from run_inverter_tests' own setup).
+    unset = object()
+    real_press_single_button_and_poll = inv._press_single_button_and_poll
+    saved_args = {key: my_predbat.args.get(key, unset) for key in ("charge_update_button", "discharge_update_button", "charge_discharge_update_button", "schedule_write_button")}
+
+    try:
+        inv._press_single_button_and_poll = fake_press
+
+        my_predbat.args["charge_update_button"] = "button.charge_update"
+        my_predbat.args["discharge_update_button"] = "button.discharge_update"
+        for key in ("charge_discharge_update_button", "schedule_write_button"):
+            if key in my_predbat.args:
+                del my_predbat.args[key]
+
+        cases = [
+            ("charge", ["button.charge_update"]),
+            ("discharge", ["button.discharge_update"]),
+            ("both", ["button.charge_update", "button.discharge_update"]),
+        ]
+        for side, expected in cases:
+            pressed.clear()
+            inv.press_and_poll_button(side=side)
+            if sorted(pressed) != sorted(expected):
+                print(f"ERROR: press_and_poll_button(side='{side}') pressed {pressed}, expected {expected}")
+                failed = True
+            else:
+                print(f"  PASS: side='{side}' pressed only {pressed}")
+
+        # Default (no side given) must still press both, for any caller that hasn't been updated
+        pressed.clear()
+        inv.press_and_poll_button()
+        if sorted(pressed) != sorted(["button.charge_update", "button.discharge_update"]):
+            print(f"ERROR: press_and_poll_button() with no side should press both, got {pressed}")
+            failed = True
+        else:
+            print("  PASS: default side='both' pressed both")
+    finally:
+        inv._press_single_button_and_poll = real_press_single_button_and_poll
+        for key, value in saved_args.items():
+            if value is unset:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    if not failed:
+        print("PASS: All press_and_poll_button side scoping tests passed")
+
+    return failed
+
+
 def test_call_service_template(test_name, my_predbat, inv, service_name="test", domain="charge", data={}, extra_data={}, clear=True, repeat=False, service_template=None, expected_result=None, twice=True):
     """
     tests
@@ -3275,6 +3350,10 @@ charge_start_service:
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate9", my_predbat, ha, inv, dummy_items, 30.0)
+    if failed:
+        return failed
+
+    failed |= test_press_and_poll_button_side_scoping(my_predbat, inv)
     if failed:
         return failed
 

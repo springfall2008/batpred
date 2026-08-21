@@ -1993,7 +1993,7 @@ class Inverter:
 
             # For inverters that need a button press to apply changes (e.g., Fox), press the button now
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="charge")
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Target SoC has been changed to {}% at {}".format(self.id, soc, self.base.time_now_str()))
@@ -2699,7 +2699,7 @@ class Inverter:
 
         if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="discharge")
 
         # Force export, turn it on after we change the window
         if force_export:
@@ -2769,7 +2769,7 @@ class Inverter:
             else:
                 # Press button if needed
                 if self.inv_time_button_press:
-                    self.press_and_poll_button()
+                    self.press_and_poll_button(side="charge")
 
         # Updated cached status to disabled
         # Don't do it if notify is not set as this is just a temporary call when setting the charge window
@@ -3167,14 +3167,22 @@ class Inverter:
         if (new_start != old_start) or (new_end != old_end) or (old_charge_schedule_enable == "off"):
             # For Solis inverters and fox we also have to press the update_charge_discharge button to send the times to the inverter
             if self.inv_time_button_press:
-                self.press_and_poll_button()
+                self.press_and_poll_button(side="charge")
 
-    def press_and_poll_button(self):
+    def press_and_poll_button(self, side="both"):
         """
         Press charge/discharge update button(s) for the inverter.
         Priority:
         1. charge_discharge_update_button
         2. charge_update_button and discharge_update_button
+
+        `side` is one of "charge", "discharge" or "both" - the side that actually changed and
+        needs its update pressed. A single combined button (schedule_write_button or
+        charge_discharge_update_button) always covers both sides regardless, so `side` only
+        matters when separate charge_update_button/discharge_update_button entities are
+        configured (e.g. some Solis setups) - pressing the unrelated side's button there writes
+        an unnecessary command to the inverter (and, on hardware that counts these towards flash/
+        EEPROM wear, batpred#2328).
         """
         success = True
 
@@ -3187,17 +3195,18 @@ class Inverter:
         elif entity_id_charge_discharge_updated_button:
             success = self._press_single_button_and_poll(entity_id_charge_discharge_updated_button)
         else:
-            # Try separate charge and discharge buttons
-            charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
-            discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
+            # Try separate charge and discharge buttons - only press the one(s) relevant to `side`
+            if side in ("charge", "both"):
+                charge_button = self.base.get_arg("charge_update_button", indirect=False, index=self.id)
+                if charge_button:
+                    if not self._press_single_button_and_poll(charge_button):
+                        success = False
 
-            if charge_button:
-                if not self._press_single_button_and_poll(charge_button):
-                    success = False
-
-            if discharge_button:
-                if not self._press_single_button_and_poll(discharge_button):
-                    success = False
+            if side in ("discharge", "both"):
+                discharge_button = self.base.get_arg("discharge_update_button", indirect=False, index=self.id)
+                if discharge_button:
+                    if not self._press_single_button_and_poll(discharge_button):
+                        success = False
 
         return success
 
