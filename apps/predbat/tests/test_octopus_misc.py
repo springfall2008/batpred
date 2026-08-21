@@ -442,6 +442,45 @@ async def test_octopus_join_saving_session(my_predbat):
         else:
             print("PASS: Multiple events can be joined sequentially")
 
+    # Test 6: A successful join sends the "joined" notification - deferred to here (not the
+    # select-entity caller in fetch_octopus_sessions()) because this is the only point where the
+    # real GraphQL result is known (issue #4593)
+    print("\n*** Test 6: Successful join sends the joined notification ***")
+    ha = my_predbat.ha_interface
+    ha.service_store_enable = True
+    ha.service_store = []
+    api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
+    api6.async_graphql_query = AsyncMock(return_value={"joinSavingSessionsEvent": {"joinedEventCodes": ["OCTOPLUS-SUCCESS"]}})
+    api6.async_get_saving_sessions = AsyncMock(return_value={"events": [], "account": {}})
+    await api6.async_join_saving_session_events("test-account-6", "OCTOPLUS-SUCCESS")
+    notify_calls = [svc for svc in ha.get_service_store() if svc[0] == "notify/notify"]
+    if len(notify_calls) != 1:
+        print(f"ERROR: Expected 1 notification on successful join, got {len(notify_calls)}")
+        failed = True
+    elif "OCTOPLUS-SUCCESS" not in notify_calls[0][1].get("message", ""):
+        print(f"ERROR: Notification message missing event code: {notify_calls[0][1]}")
+        failed = True
+    else:
+        print("PASS: Notification sent on successful join")
+    ha.service_store_enable = False
+
+    # Test 7: A failed join (async_graphql_query returns None, e.g. Octopus rejects the event -
+    # matches the real OE-1305 "event not found" case reported in #4593) sends no notification
+    print("\n*** Test 7: Failed join sends no notification ***")
+    ha.service_store_enable = True
+    ha.service_store = []
+    api7 = OctopusAPI(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=False)
+    api7.async_graphql_query = AsyncMock(return_value=None)
+    api7.async_get_saving_sessions = AsyncMock(return_value={"events": [], "account": {}})
+    await api7.async_join_saving_session_events("test-account-7", "OCTOPLUS-FAILED")
+    notify_calls = [svc for svc in ha.get_service_store() if svc[0] == "notify/notify"]
+    if len(notify_calls) != 0:
+        print(f"ERROR: Expected no notification on failed join, got {len(notify_calls)}: {notify_calls}")
+        failed = True
+    else:
+        print("PASS: No notification sent on failed join")
+    ha.service_store_enable = False
+
     if failed:
         print("\n**** ❌ Octopus async_join_saving_session_events tests FAILED ****")
         return 1
