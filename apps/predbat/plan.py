@@ -5269,6 +5269,12 @@ class Plan:
         if self.num_cars > 0:
             for car_n in range(self.num_cars):
                 for window in self.car_charging_slots[car_n]:
+                    if "average" not in window:
+                        # Non-Octopus historical reconstruction (Yesterday view) appends slots from
+                        # the car's own energy sensor with no rate at all - treating that as 0p/kWh
+                        # would drag the weighted average down and falsely flag ordinary charging as
+                        # diverging from the house rate. Skip rather than guess.
+                        continue
                     start = window["start"]
                     end = window["end"]
                     if start < minute_end and end > minute_start and end != start:
@@ -5276,7 +5282,7 @@ class Plan:
                         overlap_end = min(end, minute_end)
                         kwh = dp2(window["kwh"]) * (overlap_end - overlap_start) / (end - start)
                         total_kwh += kwh
-                        total_cost += kwh * window.get("average", 0)
+                        total_cost += kwh * window["average"]
         if total_kwh > 0.0001:
             return dp2(total_cost / total_kwh)
         return None

@@ -18,6 +18,7 @@ schedules, rate window sensors, and financial metric summaries.
 
 import math
 import copy
+from html import escape as escape_html
 from datetime import datetime, timedelta
 from config import THIS_VERSION
 from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT
@@ -1598,8 +1599,8 @@ class Output:
             html += '<tr style="color:black">'
             html += "<td id=time bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
             if rate_split:
-                house_title = "House rate: {:.2f}{}/kWh".format(rate_value_import, self.currency_symbols[1])
-                car_title = "Car rate: {:.2f}{}/kWh (IOG dispatch cap reached)".format(car_rate, self.currency_symbols[1])
+                house_title = escape_html("House rate: {:.2f}{}/kWh".format(rate_value_import, self.currency_symbols[1]), quote=True)
+                car_title = escape_html("Car rate: {:.2f}{}/kWh (differs from house rate)".format(car_rate, self.currency_symbols[1]), quote=True)
                 html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + ' style="padding:0;">'
                 html += '<div style="display:flex;">'
                 html += '<div style="flex:1;padding:4px;background-color:' + rate_color_import + ';" title="' + house_title + '">' + str(rate_str_import) + "</div>"

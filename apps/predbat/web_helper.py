@@ -6527,10 +6527,11 @@ def get_plan_renderer_js():
                 if (editable) {
                     html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
                 } else if (row.rate_split) {
-                    // Car's own rate has diverged from the house rate (IOG dispatch cap reached) -
-                    // split the cell, house on the left, car on the right, each with its own tooltip.
+                    // Car's own rate has diverged from the house rate - not necessarily an IOG cap
+                    // (any car window with its own average can diverge, e.g. combined dynamic-rate
+                    // windows) - split the cell, house on the left, car on the right, own tooltip each.
                     const houseTitle = escapeAttr(`House rate: ${row.import_rate.toFixed(2)}${currencyMinor}/kWh`);
-                    const carTitle = escapeAttr(`Car rate: ${row.car_rate.toFixed(2)}${currencyMinor}/kWh (IOG dispatch cap reached)`);
+                    const carTitle = escapeAttr(`Car rate: ${row.car_rate.toFixed(2)}${currencyMinor}/kWh (differs from house rate)`);
                     html += `<td id=import data-minute="${row.slot_minute}" data-rate="${row.import_rate}" style="padding:0;">`;
                     html += `<div style="display:flex;">`;
                     html += `<div style="flex:1;padding:4px;background-color:${row.rate_color_import || '#FFFFFF'};" title="${houseTitle}">${importText}</div>`;

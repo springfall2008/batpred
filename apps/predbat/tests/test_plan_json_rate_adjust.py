@@ -163,6 +163,24 @@ def run_test_plan_json_rate_adjust(my_predbat):
         if "House rate: 10.00" not in html_plan or "Car rate: 28.00" not in html_plan:
             print("ERROR: Expected split-cell HTML with house and car rate tooltips, got:\n{}".format(html_plan))
             failed = True
+        if "differs from house rate" not in html_plan:
+            print("ERROR: Expected the car tooltip to use neutral 'differs from house rate' wording (not every divergence is an IOG cap), got:\n{}".format(html_plan))
+            failed = True
+
+    # currency_symbols is user-configurable free text - a value carrying a double-quote must not
+    # break out of the split cell's title="..." attribute in the server-rendered plan (batpred#4647
+    # review). Checking for the specific escaped form within the title, not a blanket string search -
+    # currency_symbols is also embedded unescaped elsewhere on the page (e.g. the Cost cell text,
+    # pre-existing and out of scope for this fix), which would give a false pass/fail either way.
+    saved_currency_symbols = my_predbat.currency_symbols
+    breakout = '"><script>alert(1)</script>'
+    my_predbat.currency_symbols = ["£", "p" + breakout]
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    expected_escaped = "House rate: 10.00p&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;/kWh"
+    if expected_escaped not in html_plan:
+        print("ERROR: expected the split-cell title to HTML-escape currency_symbols, wanted:\n{}\ngot:\n{}".format(expected_escaped, html_plan))
+        failed = True
+    my_predbat.currency_symbols = saved_currency_symbols
 
     # Same car window, but priced the same as the house rate - must not split
     my_predbat.car_charging_slots[0] = [{"start": car_minute, "end": car_minute + 30, "kwh": 3.0, "average": 10.0, "cost": 30.0, "soc": 0.0, "octopus": True}]
@@ -170,6 +188,16 @@ def run_test_plan_json_rate_adjust(my_predbat):
     car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
     if car_row is not None and car_row.get("rate_split") is not False:
         print("ERROR: Expected rate_split=False when car rate matches house rate, got {}".format(car_row.get("rate_split")))
+        failed = True
+
+    # A window with no "average" key at all (non-Octopus historical reconstruction in
+    # calculate_yesterday() appends slots like this from the car's own energy sensor) must not be
+    # treated as a free/0p charge - that would drag the weighted average down and falsely flag
+    # ordinary charging as diverging from the house rate.
+    my_predbat.car_charging_slots[0] = [{"start": car_minute, "end": car_minute + 30, "kwh": 3.0, "octopus": False}]
+    rate = my_predbat.car_charge_slot_rate(car_minute, car_minute + 30)
+    if rate is not None:
+        print("ERROR: Expected car_charge_slot_rate to skip a window with no average key, got {}".format(rate))
         failed = True
 
     # Clean up
