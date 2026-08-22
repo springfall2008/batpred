@@ -232,7 +232,6 @@ hahistory
 hainterface
 halfhourly
 hanchu
-Hanchu
 hanchuess
 hanres
 HAOS
