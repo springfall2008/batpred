@@ -80,6 +80,7 @@ SCENARIO_STATE_ATTRS = [
     "battery_loss_discharge",
     "inverter_hybrid",
     "inverter_loss",
+    "inverter_freeze_export_discharge_rate",
     "inverter_limit",
     "export_limit",
     "pv_ac_limit",
@@ -219,6 +220,8 @@ def apply_random_scenario(my_predbat, rng):
     my_predbat.set_reserve_enable = rng.choice([True, False])
     my_predbat.set_export_freeze = rng.choice([True, False])
     my_predbat.set_export_freeze_only = rng.choice([True, False, False, False])
+    # Exercise a non-zero value without consuming another RNG draw, preserving seeded scenarios.
+    my_predbat.inverter_freeze_export_discharge_rate = 240.0 if my_predbat.set_export_freeze else 0.0
     my_predbat.set_charge_window = rng.choice([True, True, False])
     my_predbat.set_export_window = rng.choice([True, True, False])
     my_predbat.set_discharge_during_charge = rng.choice([True, False])

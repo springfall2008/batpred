@@ -20,6 +20,121 @@ def run_model_tests(my_predbat, prediction_kernel=False):
     reset_rates(my_predbat, import_rate, export_rate)
 
     failed = False
+    # Freeze Export residual discharge is real battery energy entering the AC balance.
+    # House load consumes it first; any excess is exported. Normal battery discharge is
+    # disabled here so only this configured path is under test.
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_default_zero",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=10.0,
+        assert_final_soc=10.0,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=0.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.0,
+    )
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_240w_one_hour",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=7.6,
+        assert_final_soc=9.76,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.24,
+    )
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_respects_inverter_loss",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=8.08,
+        assert_final_soc=9.76,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_loss=0.8,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.24,
+    )
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_no_load_exports_residual",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=-1.2,
+        assert_final_soc=9.76,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.24,
+    )
+    # Live AlphaESS behaviour: PV nearly covers the house, but Freeze Export residual
+    # discharge continues and the surplus reaches grid (487 W load, 466 W PV, 269 W battery).
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_surplus_reaches_grid",
+        my_predbat,
+        0.487,
+        0.466,
+        assert_final_metric=-1.24,
+        assert_final_soc=9.731,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=269.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.269,
+    )
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_not_outside_freeze",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=10.0,
+        assert_final_soc=10.0,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=100,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.0,
+    )
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_reserve_floor",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=9.0,
+        assert_final_soc=4.0,
+        battery_size=10.0,
+        battery_soc=4.1,
+        reserve=4.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=0.0,
+        assert_battery_cycle=0.1,
+    )
+    if failed:
+        return failed
+
     failed |= simple_scenario("zero", my_predbat, 0, 0, 0, 0, with_battery=False)
     failed |= simple_scenario("load_only", my_predbat, 1, 0, assert_final_metric=import_rate * 24, assert_final_soc=0, with_battery=False)
     failed |= simple_scenario("load_bat_ac", my_predbat, 4, 0, assert_final_metric=import_rate * 24 * 3.2, assert_final_soc=100 - 24, with_battery=True, battery_soc=100.0, inverter_loss=0.8)

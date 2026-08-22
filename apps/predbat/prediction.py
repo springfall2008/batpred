@@ -128,6 +128,7 @@ class Prediction(PredictionBatch):
             self.iboost_rate_threshold_export = base.iboost_rate_threshold_export
             self.rate_gas = base.rate_gas
             self.inverter_loss = base.inverter_loss
+            self.inverter_freeze_export_discharge_rate = base.inverter_freeze_export_discharge_rate
             self.inverter_hybrid = base.inverter_hybrid
             self.inverter_limit = base.inverter_limit
             self.export_limit = base.export_limit
@@ -634,6 +635,7 @@ class Prediction(PredictionBatch):
         battery_rate_max_discharge = self.battery_rate_max_discharge
         battery_rate_max_export = self.battery_rate_max_export
         battery_rate_min = self.battery_rate_min
+        inverter_freeze_export_discharge_rate = self.inverter_freeze_export_discharge_rate
         carbon_intensity = self.carbon_intensity
         set_discharge_during_charge = self.set_discharge_during_charge
         battery_charge_power_curve_tuple = charge_curve_to_tuple(self.battery_charge_power_curve)
@@ -1089,7 +1091,25 @@ class Prediction(PredictionBatch):
                         pv_dc = min(abs(battery_draw), pv_now)
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
 
-                battery_state = "fz+" if battery_draw < 0 else "fz~"
+                # Some inverters (observed on AlphaESS) continue a small residual battery
+                # discharge during Freeze Export. Treat the configured value as battery-side
+                # power and feed it into the normal AC balance: house load consumes it first and
+                # any surplus may reach the grid. Respect the battery reserve and physical export
+                # limit rather than capping the discharge at house demand.
+                if inverter_freeze_export_discharge_rate > 0 and battery_draw >= 0:
+                    freeze_soc_available = min(inverter_freeze_export_discharge_rate * step / 60000.0, max(soc - reserve_expected, 0))
+                    freeze_draw = freeze_soc_available * battery_loss_discharge
+                    freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
+                    if freeze_diff < 0 and abs(freeze_diff) > export_limit:
+                        freeze_draw = max(freeze_draw - (abs(freeze_diff) - export_limit) * inverter_loss_recp, 0)
+                    battery_draw = freeze_draw
+
+                if battery_draw < 0:
+                    battery_state = "fz+"
+                elif battery_draw > 0:
+                    battery_state = "fz-"
+                else:
+                    battery_state = "fz~"
             else:
                 # ECO Mode
                 pv_ac = pv_now * inverter_loss_ac
