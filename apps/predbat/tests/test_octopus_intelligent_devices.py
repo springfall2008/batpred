@@ -30,6 +30,7 @@ async def test_octopus_intelligent_devices(my_predbat):
     - Test 8: In-progress flex dispatch not promoted to completed but trimmed to remainder (issue #4114)
     - Test 9: Future flex dispatch is left untrimmed in planned
     - Test 10: async_update_intelligent_devices prunes a device no longer returned as LIVE
+    - Test 11: A transient settings-query failure does not evict a known device
     """
     print("**** Running Octopus intelligent devices tests ****")
     failed = 0
@@ -538,6 +539,58 @@ async def test_octopus_intelligent_devices(my_predbat):
             failed += 1
         else:
             print("PASS: Stale device no longer live was pruned, real device retained")
+
+    # ------------------------------------------------------------------
+    # Test 11: A device whose per-device settings query transiently fails must not be dropped
+    # from the result. Dropping it makes async_update_intelligent_devices treat the device as no
+    # longer LIVE and delete it from the cache (Test 10's pruning path), so one flaky GraphQL call
+    # evicts a real car - and with the device set now driving automatic_config re-wiring
+    # (issue #4648) that would flap the car slots on every blip. Reuse the last known settings
+    # instead, so the suspended flag stays put until Octopus actually tells us otherwise.
+    # ------------------------------------------------------------------
+    print("\n*** Test 11: Transient settings-query failure does not evict a known device ***")
+    api = make_api()
+
+    async def mock_query_settings_fail(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return device_data
+        elif "get-intelligent-dispatches" in context:
+            return {"flexPlannedDispatches": [], "completedDispatches": []}
+        elif "get-intelligent-settings" in context:
+            return None
+        return None
+
+    # The device is already known from an earlier successful poll, and was suspended at the time
+    api.intelligent_devices = {"device-abc": {"device_id": "device-abc", "suspended": True, "weekday_target_time": "07:00", "completed_dispatches": [], "planned_dispatches": []}}
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_settings_fail)
+
+    result = await api.async_get_intelligent_devices("test-account", "device-abc")
+
+    if "device-abc" not in result:
+        print(f"ERROR: Known device evicted by a transient settings-query failure, got {list(result.keys())}")
+        failed += 1
+    elif result["device-abc"].get("suspended") is not True:
+        print(f"ERROR: Expected the last known suspended state to be retained, got {result['device-abc'].get('suspended')}")
+        failed += 1
+    elif result["device-abc"].get("weekday_target_time") != "07:00":
+        print(f"ERROR: Expected the last known charging preferences to be retained, got {result['device-abc'].get('weekday_target_time')}")
+        failed += 1
+    else:
+        print("PASS: Known device retained with its last known settings when the settings query fails")
+
+    # A device we have never seen before has no settings to fall back on, so it is still skipped
+    # rather than being wired in with an unknown suspended state.
+    api2 = make_api()
+    api2.intelligent_devices = {}
+    api2.async_graphql_query = AsyncMock(side_effect=mock_query_settings_fail)
+
+    result2 = await api2.async_get_intelligent_devices("test-account", "device-abc")
+
+    if "device-abc" in result2:
+        print(f"ERROR: Unknown device should be skipped when its settings cannot be read, got {list(result2.keys())}")
+        failed += 1
+    else:
+        print("PASS: Never-seen device is skipped when its settings query fails")
 
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")
