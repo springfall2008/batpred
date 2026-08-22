@@ -403,24 +403,60 @@ def test_alphaess_serial_filter_restricts_discovery():
     assert not failed, "test_alphaess_serial_filter_restricts_discovery"
 
 
+def test_alphaess_serial_filter_mismatch_reports_the_filter_not_the_account():
+    """When a filter is configured but matches nothing, log names the filter not the account.
+
+    Misdirecting to "no battery systems" hides the real cause - the filter typo.
+    refresh_static returns False but discovery_ok is True (the call succeeded).
+    """
+    failed = False
+    client = MockAlphaESS(inverter_sn="NONEXISTENT")
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
+    session = create_aiohttp_mock_session(response)
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        result = run_async_local(client.refresh_static())
+    if result is not False:
+        print(f"ERROR: refresh_static should return False when filter matches nothing, got {result}")
+        failed = True
+    if client.discovery_ok is not True:
+        print(f"ERROR: discovery succeeded, discovery_ok should be True, got {client.discovery_ok}")
+        failed = True
+    if not any("NONEXISTENT" in message and "filter" in message.lower() for message in client.log_messages):
+        print(f"ERROR: log should mention the filter value, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_serial_filter_mismatch_reports_the_filter_not_the_account"
+
+
 def test_alphaess_refresh_static_never_clears_a_working_device_list():
     """Absence of a result is not a result.
 
     This tier re-runs every 8 hours in a long-lived process; one transient failure must
     not take a working component down until the next success, and it must not write an
-    empty list to the cache and then stamp it fresh.
+    empty list to the cache and then stamp it fresh. refresh_static must return False,
+    the tier clock must not advance, and device_list must be unchanged.
     """
     failed = False
     client = MockAlphaESS()
     ok = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok)):
-        run_async_local(client.refresh_static())
-    before = list(client.device_list)
+        result = run_async_local(client.refresh_static())
+    if result is not True:
+        print(f"ERROR: initial refresh_static should return True, got {result}")
+        failed = True
+    before_list = list(client.device_list)
+    before_tier = client._tier_refreshed.get("static")
     bad = create_aiohttp_mock_response(status=200, json_data=_envelope(6053, None, msg="too fast"))
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(bad)):
-        run_async_local(client.refresh_static())
-    if client.device_list != before:
-        print(f"ERROR: device_list cleared by a transient failure: {client.device_list} != {before}")
+        result = run_async_local(client.refresh_static())
+    if result is not False:
+        print(f"ERROR: refresh_static should return False on failure, got {result}")
+        failed = True
+    if client.device_list != before_list:
+        print(f"ERROR: device_list cleared by a transient failure: {client.device_list} != {before_list}")
+        failed = True
+    after_tier = client._tier_refreshed.get("static")
+    if after_tier != before_tier:
+        print(f"ERROR: tier clock advanced on failure: {after_tier} != {before_tier}")
         failed = True
     assert not failed, "test_alphaess_refresh_static_never_clears_a_working_device_list"
 
@@ -464,6 +500,7 @@ def run_alphaess_api_tests(my_predbat):
         ("battery_rate_max_from_poinv", test_alphaess_battery_rate_max_defaults_to_the_inverter_limit),
         ("no_battery_skipped", test_alphaess_systems_without_a_battery_are_skipped),
         ("serial_filter", test_alphaess_serial_filter_restricts_discovery),
+        ("serial_filter_mismatch", test_alphaess_serial_filter_mismatch_reports_the_filter_not_the_account),
         ("refresh_static_keeps_list", test_alphaess_refresh_static_never_clears_a_working_device_list),
         ("empty_vs_failed_discovery", test_alphaess_discovery_distinguishes_empty_account_from_failure),
     ]:

@@ -308,7 +308,9 @@ class AlphaESSAPI(ComponentBase):
     async def refresh_static(self):
         """Re-discover systems and refresh their static detail. True when discovery worked.
 
-        Deliberately does NOT assign an empty discovery result over a working device_list.
+        Branches on discovery_ok rather than on list emptiness: both a failed call and an
+        empty account produce an empty list but require different handling. Deliberately
+        does NOT assign an empty discovery result over a working device_list.
         This tier re-runs every 8 hours in a long-lived process, so one transient failure
         must not take a working component down until the next success - and assigning the
         empty result would additionally write {'device_list': []} to the cache and stamp it
@@ -317,15 +319,20 @@ class AlphaESSAPI(ComponentBase):
         """
         previous = list(self.device_list)
         serials = await self.get_device_list()
-        if not serials and previous:
-            self.log("Warn: AlphaESS discovery returned nothing; keeping the {} previously known inverter(s)".format(len(previous)))
+        if self.discovery_ok is False:
+            # The call itself failed. Preserve the working list and do not advance the tier clock.
             self.device_list = previous
-            return False
-        if not serials:
-            if self.discovery_ok:
-                self.log("Warn: AlphaESS this account has no battery systems bound to it")
+            if previous:
+                self.log("Warn: AlphaESS discovery failed; keeping the {} previously known inverter(s)".format(len(previous)))
             else:
                 self.log("Warn: AlphaESS inverter discovery failed; the account may still have systems")
+            return False
+        if not serials:
+            # Discovery succeeded but returned nothing (empty account or filter matched nothing).
+            if self.inverter_sn_filter:
+                self.log("Warn: AlphaESS discovery succeeded but the configured serial filter {} matched nothing in this account".format(self.inverter_sn_filter))
+            else:
+                self.log("Warn: AlphaESS this account has no battery systems bound to it")
             return False
         self.mark_refreshed("static")
         return True
