@@ -2053,6 +2053,7 @@ def test_octopus_automatic_config_clears_removed_devices(my_predbat):
     Tests:
     - Test 1: Slot args are cleared when the last discovered device disappears
     - Test 2: Manually configured slot args are untouched when no device was ever discovered
+    - Test 3: Manually configured slot args survive repeated runs with no devices
     """
     print("\n**** Running Octopus automatic_config device removal tests ****")
     failed = False
@@ -2092,6 +2093,26 @@ def test_octopus_automatic_config_clears_removed_devices(my_predbat):
         failed = True
     else:
         print("PASS: Manual slot config untouched when no device was ever discovered")
+
+    # Test 3: automatic_config() records the device set it wired on every call, including the calls
+    # where it wired nothing - so after one run with no devices the recorded set is [] rather than
+    # None. The "have we ever wired anything" guard therefore has to test that set for content, not
+    # merely for being set: an `is not None` check would pass here from the second call onwards and
+    # blank a manual apps.yaml config that auto-discovery never touched.
+    print("\n*** Test 3: Manual slot config survives repeated runs with no devices ***")
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.manually_configured_dispatching"
+    api3 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api3.intelligent_devices = {}
+
+    api3.automatic_config(["import"])
+    api3.automatic_config(["import"])
+    api3.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.manually_configured_dispatching":
+        print(f"ERROR: Repeated runs with no devices blanked the manual slot config, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+    else:
+        print("PASS: Manual slot config survives repeated runs with no devices")
 
     my_predbat.args.clear()
     my_predbat.args.update(original_args)

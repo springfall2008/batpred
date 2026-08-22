@@ -1175,9 +1175,11 @@ class OctopusAPI(ComponentBase):
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
         devices = self.get_intelligent_devices()
         # Also enter this block when the device set has emptied, so the slot args are cleared rather
-        # than left pointing at a device that no longer exists. Only once something has been wired
-        # though (intelligent_config_devices is not None): before the first discovery a user's own
-        # apps.yaml entries are the only wiring there is, and blanking them would break a manual setup.
+        # than left pointing at a device that no longer exists. Only once real devices have actually
+        # been wired though - hence the truthiness test rather than an `is not None` one. The set
+        # below is recorded on every call, including calls that wired nothing, so it is [] and not
+        # None after the first run on an account with no devices; treating that as "previously
+        # wired" would blank a user's own apps.yaml entries, which auto-discovery never touched.
         if devices or self.intelligent_config_devices:
             # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
             # account) aren't actively charging, so exclude them from the entity lists and from
