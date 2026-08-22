@@ -469,6 +469,32 @@ These are useful for automations if for example, you want to turn off car chargi
 
 ## Inverter data
 
+**sensor.predbat_inverter_config** reports the static configuration that Predbat plans against, totalled across all of your inverters.
+These values are read from `apps.yaml` or from the inverters themselves, so unlike the [Predbat control settings](customisation.md) they have no entity of their own.
+The sensor state is the total AC inverter limit in kW, with the rest of the detail held in the attributes:
+
+| Attribute | Meaning |
+|-----------|---------|
+| inverter_limit | Total AC throughput limit in kW - see [inverter_limit](apps-yaml.md#inverter_limit) |
+| export_limit | Total AC export limit in kW - see [export_limit](apps-yaml.md#export_limit). Note this is your inverter's power cap and is a different thing to the predbat.export_limit plan sensor |
+| pv_ac_limit | Modelled AC output limit of an AC-coupled PV system in kW - see [pv_ac_limit](apps-yaml.md#pv_ac_limit) |
+| battery_rate_max_charge | Maximum battery charge rate in kW |
+| battery_rate_max_charge_dc | Maximum DC (solar) battery charge rate in kW |
+| battery_rate_max_discharge | Maximum battery discharge rate in kW |
+| battery_rate_max_export | Maximum battery export rate in kW |
+| battery_rate_min | Minimum battery charge/discharge rate in kW |
+| soc_max | Total battery capacity in kWh |
+| reserve | Battery reserve in kWh |
+| num_inverters | Number of inverters |
+| num_cars | Number of cars Predbat is planning for |
+| inverter_can_charge_during_export | Whether the battery can be charged while the inverter is exporting |
+| metric_standing_charge | Daily standing charge |
+| forecast_minutes | Length of the forecast horizon in minutes |
+| plan_interval_minutes | Length of one slot in the plan in minutes |
+
+The power figures are the totals across your fleet, so with two 3 kW inverters the reported inverter_limit is 6 kW.
+This sensor is worth checking first when a plan looks wrong, as an incorrect inverter_limit or battery rate quietly shapes every charge and export window.
+
 Some inverters store inverter settings in [flash memory that can have a limited number of write cycles](caution.md#flash-memory) so Predbat counts the commands that it sends to the inverter so you can keep track of this:
 
 - predbat.inverter_register_writes is the incrementing total number of writes across all inverters
