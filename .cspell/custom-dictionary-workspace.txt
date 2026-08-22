@@ -209,6 +209,9 @@ hadashboard
 hahistory
 hainterface
 halfhourly
+Hanchu
+hanchu
+hanchuess
 hanres
 HAOS
 hasattr
@@ -588,6 +591,7 @@ yaxis
 yaxistooltip
 yday
 ylabel
+YOURSERIAL
 yuanzhi
 zappi
 zigbee
