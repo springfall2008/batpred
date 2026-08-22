@@ -47,6 +47,12 @@ from alphaess_const import (
     ALPHAESS_ENERGY,
     ALPHAESS_ENERGY_LOAD_FIELD,
     ALPHAESS_AC_COUPLED_MODELS,
+    snap_time_grid,
+    hhmmss_to_hhmm,
+    hm_to_minutes,
+    window_is_empty,
+    ALPHAESS_TIME_DISABLED,
+    ALPHAESS_TIME_MAX,
 )
 
 
@@ -883,3 +889,135 @@ class AlphaESSAPI(ComponentBase):
             return
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
+
+    @staticmethod
+    def _clamp_percent(value, low=0, high=100):
+        """Clamp a SOC percentage to the API's accepted range."""
+        try:
+            return int(max(low, min(high, int(float(value)))))
+        except (TypeError, ValueError):
+            return low
+
+    def split_window(self, start, end):
+        """Split a window at midnight, returning ((start1, end1), (start2, end2)) in HH:mm.
+
+        INVERTER_DEF sets can_span_midnight False because wrap-around behaviour is
+        undocumented for timeChaf1/timeChae1, so Predbat splits rather than writing a
+        window whose meaning is unknown. Period 2 exists for the remainder and for nothing
+        else - it is the midnight split, not a state.
+        """
+        start_min = hm_to_minutes(hhmmss_to_hhmm(start))
+        end_text = str(end or "")
+        end_hours = end_text.split(":")[0] if ":" in end_text else "0"
+        try:
+            end_min = int(end_hours) * 60 + int(end_text.split(":")[1])
+        except (TypeError, ValueError, IndexError):
+            end_min = start_min
+        if end_min <= 24 * 60:
+            return (hhmmss_to_hhmm(start), hhmmss_to_hhmm(end)), (ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED)
+        wrapped = end_min - 24 * 60
+        second_end = "{:02d}:{:02d}".format(wrapped // 60, wrapped % 60)
+        return (hhmmss_to_hhmm(start), ALPHAESS_TIME_MAX), (ALPHAESS_TIME_DISABLED, second_end)
+
+    def _snapped_periods(self, sn, direction, start, end, enabled):
+        """Return two snapped HH:mm period pairs, disabling anything with no usable time.
+
+        Times snap INWARD (start up, end down) so a snapped window is never wider than the
+        one Predbat asked for. If snapping collapses or inverts a window it is written as
+        disabled rather than as a wrap-around, and the decision is logged - a silently
+        ignored off-grid window would look written and never run.
+        """
+        if not enabled:
+            return (ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED), (ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED)
+        (raw_start1, raw_end1), (raw_start2, raw_end2) = self.split_window(start, end)
+        periods = []
+        for index, (raw_start, raw_end) in enumerate(((raw_start1, raw_end1), (raw_start2, raw_end2)), start=1):
+            if raw_start == ALPHAESS_TIME_DISABLED and raw_end == ALPHAESS_TIME_DISABLED:
+                periods.append((ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED))
+                continue
+            snapped_start = snap_time_grid(raw_start, "start")
+            snapped_end = snap_time_grid(raw_end, "end")
+            if window_is_empty(snapped_start, snapped_end):
+                if index == 1:
+                    self.log("Info: AlphaESS {} {} window {}-{} collapsed to nothing on the API's 15-minute grid, so it is written as disabled rather than as an undocumented wrap-around".format(sn, direction, raw_start, raw_end))
+                periods.append((ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED))
+                continue
+            periods.append((snapped_start, snapped_end))
+        return periods[0], periods[1]
+
+    def build_charge_payload(self, sn, schedule):
+        """Build the full updateChargeConfigInfo body for one inverter.
+
+        A FULL REPLACEMENT, not a patch: all seven fields are always present, because the
+        endpoint silently resets anything omitted.
+        """
+        window = schedule.get("charge", {}) or {}
+        enabled = bool(window.get("enable"))
+        # charge_rate zero is Predbat signalling freeze charge / no cross-charging. There
+        # is no pause endpoint, so a zeroed rate is the only signal available and it
+        # overrides the window outright.
+        rate = self._as_float(window.get("power"), 0.0)
+        if enabled and rate <= 0:
+            enabled = False
+        (start1, end1), (start2, end2) = self._snapped_periods(sn, "charge", window.get("start"), window.get("end"), enabled)
+        if start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED:
+            enabled = False
+        return {
+            "sysSn": sn,
+            "gridCharge": 1 if enabled else 0,
+            "timeChaf1": start1,
+            "timeChae1": end1,
+            "timeChaf2": start2,
+            "timeChae2": end2,
+            "batHighCap": self._clamp_percent(window.get("soc", 100) if enabled else 100),
+        }
+
+    def build_discharge_payload(self, sn, schedule):
+        """Build the full updateDisChargeConfigInfo body for one inverter.
+
+        batUseCap serves two Predbat concepts because the API has only one field for the
+        discharge floor: it is the export target while an export window is programmed and
+        the reserve otherwise.
+        """
+        window = schedule.get("export", {}) or {}
+        enabled = bool(window.get("enable"))
+        reserve = self._clamp_percent(schedule.get("reserve", 0))
+        export_rate = self._as_float(window.get("power"), 0.0)
+        charge_rate = self._as_float((schedule.get("charge") or {}).get("power"), 0.0)
+
+        # discharge_rate zero means hold SOC (freeze export): discharge time control ON
+        # with no permitted period, so the battery cannot discharge at all. But BOTH rates
+        # zero is an absence of a plan rather than a freeze - do not strand an
+        # unconfigured system holding its battery all day.
+        if export_rate <= 0 and charge_rate > 0:
+            return {
+                "sysSn": sn,
+                "ctrDis": 1,
+                "timeDisf1": ALPHAESS_TIME_DISABLED,
+                "timeDise1": ALPHAESS_TIME_DISABLED,
+                "timeDisf2": ALPHAESS_TIME_DISABLED,
+                "timeDise2": ALPHAESS_TIME_DISABLED,
+                "batUseCap": reserve,
+            }
+
+        (start1, end1), (start2, end2) = self._snapped_periods(sn, "export", window.get("start"), window.get("end"), enabled)
+        if start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED:
+            enabled = False
+        return {
+            "sysSn": sn,
+            # With no export window, discharge time control is OFF: that is demand mode,
+            # where the battery covers the house normally down to batUseCap.
+            "ctrDis": 1 if enabled else 0,
+            "timeDisf1": start1,
+            "timeDise1": end1,
+            "timeDisf2": start2,
+            "timeDise2": end2,
+            "batUseCap": self._clamp_percent(window.get("soc", reserve)) if enabled else reserve,
+        }
+
+    @staticmethod
+    def payloads_equal(first, second):
+        """Return True when two payloads are byte-identical, ignoring key order."""
+        if not isinstance(first, dict) or not isinstance(second, dict):
+            return False
+        return json.dumps(first, sort_keys=True, default=str) == json.dumps(second, sort_keys=True, default=str)

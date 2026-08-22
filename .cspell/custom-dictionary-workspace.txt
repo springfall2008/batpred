@@ -48,6 +48,7 @@ Batpred
 battemperature
 batteri
 batteryb
+batusecap
 beforeunload
 bierner
 brickatius
@@ -74,6 +75,7 @@ cloudfront
 cobat
 Codespaces
 COEFF
+collaps
 collapsable
 compareform
 configform

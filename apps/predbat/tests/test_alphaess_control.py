@@ -183,6 +183,191 @@ def test_alphaess_fallback_on_unknown_or_unavailable_values():
     assert not failed, "test_alphaess_fallback_on_unknown_or_unavailable_values"
 
 
+def test_alphaess_controls_pass_straight_through():
+    """Predbat's controls map onto the schedule fields verbatim; the inverter does timing.
+
+    execute.py:514 already gates how far ahead a window is programmed
+    ((minutes_start - minutes_now) <= set_window_minutes), so Predbat never hands the
+    component a window hours in advance. That is why the naive pass-through is safe and no
+    window-blanking state machine is needed.
+    """
+    failed = False
+    client = _client()
+    schedule = _schedule(
+        reserve=10,
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"},
+        export={"enable": True, "soc": 20, "power": 3000, "start": "17:00:00", "end": "19:00:00"},
+    )
+    charge = client.build_charge_payload("AL70", schedule)
+    discharge = client.build_discharge_payload("AL70", schedule)
+    for key, expect in (("sysSn", "AL70"), ("gridCharge", 1), ("timeChaf1", "01:00"), ("timeChae1", "05:00"), ("batHighCap", 90)):
+        if charge.get(key) != expect:
+            print(f"ERROR: charge[{key}] = {charge.get(key)} != {expect}")
+            failed = True
+    for key, expect in (("sysSn", "AL70"), ("ctrDis", 1), ("timeDisf1", "17:00"), ("timeDise1", "19:00")):
+        if discharge.get(key) != expect:
+            print(f"ERROR: discharge[{key}] = {discharge.get(key)} != {expect}")
+            failed = True
+    # batUseCap is the EXPORT TARGET while an export window is programmed.
+    if discharge.get("batUseCap") != 20:
+        print(f"ERROR: batUseCap {discharge.get('batUseCap')} should be the export target 20")
+        failed = True
+    # Period 2 is the midnight split, not a state - disabled when no split occurred.
+    for key in ("timeChaf2", "timeChae2"):
+        if charge.get(key) != "00:00":
+            print(f"ERROR: {key} = {charge.get(key)} should be disabled")
+            failed = True
+    assert not failed, "test_alphaess_controls_pass_straight_through"
+
+
+def test_alphaess_batusecap_is_the_reserve_outside_an_export_window():
+    """batUseCap serves two Predbat concepts because the API has one field for the floor."""
+    failed = False
+    client = _client()
+    schedule = _schedule(reserve=25, charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    discharge = client.build_discharge_payload("AL70", schedule)
+    if discharge.get("batUseCap") != 25:
+        print(f"ERROR: batUseCap {discharge.get('batUseCap')} should be the reserve 25")
+        failed = True
+    # With no export window and a non-zero discharge rate, discharge time control is OFF -
+    # that is demand mode, the battery covers the house normally.
+    if discharge.get("ctrDis") != 0:
+        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 0 in demand mode")
+        failed = True
+    assert not failed, "test_alphaess_batusecap_is_the_reserve_outside_an_export_window"
+
+
+def test_alphaess_rate_zero_is_freeze():
+    """AlphaESS has no pause endpoint, so Predbat expresses freeze by zeroing the rates
+    (execute.py:491-495). Zero is a distinct instruction, not just 'slow'."""
+    failed = False
+    client = _client()
+
+    # charge_rate == 0 -> no grid charging, overriding the charge window (freeze charge,
+    # and no cross-charging during an export).
+    frozen_charge = _schedule(reserve=10, charge={"enable": True, "soc": 90, "power": 0, "start": "01:00:00", "end": "05:00:00"})
+    charge = client.build_charge_payload("AL70", frozen_charge)
+    if charge.get("gridCharge") != 0:
+        print(f"ERROR: gridCharge {charge.get('gridCharge')} should be 0 when charge_rate is 0")
+        failed = True
+
+    # discharge_rate == 0 -> ctrDis 1 with BOTH periods disabled, so the battery holds SOC.
+    frozen_export = _schedule(reserve=10, export_power=0)
+    discharge = client.build_discharge_payload("AL70", frozen_export)
+    if discharge.get("ctrDis") != 1:
+        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 1 to hold SOC")
+        failed = True
+    for key in ("timeDisf1", "timeDise1", "timeDisf2", "timeDise2"):
+        if discharge.get(key) != "00:00":
+            print(f"ERROR: {key} = {discharge.get(key)} should be disabled to hold SOC")
+            failed = True
+    assert not failed, "test_alphaess_rate_zero_is_freeze"
+
+
+def test_alphaess_both_rates_zero_is_not_a_freeze():
+    """Both rates zero is an absence of a plan, not a freeze.
+
+    Do not strand an unconfigured system holding its battery all day - Sunsynk hit exactly
+    this and it needed an explicit case.
+    """
+    failed = False
+    client = _client()
+    schedule = _schedule(reserve=15, charge_power=0, export_power=0)
+    discharge = client.build_discharge_payload("AL70", schedule)
+    if discharge.get("ctrDis") != 0:
+        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 0 when there is no plan at all")
+        failed = True
+    assert not failed, "test_alphaess_both_rates_zero_is_not_a_freeze"
+
+
+def test_alphaess_times_snap_inward_to_the_15_minute_grid():
+    """Off-grid values are accepted by the API and silently ignored by the device."""
+    failed = False
+    client = _client()
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:07:00", "end": "05:53:00"})
+    charge = client.build_charge_payload("AL70", schedule)
+    if charge.get("timeChaf1") != "01:15" or charge.get("timeChae1") != "05:45":
+        print(f"ERROR: snapped window {charge.get('timeChaf1')}-{charge.get('timeChae1')} should be 01:15-05:45")
+        failed = True
+    assert not failed, "test_alphaess_times_snap_inward_to_the_15_minute_grid"
+
+
+def test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped():
+    """An inverted window must NOT be written as a wrap-around - wrap behaviour is
+    undocumented, so it is disabled instead and the decision is logged."""
+    failed = False
+    client = _client()
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:05:00", "end": "01:10:00"})
+    charge = client.build_charge_payload("AL70", schedule)
+    if charge.get("gridCharge") != 0 or charge.get("timeChaf1") != "00:00" or charge.get("timeChae1") != "00:00":
+        print(f"ERROR: collapsed window not disabled: {charge}")
+        failed = True
+    if not any("collaps" in message.lower() or "too short" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no log for the collapsed window, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped"
+
+
+def test_alphaess_midnight_end_snaps_to_the_maximum():
+    """23:45 is the documented maximum, so Predbat's midnight end lands there."""
+    failed = False
+    client = _client()
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "22:00:00", "end": "24:00:00"})
+    charge = client.build_charge_payload("AL70", schedule)
+    if charge.get("timeChae1") != "23:45":
+        print(f"ERROR: 24:00 end snapped to {charge.get('timeChae1')} != 23:45")
+        failed = True
+    assert not failed, "test_alphaess_midnight_end_snaps_to_the_maximum"
+
+
+def test_alphaess_period_two_carries_the_midnight_split():
+    """can_span_midnight is False, so Predbat splits and period 2 takes the remainder."""
+    failed = False
+    client = _client()
+    (start1, end1), (start2, end2) = client.split_window("23:00:00", "26:00:00")
+    if (start1, end1) != ("23:00", "23:45"):
+        print(f"ERROR: period 1 {start1}-{end1}")
+        failed = True
+    if (start2, end2) != ("00:00", "02:00"):
+        print(f"ERROR: period 2 {start2}-{end2}")
+        failed = True
+    assert not failed, "test_alphaess_period_two_carries_the_midnight_split"
+
+
+def test_alphaess_reserve_is_clamped_at_the_api_boundary():
+    """The entity is published unclamped; the payload is where the API's limits apply."""
+    failed = False
+    client = _client()
+    low = client.build_discharge_payload("AL70", _schedule(reserve=0))
+    if not 0 <= low.get("batUseCap", -1) <= 100:
+        print(f"ERROR: batUseCap {low.get('batUseCap')} out of range")
+        failed = True
+    high = client.build_charge_payload("AL70", _schedule(charge={"enable": True, "soc": 150, "power": 3000, "start": "01:00:00", "end": "05:00:00"}))
+    if high.get("batHighCap") != 100:
+        print(f"ERROR: batHighCap {high.get('batHighCap')} should clamp to 100")
+        failed = True
+    assert not failed, "test_alphaess_reserve_is_clamped_at_the_api_boundary"
+
+
+def test_alphaess_payload_is_a_full_replacement():
+    """update*ConfigInfo replaces the whole object - all seven fields must be present or
+    the omitted ones are silently reset."""
+    failed = False
+    client = _client()
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    charge = client.build_charge_payload("AL70", schedule)
+    for key in ("sysSn", "batHighCap", "gridCharge", "timeChaf1", "timeChae1", "timeChaf2", "timeChae2"):
+        if key not in charge:
+            print(f"ERROR: charge payload missing {key}")
+            failed = True
+    discharge = client.build_discharge_payload("AL70", schedule)
+    for key in ("sysSn", "batUseCap", "ctrDis", "timeDisf1", "timeDise1", "timeDisf2", "timeDise2"):
+        if key not in discharge:
+            print(f"ERROR: discharge payload missing {key}")
+            failed = True
+    assert not failed, "test_alphaess_payload_is_a_full_replacement"
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -192,6 +377,16 @@ def run_alphaess_control_tests(my_predbat):
         ("entity_routing", test_alphaess_entity_routing_does_not_confuse_prefixed_serials),
         ("update_local_schedule", test_alphaess_update_local_schedule_applies_each_field),
         ("fallback_on_unknown_or_unavailable", test_alphaess_fallback_on_unknown_or_unavailable_values),
+        ("controls_pass_through", test_alphaess_controls_pass_straight_through),
+        ("batusecap_is_reserve", test_alphaess_batusecap_is_the_reserve_outside_an_export_window),
+        ("rate_zero_is_freeze", test_alphaess_rate_zero_is_freeze),
+        ("both_rates_zero_not_freeze", test_alphaess_both_rates_zero_is_not_a_freeze),
+        ("snap_inward", test_alphaess_times_snap_inward_to_the_15_minute_grid),
+        ("collapsed_disabled", test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped),
+        ("midnight_end_snaps", test_alphaess_midnight_end_snaps_to_the_maximum),
+        ("midnight_split", test_alphaess_period_two_carries_the_midnight_split),
+        ("clamped_at_boundary", test_alphaess_reserve_is_clamped_at_the_api_boundary),
+        ("full_replacement", test_alphaess_payload_is_a_full_replacement),
     ]:
         try:
             if fn():
