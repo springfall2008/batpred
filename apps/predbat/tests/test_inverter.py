@@ -526,6 +526,131 @@ def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, 
     return failed
 
 
+def test_low_power_mode_entity_created_for_script_driven_power_inverter(test_name, my_predbat):
+    """
+    #3311: a "power" output_charge_control inverter normally writes its rate straight to the
+    inverter (REST/cloud API) with no HA entity involved, so the dummy charge_rate/discharge_rate
+    entities are usually skipped for it. But a REST-less "power" inverter (Solax, driven via
+    charge_start_service/a script rather than a REST API) still reads/writes the rate through
+    self.base.args["charge_rate"] exactly like "current" mode does - without the entity, the
+    computed low-power-mode rate has nowhere to be stored, so get_current_charge_rate() falls back
+    to battery_rate_max_raw and the script is sent full power regardless of what was planned.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    saved_args = {key: my_predbat.args.get(key) for key in ["inverter_type", "givtcp_rest", "charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]}
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]  # GE's output_charge_control is "power"
+        my_predbat.args["givtcp_rest"] = None  # no REST configured - script/service driven
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        inv = Inverter(my_predbat, 0)
+
+        if inv.inv_output_charge_control != "power":
+            print("ERROR: {} test fixture assumption broken - GE output_charge_control is no longer 'power'".format(test_name))
+            failed = True
+        if inv.rest_data:
+            print("ERROR: {} test fixture assumption broken - rest_data unexpectedly populated with no REST configured".format(test_name))
+            failed = True
+
+        if "charge_rate" not in my_predbat.args:
+            print("ERROR: {} charge_rate entity was not auto-created for a REST-less 'power' inverter".format(test_name))
+            failed = True
+        if "discharge_rate" not in my_predbat.args:
+            print("ERROR: {} discharge_rate entity was not auto-created for a REST-less 'power' inverter".format(test_name))
+            failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    return failed
+
+
+def test_low_power_mode_entity_not_clobbered_when_already_configured(test_name, my_predbat):
+    """
+    Guards the actual bug hit while building the #3311 fix: a non-REST "power" inverter that
+    already has a real charge_rate/discharge_rate configured (e.g. GE's own coverage/apps.yaml,
+    which sets charge_rate for the "if not using REST" case) must keep it - the entity-creation
+    block must only fill genuine gaps, not overwrite an already-configured real entity with a
+    fresh dummy one.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    saved_args = {key: my_predbat.args.get(key) for key in ["inverter_type", "givtcp_rest", "charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]}
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["givtcp_rest"] = None
+        my_predbat.args["charge_rate"] = ["number.real_charge_rate", "number.real_charge_rate", "number.real_charge_rate", "number.real_charge_rate"]
+        my_predbat.args["discharge_rate"] = ["number.real_discharge_rate", "number.real_discharge_rate", "number.real_discharge_rate", "number.real_discharge_rate"]
+        for key in ["charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        Inverter(my_predbat, 0)
+
+        if my_predbat.args["charge_rate"][0] != "number.real_charge_rate":
+            print("ERROR: {} pre-configured charge_rate was clobbered by auto-creation, now {}".format(test_name, my_predbat.args["charge_rate"][0]))
+            failed = True
+        if my_predbat.args["discharge_rate"][0] != "number.real_discharge_rate":
+            print("ERROR: {} pre-configured discharge_rate was clobbered by auto-creation, now {}".format(test_name, my_predbat.args["discharge_rate"][0]))
+            failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    return failed
+
+
+def test_low_power_mode_entity_not_created_for_rest_driven_power_inverter(test_name, my_predbat):
+    """
+    Companion to test_low_power_mode_entity_created_for_script_driven_power_inverter - a genuinely
+    REST-driven "power" inverter (GE with givtcp_rest configured) reads/writes its rate directly via
+    the REST API (get_current_charge_rate()'s self.rest_data branch), so it still doesn't need the
+    dummy entity. Guards against the #3311 fix over-widening and creating unused entities for the
+    inverters the original behaviour was correct for.
+    """
+    print("**** Running Test: {} ****".format(test_name))
+    failed = False
+
+    saved_args = {key: my_predbat.args.get(key) for key in ["inverter_type", "givtcp_rest", "charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]}
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["givtcp_rest"] = "dummy"
+        for key in ["charge_rate", "discharge_rate", "charge_rate_percent", "discharge_rate_percent"]:
+            my_predbat.args.pop(key, None)
+
+        dummy_rest = DummyRestAPI()
+        dummy_rest.rest_data = {"Control": {}, "Stats": {}, "raw": {"invertor": {}}, "Invertor_Details": {}}
+        inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+
+        if not inv.rest_data:
+            print("ERROR: {} test fixture assumption broken - rest_data not populated with REST configured".format(test_name))
+            failed = True
+
+        if "charge_rate" in my_predbat.args:
+            print("ERROR: {} charge_rate entity was auto-created for a REST-driven 'power' inverter - should read/write via REST directly".format(test_name))
+            failed = True
+        if "discharge_rate" in my_predbat.args:
+            print("ERROR: {} discharge_rate entity was auto-created for a REST-driven 'power' inverter - should read/write via REST directly".format(test_name))
+            failed = True
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+
+    return failed
+
+
 def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, expect_mode=None):
     """
     Test the adjust_inverter_mode function
@@ -2930,6 +3055,14 @@ def run_inverter_tests(my_predbat_dummy):
     # just when the rate itself changes
     failed |= test_current_reasserted_on_unchanged_rate("current_reassert_charge", ha, inv, 0, 200)
     failed |= test_current_reasserted_on_unchanged_rate("current_reassert_discharge", ha, inv, 0, 250, discharge=True)
+    if failed:
+        return failed
+
+    # #3311: script-driven "power" inverters (Solax) still need the charge_rate/discharge_rate
+    # dummy entity, unlike genuinely REST-driven "power" inverters (GE with givtcp_rest set)
+    failed |= test_low_power_mode_entity_created_for_script_driven_power_inverter("low_power_entity_created_script_driven", my_predbat)
+    failed |= test_low_power_mode_entity_not_clobbered_when_already_configured("low_power_entity_not_clobbered", my_predbat)
+    failed |= test_low_power_mode_entity_not_created_for_rest_driven_power_inverter("low_power_entity_not_created_rest_driven", my_predbat)
     if failed:
         return failed
 
