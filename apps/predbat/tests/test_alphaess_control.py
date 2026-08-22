@@ -31,6 +31,10 @@ def _schedule(reserve=10, charge=None, export=None, charge_power=3000, export_po
 def _client(sn="AL70"):
     """Build a client with one discovered inverter ready for control tests."""
     client = MockAlphaESS()
+    # 0 rather than the real default (2s): api_delay sleeps between the charge and discharge
+    # writes on every apply_settings call, and the control-write tests do not exercise that
+    # pacing - it just added ~2s per apply across the whole suite for nothing.
+    client.api_delay = 0
     client.device_list = [sn]
     client.device_detail = {sn: {"sysSn": sn, "cobat": 13.34, "poinv": 5.0, "popv": 9.0, "minv": "SMILE5-INV"}}
     client.device_values = {sn: {"soc": 50.0}}
@@ -473,9 +477,9 @@ def test_alphaess_identical_payload_is_not_rewritten():
     schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
     ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
-        run_async_local(client.apply_settings("AL70", schedule))
+        result_first = run_async_local(client.apply_settings("AL70", schedule))
         first_calls = session.return_value.post.call_count if hasattr(session.return_value, "post") else None
-        run_async_local(client.apply_settings("AL70", schedule))
+        result_second = run_async_local(client.apply_settings("AL70", schedule))
         second_calls = session.return_value.post.call_count if hasattr(session.return_value, "post") else None
     # Second identical apply must send nothing: the POST count must not move at all, not
     # merely end up holding the same cached value - a value can be identical either because
@@ -483,6 +487,11 @@ def test_alphaess_identical_payload_is_not_rewritten():
     # same bytes, and only the call count tells those two apart.
     if second_calls != first_calls:
         print(f"ERROR: second identical apply sent {second_calls} - {first_calls} POST(s), should send zero")
+        failed = True
+    # Both calls actually caught the inverter up (sent, then already-matching) so both must
+    # report True - only a HELD or rejected write should ever read as not-caught-up.
+    if not result_first or not result_second:
+        print(f"ERROR: apply_settings returned {result_first!r} then {result_second!r}, both should be truthy")
         failed = True
     if client.applied_payload.get("AL70", {}).get("charge") is None:
         print("ERROR: applied payload not cached")
@@ -549,16 +558,31 @@ def test_alphaess_reconcile_is_gated_on_predbat_read_only():
 
 
 def test_alphaess_reconcile_is_gated_on_control_enable():
-    """control_enable false means monitoring only."""
+    """control_enable false means monitoring only.
+
+    apply_settings ALSO checks control_enable as defence-in-depth, so asserting only on
+    applied_payload would pass even with _reconcile_control's own clause deleted - the
+    deeper gate would still catch it. This pins _reconcile_control's OWN guard specifically,
+    by replacing apply_schedule with a spy: if the clause were removed, _reconcile_control
+    would call it despite control_enable being False, regardless of what apply_settings does
+    once inside it.
+    """
     failed = False
     client = _writable()
     client.control_enable = False
     client.min_write_interval = 0
     client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
-    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))):
-        run_async_local(client._reconcile_control("AL70"))
-    if client.applied_payload.get("AL70"):
-        print(f"ERROR: wrote with control disabled: {client.applied_payload}")
+    called = {"apply_schedule": False}
+
+    async def spy_apply_schedule(sn, force=False):
+        """Record whether _reconcile_control attempted to apply at all."""
+        called["apply_schedule"] = True
+        return True
+
+    client.apply_schedule = spy_apply_schedule
+    run_async_local(client._reconcile_control("AL70"))
+    if called["apply_schedule"]:
+        print("ERROR: _reconcile_control called apply_schedule despite control_enable being False")
         failed = True
     assert not failed, "test_alphaess_reconcile_is_gated_on_control_enable"
 
@@ -605,7 +629,8 @@ def test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it(
 
 
 def test_alphaess_6053_backs_off_rather_than_counting_as_a_failure():
-    """Too-fast is a pacing signal, not a broken component."""
+    """Too-fast is a pacing signal, not a broken component - it must not be logged as a
+    fault (Warn) either, or the pacing intent this test name asserts is contradicted."""
     failed = False
     client = _writable()
     client.min_write_interval = 0
@@ -617,7 +642,64 @@ def test_alphaess_6053_backs_off_rather_than_counting_as_a_failure():
     if client.applied_payload.get("AL70", {}).get("charge") is not None:
         print("ERROR: a 6053-rejected write was cached as applied")
         failed = True
+    if any(message.startswith("Warn:") and "6053" in message for message in client.log_messages):
+        print(f"ERROR: a 6053 was logged at Warn, reading as a component fault rather than pacing: {client.log_messages}")
+        failed = True
     assert not failed, "test_alphaess_6053_backs_off_rather_than_counting_as_a_failure"
+
+
+def test_alphaess_6053_backs_off_the_retry_via_min_write_interval():
+    """A 6053 must stamp an attempt time so the retry itself is paced too.
+
+    last_write_time was previously stamped only on success, so the very next cycle hammered
+    the same endpoint again with no extra spacing at all - the opposite of pacing, against
+    endpoints documented as writable once per 24 hours.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 300
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    busy = create_aiohttp_mock_response(status=200, json_data=_envelope(6053, None, msg="The request was too fast"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(busy)) as session:
+        with patch("alphaess.time.time", return_value=1000.0):
+            run_async_local(client.apply_settings("AL70", schedule))
+            calls_after_first = session.return_value.post.call_count
+        # 10 seconds later, well inside the 300s minimum interval: the retry must be held,
+        # not attempted again.
+        with patch("alphaess.time.time", return_value=1010.0):
+            run_async_local(client.apply_settings("AL70", schedule))
+            calls_after_second = session.return_value.post.call_count
+    if calls_after_second != calls_after_first:
+        print(f"ERROR: a 6053 was retried inside min_write_interval instead of being paced, {calls_after_first} -> {calls_after_second} POST(s)")
+        failed = True
+    assert not failed, "test_alphaess_6053_backs_off_the_retry_via_min_write_interval"
+
+
+def test_alphaess_held_write_is_not_reported_as_applied():
+    """apply_settings must not report success for a payload that was HELD, not sent.
+
+    A later consumer (Task 11's periodic reconciliation) could otherwise read a bare True
+    as "the inverter matches the plan" when a real change is still pending behind the
+    minimum write interval.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 300
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    first = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    second = _schedule(charge={"enable": True, "soc": 70, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+        with patch("alphaess.time.time", return_value=1000.0):
+            first_result = run_async_local(client.apply_settings("AL70", first))
+        with patch("alphaess.time.time", return_value=1010.0):
+            held_result = run_async_local(client.apply_settings("AL70", second))
+    if not first_result:
+        print(f"ERROR: a genuinely sent write returned {first_result!r}, should be truthy")
+        failed = True
+    if held_result:
+        print(f"ERROR: apply_settings returned {held_result!r} for a change HELD by min_write_interval, should be falsy")
+        failed = True
+    assert not failed, "test_alphaess_held_write_is_not_reported_as_applied"
 
 
 def test_alphaess_write_button_is_not_forced():
@@ -675,6 +757,8 @@ def run_alphaess_control_tests(my_predbat):
         ("undriven_serial_skipped", test_alphaess_reconcile_skips_a_serial_predbat_has_not_been_asked_to_drive),
         ("min_write_interval", test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it),
         ("6053_backoff", test_alphaess_6053_backs_off_rather_than_counting_as_a_failure),
+        ("6053_paces_the_retry", test_alphaess_6053_backs_off_the_retry_via_min_write_interval),
+        ("held_write_not_applied", test_alphaess_held_write_is_not_reported_as_applied),
         ("write_button_not_forced", test_alphaess_write_button_is_not_forced),
     ]:
         try:

@@ -786,6 +786,130 @@ def test_alphaess_load_today_falls_back_to_the_energy_balance():
     assert not failed, "test_alphaess_load_today_falls_back_to_the_energy_balance"
 
 
+CHARGE_CONFIG_SAMPLE = {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}
+DISCHARGE_CONFIG_SAMPLE = {"sysSn": "AL70", "ctrDis": 0, "timeDisf1": "00:00", "timeDise1": "00:00", "timeDisf2": "00:00", "timeDise2": "00:00", "batUseCap": 20}
+
+
+def test_alphaess_fetch_config_populates_both_directions_when_both_reads_succeed():
+    """Both getChargeConfigInfo and getDisChargeConfigInfo landing populates device_config
+    and returns True - nothing reads device_config as a write baseline today (both payload
+    builders are full replacements built from the schedule), but Tasks 10b and 11 will."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.fetch_config("AL70"))
+    if not ok:
+        print("ERROR: fetch_config returned False when both reads succeeded")
+        failed = True
+    entry = client.device_config.get("AL70", {})
+    if entry.get("charge") != CHARGE_CONFIG_SAMPLE:
+        print(f"ERROR: charge config not stored: {entry.get('charge')}")
+        failed = True
+    if entry.get("discharge") != DISCHARGE_CONFIG_SAMPLE:
+        print(f"ERROR: discharge config not stored: {entry.get('discharge')}")
+        failed = True
+    assert not failed, "test_alphaess_fetch_config_populates_both_directions_when_both_reads_succeed"
+
+
+def test_alphaess_fetch_config_partial_failure_keeps_the_stale_half_and_returns_false():
+    """Only the charge read succeeding must not report overall success, and must not wipe
+    out whatever discharge value was already known from a previous cycle - fetch_config
+    keeps partial data rather than blanking a field it could not refresh this time."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    client.device_config["AL70"] = {"discharge": DISCHARGE_CONFIG_SAMPLE}
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.fetch_config("AL70"))
+    if ok:
+        print("ERROR: fetch_config returned True with only one of two reads succeeding")
+        failed = True
+    entry = client.device_config.get("AL70", {})
+    if entry.get("charge") != CHARGE_CONFIG_SAMPLE:
+        print(f"ERROR: the successful charge read was not stored: {entry.get('charge')}")
+        failed = True
+    # The failed discharge read must keep whatever was already known, not be cleared.
+    if entry.get("discharge") != DISCHARGE_CONFIG_SAMPLE:
+        print(f"ERROR: the previous cycle's discharge value was lost on a failed read: {entry.get('discharge')}")
+        failed = True
+    if not any("discharge" in message.lower() and "AL70" in message for message in client.log_messages):
+        print(f"ERROR: the failed half was not named in the log, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_fetch_config_partial_failure_keeps_the_stale_half_and_returns_false"
+
+
+def test_alphaess_fetch_config_both_fail_returns_false():
+    """Neither read succeeding is a plain failure with nothing to store."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    fail_response = create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(fail_response)):
+        ok = run_async_local(client.fetch_config("AL70"))
+    if ok:
+        print("ERROR: fetch_config returned True when both reads failed")
+        failed = True
+    assert not failed, "test_alphaess_fetch_config_both_fail_returns_false"
+
+
+def test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds():
+    """A half-successful (or fully failed) read must not start the 30-minute config tier
+    clock, or the stale half is left unrefreshed for a full TTL - the same class of bug
+    Task 4's refresh_static had (marking a tier fresh on an unsuccessful poll)."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    client.device_list = ["AL70"]
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        got_any = run_async_local(client.refresh_config())
+    if got_any:
+        print("ERROR: refresh_config reported success with only a partial read")
+        failed = True
+    if client._tier_refreshed.get("config") is not None:
+        print("ERROR: the config tier clock was started on a partial read")
+        failed = True
+    assert not failed, "test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds"
+
+
+def test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds():
+    """One fully-successful serial is enough to start the tier clock, even if a sibling
+    serial's read fails outright."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    client.device_list = ["AL70", "AL71"]
+    responses = [
+        # AL70: both reads succeed.
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+        # AL71: both reads fail.
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        got_any = run_async_local(client.refresh_config())
+    if not got_any:
+        print("ERROR: refresh_config reported failure when one serial fully succeeded")
+        failed = True
+    if client._tier_refreshed.get("config") is None:
+        print("ERROR: the config tier clock was not started despite one serial fully succeeding")
+        failed = True
+    assert not failed, "test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -817,6 +941,11 @@ def run_alphaess_api_tests(my_predbat):
         ("reprobe_live_failure", test_alphaess_reprobe_live_failure_leaves_serial_demoted),
         ("energy_counters", test_alphaess_energy_counters_map_to_predbat_args),
         ("load_today_fallback", test_alphaess_load_today_falls_back_to_the_energy_balance),
+        ("fetch_config_both_succeed", test_alphaess_fetch_config_populates_both_directions_when_both_reads_succeed),
+        ("fetch_config_partial_failure", test_alphaess_fetch_config_partial_failure_keeps_the_stale_half_and_returns_false),
+        ("fetch_config_both_fail", test_alphaess_fetch_config_both_fail_returns_false),
+        ("refresh_config_not_marked_on_partial", test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds),
+        ("refresh_config_marked_on_one_full_success", test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds),
     ]:
         try:
             if fn():

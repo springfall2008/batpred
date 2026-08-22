@@ -188,6 +188,12 @@ class AlphaESSAPI(ComponentBase):
         if code == ALPHAESS_CODE_TIMESTAMP:
             self.log("Warn: AlphaESS rejected the request timestamp ({}) - this host's clock is more than 300 seconds from AlphaESS server time, it is a clock problem and not a credentials problem".format(self.describe_code(code)))
             return
+        if code == ALPHAESS_CODE_TOO_FAST:
+            # A pacing signal, not a component fault: both write endpoints are documented as
+            # writable once per 24 hours, so a busy response here is expected under load.
+            # Logging it at Warn would contradict that and read as a genuine malfunction.
+            self.log("Info: AlphaESS {} was rate-limited ({}); this is a pacing signal, not a fault, and will be retried after the write pacing interval".format(path, self.describe_code(code)))
+            return
         self.log("Warn: AlphaESS {} returned {} {}".format(path, self.describe_code(code), detail))
 
     async def _request(self, method, endpoint_key, params=None, body=None):
@@ -1031,20 +1037,36 @@ class AlphaESSAPI(ComponentBase):
         return json.dumps(first, sort_keys=True, default=str) == json.dumps(second, sort_keys=True, default=str)
 
     async def fetch_config(self, sn):
-        """Read the current charge and discharge config, the read-modify-write baseline."""
-        ok = False
-        code, charge = await self._get("charge_config", params={"sysSn": sn})
+        """Read the current charge and discharge config for one inverter.
+
+        NOT a read-modify-write baseline: both payload builders replace the whole object
+        from the locally held schedule rather than patching device_config, so nothing reads
+        this back into a write today. It exists to surface the inverter's current settings
+        for Tasks 10b (external-change detection) and 11 (periodic reconciliation).
+
+        Returns True only when BOTH reads succeed. refresh_config uses that to decide
+        whether to start the 30-minute config tier clock, and starting it on a half-successful
+        read would leave the failed half stale for a full TTL - the same class of bug Task 4's
+        refresh_static had (marking a tier fresh on an unsuccessful poll). Whatever data DID
+        come back is kept regardless of the overall result, so a transient failure on one
+        endpoint does not blank out the other's last-known values - it is logged instead.
+        """
         entry = self.device_config.setdefault(sn, {})
-        if code == ALPHAESS_CODE_OK and isinstance(charge, dict):
+        code, charge = await self._get("charge_config", params={"sysSn": sn})
+        charge_ok = code == ALPHAESS_CODE_OK and isinstance(charge, dict)
+        if charge_ok:
             entry["charge"] = charge
-            ok = True
         if self.api_delay:
             await asyncio.sleep(self.api_delay)
         code, discharge = await self._get("discharge_config", params={"sysSn": sn})
-        if code == ALPHAESS_CODE_OK and isinstance(discharge, dict):
+        discharge_ok = code == ALPHAESS_CODE_OK and isinstance(discharge, dict)
+        if discharge_ok:
             entry["discharge"] = discharge
-            ok = True
-        return ok
+        if not charge_ok:
+            self.log("Warn: AlphaESS {} charge config read failed; keeping the previous cycle's value".format(sn))
+        if not discharge_ok:
+            self.log("Warn: AlphaESS {} discharge config read failed; keeping the previous cycle's value".format(sn))
+        return charge_ok and discharge_ok
 
     async def refresh_config(self):
         """Refresh the config baseline for every inverter, and re-probe demoted telemetry.
@@ -1089,20 +1111,31 @@ class AlphaESSAPI(ComponentBase):
         return (time.time() - last) >= self.min_write_interval
 
     async def _write_payload(self, sn, direction, endpoint_key, payload, force=False):
-        """Send one payload if it differs from the last applied one and pacing allows."""
+        """Send one payload if it differs from the last applied one and pacing allows.
+
+        Returns whether the inverter is now KNOWN TO MATCH this payload, not merely whether
+        an exception was avoided. True covers "sent and confirmed" and "already matched, so
+        nothing needed sending" alike. False covers both a HELD change (a real difference
+        exists, but the pacing gate is deliberately not sending it yet) and an outright
+        rejection - a caller must not read either of those as the inverter matching the plan.
+        """
         cache = self.applied_payload.setdefault(sn, {})
         if not force and self.payloads_equal(cache.get(direction), payload):
             self.log("Info: AlphaESS {} {} settings unchanged, nothing sent".format(sn, direction))
             return True
         if not self._write_allowed(sn, direction, force=force):
             self.log("Info: AlphaESS {} {} change is held by alphaess_min_write_interval ({}s) and will be applied on the next eligible cycle".format(sn, direction, self.min_write_interval))
-            return True
+            return False
         code, _ = await self._post(endpoint_key, body=payload)
         if code != ALPHAESS_CODE_OK:
             if code == ALPHAESS_CODE_TOO_FAST:
                 # A pacing signal, not a broken component. Deliberately NOT cached as
-                # applied, so the next cycle retries.
-                self.log("Info: AlphaESS rate-limited the {} write for {}; it will be retried".format(direction, sn))
+                # applied, so the next cycle retries - but the attempt IS stamped, so that
+                # retry goes through the same minimum-interval gate rather than hammering
+                # the endpoint again immediately with no extra spacing at all. Both write
+                # endpoints are documented as writable once per 24 hours.
+                self.last_write_time[(sn, direction)] = time.time()
+                self.log("Info: AlphaESS rate-limited the {} write for {}; it will be retried after the write pacing interval".format(direction, sn))
             else:
                 self.log("Warn: AlphaESS {} write for {} was rejected with {}".format(direction, sn, self.describe_code(code)))
             return False
@@ -1117,6 +1150,13 @@ class AlphaESSAPI(ComponentBase):
 
         Charge and discharge are gated separately so a charge-only change does not consume
         a discharge write - both endpoints are documented as writable once per 24 hours.
+
+        Returns True only when the inverter is now KNOWN TO MATCH the built schedule for
+        BOTH directions (each was just sent and confirmed, or already matched). False means
+        at least one direction does not yet match - either it was HELD by the pacing gate
+        (a real change is pending, this cycle deliberately did nothing about it) or it was
+        rejected. A caller must not read False's absence, i.e. a bare True, as proof a write
+        actually went out this cycle - only that the inverter is caught up either way.
         """
         if not self.control_enable:
             return False
