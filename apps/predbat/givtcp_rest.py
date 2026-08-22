@@ -18,11 +18,19 @@ optional test-injection overrides - the live snapshot (`rest_data`) and the
 configured base URL (`rest_api`) live on the owning Inverter, since other
 Inverter code paths (still, pending a later phase of this refactor) read and
 fall back on them directly alongside the HA-entity path.
+
+The read-only properties/methods (charge_enable_time, soc_kwh, power_readings,
+charge_window_times, ...) normalise that raw snapshot into plain values,
+absorbing GivTCP-version differences (rest_v3) so callers don't have to walk
+its JSON shape by hand. Each returns None when the relevant data hasn't been
+read yet, mirroring the "REST configured but no data this cycle" case callers
+already have to handle for the write path.
 """
 
 import requests
 
 from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
+from utils import dp3, time_string_to_stamp
 
 
 class GivTCPRest:
@@ -45,6 +53,80 @@ class GivTCPRest:
             self.post_command = rest_postCommand
         if rest_getData:
             self.get_data = rest_getData
+
+    @property
+    def charge_enable_time(self):
+        """Whether GivTCP's scheduled charge is enabled, or None if no status has been read yet."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        return rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
+
+    @property
+    def discharge_enable_time(self):
+        """Whether GivTCP's scheduled discharge is enabled, or None if no status has been read yet."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        return rest_data["Control"]["Enable_Discharge_Schedule"] == "enable"
+
+    @property
+    def soc_kwh(self):
+        """Current battery SoC in kWh, or None if GivTCP hasn't reported it this cycle."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        value = rest_data.get("Power", {}).get("Power", {}).get("SOC_kWh", None)
+        if value is None:
+            return None
+        return dp3(value * self.inverter.battery_scaling)
+
+    @property
+    def target_soc(self):
+        """Currently applied charge target percent, or None if no status has been read yet."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        return float(rest_data["Control"]["Target_SOC"])
+
+    def power_readings(self):
+        """Battery/PV/grid/load power and battery voltage from GivTCP's Power block, or None if
+        GivTCP hasn't reported a full Power block this cycle."""
+        rest_data = self.inverter.rest_data
+        if not rest_data or "Power" not in rest_data or "Power" not in rest_data["Power"]:
+            return None
+        ppdetails = rest_data["Power"]["Power"]
+        if self.inverter.rest_v3:
+            battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
+        else:
+            battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.inverter.id, required_unit="V")
+        return {
+            "battery_power": float(ppdetails.get("Battery_Power", 0.0)),
+            "pv_power": float(ppdetails.get("PV_Power", 0.0)),
+            "grid_power": float(ppdetails.get("Grid_Power", 0.0)),
+            "load_power": float(ppdetails.get("Load_Power", 0.0)),
+            "battery_voltage": battery_voltage,
+        }
+
+    def charge_window_times(self):
+        """Current charge window as (start, end) parsed timestamps, or None if no status has been
+        read yet."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        start = time_string_to_stamp(rest_data["Timeslots"]["Charge_start_time_slot_1"])
+        end = time_string_to_stamp(rest_data["Timeslots"]["Charge_end_time_slot_1"])
+        return start, end
+
+    def discharge_window_times(self):
+        """Current discharge window as (start, end) parsed timestamps, or None if no status has
+        been read yet."""
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return None
+        start = time_string_to_stamp(rest_data["Timeslots"]["Discharge_start_time_slot_1"])
+        end = time_string_to_stamp(rest_data["Timeslots"]["Discharge_end_time_slot_1"])
+        return start, end
 
     def read_data(self, api="readData", retry=True):
         """

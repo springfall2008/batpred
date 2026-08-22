@@ -1401,8 +1401,8 @@ class Inverter:
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
 
         if self.rest_data:
-            self.charge_enable_time = self.rest_data["Control"]["Enable_Charge_Schedule"] == "enable"
-            self.discharge_enable_time = self.rest_data["Control"]["Enable_Discharge_Schedule"] == "enable"
+            self.charge_enable_time = self.givtcp.charge_enable_time
+            self.discharge_enable_time = self.givtcp.discharge_enable_time
         else:
             self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
             self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
@@ -1411,8 +1411,9 @@ class Inverter:
         self.charge_rate_now = max(self.charge_rate_now * self.base.battery_rate_max_scaling, self.battery_rate_min)
         self.discharge_rate_now = max(self.discharge_rate_now * self.base.battery_rate_max_scaling_discharge, self.battery_rate_min)
 
-        if self.rest_data and self.rest_data.get("Power", {}).get("Power", {}).get("SOC_kWh", None) is not None:
-            self.soc_kw = dp3(self.rest_data["Power"]["Power"]["SOC_kWh"] * self.battery_scaling)
+        soc_kwh = self.givtcp.soc_kwh if self.rest_data else None
+        if soc_kwh is not None:
+            self.soc_kw = soc_kwh
         else:
             if "soc_percent" in self.base.args:
                 self.soc_kw = dp3(self.base.get_arg("soc_percent", default=0.0, index=self.id, required_unit="%") * self.soc_max / 100.0)
@@ -1425,18 +1426,13 @@ class Inverter:
             self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
 
         if self.rest_data and ("Power" in self.rest_data) and not self.base.get_arg("givtcp_rest_power_ignore", default=False, index=self.id):
-            pdetails = self.rest_data["Power"]
-            if "Power" in pdetails:
-                ppdetails = pdetails["Power"]
-                # self.log("DEBUG: Power details from REST: {}".format(ppdetails))
-                self.battery_power = float(ppdetails.get("Battery_Power", 0.0))
-                self.pv_power = float(ppdetails.get("PV_Power", 0.0))
-                self.grid_power = float(ppdetails.get("Grid_Power", 0.0))
-                self.load_power = float(ppdetails.get("Load_Power", 0.0))
-                if self.rest_v3:
-                    self.battery_voltage = float(ppdetails.get("Battery_Voltage", 0.0))
-                else:
-                    self.battery_voltage = self.base.get_arg("battery_voltage", default=52.0, index=self.id, required_unit="V")
+            power = self.givtcp.power_readings()
+            if power:
+                self.battery_power = power["battery_power"]
+                self.pv_power = power["pv_power"]
+                self.grid_power = power["grid_power"]
+                self.load_power = power["load_power"]
+                self.battery_voltage = power["battery_voltage"]
         else:
             # Battery power
             self.battery_power = self.base.get_arg("battery_power", default=0.0, index=self.id, required_unit="W")
@@ -1484,8 +1480,7 @@ class Inverter:
         if self.charge_enable_time or not self.inv_has_charge_enable_time:
             # Find current charge window
             if self.rest_data:
-                charge_start_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_start_time_slot_1"])
-                charge_end_time = time_string_to_stamp(self.rest_data["Timeslots"]["Charge_end_time_slot_1"])
+                charge_start_time, charge_end_time = self.givtcp.charge_window_times()
             elif "charge_start_time" in self.base.args:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
@@ -1577,7 +1572,7 @@ class Inverter:
         # Work out existing charge limits and percent
         if self.charge_enable_time:
             if self.rest_data:
-                self.current_charge_limit = float(self.rest_data["Control"]["Target_SOC"])
+                self.current_charge_limit = self.givtcp.target_soc
             else:
                 self.current_charge_limit = float(self.base.get_arg("charge_limit", index=self.id, default=100.0, required_unit="%"))
         else:
@@ -1601,8 +1596,7 @@ class Inverter:
         self.export_window = []
 
         if self.rest_data:
-            discharge_start = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"])
-            discharge_end = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"])
+            discharge_start, discharge_end = self.givtcp.discharge_window_times()
         elif "discharge_start_time" in self.base.args:
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
             discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
