@@ -472,7 +472,7 @@ class AnnualTariff:
             usable.append(entry)
         if ignored:
             self.log("Warn: Annual: {} contains {} day_of_week/date entries, which are anchored to today's date rather than the sampled historical date and cannot be honoured during an annual replay; ignoring them".format(name, ignored))
-        table = self.predbat.basic_rates(usable, name)
+        table = self.predbat.basic_rates(usable, name, include_manual_api=False)
         setattr(self, cache_attr, table)
         return table
 

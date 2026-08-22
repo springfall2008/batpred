@@ -97,7 +97,7 @@ class Compare:
             else:
                 self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_import" in tariff:
-            pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import")
+            pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import", include_manual_api=False)
         else:
             self.log("Using existing rate import data")
 
@@ -127,7 +127,7 @@ class Compare:
             else:
                 self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_export" in tariff:
-            pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export")
+            pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export", include_manual_api=False)
         else:
             self.log("Using existing rate export data")
 
@@ -135,7 +135,7 @@ class Compare:
             pb.rate_scan(pb.rate_import, print=False)
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True)
             if "rates_import_override" in tariff:
-                pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated)
+                pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated, include_manual_api=False)
             pb.rate_scan(pb.rate_import, print=True)
 
         # Replicate and scan export rates
@@ -143,7 +143,7 @@ class Compare:
             pb.rate_scan_export(pb.rate_export, print=False)
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False)
             if "rates_export_override" in tariff:
-                pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated)
+                pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated, include_manual_api=False)
             pb.rate_scan_export(pb.rate_export, print=True)
 
         # Set rate thresholds

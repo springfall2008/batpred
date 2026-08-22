@@ -188,4 +188,84 @@ def test_basic_rates(my_predbat):
     finally:
         my_predbat.manual_api = old_manual_api
 
+    # Test 9: manual API override is actually applied when it isn't already present in `info`
+    # (e.g. rates_import, which - unlike rates_import_override - get_arg() never pre-merges).
+    # This is the append branch of basic_rates()'s manual_items dedup loop.
+    print("*** Running test: Manual API override applied when not pre-merged into info")
+    old_manual_api = my_predbat.manual_api
+    my_predbat.manual_api = ["rates_import?start=17:00:00&end=19:00:00&rate=3.5"]
+    try:
+        base_rates = {minute: 25.0 for minute in range(-24 * 60, 48 * 60)}
+        rate_replicate = {}
+        results = my_predbat.basic_rates([], "rates_import", base_rates, rate_replicate)
+
+        if results.get(17 * 60 + 30) != 3.5:
+            print(f"ERROR: Expected manual API override rate 3.5 at 17:30, got {results.get(17 * 60 + 30)}")
+            failed = 1
+        if results.get(10 * 60) != 25.0:
+            print(f"ERROR: Expected the unaffected rate at 10:00 to stay 25.0, got {results.get(10 * 60)}")
+            failed = 1
+    finally:
+        my_predbat.manual_api = old_manual_api
+
+    # Test 10: a manual API override with an empty rate value (e.g. "...&rate=" with nothing after
+    # the "=") must not crash basic_rates() - it should be treated as a bad rate and skipped.
+    print("*** Running test: Manual API override with empty rate value does not crash")
+    old_manual_api = my_predbat.manual_api
+    my_predbat.manual_api = ["rates_import?start=17:00:00&end=19:00:00&rate="]
+    try:
+        base_rates = {minute: 25.0 for minute in range(-24 * 60, 48 * 60)}
+        rate_replicate = {}
+        try:
+            results = my_predbat.basic_rates([], "rates_import", base_rates, rate_replicate)
+        except IndexError as e:
+            print(f"ERROR: basic_rates() raised IndexError on an empty manual API rate value: {e}")
+            failed = 1
+        else:
+            if results.get(17 * 60 + 30) != 25.0:
+                print(f"ERROR: Expected the bad override to be skipped, leaving 25.0 at 17:30, got {results.get(17 * 60 + 30)}")
+                failed = 1
+    finally:
+        my_predbat.manual_api = old_manual_api
+
+    # Test 11: include_manual_api=False (used by tariff comparison and annual replay, which
+    # simulate a tariff other than the live one) must keep the live system's manual API overrides
+    # out of the simulated result, even though `info` doesn't already contain them.
+    print("*** Running test: include_manual_api=False keeps live overrides out of simulated tariffs")
+    old_manual_api = my_predbat.manual_api
+    my_predbat.manual_api = ["rates_import_override?start=17:00:00&end=19:00:00&rate=0"]
+    try:
+        base_rates = {minute: 25.0 for minute in range(-24 * 60, 48 * 60)}
+        rate_replicate = {}
+        results = my_predbat.basic_rates([], "rates_import_override", base_rates, rate_replicate, include_manual_api=False)
+
+        if results.get(17 * 60 + 30) != 25.0:
+            print(f"ERROR: Live manual API override leaked into a simulated tariff at 17:30, got {results.get(17 * 60 + 30)}")
+            failed = 1
+    finally:
+        my_predbat.manual_api = old_manual_api
+
+    # Test 12: a manual API override in the flat "command=value" shorthand form (rather than the
+    # documented "command?start=...&end=...&rate=..." form) is not a usable rate override - it
+    # must be reported via record_status(had_errors=True), not silently dropped.
+    print("*** Running test: Manual API override in unsupported shorthand form is reported, not silently dropped")
+    old_manual_api = my_predbat.manual_api
+    old_had_errors = my_predbat.had_errors
+    my_predbat.manual_api = ["rates_import=5"]
+    my_predbat.had_errors = False
+    try:
+        base_rates = {minute: 25.0 for minute in range(-24 * 60, 48 * 60)}
+        rate_replicate = {}
+        results = my_predbat.basic_rates([], "rates_import", base_rates, rate_replicate)
+
+        if not my_predbat.had_errors:
+            print("ERROR: Expected had_errors to be set when a shorthand-form manual API rate override is ignored")
+            failed = 1
+        if results.get(10 * 60) != 25.0:
+            print(f"ERROR: Expected the unusable override to be ignored, leaving 25.0 at 10:00, got {results.get(10 * 60)}")
+            failed = 1
+    finally:
+        my_predbat.manual_api = old_manual_api
+        my_predbat.had_errors = old_had_errors
+
     return failed
