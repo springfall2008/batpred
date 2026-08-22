@@ -1495,7 +1495,7 @@ class WebInterface(ComponentBase):
                     pass
 
                 # Set the entity state
-                await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
+                await self.set_state_external(entity_id, new_value, attributes=attributes)
                 self.log(f"Entity {entity_id} updated to {new_value} via web interface")
 
         except Exception as e:
@@ -2653,7 +2653,7 @@ chart.render();
                 new_value = float(new_value)
 
             self.log("Web interface setting {} to {}".format(pitem, new_value))
-            await self.base.ha_interface.set_state_external(pitem, new_value)
+            await self.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
 
@@ -2898,12 +2898,12 @@ chart.render();
                 if key == "mode":
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
-                    await self.base.ha_interface.set_state_external(entity_id, value)
+                    await self.set_state_external(entity_id, value)
                 elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
-                    await self.base.ha_interface.set_state_external(entity_id, bool_value)
+                    await self.set_state_external(entity_id, bool_value)
 
             # Log the update
             self.log(f"Dashboard status updated: {dict(data)}")
@@ -4287,7 +4287,7 @@ chart.render();
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
                 item = self.base.config_index.get("manual_import_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
                 manual_export_rates = self.base.manual_rates("manual_export_rates")
@@ -4296,11 +4296,11 @@ chart.render();
                 await self.base.async_manual_select("manual_export_rates", clear_option)
             elif action == "Set Export":
                 item = self.base.config_index.get("manual_export_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_export_rates", selection_option)
             elif action == "Set Load":
                 item = self.base.config_index.get("manual_load_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
                 manual_load_adjust = self.base.manual_rates("manual_load_adjust")
@@ -4309,7 +4309,7 @@ chart.render();
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
             elif action == "Set SOC":
                 item = self.base.config_index.get("manual_soc_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
                 manual_soc = self.base.manual_rates("manual_soc")
