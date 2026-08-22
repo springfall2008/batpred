@@ -1780,10 +1780,14 @@ class Fetch:
 
         return rates
 
-    def basic_rates(self, info, rtype, prev=None, rate_replicate=None):
+    def basic_rates(self, info, rtype, prev=None, rate_replicate=None, include_manual_api=True):
         """
         Work out the energy rates based on user supplied time periods
         works on a 24-hour period only and then gets replicated later for future days
+
+        include_manual_api should be False for callers (e.g. tariff comparison, annual replay)
+        that simulate a tariff other than the live one - the live system's manual API overrides
+        apply to the actual running plan and must not leak into those simulations.
         """
         rates = {}
         if rate_replicate is None:
@@ -1799,7 +1803,26 @@ class Fetch:
                 rates[minute] = 0
             max_minute = 48 * 60
 
-        manual_items = self.get_manual_api(rtype)
+        # get_manual_api() returns each override wrapped as {"index": ..., "value": {...}}, not the
+        # flat {"start": ..., "end": ..., "rate": ...} shape this loop expects below - unwrap it here.
+        # Before this fix, an unwrapped entry's this_rate.get("start")/get("rate") always missed,
+        # falling through to the "00:00:00" start/end default (which, since end<=start, wraps to a
+        # full 24-hour range) and the rate=0/rate_increment=True default (a genuine no-op on the
+        # rate value) - silently marking every minute of the day as overridden in rate_replicate
+        # (and hence in the plan display) even for the narrowest override window (batpred#2578).
+        # For most callers (anything sourced via get_arg(..., default=[]), which already merges
+        # manual API overrides into its own return value) this would duplicate an override already
+        # present in `info`. Avoid double-applying, as incremental overrides would otherwise stack.
+        manual_items = []
+        if include_manual_api:
+            for item in self.get_manual_api(rtype):
+                value = item.get("value")
+                if not isinstance(value, dict):
+                    self.log("Warn: Manual API override for {} must use the '?start=...&end=...&rate=...' form, got {}".format(rtype, value))
+                    self.record_status("Warn: Manual API override for {} must use the '?start=...&end=...&rate=...' form".format(rtype), had_errors=True)
+                    continue
+                if value not in info:
+                    manual_items.append(value)
         if manual_items:
             self.log("Basic rate API override items for {} are {}".format(rtype, manual_items))
 
@@ -1868,9 +1891,9 @@ class Fetch:
                     rate_increment = True
 
                 # Resolve any sensor links
-                if isinstance(rate, str) and rate[0].isalpha():
+                if isinstance(rate, str) and rate and rate[0].isalpha():
                     rate = self.resolve_arg("rate", rate, 0.0)
-                if isinstance(load_scaling, str) and load_scaling[0].isalpha():
+                if isinstance(load_scaling, str) and load_scaling and load_scaling[0].isalpha():
                     load_scaling = self.resolve_arg("load_scaling", load_scaling, 1.0)
 
                 # Ensure the end result is a float
