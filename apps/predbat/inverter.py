@@ -21,10 +21,10 @@ Assistant entity writes with polling validation.
 import os
 import time
 import pytz
-import requests
 from datetime import datetime, timedelta
 from config import INVERTER_DEF, SOLAX_SOLIS_MODES_NEW, SOLAX_SOLIS_MODES
-from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT, EXPORT_LIMIT_IDLE
+from givtcp_rest import GivTCPRest
+from const import MINUTE_WATT, TIME_FORMAT, TIME_FORMAT_OCTOPUS, INVERTER_TEST, TIME_FORMAT_SECONDS, INVERTER_MAX_RETRY, EXPORT_LIMIT_IDLE
 from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, minute_data_state, window2minutes
 
 TIME_FORMAT_HMS = "%H:%M:%S"
@@ -201,10 +201,7 @@ class Inverter:
         self.idle_start_minutes = 0
         self.idle_end_minutes = 0
 
-        if rest_postCommand:
-            self.rest_postCommand = rest_postCommand
-        if rest_getData:
-            self.rest_getData = rest_getData
+        self.givtcp = GivTCPRest(self.base, self, rest_postCommand=rest_postCommand, rest_getData=rest_getData)
 
         self.inverter_type = self.base.get_arg("inverter_type", "GE", indirect=False, index=self.id)
 
@@ -271,7 +268,7 @@ class Inverter:
             if self.rest_api:
                 if not quiet:
                     self.base.log("Inverter {} using REST API {}".format(self.id, self.rest_api))
-                self.rest_data = self.rest_readData()
+                self.rest_data = self.givtcp.read_data()
                 if not self.rest_data:
                     self.auto_restart("REST read failure")
                 else:
@@ -1398,7 +1395,7 @@ class Inverter:
         self.grid_power = 0
 
         if self.rest_api:
-            self.rest_data = self.rest_readData()
+            self.rest_data = self.givtcp.read_data()
 
         self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
@@ -1787,7 +1784,7 @@ class Inverter:
         if current_reserve != reserve:
             self.base.log("Inverter {} Current Reserve is {}% and new target is {}%".format(self.id, dp0(current_reserve), dp0(reserve)))
             if self.rest_data:
-                self.rest_setReserve(reserve)
+                self.givtcp.set_reserve(reserve)
             else:
                 self.write_and_poll_value("reserve", self.base.get_arg("reserve", indirect=False, index=self.id, required_unit="%"), reserve)
             if self.base.set_inverter_notify:
@@ -1863,7 +1860,7 @@ class Inverter:
         if abs(current_rate - new_rate) > (self.battery_rate_max_charge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current charge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
-                self.rest_setChargeRate(new_rate)
+                self.givtcp.set_charge_rate(new_rate)
             else:
                 if "charge_rate" in self.base.args:
                     self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
@@ -1907,7 +1904,7 @@ class Inverter:
         if abs(current_rate - new_rate) > (self.battery_rate_max_discharge * MINUTE_WATT / 20):
             self.base.log("Inverter {} current discharge rate is {}W and new target is {}W".format(self.id, current_rate, new_rate))
             if self.rest_data:
-                self.rest_setDischargeRate(new_rate)
+                self.givtcp.set_discharge_rate(new_rate)
             else:
                 if "discharge_rate" in self.base.args:
                     self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
@@ -1962,8 +1959,8 @@ class Inverter:
             if self.rest_data:
                 # Enable charge target, without it the inverter ignores the target SOC.
                 # rest_enableChargeTarget no-ops if already enabled.
-                self.rest_enableChargeTarget(True)
-                self.rest_setChargeTarget(soc)
+                self.givtcp.enable_charge_target(True)
+                self.givtcp.set_charge_target(soc)
             else:
                 self.write_and_poll_value("charge_limit", self.base.get_arg("charge_limit", indirect=False, index=self.id, required_unit="%"), soc)
                 charge_limit_enable_entity_id = self.base.get_arg("charge_limit_enable", indirect=False, index=self.id)
@@ -2210,7 +2207,7 @@ class Inverter:
         if self.rest_data and self.rest_v3:
             if entity_start and ((old_start_time != new_start_time) or (old_end_time != new_end_time)):
                 self.base.log("Inverter {} set pause slot to {} - {}".format(self.id, new_start_time, new_end_time))
-                self.rest_setPauseSlot(new_start_time, new_end_time)
+                self.givtcp.set_pause_slot(new_start_time, new_end_time)
         else:
             if old_start_time and old_start_time != new_start_time:
                 # Don't poll as inverters with no registers will fail
@@ -2225,7 +2222,7 @@ class Inverter:
         # Set the mode
         if new_pause_mode != old_pause_mode:
             if self.rest_data and self.rest_v3:
-                self.rest_setBatteryPauseMode(new_pause_mode)
+                self.givtcp.set_battery_pause_mode(new_pause_mode)
             else:
                 self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
 
@@ -2287,7 +2284,7 @@ class Inverter:
         if old_inverter_mode != new_inverter_mode:
             self.log("Inverter {} current mode is {} and new target is {} has_ge_eco_toggle {}".format(self.id, old_inverter_mode, new_inverter_mode, self.inv_has_ge_eco_toggle))
             if self.rest_data:
-                self.rest_setBatteryMode(new_inverter_mode)
+                self.givtcp.set_battery_mode(new_inverter_mode)
             else:
                 entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
                 if self.inv_has_ge_eco_toggle:
@@ -2557,11 +2554,11 @@ class Inverter:
                 if inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
                     self.log("Inverter {} is {}, discharge target register not supported, export target not written".format(self.id, inverter_model))
                 else:
-                    current = self.rest_readDischargeTarget()
+                    current = self.givtcp.read_discharge_target()
                     if current is None:
                         self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
                     elif current != target_soc:
-                        self.rest_setDischargeTarget(target_soc)
+                        self.givtcp.set_discharge_target(target_soc)
                     else:
                         self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
             elif "discharge_target_soc" in self.base.args:
@@ -2580,7 +2577,7 @@ class Inverter:
         # REST version of writing slot
         if self.rest_data and new_start and new_end and ((new_start != old_start) or (new_end != old_end)):
             changed_start_end = True
-            self.rest_setDischargeSlot1(new_start, new_end)
+            self.givtcp.set_discharge_slot1(new_start, new_end)
 
         # Change scheduled discharge enable
         if force_export:
@@ -2641,7 +2638,7 @@ class Inverter:
         if old_charge_schedule_enable == "on" or old_charge_schedule_enable == "enable":
             # Enable scheduled charge if not turned on
             if self.rest_data:
-                self.rest_enableChargeSchedule(False)
+                self.givtcp.enable_charge_schedule(False)
             else:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), False)
                 # If there's no charge enable switch then we can enable using start and end time
@@ -3026,7 +3023,7 @@ class Inverter:
 
         if new_start != old_start or new_end != old_end or (self.inv_charge_time_format in ["H M", "H:M-H:M"]):
             if self.rest_data:
-                self.rest_setChargeSlot1(new_start, new_end)
+                self.givtcp.set_charge_slot1(new_start, new_end)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Charge window change to: {} - {} at {}".format(self.id, new_start, new_end, self.base.time_now_str()))
@@ -3035,7 +3032,7 @@ class Inverter:
         if (old_charge_schedule_enable == "off" or have_disabled) and (new_start != new_end):
             # Enable scheduled charge if not turned on, unless the start and end are the same (disabled)
             if self.rest_data:
-                self.rest_enableChargeSchedule(True)
+                self.givtcp.enable_charge_schedule(True)
             elif "scheduled_charge_enable" in self.base.args:
                 self.write_and_poll_switch("scheduled_charge_enable", self.base.get_arg("scheduled_charge_enable", indirect=False, index=self.id), True)
                 if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
@@ -3122,419 +3119,4 @@ class Inverter:
 
         self.base.log(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete")
         self.base.record_status(f"Warn: Inverter {self.id} Trying to press {entity_id} didn't complete", had_errors=True)
-        return False
-
-    def rest_readData(self, api="readData", retry=True):
-        """
-        Get inverter status
-
-        :param api: The API endpoint to retrieve data from (default is "readData")
-        :retry: if the REST GET fails then should the GET be retried? (default is True)
-        :return: The JSON response containing the inverter status, or None if there was an error
-        """
-        url = self.rest_api + "/" + api
-
-        # repeatedly try to get inverter data via REST, sleeping after each failed attempt to enable GivTCP to re-get the data
-        for loop in range(INVERTER_MAX_RETRY_REST):
-            json = self.rest_getData(url)
-
-            if json:
-                if "Control" in json:
-                    if loop == 0:
-                        self.base.log("Inverter {} REST GET {} successful".format(self.id, url))
-                    else:
-                        self.base.log("Info: Inverter {} REST GET {} successful on retry {}".format(self.id, url, loop))
-                    return json
-
-            # if retry = False then don't retry further GET calls
-            if not retry:
-                break
-
-            # firstly retry after a short delay to allow the REST endpoint to get the data, then try longer delays
-            if loop == 0:
-                delay = 20
-            else:
-                delay = 40
-
-            self.base.log('Warn: inverter {} didn\'t receive JSON response from REST GET {}, received "{}". Waiting {}s then retrying'.format(self.id, url, json, delay))
-            self.sleep(delay)
-
-        # Exhausted retry attempts, fail REST GET and fallback to using HA entities (if they have been configured in apps.yaml)
-        self.base.log("Warn: Inverter {} unable to read REST data from {} - REST will be skipped for this run".format(self.id, url))
-        self.base.record_status("Warn: Inverter {} unable to read REST data from {} - REST will be skipped".format(self.id, url), had_errors=True)
-        return None
-
-    def rest_runAll(self, old_data=None):
-        """
-        Updated and get inverter status
-        """
-        new_data = self.rest_readData(api="runAll", retry=False)
-        if new_data:
-            return new_data
-        else:
-            return old_data
-
-    def rest_postCommand(self, url, json):
-        """
-        Send REST Command
-        """
-        try:
-            r = requests.post(url, json=json, timeout=INVERTER_REST_TIMEOUT)
-        except Exception as e:
-            self.base.log("Warn: Inverter {} REST POST {} failed: {}".format(self.id, url, e))
-            return None
-        return r
-
-    def rest_getData(self, url):
-        """
-        Get REST Data
-        """
-        r = None
-
-        try:
-            r = requests.get(url, timeout=INVERTER_REST_TIMEOUT)
-        except Exception as e:
-            self.base.log("Error: Exception raised {}".format(e))
-
-        if r and (r.status_code == 200):
-            return r.json()
-        else:
-            return None
-
-    def rest_enableChargeTarget(self, enable):
-        """
-        Enable or disable the charge target SOC limit register via REST.
-        Without this being enabled, CHARGE_TARGET_SOC (reg 116) is ignored by the inverter.
-        No-ops if the register already matches the requested state.
-        """
-        current = self.rest_data["Control"].get("Enable_Charge_Target", "disable")
-        if isinstance(current, str):
-            current = current.lower() in ["enable", "on", "true"]
-        if current == enable:
-            return True
-
-        url = self.rest_api + "/enableChargeTarget"
-        data = {"state": "enable" if enable else "disable"}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            new_value = self.rest_data["Control"].get("Enable_Charge_Target", "disable")
-            if isinstance(new_value, str):
-                new_value = new_value.lower() in ["enable", "on", "true"]
-            if new_value == enable:
-                self.count_register_writes += 1
-                self.base.log("Set inverter {} charge target enable {} via REST successful on retry {}".format(self.id, enable, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Set inverter {} charge target enable {} via REST failed".format(self.id, enable))
-        self.base.record_status("Warn: Inverter {} REST failed to enableChargeTarget".format(self.id), had_errors=True)
-        return False
-
-    def rest_setChargeTarget(self, target):
-        """
-        Configure charge target % via REST
-        """
-        target = int(target)
-        url = self.rest_api + "/setChargeTarget"
-        data = {"chargeToPercent": target}
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if float(self.rest_data["Control"]["Target_SOC"]) == target:
-                self.count_register_writes += 1
-                self.base.log("Inverter {} charge target {} via REST successful on retry {}".format(self.id, target, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} charge target {} via REST failed".format(self.id, target))
-        self.base.record_status("Warn: Inverter {} REST failed to setChargeTarget".format(self.id), had_errors=True)
-        return False
-
-    def rest_setChargeRate(self, rate):
-        """
-        Configure charge target % via REST
-        """
-        rate = int(rate)
-        url = self.rest_api + "/setChargeRate"
-        data = {"chargeRate": rate}
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
-            if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
-                self.count_register_writes += 1
-                self.base.log("Inverter {} set charge rate {} via REST successful on retry {}".format(self.id, rate, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} set charge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Charge_Rate"]))
-        self.base.record_status("Warn: Inverter {} REST failed to setChargeRate".format(self.id), had_errors=True)
-        return False
-
-    def rest_setDischargeRate(self, rate):
-        """
-        Configure charge target % via REST
-        """
-        rate = int(rate)
-        url = self.rest_api + "/setDischargeRate"
-        data = {"dischargeRate": rate}
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
-            if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
-                self.count_register_writes += 1
-                self.base.log("Inverter {} set discharge rate {} via REST successful on retry {}".format(self.id, rate, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} set discharge rate {} via REST failed got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]))
-        self.base.record_status("Warn: Inverter {} REST failed to setDischargeRate to {} got {}".format(self.id, rate, self.rest_data["Control"]["Battery_Discharge_Rate"]), had_errors=True)
-        return False
-
-    def rest_setBatteryMode(self, inverter_mode):
-        """
-        Configure invert mode via REST
-        """
-        url = self.rest_api + "/setBatteryMode"
-        data = {"mode": inverter_mode}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if inverter_mode == self.rest_data["Control"]["Mode"]:
-                self.count_register_writes += 1
-                self.base.log("Set inverter {} mode {} via REST successful on retry {}".format(self.id, inverter_mode, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Set inverter {} mode {} via REST failed".format(self.id, inverter_mode))
-        self.base.record_status("Warn: Inverter {} REST failed to setBatteryMode".format(self.id), had_errors=True)
-        return False
-
-    def rest_setBatteryPauseMode(self, pause_mode):
-        """
-        Configure inverter pause mode via REST - v3.x+
-        """
-        url = self.rest_api + "/setBatteryPauseMode"
-        data = {"state": pause_mode}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if pause_mode == self.rest_data["Control"]["Battery_pause_mode"]:
-                self.count_register_writes += 1
-                self.base.log("Set inverter {} pause mode {} via REST successful on retry {}".format(self.id, pause_mode, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Set inverter {} pause mode {} via REST failed".format(self.id, pause_mode))
-        self.base.record_status("Warn: Inverter {} REST failed to setBatteryPauseMode got {}".format(self.id, self.rest_data["Control"]["Battery_pause_mode"]), had_errors=True)
-        return False
-
-    def rest_setReserve(self, target):
-        """
-        Configure reserve % via REST
-        """
-        target = int(target)
-        result = target
-        url = self.rest_api + "/setBatteryReserve"
-        data = {"reservePercent": target}
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
-            if result == target:
-                self.count_register_writes += 1
-                self.base.log("Set inverter {} reserve {} via REST successful on retry {}".format(self.id, target, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Set inverter {} reserve {} via REST failed on retry {} got {}".format(self.id, target, retry, result))
-        self.base.record_status("Warn: Inverter {} REST failed to setReserve to {} got {}".format(self.id, target, result), had_errors=True)
-        return False
-
-    def rest_enableChargeSchedule(self, enable):
-        """
-        Configure enable charge schedule via REST
-        """
-        url = self.rest_api + "/enableChargeSchedule"
-        data = {"state": "enable" if enable else "disable"}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
-            if isinstance(new_value, str):
-                if new_value.lower() in ["enable", "on", "true"]:
-                    new_value = True
-                else:
-                    new_value = False
-            if new_value == enable:
-                self.count_register_writes += 1
-                self.base.log("Set inverter {} charge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Set inverter {} charge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Charge_Schedule"]))
-        self.base.record_status("Warn: Inverter {} REST failed to enableChargeSchedule".format(self.id), had_errors=True)
-        return False
-
-    def rest_enableDischargeSchedule(self, enable):
-        """
-        Configure enable discharge schedule via REST (V3.x+)
-        """
-        url = self.rest_api + "/enableDischargeSchedule"
-        data = {"state": "enable" if enable else "disable"}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            new_value = self.rest_data["Control"]["Enable_Discharge_Schedule"]
-            if isinstance(new_value, str):
-                if new_value.lower() in ["enable", "on", "true"]:
-                    new_value = True
-                else:
-                    new_value = False
-            if new_value == enable:
-                self.count_register_writes += 1
-                self.base.log("Set inverter {} discharge schedule {} via REST successful on retry {}".format(self.id, enable, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Set inverter {} discharge schedule {} via REST failed got {}".format(self.id, enable, self.rest_data["Control"]["Enable_Discharge_Schedule"]))
-        self.base.record_status("Warn: Inverter {} REST failed to enableDischargeSchedule".format(self.id), had_errors=True)
-        return False
-
-    def rest_setPauseSlot(self, start, finish):
-        """
-        Configure pause slot via REST - v3.x+
-        """
-        url = self.rest_api + "/setPauseSlot"
-        data = {"start": start[:5], "finish": finish[:5]}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if self.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and self.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
-                self.count_register_writes += 1
-                self.base.log("Inverter {} set pause slot {} via REST successful after retry {}".format(self.id, data, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} set pause slot {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn: Inverter {} REST failed to setPauseSlot".format(self.id), had_errors=True)
-        return False
-
-    def rest_setChargeSlot1(self, start, finish):
-        """
-        Configure charge slot via REST
-        """
-        url = self.rest_api + "/setChargeSlot1"
-        data = {"start": start[:5], "finish": finish[:5]}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
-                self.count_register_writes += 1
-                self.base.log("Inverter {} set charge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} set charge slot 1 {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn: Inverter {} REST failed to setChargeSlot1".format(self.id), had_errors=True)
-        return False
-
-    def rest_readDischargeTarget(self):
-        """
-        Read GivTCP's currently applied discharge target percent, or None if it can't be read.
-
-        Mirrors rest_setDischargeTarget()'s own preference order: Control.Discharge_Target_SOC_1 is
-        GivTCP's synchronous write-time signal, updated the moment a write is accepted, so it's
-        checked first. raw.invertor.discharge_target_soc_1 is a fallback for GivTCP setups where
-        Control doesn't expose the key - but on its own it's unreliable as a "did this actually
-        change" signal, since it only refreshes on GivTCP's separate background self_run poll cycle,
-        not synchronously with any write. A caller that reads raw.invertor alone to decide whether a
-        write is even needed can end up re-writing every cycle on hardware where that field never
-        catches up (#4421, #4517).
-        """
-        if not isinstance(self.rest_data, dict):
-            return None
-        try:
-            result = int(float(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None)))
-        except (ValueError, TypeError):
-            result = None
-        if result is None:
-            try:
-                result = int(float(self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None)))
-            except (ValueError, TypeError):
-                result = None
-        return result
-
-    def rest_setDischargeTarget(self, target):
-        """
-        Configure discharge to percent via REST
-        """
-
-        def to_int(value):
-            """GivTCP reports these as strings, so coerce before comparing or a successful write
-            reads back as '4' and never matches the int target."""
-            try:
-                return int(float(value))
-            except (ValueError, TypeError):
-                return None
-
-        target = int(target)
-        url = self.rest_api + "/setDischargeTarget"
-        data = {"dischargeToPercent": target, "slot": 1}
-        result = None
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            # GivTCP's write handler updates Control.Discharge_Target_SOC_1 synchronously the
-            # moment it accepts the command (confirmed against GivTCP's own source - write.py's
-            # setDischargeTarget() calls updateControlCache() straight after the Modbus write), so
-            # it's checked first. raw.invertor.discharge_target_soc_1 is kept as a fallback, but on
-            # its own it's an unreliable signal: it only refreshes on GivTCP's separate background
-            # self_run poll cycle, which can be tens of seconds away, not synchronous with this
-            # POST at all (#4421). A short settle delay still helps for the much smaller residual
-            # gap - the physical inverter itself taking a moment to apply the write, which a
-            # same-moment self_run poll could otherwise briefly overwrite Control with a stale read
-            # of.
-            self.sleep(1)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            result = to_int(self.rest_data.get("Control", {}).get("Discharge_Target_SOC_1", None))
-            if result != target:
-                result = to_int(self.rest_data.get("raw", {}).get("invertor", {}).get("discharge_target_soc_1", None))
-            if result == target:
-                self.count_register_writes += 1
-                self.base.log("Inverter {} Set export target slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} Set export target slot 1 {} via REST failed got {}".format(self.id, data, result))
-        self.base.record_status("Warn: Inverter {} REST failed to setExportTarget got {}".format(self.id, result), had_errors=True)
-        return False
-
-    def rest_setDischargeSlot1(self, start, finish):
-        """
-        Configure charge slot via REST
-        """
-        url = self.rest_api + "/setDischargeSlot1"
-        data = {"start": start[:5], "finish": finish[:5]}
-
-        for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
-            self.rest_data = self.rest_runAll(self.rest_data)
-            if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
-                self.count_register_writes += 1
-                self.base.log("Inverter {} Set discharge slot 1 {} via REST successful after retry {}".format(self.id, data, retry))
-                return True
-            self.sleep(2)
-
-        self.base.log("Warn: Inverter {} Set discharge slot 1 {} via REST failed".format(self.id, data))
-        self.base.record_status("Warn: Inverter {} REST failed to setDischargeSlot1".format(self.id), had_errors=True)
         return False
