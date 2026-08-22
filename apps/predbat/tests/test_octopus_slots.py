@@ -120,8 +120,9 @@ def run_load_octopus_slots_tests(my_predbat):
             # flipping to the max rate (batpred#4624).
             slot_block_start = (minutes_start // 30) * 30
             split_minute = slot_block_start + 2 * 30  # 2 blocks (12 - 10) remain in the daily budget
-            low_kwh = dp2(5.0 * (split_minute - minutes_start) / 60)
-            high_kwh = dp2(5.0 - low_kwh)
+            # Full precision to match production - only cost is rounded (batpred#4644 review).
+            low_kwh = 5.0 * (split_minute - minutes_start) / 60
+            high_kwh = 5.0 - low_kwh
             for target in (expected_slots5, expected_slots8):
                 target.append({"start": minutes_start, "end": split_minute, "kwh": low_kwh, "average": 4, "cost": dp2(4 * low_kwh), "soc": 10, "octopus": True})
                 target.append({"start": split_minute, "end": minutes_end, "kwh": high_kwh, "average": 10, "cost": dp2(10 * high_kwh), "soc": 10, "octopus": True})

@@ -2666,12 +2666,15 @@ class Octopus:
                 elif available_blocks <= 0:
                     chunks = [(start_minutes, end_minutes, kwh, self.rate_max_base)]
                 else:
+                    # Full precision here - rounding to dp2() on both sides can make low_kwh + high_kwh
+                    # drift from the original kwh, and this function's non-split chunks already carry
+                    # kwh at full precision too (dp2() is only applied downstream, to cost/soc).
                     split_minute = min(slot_block_start + available_blocks * 30, end_minutes)
                     span = end_minutes - start_minutes
-                    low_kwh = dp2(kwh * (split_minute - start_minutes) / span) if span > 0 else 0.0
+                    low_kwh = kwh * (split_minute - start_minutes) / span if span > 0 else 0.0
                     chunks = [
                         (start_minutes, split_minute, low_kwh, self.rate_min_base),
-                        (split_minute, end_minutes, dp2(kwh - low_kwh), self.rate_max_base),
+                        (split_minute, end_minutes, kwh - low_kwh, self.rate_max_base),
                     ]
 
             for chunk_start, chunk_end, chunk_kwh, slot_average in chunks:
