@@ -55,6 +55,7 @@ from tests.test_optimise_swap_export import run_optimise_swap_export_tests
 from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
+from tests.test_car_charging_scored import run_car_charging_scored_tests
 from tests.test_evcc import test_evcc
 from tests.test_car_charging_in_load_history import run_car_charging_in_load_history_tests, run_car_plugged_state_tests, run_car_charging_mode_tests, run_car_solar_possible_tests
 from tests.test_plugin_startup import test_plugin_startup_order
@@ -496,6 +497,7 @@ def main():
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
+        ("car_charging_scored", run_car_charging_scored_tests, "Car charging window scoring tests", False),
         ("car_charging_in_load_history", run_car_charging_in_load_history_tests, "Car charging in load history tests", False),
         ("car_plugged_state", run_car_plugged_state_tests, "Car plugged-in sensor state tests", False),
         ("car_charging_mode", run_car_charging_mode_tests, "Car charging mode decision tests", False),

@@ -20,7 +20,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 
 from datetime import datetime, timedelta
 from multiprocessing import cpu_count
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
+from const import CAR_SCORE_MAX_PREDICTIONS, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, TIME_FORMAT, MINUTE_WATT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE
 
 from utils import calc_percent_limit, clone_windows, dp0, dp1, dp2, dp3, dp4, remove_intersecting_windows, in_car_slot
 from prediction import Prediction
@@ -5150,6 +5150,181 @@ class Plan:
             ready_minutes += 24 * 60
         return ready_minutes
 
+    def car_take_window(self, car_n, window, car_soc, ready_minutes, max_price):
+        """Work out the slot this car would take in one candidate window, or None if it can take none.
+
+        Split out of plan_car_charging so the price-sorted planner and the scored one share a single
+        definition of how much charge a window holds. Returns (slot, car_soc_after) - slot is None when
+        the window has passed, is priced out, or the car is already full.
+        """
+        start = max(window["start"], self.minutes_now)
+        end = min(window["end"], ready_minutes)
+        price = window["average"]
+
+        # Skip past windows
+        if end <= start:
+            return None, car_soc
+
+        # Skip over prices when they are too high
+        if (max_price != 0) and price > max_price:
+            return None, car_soc
+
+        # Compute amount of charge
+        length = end - start
+        hours = length / 60
+        kwh = self.car_charging_rate[car_n] * hours
+
+        kwh_add = kwh * self.car_charging_loss
+        kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0)
+
+        # Clamp length to required amount (shorten the window)
+        if kwh_add > kwh_left:
+            percent = kwh_left / kwh_add
+            length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
+            end = start + length
+            hours = length / 60
+            kwh = self.car_charging_rate[car_n] * hours
+            kwh_add = min(kwh * self.car_charging_loss, kwh_left)
+            kwh = kwh_add / self.car_charging_loss
+
+        if kwh <= 0:
+            return None, car_soc
+
+        new_slot = {}
+        new_slot["start"] = start
+        new_slot["end"] = end
+        new_slot["kwh"] = dp3(kwh)
+        new_slot["average"] = price
+        new_slot["cost"] = dp2(price * kwh)
+        new_slot["octopus"] = False
+        new_slot["source"] = "grid"
+        new_slot["effective"] = dp2(price)
+        return new_slot, dp3(car_soc + kwh_add)
+
+    def car_slot_extra_load(self, slot):
+        """Turn a candidate car slot into the load forecast delta it adds, keyed for score_extra_load.
+
+        Keys are minutes relative to now on the PREDICT_STEP grid, matching load_minutes_step, and the
+        value is the grid-side draw in that step. slot["kwh"] is already grid-side - the charging loss
+        is taken on the car side - so it is spread evenly across the window, with the first and last
+        steps clipped to the part of them the slot actually covers.
+        """
+        extra = {}
+        length = slot["end"] - slot["start"]
+        if length <= 0 or slot["kwh"] <= 0:
+            return extra
+
+        kwh_per_minute = slot["kwh"] / length
+        start_rel = slot["start"] - self.minutes_now
+        end_rel = slot["end"] - self.minutes_now
+        first = (start_rel // PREDICT_STEP) * PREDICT_STEP
+        for minute in range(first, end_rel, PREDICT_STEP):
+            covered = min(minute + PREDICT_STEP, end_rel) - max(minute, start_rel)
+            if covered > 0:
+                extra[minute] = extra.get(minute, 0.0) + kwh_per_minute * covered
+        return extra
+
+    def car_scored_charging_enabled(self, car_n):
+        """Should this car's windows be scored against the forecast rather than sorted by import rate?
+
+        Scoring only says something the import rate does not when the home battery is allowed to feed
+        the car. It models the car as house load, which is faithful only when the car's energy is
+        reported as load - otherwise the car bypasses the CT clamp and the two are not the same kWh -
+        and only when that energy is not already in the load history, which the forecast handles by not
+        adding the planned slot at all, so injecting it here would count the same kWh twice. It also
+        needs a plan from a previous cycle to score against, which does not exist on the first run
+        after a restart.
+        """
+        if not self.car_charging_from_battery:
+            return False
+        if not self.car_charging_plan_smart[car_n]:
+            return False
+        if not self.car_energy_reported_load or self.car_charging_in_load_history:
+            return False
+        if not self.charge_limit_best or not self.load_minutes_step:
+            return False
+        if not getattr(self, "end_record", 0):
+            return False
+        return True
+
+    def plan_car_charging_scored(self, car_n, low_rates, ready_minutes, max_price, car_soc, plan):
+        """Choose the car's windows by what charging in them actually costs, not by the import rate.
+
+        With car_charging_from_battery the home battery serves the car, so a window's import rate is not
+        what the charge costs. The real price is what the plan gives up by having that energy leave the
+        battery then, and that turns on things a rate comparison cannot see at once: which export the
+        energy would otherwise have been sold into, whether the battery is already at its discharge
+        limit in that window, losses and cycle cost. Rather than approximate it with a formula, each
+        candidate window is scored by running the forecast with the car's load in it and taking the
+        metric delta. The cheapest is committed and the rest scored again, so the next choice sees the
+        SoC the first one has already spent.
+
+        Scores are taken against the previous cycle's plan - the only one that exists this early, see
+        fetch_sensor_data_car_planning. The plan is recomputed every few minutes so the lag costs
+        nothing, and it is the contract calculate_marginal_costs already runs under.
+
+        Returns (plan, car_soc, committed) where committed is the set of low_rates indices already
+        taken, so the caller's price-sorted pass can finish anything the scoring budget did not reach.
+        """
+        committed = set()
+        candidates = []
+        for window_n, window in enumerate(low_rates):
+            if window["end"] <= self.minutes_now or window["start"] >= ready_minutes:
+                continue
+            if (max_price != 0) and window["average"] > max_price:
+                continue
+            candidates.append(window_n)
+        if not candidates:
+            return plan, car_soc, committed
+
+        # Every context built here differs from the others only in its load, so the load-independent
+        # arrays - rates, PV, temperature caps, carbon, car slots - are built once and shared
+        kernel_static_cache = {}
+        time_start = time.time()
+
+        # Baseline from the same code path as the trials rather than self.prediction, which by this
+        # point in the cycle may still be one of the yesterday comparison runs Output leaves behind
+        committed_metric = self.score_extra_load({}, kernel_static_cache=kernel_static_cache, include_battery_value=True)
+        committed_load = {}
+        predictions = 1
+
+        while candidates and (car_soc + 0.1) < self.car_charging_limit[car_n] and predictions < CAR_SCORE_MAX_PREDICTIONS:
+            best = None
+            for window_n in candidates:
+                trial_slot, trial_soc = self.car_take_window(car_n, low_rates[window_n], car_soc, ready_minutes, max_price)
+                if not trial_slot:
+                    continue
+                trial_load = dict(committed_load)
+                for minute, amount in self.car_slot_extra_load(trial_slot).items():
+                    trial_load[minute] = trial_load.get(minute, 0.0) + amount
+                metric = self.score_extra_load(trial_load, kernel_static_cache=kernel_static_cache, include_battery_value=True)
+                predictions += 1
+                cost = (metric - committed_metric) / trial_slot["kwh"]
+                if (best is None) or (cost < best[0]):
+                    best = (cost, window_n, trial_slot, trial_soc, metric, trial_load)
+            if best is None:
+                break
+
+            cost, window_n, slot, car_soc, committed_metric, committed_load = best
+            # The grid rate stays in "average" - in_car_slot reads it for the Intelligent premium - so
+            # what the charge actually costs is recorded alongside it rather than replacing it
+            slot["effective"] = dp2(cost)
+            slot["cost"] = dp2(cost * slot["kwh"])
+            slot["source"] = "battery" if cost < slot["average"] else "grid"
+            plan.append(slot)
+            committed.add(window_n)
+            candidates.remove(window_n)
+
+        self.log(
+            "Car {} scored charging windows with {} prediction(s) in {}s, picked {}".format(
+                car_n,
+                predictions,
+                dp2(time.time() - time_start),
+                [(self.time_abs_str(slot["start"]), slot["source"], slot["effective"]) for slot in plan],
+            )
+        )
+        return plan, car_soc, committed
+
     def plan_car_charging(self, car_n, low_rates):
         """
         Plan when the car will charge, taking into account ready time and pricing
@@ -5166,9 +5341,10 @@ class Plan:
 
         ready_minutes = self.car_ready_minutes(car_n)
 
-        # Car charging now override
-        extra_slot = {}
+        # Car charging now override - the car is already drawing, so this slot is a fact rather than a
+        # choice and is taken before anything else is scored or priced
         if self.car_charging_now[car_n]:
+            extra_slot = {}
             start = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
             end = start + self.plan_interval_minutes
             extra_slot["start"] = start
@@ -5183,61 +5359,27 @@ class Plan:
                     self.log("Remove old window {}".format(window_p))
                     break
 
-            price_sorted = [-1] + price_sorted
+            new_slot, car_soc = self.car_take_window(car_n, extra_slot, car_soc, ready_minutes, max_price)
+            if new_slot:
+                plan.append(new_slot)
+
+        # When the home battery may feed the car, a window's import rate is not what charging in it
+        # costs - score the windows against the forecast instead. The price-sorted pass below finishes
+        # anything the scoring budget did not reach, and is the whole plan when scoring does not apply.
+        committed = set()
+        if self.car_scored_charging_enabled(car_n):
+            plan, car_soc, committed = self.plan_car_charging_scored(car_n, low_rates, ready_minutes, max_price, car_soc, plan)
 
         for window_n in price_sorted:
-            if window_n == -1:
-                window = extra_slot
-            else:
-                window = low_rates[window_n]
-
-            start = max(window["start"], self.minutes_now)
-            end = min(window["end"], ready_minutes)
-            price = window["average"]
-
-            length = 0
-            kwh = 0
+            if window_n in committed:
+                continue
 
             # Stop once we have enough charge, allow small margin for rounding
             if (car_soc + 0.1) >= self.car_charging_limit[car_n]:
                 break
 
-            # Skip past windows
-            if end <= start:
-                continue
-
-            # Skip over prices when they are too high
-            if (max_price != 0) and price > max_price:
-                continue
-
-            # Compute amount of charge
-            length = end - start
-            hours = length / 60
-            kwh = self.car_charging_rate[car_n] * hours
-
-            kwh_add = kwh * self.car_charging_loss
-            kwh_left = max(self.car_charging_limit[car_n] - car_soc, 0)
-
-            # Clamp length to required amount (shorten the window)
-            if kwh_add > kwh_left:
-                percent = kwh_left / kwh_add
-                length = int(min(round(((length * percent) / 5) + 0.5, 0) * 5, end - start))
-                end = start + length
-                hours = length / 60
-                kwh = self.car_charging_rate[car_n] * hours
-                kwh_add = min(kwh * self.car_charging_loss, kwh_left)
-                kwh = kwh_add / self.car_charging_loss
-
-            # Work out charging amounts
-            if kwh > 0:
-                car_soc = dp3(car_soc + kwh_add)
-                new_slot = {}
-                new_slot["start"] = start
-                new_slot["end"] = end
-                new_slot["kwh"] = dp3(kwh)
-                new_slot["average"] = window["average"]
-                new_slot["cost"] = dp2(new_slot["average"] * kwh)
-                new_slot["octopus"] = False
+            new_slot, car_soc = self.car_take_window(car_n, low_rates[window_n], car_soc, ready_minutes, max_price)
+            if new_slot:
                 plan.append(new_slot)
 
         # Return sorted back in time order

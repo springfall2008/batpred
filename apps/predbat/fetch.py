@@ -1141,9 +1141,14 @@ class Fetch:
 
         Diverting PV to the car is not free - its opportunity cost is the export rate given up. Per kWh
         delivered to the car battery the solar route costs export_rate / car_charging_loss and the grid route
-        costs import_rate / car_charging_loss, so the loss cancels and the comparison is simply the export
-        rate now against the cheapest import available before the car has to be ready. When exporting pays
-        better, the surplus should be sold and the car charged from the cheap slot instead.
+        costs charge_price / car_charging_loss, so the loss cancels and the comparison is simply the export
+        rate now against the cheapest way the car could otherwise be charged before it has to be ready. When
+        exporting pays better, the surplus should be sold and the car charged from the cheap slot instead.
+
+        That cheapest alternative is the plan's own price where the plan has one: when the home battery may
+        feed the car, plan_car_charging_scored has already worked out what each slot really costs, which is
+        not its import rate. Falling back on the cheapest import alone would measure the two routes with
+        different yardsticks and let the solar decision contradict the charging plan.
 
         Only applied when there is a departure plan to fall back on, otherwise refusing the solar would just
         waste it. Returns without limiting when the switch is off or the car is not a solar car.
@@ -1155,17 +1160,25 @@ class Fetch:
         if not (self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
             # No planned charge to fall back on - blocking the diversion would simply lose the energy
             return
-        if not self.rate_import:
-            return
 
         ready = self.car_ready_minutes(car_n)
-        rates = [self.rate_import[minute] for minute in range(self.minutes_now, ready) if minute in self.rate_import]
-        if not rates:
-            return
+        # Only the scored planner prices a slot at anything other than its import rate, so for every
+        # other car this stays exactly the cheapest import it always was
+        planned = [slot["effective"] for slot in self.car_charging_slots[car_n] if "effective" in slot] if self.car_scored_charging_enabled(car_n) else []
+        if planned:
+            threshold = min(planned)
+            reason = "cheapest planned charge"
+        else:
+            if not self.rate_import:
+                return
+            rates = [self.rate_import[minute] for minute in range(self.minutes_now, ready) if minute in self.rate_import]
+            if not rates:
+                return
+            threshold = min(rates)
+            reason = "cheapest import"
 
-        threshold = min(rates)
         self.car_charging_solar_export_threshold[car_n] = threshold
-        self.log("Car {} solar diversion allowed while the export rate is at or below {}{} (cheapest import before {} minutes)".format(car_n, dp2(threshold), self.currency_symbols[1], ready))
+        self.log("Car {} solar diversion allowed while the export rate is at or below {}{} ({} before {} minutes)".format(car_n, dp2(threshold), self.currency_symbols[1], reason, ready))
 
     def fetch_sensor_data_car_planning(self):
         # The per-car solar lists are sized by fetch_sensor_data_cars, which a caller can skip while

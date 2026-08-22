@@ -82,6 +82,10 @@ CAR_UNPLUGGED_RESPONSE = ["off", "false", "no", "0", "disconnected", "unavailabl
 CAR_MODE_NOW = "now"
 CAR_MODE_SOLAR = "solar"
 CAR_MODE_OFF = "off"
+# Ceiling on how many what-if predictions plan_car_charging_scored may run for one car. Each is a full
+# forecast, so a big car with many short windows could otherwise spend seconds here; past the budget the
+# remaining energy falls back to the price-sorted pass, which is the pre-scoring behaviour.
+CAR_SCORE_MAX_PREDICTIONS = 250
 # Sentinel values for an export window's target SoC/limit (export_limits_best and friends).
 # A real target is any value below EXPORT_LIMIT_FREEZE, expressed as a percentage 0-100
 # (see calc_percent_limit) with the fractional part sometimes encoding a low-power export rate.

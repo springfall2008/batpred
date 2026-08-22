@@ -78,22 +78,36 @@ class Output:
         On means the surplus is worth less exported than the charge it displaces, so an external charger
         (e.g. EVCC) should run in its solar/PV mode. Off means sell the surplus instead and let the planned
         grid slots - published as binary_sensor.<prefix>_car_charging_slot - cover the car.
+
+        The forecast only diverts to the car once the home battery is above car_charging_solar_min_soc - see
+        Prediction.run_prediction - so below it this must not tell the charger to follow the sun either, or
+        the charger does exactly what the plan has assumed it will not, out of a battery the house still
+        needs. That is only withheld when there are grid slots to fall back on, matching
+        set_car_solar_export_threshold: with no plan behind it, refusing the surplus loses the energy and
+        takes the charger's own departure plan down with it.
         """
         if not self.car_charging_solar[car_n]:
             return False, "solar_disabled"
 
         threshold = self.car_charging_solar_export_threshold[car_n]
         export_rate = self.rate_export.get(self.minutes_now, 0)
-        allowed = self.car_charging_plugged[car_n] and export_rate <= threshold
+        battery_percent = calc_percent_limit(self.soc_kw, self.soc_max)
+        has_fallback = self.car_charging_planned[car_n] or self.car_charging_now[car_n]
+        battery_low = (self.soc_max > 0) and (battery_percent < self.car_charging_solar_min_soc) and has_fallback
+        allowed = self.car_charging_plugged[car_n] and (export_rate <= threshold) and not battery_low
 
-        # Why it is off matters to the caller: only "export_better" is a decision to stop charging from
-        # the surplus, and an external charger should be left following the sun for the other reasons
+        # Why it is off matters to the caller: "export_better" and "home_battery_low" are decisions to stop
+        # charging from the surplus, and an external charger should be left following the sun for the rest.
+        # export_better is reported whenever it alone would have turned the diversion off, so the battery
+        # reason only appears when the battery is what made the difference.
         if allowed:
             reason = "solar"
         elif not self.car_charging_plugged[car_n]:
             reason = "not_plugged"
-        else:
+        elif export_rate > threshold:
             reason = "export_better"
+        else:
+            reason = "home_battery_low"
 
         self.dashboard_item(
             "binary_sensor." + self.prefix + "_car_charging_solar_slot" + postfix,
@@ -104,6 +118,8 @@ class Output:
                 "export_rate": dp2(export_rate),
                 "threshold": None if threshold >= CAR_SOLAR_EXPORT_ALWAYS else dp2(threshold),
                 "plugged_in": self.car_charging_plugged[car_n],
+                "home_battery_percent": battery_percent,
+                "home_battery_priority": self.car_charging_solar_min_soc,
                 "icon": "mdi:solar-power-variant",
             },
         )
@@ -119,14 +135,14 @@ class Output:
 
         Solar is the resting state rather than off: off means "do not charge from the sun", which for a
         charger that has its own departure plan (evcc) takes that plan down with it. Off is therefore
-        reserved for the two cases where it is a decision - the surplus is worth more exported, or this
-        car does not do solar charging at all.
+        reserved for the cases where it is a decision - the surplus is worth more exported, the home
+        battery is below the priority the forecast assumes, or this car does not do solar charging at all.
         """
         if slot:
             mode, reason = CAR_MODE_NOW, "grid_slot"
         elif solar_allowed:
             mode, reason = CAR_MODE_SOLAR, "solar"
-        elif solar_reason in ("export_better", "solar_disabled"):
+        elif solar_reason in ("export_better", "solar_disabled", "home_battery_low"):
             mode, reason = CAR_MODE_OFF, solar_reason
         else:
             mode, reason = CAR_MODE_SOLAR, "idle"
@@ -209,6 +225,10 @@ class Output:
                     show["end"] = end
                     show["kwh"] = kwh
                     show["average"] = average
+                    # "average" is the grid rate for the slot, which is not what the charge costs when the
+                    # home battery serves the car - see plan_car_charging_scored - so say which it is
+                    show["source"] = window.get("source", "grid")
+                    show["effective"] = dp2(window.get("effective", average))
                     show["cost"] = cost
                     total_cost += cost
                     total_kwh += kwh

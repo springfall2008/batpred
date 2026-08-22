@@ -477,9 +477,35 @@ Configuration (all per-car, set in `apps.yaml` unless noted):
 - **car_charging_solar_limit** - the SoC (%) the opportunistic solar charging fills the car to, **independent of the grid plan target** (`car_charging_limit`).
   Defaults to `car_charging_limit` when not set. With EVCC this is the loadpoint's limit SoC (its PV cap), while `car_charging_limit` is the departure plan target.
 - **input_number.predbat_car_charging_solar_min_soc** - home battery SoC threshold (%) in Home Assistant. The car only takes solar once the home battery is above this level,
-  so the home battery is charged first. Default 0%. This is yours to set for any charger - with the [evcc component](components.md#evcc-ev-charger-evcc) and
+  so the home battery is charged first. Default 0%. It applies to both the forecast and the decision Predbat publishes, so a charger following
+  **sensor.predbat_car_charging_mode** stops diverting below it as well - see the `home_battery_low` reason above. This is yours to set for any charger - with the [evcc component](components.md#evcc-ev-charger-evcc) and
   `evcc_automatic` on it is taken from evcc's own `prioritySoc` instead, which means the same thing, so the two cannot drift apart. Even then it is only written when
   the value in evcc changes, so adjusting it in Home Assistant is not undone on the next poll.
+
+### Charging the car from the home battery
+
+**switch.predbat_car_charging_from_battery** (default Off) lets the home battery serve the car. With it on, what a
+charging window costs is no longer its import rate - the energy comes out of the battery, and its price is whatever the
+plan gives up by not having it there. That turns on several things at once: which export the energy would otherwise have
+been sold into, whether the battery is already at its discharge limit in that window, the round-trip losses, and the
+cycle cost.
+
+Rather than approximate that with a rate rule, Predbat prices each candidate window by running the forecast with the
+car's load in it and taking the difference. The cheapest window is taken, the rest are priced again so the next choice
+sees the charge the first one has already spent, and so on until the car reaches its target. There is nothing to
+configure: it follows from the prices, and it is only used when **car_charging_from_battery** is on, smart charging is
+on, and the car's energy is reported as load rather than already being part of the load history.
+
+Two consequences worth knowing:
+
+- The car may start charging as soon as it is plugged in, even with smart charging on, when the battery is the cheapest
+  source at that moment.
+- It will equally wait through a well paid export window and charge afterwards, because a kWh taken while the battery is
+  selling at its limit is a kWh that never gets sold at that price.
+
+Each planned slot on **binary_sensor.predbat_car_charging_slot** carries a `source` of `battery` or `grid` and an
+`effective` price alongside the window's `average` import rate, so you can see which it chose and what it expects to pay.
+The `Car ... scored charging windows` line in the log shows the same, along with how long the scoring took.
 
 ### Setting it up by hand
 
@@ -554,12 +580,19 @@ sensor and get identical behaviour.
 | `solar` | `solar` | Take the surplus, it is worth less exported than the charge it displaces (evcc: `pv`, or `minpv` with `evcc_use_minpv`) |
 | `solar` | `idle` | Nothing planned and the car is not plugged in - keep following the sun (evcc: `pv`) |
 | `off` | `export_better` | Sell the surplus instead; the car is charged from the planned cheap slots |
+| `off` | `home_battery_low` | The home battery is below **car_charging_solar_min_soc**, which the forecast already assumes stops the diversion |
 | `off` | `solar_disabled` | This car does not do solar charging (`car_charging_solar` is off) |
 
 Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - and for a charger
 that keeps its own departure plan, evcc included, off takes that plan down with it. So off is published only when it is
-meant: the export pays better, or the car does no solar charging at all. Not being plugged in is an absence, not a
-decision, and leaves the charger following the sun.
+meant: the export pays better, the home battery is below the priority level, or the car does no solar charging at all.
+Not being plugged in is an absence, not a decision, and leaves the charger following the sun.
+
+`home_battery_low` keeps the published decision and the forecast in step. The forecast only diverts to the car once the
+home battery is above **car_charging_solar_min_soc**, so below it the charger must not be told to follow the sun either -
+otherwise it charges out of a battery the house still needs, from energy the plan has already spent elsewhere. Like
+`export_better` it is only published when there are grid slots to fall back on; with nothing planned, refusing the
+surplus would just lose it.
 
 Safeguards, so the switch can never leave the car short:
 
