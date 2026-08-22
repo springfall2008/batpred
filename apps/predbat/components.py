@@ -34,6 +34,7 @@ from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from givtcp import GivTCPComponent
 from deye import DeyeAPI
 from sunsynk import SunsynkAPI
 from enphase import EnphaseAPI
@@ -241,6 +242,18 @@ COMPONENT_LIST = {
             "token_hash": {
                 "required": False,
                 "config": "fox_token_hash",
+            },
+        },
+        "phase": 1,
+    },
+    "givtcp": {
+        "class": GivTCPComponent,
+        "name": "GivTCP REST",
+        "event_filter": "predbat_givtcp_",
+        "args": {
+            "rest_urls": {
+                "required": True,
+                "config": "givtcp_rest",
             },
         },
         "phase": 1,

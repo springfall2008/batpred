@@ -27,10 +27,36 @@ read yet, mirroring the "REST configured but no data this cycle" case callers
 already have to handle for the write path.
 """
 
+import time
+
 import requests
 
 from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
 from utils import dp3, time_string_to_stamp
+
+
+class InverterRestState:
+    """
+    Minimal stand-in for the subset of Inverter that GivTCPRest depends on: id, rest_api (the
+    configured URL), rest_data (mutable last-read snapshot), rest_v3, the two battery rate limits
+    used to size write-verification tolerance, a register-write counter, and a blocking sleep().
+
+    Lets a caller that isn't a real Inverter (e.g. GivTCPComponent, which has no Inverter object
+    to hand GivTCPRest) construct one of these instead, so GivTCPRest itself stays unchanged.
+    """
+
+    def __init__(self, id, rest_api, battery_rate_max_charge, battery_rate_max_discharge, battery_scaling=1.0):
+        self.id = id
+        self.rest_api = rest_api
+        self.rest_data = None
+        self.rest_v3 = False
+        self.battery_scaling = battery_scaling
+        self.battery_rate_max_charge = battery_rate_max_charge
+        self.battery_rate_max_discharge = battery_rate_max_discharge
+        self.count_register_writes = 0
+
+    def sleep(self, seconds):
+        time.sleep(seconds)
 
 
 class GivTCPRest:

@@ -219,6 +219,7 @@ from tests.test_plan_persistence import test_plan_persistence
 from tests.test_github import test_github
 from tests.test_download import test_download
 from tests.test_ohme import test_ohme
+from tests.test_givtcp_component import test_givtcp_component
 from tests.test_component_base import test_component_base_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
@@ -551,6 +552,7 @@ def main():
         ("github", test_github, "GitHub mixin tests (cache hit/miss/stale, HTTP errors, release parsing, auto-update)", False),
         # Ohme EV charger API unit tests
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
+        ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         # Shared MockBase tests
