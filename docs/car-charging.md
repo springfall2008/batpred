@@ -274,7 +274,13 @@ Just keep the single-sensor config (or provide a one-entry list) and car 1 will 
 
 With **octopus_automatic** set to True, Predbat wires the car slots itself from the devices your Octopus account
 reports as live. Devices that Octopus reports as suspended are skipped, and the remaining devices are assigned to
-car slots in a fixed order, so a given car keeps the same car index across restarts.
+car slots in a fixed order, so the same set of cars always produces the same car indexes.
+
+Slots are re-packed when a car goes away, so removing or suspending a car can move the cars after it up an index -
+for example if car 0 is removed, the car that was car 1 becomes car 0. `num_cars` is never reduced automatically, so
+the now-unused slot at the end simply falls back to Predbat-led charging. If you set per-car options in `apps.yaml`
+(**car_charging_battery_size**, **car_charging_limit**, **car_charging_exclusive**) or use manual SoC entry, check
+they still line up after adding or removing a car.
 
 Predbat re-checks this on every device poll (roughly every 2 minutes) and re-wires the slots if the set of live,
 non-suspended devices changes - for example when you enrol a second EV, remove one, or suspend one car in favour of
