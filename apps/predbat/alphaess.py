@@ -46,6 +46,7 @@ from alphaess_const import (
     ALPHAESS_TTL_POWER_DEMOTED,
     ALPHAESS_ENERGY,
     ALPHAESS_ENERGY_LOAD_FIELD,
+    ALPHAESS_AC_COUPLED_MODELS,
 )
 
 
@@ -392,6 +393,14 @@ class AlphaESSAPI(ComponentBase):
                 # pgrid + pbat = pload, so a positive pbat is already discharge.
                 value = -value
             values[leaf] = value
+        # AlphaESS uses null-for-absent in these detail objects: the API docs state
+        # pevDetail values are "null when no charger is fitted". A unit with no DC strings
+        # should therefore report nulls, while a hybrid at NIGHT reports zeros. Null versus
+        # zero is the discriminator, and unlike a PV-power threshold it works at any hour.
+        # Applying the pevDetail convention to ppvDetail is inference - VERIFY@FIELD.
+        pv_detail = payload.get("ppvDetail") or {}
+        strings = [pv_detail.get("ppv{}".format(index)) for index in range(1, 5)]
+        values["ppv_detail_all_null"] = bool(pv_detail) and all(value is None for value in strings)
         self.device_values[sn] = values
         return True
 
@@ -543,3 +552,178 @@ class AlphaESSAPI(ComponentBase):
         if got_any:
             self.mark_refreshed("energy")
         return got_any
+
+    def _sensor_name(self, sn, leaf):
+        """Return a namespaced AlphaESS sensor entity id."""
+        return "sensor.{}_alphaess_{}_{}".format(self.prefix, sn.lower(), leaf)
+
+    def _control_name(self, domain, sn, leaf):
+        """Return a namespaced AlphaESS control entity id."""
+        return "{}.{}_alphaess_{}_{}".format(domain, self.prefix, sn.lower(), leaf)
+
+    async def publish_data(self):
+        """Publish monitoring sensors for each inverter."""
+        units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "ev_power": "W"}
+        for sn in self.device_list:
+            values = self.device_values.get(sn, {})
+            for leaf, unit in units.items():
+                if leaf in values:
+                    self.dashboard_item(
+                        self._sensor_name(sn, leaf),
+                        state=values[leaf],
+                        attributes={"unit_of_measurement": unit, "friendly_name": "AlphaESS {} {}".format(sn, leaf.replace("_", " ").title())},
+                        app="alphaess",
+                    )
+
+            # Ratings are published only when actually derivable - an arg pointing at a
+            # sensor that never appears is worse than an absent arg the user can fill in.
+            capacity = self.battery_capacity(sn)
+            if capacity > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_capacity"), state=round(capacity, 3), attributes={"unit_of_measurement": "kWh", "friendly_name": "AlphaESS {} Battery Capacity".format(sn)}, app="alphaess")
+            limit = self.inverter_limit(sn)
+            if limit > 0:
+                self.dashboard_item(self._sensor_name(sn, "inverter_limit"), state=round(limit), attributes={"unit_of_measurement": "W", "friendly_name": "AlphaESS {} Inverter Limit".format(sn)}, app="alphaess")
+            rate_max = self.battery_rate_max(sn)
+            if rate_max > 0:
+                self.dashboard_item(self._sensor_name(sn, "battery_rate_max"), state=round(rate_max), attributes={"unit_of_measurement": "W", "friendly_name": "AlphaESS {} Battery Rate Max".format(sn)}, app="alphaess")
+
+            detail = self.device_detail.get(sn, {})
+            for leaf, field in (("inverter_model", "minv"), ("battery_model", "mbat"), ("ems_status", "emsStatus")):
+                if detail.get(field) is not None:
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=detail[field], attributes={"friendly_name": "AlphaESS {} {}".format(sn, leaf.replace("_", " ").title())}, app="alphaess")
+            # Published but deliberately NOT mapped to soc_percent/soc_kw: the arithmetic in
+            # the API docs' live samples fits both "current SOC" and "configured usable
+            # depth" equally well, and this is an 8-hour tier anyway. Live SOC comes from
+            # LastPower.soc where there is no ambiguity.
+            for leaf, field, unit in (("pv_nominal", "popv", "kW"), ("usable_capacity", "usCapacity", "%"), ("surplus_capacity", "surplusCobat", "kWh")):
+                if detail.get(field) is not None:
+                    self.dashboard_item(self._sensor_name(sn, leaf), state=detail[field], attributes={"unit_of_measurement": unit, "friendly_name": "AlphaESS {} {}".format(sn, leaf.replace("_", " ").title())}, app="alphaess")
+
+            # Daily energy counters feed Predbat's load/import/export learning. They reset
+            # at midnight; minute_data/clean_incrementing_reverse absorbs that.
+            for leaf, value in self.device_energy.get(sn, {}).items():
+                self.dashboard_item(
+                    self._sensor_name(sn, leaf),
+                    state=value,
+                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": "AlphaESS {} {}".format(sn, leaf.replace("_", " ").title())},
+                    app="alphaess",
+                )
+
+    def detect_ac_coupled(self, sn):
+        """Return True (AC-coupled), False (hybrid) or None (undecided) for one serial.
+
+        Two signals must AGREE before a verdict is returned, because the errors are not
+        symmetric - see apply_hybrid_verdict.
+        """
+        detail = self.device_detail.get(sn, {})
+        if str(detail.get("minv", "")) in ALPHAESS_AC_COUPLED_MODELS:
+            return True
+        values = self.device_values.get(sn, {})
+        strings_absent = values.get("ppv_detail_all_null")
+        if strings_absent is None:
+            return None
+        pv_nameplate = self._as_float(detail.get("popv"), 0.0)
+        pv_energy = self._as_float(self.device_energy.get(sn, {}).get("pv_today"), 0.0)
+        # Signal 2 needs daylight to mean anything: with no PV energy yet today, "popv is
+        # zero" says nothing about where the PV is.
+        nameplate_says_ac = pv_nameplate <= 0 and pv_energy > 0
+        if strings_absent and nameplate_says_ac:
+            return True
+        if not strings_absent:
+            return False
+        return None
+
+    async def apply_hybrid_verdict(self):
+        """Move switch.predbat_inverter_hybrid only on positive evidence of AC coupling.
+
+        inverter_hybrid is one of Predbat's OWN CONFIG_ITEMS switches rather than an
+        apps.yaml arg, so it is written with set_state_external - writing the entity state
+        alone would move the displayed switch without changing the value the planner reads.
+
+        The two errors are NOT symmetric. inverter_hybrid False on an actually-hybrid
+        system stops PV counting against inverter_limit, so Predbat plans charge-plus-PV
+        beyond what the inverter can pass and the surplus is clipped with targets silently
+        missed. True on an actually-AC-coupled system merely under-uses the battery.
+        Predbat defaults to True and every mainstream AlphaESS unit is a hybrid, so the
+        switch is only ever moved towards AC-coupled, and only on agreeing evidence.
+        """
+        if not self.device_list:
+            return
+        verdicts = [self.detect_ac_coupled(sn) for sn in self.device_list]
+        entity = "switch.{}_inverter_hybrid".format(self.prefix)
+        if verdicts and all(verdict is True for verdict in verdicts):
+            models = ", ".join(str(self.device_detail.get(sn, {}).get("minv", "unknown")) for sn in self.device_list)
+            self.log("Info: AlphaESS detected AC coupling (no DC strings reported, and PV energy with no PV nameplate) for model(s) {}; setting {} off".format(models, entity))
+            await self.set_state_external(entity, False)
+            return
+        if any(verdict is None for verdict in verdicts):
+            models = ", ".join(str(self.device_detail.get(sn, {}).get("minv", "unknown")) for sn in self.device_list)
+            self.log("Info: AlphaESS could not determine hybrid versus AC coupling for model(s) {}; leaving {} at its current value. If this is an AC-coupled retrofit, turn that switch off by hand.".format(models, entity))
+
+    async def automatic_config(self):
+        """Register every discovered inverter as an AlphaESSCloud Predbat inverter."""
+        devices = list(self.device_list)
+        if not devices:
+            self.log("Warn: AlphaESS automatic_config found no inverters")
+            return
+        self.set_arg_auto("inverter_type", ["AlphaESSCloud" for _ in devices])
+        self.set_arg_auto("num_inverters", len(devices))
+        self.set_arg_auto("soc_percent", [self._sensor_name(sn, "soc") for sn in devices])
+        self.set_arg_auto("battery_power", [self._sensor_name(sn, "battery_power") for sn in devices])
+        self.set_arg_auto("grid_power", [self._sensor_name(sn, "grid_power") for sn in devices])
+        self.set_arg_auto("load_power", [self._sensor_name(sn, "load_power") for sn in devices])
+        if not self.automatic_ignore_pv:
+            self.set_arg_auto("pv_power", [self._sensor_name(sn, "pv_power") for sn in devices])
+        # Own the sign flags rather than leaving them to whatever else configured this
+        # install. base.args is shared and NOT namespaced per inverter type, so a component
+        # that legitimately inverts its own grid sensor - teslemetry sets grid_power_invert
+        # True, fox does the same - leaves that key set for every inverter index, and an
+        # AlphaESS inverter that never claims it inherits the flip. The published sensor is
+        # then correct and inverter.py negates it again, so an export reads as an import.
+        # All three are False because publish_data already emits Predbat's conventions.
+        for flag in ("grid_power_invert", "battery_power_invert", "load_power_invert"):
+            self.set_arg_auto(flag, [False for _ in devices])
+
+        # Only map an arg when EVERY inverter reports the underlying value.
+        for leaf in ("load_today", "import_today", "export_today", "pv_today"):
+            if leaf == "pv_today" and self.automatic_ignore_pv:
+                continue
+            if all(leaf in self.device_energy.get(sn, {}) for sn in devices):
+                self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
+            else:
+                self.log("Warn: AlphaESS not every inverter reports {}, it must be set manually in apps.yaml".format(leaf))
+
+        if all(self.battery_capacity(sn) > 0 for sn in devices):
+            self.set_arg_auto("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
+        else:
+            self.log("Warn: AlphaESS no battery capacity available for every inverter, soc_max must be set manually in apps.yaml")
+        if all(self.inverter_limit(sn) > 0 for sn in devices):
+            self.set_arg_auto("inverter_limit", [self._sensor_name(sn, "inverter_limit") for sn in devices])
+        else:
+            self.log("Warn: AlphaESS no poinv reported, inverter_limit must be set manually in apps.yaml")
+        if all(self.battery_rate_max(sn) > 0 for sn in devices):
+            self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
+        else:
+            self.log("Warn: AlphaESS no battery rate available, battery_rate_max must be set manually in apps.yaml")
+        # Deliberately NOT auto-mapped. poinv is the inverter rating, not the site's
+        # grid-connection limit, and a G98/G99-capped site can sit far below it. Unlike
+        # battery_rate_max, nothing measures and reports this error back, so a guess would
+        # over-export silently. Predbat falls back to 99999W until the user sets it.
+        self.log("Warn: AlphaESS does not report an export power limit; set export_limit in apps.yaml if your grid connection is capped below the inverter rating, otherwise Predbat will plan exports it cannot deliver")
+        # battery_min_soc is deliberately NOT mapped: batUseCap is a field Predbat writes,
+        # so reading it back as the floor would be circular.
+
+        self.set_arg_auto("reserve", [self._control_name("number", sn, "battery_schedule_reserve") for sn in devices])
+        self.set_arg_auto("charge_start_time", [self._control_name("select", sn, "battery_schedule_charge_start_time") for sn in devices])
+        self.set_arg_auto("charge_end_time", [self._control_name("select", sn, "battery_schedule_charge_end_time") for sn in devices])
+        self.set_arg_auto("charge_limit", [self._control_name("number", sn, "battery_schedule_charge_soc") for sn in devices])
+        self.set_arg_auto("charge_rate", [self._control_name("number", sn, "battery_schedule_charge_power") for sn in devices])
+        self.set_arg_auto("scheduled_charge_enable", [self._control_name("switch", sn, "battery_schedule_charge_enable") for sn in devices])
+        self.set_arg_auto("discharge_start_time", [self._control_name("select", sn, "battery_schedule_export_start_time") for sn in devices])
+        self.set_arg_auto("discharge_end_time", [self._control_name("select", sn, "battery_schedule_export_end_time") for sn in devices])
+        self.set_arg_auto("discharge_target_soc", [self._control_name("number", sn, "battery_schedule_export_soc") for sn in devices])
+        self.set_arg_auto("discharge_rate", [self._control_name("number", sn, "battery_schedule_export_power") for sn in devices])
+        self.set_arg_auto("scheduled_discharge_enable", [self._control_name("switch", sn, "battery_schedule_export_enable") for sn in devices])
+        self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
+
+        await self.apply_hybrid_verdict()
