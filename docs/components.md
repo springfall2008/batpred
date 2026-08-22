@@ -16,6 +16,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
+    - [evcc EV Charger (evcc)](#evcc-ev-charger-evcc)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Enphase API (enphase)](#enphase-api-enphase)
@@ -498,6 +499,117 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | - | `ohme_automatic_octopus_intelligent` | Set to `true` to automatically sync with Intelligent Octopus |
+
+---
+
+### evcc EV Charger (evcc)
+
+**Can be restarted:** Yes
+
+#### What it does (evcc)
+
+Reads the state of an [evcc](https://evcc.io/) instance over its REST API and wires it into Predbat's car
+model, so you do not have to describe your charger and car by hand in `apps.yaml`. Optionally it also writes
+the loadpoint charging mode back, so Predbat's own solar/grid decision reaches evcc without a Home Assistant
+automation in between.
+
+The most useful part is that evcc keeps charging plans on the **vehicle**, not the loadpoint. That means the
+departure time and target SoC can be read *while the car is away*, so Predbat's plan is ready the moment the
+car is plugged in rather than a cycle later.
+
+It also derives the charger's power band from evcc's own configuration - a single-phase 6-16A charger
+becomes a 1.38kW minimum, 3.68kW maximum and a 0.23kW step - instead of you working it out from amps and phases.
+
+#### When to enable (evcc)
+
+- You use evcc to control your EV charging
+- You want Predbat to know the car's departure plan, battery size and charger limits automatically
+- You want Predbat's plan to account for the PV surplus evcc diverts to the car
+
+#### Important notes (evcc)
+
+- **`evcc_solar` defaults to `true`**, which sets `car_charging_solar` for every evcc car. With that on, and
+  with no departure plan and no expected arrival time, Predbat plans **no** grid charging slots for the car -
+  the PV diversion is modelled instead. That is correct for evcc, but if you previously had grid slots for
+  that car you will see them disappear. Set `evcc_solar: False` to keep the old behaviour.
+- **Auto-configuration never overwrites what you set yourself.** Any `car_charging_*` key already present in
+  your `apps.yaml` is left alone and listed in the `overridden` attribute of `sensor.predbat_evcc_status`.
+  This matters most for `car_charging_soc`: if you have a car integration in Home Assistant that reports a
+  live SoC while the car is away, keep pointing at it - evcc only knows the SoC it last saw while connected.
+- Mode control is off by default. Enable it deliberately with `evcc_control: True`.
+- `car_charging_energy` is **not** auto-configured; evcc reports session energy in Wh and the unit is not
+  consistent across versions, so wire it yourself if you want it.
+- One loadpoint maps to one Predbat car. Two cars sharing a single loadpoint is not modelled.
+
+#### Configuration Options (evcc)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `host` | String | Yes | - | `evcc_host` | evcc base URL, e.g. `http://192.168.1.50:7070`. A bare host gets `http://` and port 7070 added |
+| `api_key` | String | No | - | `evcc_api_key` | Long-lived evcc API key (`evcc_...`). Omit it entirely on an unauthenticated LAN instance |
+| `automatic` | Boolean | No | `False` | `evcc_automatic` | Point Predbat's `car_charging_*` keys at the entities this component publishes |
+| `control` | Boolean | No | `False` | `evcc_control` | Allow Predbat to write the loadpoint charging mode back to evcc |
+| `loadpoints` | List | No | - | `evcc_loadpoints` | One entry per Predbat car: an evcc loadpoint id (1-based) or title, or `off` to skip that car. Defaults to a one-to-one mapping |
+| `solar` | Boolean | No | `True` | `evcc_solar` | Model evcc's PV diversion by setting `car_charging_solar` - see the note above |
+| `use_minpv` | Boolean | No | `False` | `evcc_use_minpv` | Use evcc's `minpv` mode instead of `pv` when Predbat wants solar charging |
+| `poll_seconds` | Integer | No | `60` | `evcc_poll_seconds` | How often to read the evcc state |
+| `mode_refresh_minutes` | Integer | No | `15` | `evcc_mode_refresh_minutes` | Re-assert the mode this often even when unchanged, so an evcc restart does not leave it wrong |
+| `override_minutes` | Integer | No | `60` | `evcc_override_minutes` | How long to stop writing after the mode is changed outside Predbat. `0` disables the backoff |
+| `phase_voltage` | Integer | No | `230` | `evcc_phase_voltage` | Mains voltage used to convert the charger's amps to kW |
+| `soc_max_age_hours` | Integer | No | `24` | `evcc_soc_max_age_hours` | Age past which a remembered vehicle SoC is flagged stale |
+| `timeout` | Integer | No | `15` | `evcc_timeout` | HTTP timeout in seconds |
+
+#### Published Entities (evcc)
+
+Per car, with `_1`, `_2` … postfixes for later cars:
+
+| Entity | Meaning |
+| ------ | ------- |
+| `binary_sensor.predbat_evcc_connected` | The car is plugged in |
+| `binary_sensor.predbat_evcc_charging` | The car is drawing power |
+| `sensor.predbat_evcc_soc` | Vehicle SoC %, kept at its last observed value while disconnected (`stale`, `age_minutes`, `observed` attributes) |
+| `sensor.predbat_evcc_battery_size` | Vehicle usable capacity in kWh |
+| `sensor.predbat_evcc_plan_time` | Next departure time as `HH:MM:SS`, or `off` when no usable plan applies (`plan_source`, `plan_datetime`) |
+| `sensor.predbat_evcc_plan_soc` | The plan's target SoC %, falling back to the standing limit |
+| `sensor.predbat_evcc_limit_soc` | The vehicle's standing SoC limit, used as the solar charging cap |
+| `sensor.predbat_evcc_max_power` / `_min_power` / `_power_step` | Charger power band in kW, derived from amps and phases |
+| `sensor.predbat_evcc_charge_power` | Present charging power in W |
+| `sensor.predbat_evcc_mode` | evcc's current charging mode |
+| `sensor.predbat_evcc_target_mode` | The mode Predbat wants, with a `reason` explaining why it was or was not written |
+| `binary_sensor.predbat_evcc_override` | On when somebody changed the mode in evcc and Predbat has backed off |
+| `switch.predbat_evcc_control` | Runtime kill switch for mode writing (only when `evcc_control` is set) |
+| `sensor.predbat_evcc_priority_soc` | The site's home battery priority SoC. With `evcc_automatic` it also sets **input_number.predbat_car_charging_solar_min_soc**, but only when the value in evcc changes, so your own adjustments are not undone every poll |
+| `sensor.predbat_evcc_status` | `ok` / `degraded` / `unreachable`, with the evcc version and any missing fields |
+
+#### Mode control (evcc)
+
+With `evcc_control: True`, Predbat maps its own decision onto evcc's modes:
+
+| Predbat state | evcc mode |
+| ------------- | --------- |
+| `now` - a grid slot is planned | `now` |
+| `solar` - take the surplus, or nothing is planned | `pv` (or `minpv` with `evcc_use_minpv`) |
+| `off` - the export pays better, or this car does no solar charging | `off` |
+
+The decision is not made here: it is Predbat's own `sensor.predbat_car_charging_mode`, described under
+[the charging mode](car-charging.md#the-charging-mode), so evcc and a plain Home Assistant automation
+driving some other charger act on identical logic. Note that `solar` is the resting state - evcc is left
+in `pv` rather than `off` when nothing is planned, because `off` disables the loadpoint and takes evcc's
+own departure plan down with it, which is the plan this component exists to read.
+
+Writes only happen when the plan is valid and fresh, `switch.predbat_set_read_only` is off, and the runtime
+switch is on; every refusal is published as the `reason` attribute on `sensor.predbat_evcc_target_mode`, so
+"why is nothing happening" is answerable from that entity alone. If you change the mode in evcc's own UI,
+Predbat notices, backs off for `evcc_override_minutes`, and resumes when the next car is plugged in.
+
+#### Example configuration (evcc)
+
+```yaml
+  evcc_host: 'http://192.168.1.50:7070'
+  evcc_automatic: True
+  # Enable only once you have watched sensor.predbat_evcc_target_mode and are happy with it
+  #evcc_control: True
+```
 
 ---
 

@@ -42,6 +42,7 @@ class MockBase:
         self.minutes_now = self.now_utc.hour * 60 + self.now_utc.minute
         self.prefix = "predbat"
         self.entities = {}
+        self.config_written = {}
         self.config_root = config_root
         self.plan_interval_minutes = 30
         self.fatal_error = False
@@ -121,6 +122,10 @@ class MockBase:
     def get_ha_config(self, name, default):
         """Return the caller's default - a standalone run has no Home Assistant config."""
         return default
+
+    def expose_config(self, name, value, **kwargs):
+        """Record a config write - a standalone run has no Home Assistant entities to update."""
+        self.config_written[name] = value
 
     def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         """Return None - a standalone run has no Home Assistant recorder, matching PredBat's no-interface path."""

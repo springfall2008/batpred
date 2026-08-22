@@ -4347,6 +4347,8 @@ class Plan:
                 self.predict_metric_best = pred.predict_metric_best
                 self.predict_carbon_best = pred.predict_carbon_best
                 self.predict_clipped_best = pred.predict_clipped_best
+                self.predict_car_solar_best = pred.predict_car_solar_best
+                self.predict_car_solar_possible_best = pred.predict_car_solar_possible_best
 
             if save:
                 self.log(
@@ -5132,6 +5134,22 @@ class Plan:
         plan = self.sort_window_by_time(plan)
         return plan
 
+    def car_ready_minutes(self, car_n):
+        """
+        Resolve the ready time for a car as absolute minutes from today's midnight.
+
+        Wrapped forwards past minutes_now when the time of day has already passed today.
+        """
+        try:
+            ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
+        except (ValueError, TypeError):
+            ready_time = datetime.strptime("07:00:00", "%H:%M:%S")
+            self.log("Warn: Car charging plan time for car {} is invalid".format(car_n))
+        ready_minutes = ready_time.hour * 60 + ready_time.minute
+        if ready_minutes < self.minutes_now:
+            ready_minutes += 24 * 60
+        return ready_minutes
+
     def plan_car_charging(self, car_n, low_rates):
         """
         Plan when the car will charge, taking into account ready time and pricing
@@ -5146,17 +5164,7 @@ class Plan:
         else:
             price_sorted = [n for n in range(len(low_rates))]
 
-        try:
-            ready_time = datetime.strptime(self.car_charging_plan_time[car_n], "%H:%M:%S")
-        except (ValueError, TypeError):
-            ready_time = datetime.strptime("07:00:00", "%H:%M:%S")
-            self.log("Warn: Car charging plan time for car {} is invalid".format(car_n))
-
-        ready_minutes = ready_time.hour * 60 + ready_time.minute
-
-        # Ready minutes wrap?
-        if ready_minutes < self.minutes_now:
-            ready_minutes += 24 * 60
+        ready_minutes = self.car_ready_minutes(car_n)
 
         # Car charging now override
         extra_slot = {}

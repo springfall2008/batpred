@@ -37,6 +37,7 @@ from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
 from utils import remove_intersecting_windows
+from const import CAR_SOLAR_EXPORT_ALWAYS
 from tests.test_infra import reset_inverter, reset_rates
 from tests.test_model import run_model_tests
 
@@ -110,10 +111,19 @@ SCENARIO_STATE_ATTRS = [
     "num_cars",
     "car_charging_loss",
     "car_energy_reported_load",
+    "car_charging_in_load_history",
     "car_charging_from_battery",
     "car_charging_soc",
     "car_charging_limit",
     "car_charging_slots",
+    "car_charging_solar",
+    "car_charging_plugged",
+    "car_charging_solar_max_power",
+    "car_charging_solar_min_power",
+    "car_charging_solar_power_step",
+    "car_charging_solar_limit",
+    "car_charging_solar_export_threshold",
+    "car_charging_solar_min_soc",
     "iboost_enable",
     "iboost_solar",
     "iboost_solar_excess",
@@ -269,10 +279,28 @@ def apply_random_scenario(my_predbat, rng):
     my_predbat.num_cars = rng.choice([0, 0, 0, 1, 1, 2])
     my_predbat.car_charging_loss = round(rng.uniform(0.85, 1.0), 3)
     my_predbat.car_energy_reported_load = rng.choice([True, False])
+    my_predbat.car_charging_in_load_history = my_predbat.car_energy_reported_load and rng.choice([True, False])
     my_predbat.car_charging_from_battery = rng.choice([True, False])
+    # Opportunistic solar diversion state - sized to KERNEL_MAX_CARS so the per-car loops are always in range
+    my_predbat.car_charging_solar = [False, False, False, False]
+    my_predbat.car_charging_plugged = [False, False, False, False]
+    my_predbat.car_charging_solar_max_power = [7.4, 7.4, 7.4, 7.4]
+    my_predbat.car_charging_solar_min_power = [0.0, 0.0, 0.0, 0.0]
+    my_predbat.car_charging_solar_power_step = [0.0, 0.0, 0.0, 0.0]
+    my_predbat.car_charging_solar_limit = [100.0, 100.0, 100.0, 100.0]
+    my_predbat.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS] * 4
+    my_predbat.car_charging_solar_min_soc = rng.choice([0.0, 0.0, round(rng.uniform(10, 90), 1)])
     for car_n in range(my_predbat.num_cars):
         my_predbat.car_charging_soc[car_n] = round(rng.uniform(0, 30), 2)
         my_predbat.car_charging_limit[car_n] = round(rng.uniform(20, 80), 2)
+        my_predbat.car_charging_solar[car_n] = rng.random() < 0.4
+        my_predbat.car_charging_plugged[car_n] = rng.choice([True, False])
+        my_predbat.car_charging_solar_max_power[car_n] = round(rng.uniform(1.0, 11.0), 2)
+        my_predbat.car_charging_solar_min_power[car_n] = rng.choice([0.0, 0.0, round(rng.uniform(1.0, 4.5), 2)])
+        my_predbat.car_charging_solar_power_step[car_n] = rng.choice([0.0, 0.0, round(rng.uniform(0.5, 2.0), 2)])
+        my_predbat.car_charging_solar_limit[car_n] = round(rng.uniform(20, 90), 2)
+        # A finite threshold blocks the diversion whenever the export rate is above it
+        my_predbat.car_charging_solar_export_threshold[car_n] = rng.choice([CAR_SOLAR_EXPORT_ALWAYS, CAR_SOLAR_EXPORT_ALWAYS, round(rng.uniform(0, 30), 2)])
         slots = []
         for _ in range(rng.randint(0, 3)):
             start = my_predbat.minutes_now + rng.randrange(0, my_predbat.forecast_minutes - 60, 30)
@@ -504,6 +532,93 @@ def run_edge_case_tests(my_predbat):
             [],
             2.0,
             0.5,
+            forecast_minutes,
+        ),
+        (
+            # The car energy is left in the load history, so the planned slot must add no extra load
+            "car_in_load_history",
+            {
+                "num_cars": 1,
+                "car_energy_reported_load": True,
+                "car_charging_in_load_history": True,
+                "car_charging_slots": [[{"start": minutes_now, "end": minutes_now + 300, "kwh": 15.0, "average": 0, "octopus": False}], [], [], []],
+                "car_charging_soc": [0, 0, 0, 0],
+                "soc_kw": 50.0,
+            },
+            [],
+            [],
+            [],
+            [],
+            2.0,
+            0.5,
+            forecast_minutes,
+        ),
+        (
+            # Opportunistic solar diversion takes the PV surplus off the top, before any planned grid charging
+            "car_solar_divert",
+            {
+                "num_cars": 1,
+                "car_charging_slots": [[], [], [], []],
+                "car_charging_soc": [0, 0, 0, 0],
+                "car_charging_solar": [True, False, False, False],
+                "car_charging_plugged": [True, False, False, False],
+                "car_charging_solar_max_power": [3.0, 7.4, 7.4, 7.4],
+                "car_charging_solar_limit": [40.0, 100.0, 100.0, 100.0],
+                "soc_kw": 10.0,
+            },
+            [],
+            [],
+            [],
+            [],
+            0.5,
+            4.0,
+            forecast_minutes,
+        ),
+        (
+            # Solar diversion refused because the export rate is above the threshold - the surplus is worth
+            # more sold than it saves on the cheap charge it would displace
+            "car_solar_export_blocked",
+            {
+                "num_cars": 1,
+                "car_charging_slots": [[], [], [], []],
+                "car_charging_soc": [0, 0, 0, 0],
+                "car_charging_solar": [True, False, False, False],
+                "car_charging_plugged": [True, False, False, False],
+                "car_charging_solar_max_power": [3.0, 7.4, 7.4, 7.4],
+                "car_charging_solar_limit": [40.0, 100.0, 100.0, 100.0],
+                "car_charging_solar_export_threshold": [1.0, CAR_SOLAR_EXPORT_ALWAYS, CAR_SOLAR_EXPORT_ALWAYS, CAR_SOLAR_EXPORT_ALWAYS],
+                "soc_kw": 10.0,
+            },
+            [],
+            [],
+            [],
+            [],
+            0.5,
+            4.0,
+            forecast_minutes,
+        ),
+        (
+            # Solar diversion with a minimum start power, discrete current steps and a home battery priority SoC
+            "car_solar_quantised",
+            {
+                "num_cars": 1,
+                "car_charging_slots": [[{"start": minutes_now, "end": minutes_now + 300, "kwh": 10.0, "average": 0, "octopus": False}], [], [], []],
+                "car_charging_soc": [0, 0, 0, 0],
+                "car_charging_solar": [True, False, False, False],
+                "car_charging_plugged": [True, False, False, False],
+                "car_charging_solar_max_power": [11.0, 7.4, 7.4, 7.4],
+                "car_charging_solar_min_power": [4.0, 0.0, 0.0, 0.0],
+                "car_charging_solar_power_step": [0.69, 0.0, 0.0, 0.0],
+                "car_charging_solar_limit": [60.0, 100.0, 100.0, 100.0],
+                "car_charging_solar_min_soc": 30.0,
+                "soc_kw": 50.0,
+            },
+            [],
+            [],
+            [],
+            [],
+            1.0,
+            9.0,
             forecast_minutes,
         ),
         (

@@ -362,6 +362,37 @@ pred_bat:
   #car_charging_exclusive:
   #  - True
 
+  # Opportunistic solar charging - models a charger that follows the PV surplus itself (Zappi ECO+,
+  # Wallbox Eco-Smart, evcc, ...) so the home battery forecast is not too optimistic on sunny days.
+  # Modelling only: Predbat never commands the car, it only reflects the energy the charger diverts.
+  # Works with any such charger - the evcc component below just fills these in for you.
+  # See https://springfall2008.github.io/batpred/car-charging/#opportunistic-solar-sun-following-charging
+  #car_charging_solar:
+  #  - True
+  # Sensor saying the car is plugged in, needed to know about future daylight hours
+  # (falls back to car_charging_now, which only says something about right now)
+  #car_charging_plugged:
+  #  - 're:binary_sensor.myenergi_zappi_[0-9a-z]+_plug_status'
+  # Charger power band in kW: maximum diversion, minimum before it starts, and its current step
+  # (3-phase 6A is about 4.1kW, 1A about 0.69kW; leave the step at 0 to follow the surplus exactly)
+  #car_charging_solar_max_power:
+  #  - 11.0
+  #car_charging_solar_min_power:
+  #  - 4.1
+  #car_charging_solar_power_step:
+  #  - 0.69
+  # SoC % the solar charging fills to, independent of the car_charging_limit departure target
+  #car_charging_solar_limit:
+  #  - 80
+
+  # evcc integration - reads your charger, car and departure plans over the evcc REST API and fills in
+  # the car_charging_* settings above for you. Any key you set yourself is left alone.
+  # See https://springfall2008.github.io/batpred/components/#evcc-ev-charger-evcc
+  #evcc_host: 'http://192.168.1.50:7070'
+  #evcc_automatic: True
+  # Let Predbat set the evcc charging mode (solar / fast / off). Off by default - enable deliberately.
+  #evcc_control: True
+
   # Octopus Energy direct integration
   #octopus_api_key: !secret octopus_api_key
   #octopus_api_account: !secret octopus_api_account

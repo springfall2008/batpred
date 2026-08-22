@@ -21,6 +21,7 @@ from storage import StorageComponent
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
+from evcc import EvccAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
 from temperature import TemperatureAPI
@@ -203,6 +204,27 @@ COMPONENT_LIST = {
                 "required": False,
                 "config": "ohme_automatic_octopus_intelligent",
             },
+        },
+        "phase": 1,
+    },
+    "evcc": {
+        "class": EvccAPI,
+        "name": "evcc EV Charger",
+        "event_filter": "predbat_evcc_",
+        "args": {
+            "host": {"required": True, "config": "evcc_host"},
+            "api_key": {"required": False, "config": "evcc_api_key"},
+            "automatic": {"required": False, "config": "evcc_automatic", "default": False},
+            "control": {"required": False, "config": "evcc_control", "default": False},
+            "loadpoints": {"required": False, "config": "evcc_loadpoints"},
+            "solar": {"required": False, "config": "evcc_solar", "default": True},
+            "use_minpv": {"required": False, "config": "evcc_use_minpv", "default": False},
+            "poll_seconds": {"required": False, "config": "evcc_poll_seconds", "default": 60},
+            "mode_refresh_minutes": {"required": False, "config": "evcc_mode_refresh_minutes", "default": 15},
+            "override_minutes": {"required": False, "config": "evcc_override_minutes", "default": 60},
+            "phase_voltage": {"required": False, "config": "evcc_phase_voltage", "default": 230},
+            "soc_max_age_hours": {"required": False, "config": "evcc_soc_max_age_hours", "default": 24},
+            "timeout": {"required": False, "config": "evcc_timeout", "default": 15},
         },
         "phase": 1,
     },

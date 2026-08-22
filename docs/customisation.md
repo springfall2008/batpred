@@ -293,6 +293,10 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_octopus_intelligent_ignore_unplugged** (_expert mode_) - used with Octopus Intelligent to prevent Predbat from assuming the car will be charging when the car is unplugged
 - **binary_sensor.predbat_car_charging_slot** - set to On by Predbat when the car should be charged (Predbat-led charging)
 - **select.predbat_car_charging_plan_time** - the time you want the car to be charged by
+- **input_number.predbat_car_charging_solar_min_soc** - home battery SoC threshold before opportunistic solar is diverted to the car
+- **switch.predbat_car_charging_solar_export_smart** - only divert solar to the car while the export rate is at or below the cheapest import before the car must be ready, otherwise sell the surplus and charge from the planned cheap slots
+- **binary_sensor.predbat_car_charging_solar_slot** - set to On by Predbat when solar surplus should be diverted to the car
+- **sensor.predbat_car_charging_mode** - the charging decision for an external charger: `now`, `solar` or `off`, with a `reason` attribute saying why
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - prevent the car from draining the home battery when charging

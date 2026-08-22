@@ -64,6 +64,24 @@ LOW_POWER_PV_LIGHT_FRACTION = 0.1
 
 INVERTER_TEST = False  # Run inverter control self test
 
+# Export rate above which solar is never diverted to the car. The default means "no limit" - solar is always
+# taken - matching the iboost_rate_threshold_export convention of a rate no real tariff will reach.
+CAR_SOLAR_EXPORT_ALWAYS = 9999.0
+
+# States a car_charging_plugged sensor may report for "plugged in", on top of whatever the user put in
+# car_charging_now_response. That list is written for a charger's own status text and cannot be relied on
+# here: the evcc component points car_charging_plugged at a binary sensor reporting exactly on/off, and an
+# unquoted "on" in a YAML list is parsed as a boolean, so the string would never match at all
+CAR_PLUGGED_RESPONSE = ["on", "true", "yes", "1", "connected", "charging"]
+# Recognised "not plugged in" states, so only a genuinely unrecognised state is worth warning about
+CAR_UNPLUGGED_RESPONSE = ["off", "false", "no", "0", "disconnected", "unavailable", "unknown", "none", ""]
+
+# The charging decision Predbat publishes per car as sensor.<prefix>_car_charging_mode. Solar is the
+# resting state, so a charger that follows the sun keeps doing so - and keeps its own departure plan
+# alive - while off is reserved for a deliberate "do not charge from the surplus"
+CAR_MODE_NOW = "now"
+CAR_MODE_SOLAR = "solar"
+CAR_MODE_OFF = "off"
 # Sentinel values for an export window's target SoC/limit (export_limits_best and friends).
 # A real target is any value below EXPORT_LIMIT_FREEZE, expressed as a percentage 0-100
 # (see calc_percent_limit) with the fractional part sometimes encoding a low-power export rate.

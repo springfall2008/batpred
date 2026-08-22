@@ -54,6 +54,20 @@ If you are getting [erroneous house load predictions in your plan](faq.md#why-is
 
 If you don't have an EV then turn **switch.predbat_car_charging_hold** Off as Predbat will by default still consider any house load in excess of **input_number.predbat_car_charging_threshold** to be car charging activity and will exclude it.
 
+Turning **switch.predbat_car_charging_hold** Off with the charger inside the CT clamp is the alternative approach: the
+car charging energy is left **in** the historical house load, and the load forecast supplies the car demand instead of
+Predbat's car plan. The two are an either/or, because the history and the plan are forecasts of the *same* kWh, and
+Predbat follows whichever one you have chosen without a switch of its own:
+
+- **car_charging_hold On** (the default) - the car energy is stripped from the history, and Predbat's own car plan
+  supplies the demand at the planned time.
+- **car_charging_hold Off** (with **switch.predbat_car_energy_reported_load** On) - the car energy stays in the history,
+  and the load forecast (or the [load ML model](load-ml.md), which can then learn your charging pattern by day and time)
+  supplies it. Predbat's planned car slots then add no extra load on top, so the same energy is never counted twice.
+
+With **switch.predbat_car_energy_reported_load** Off the car energy was never in the house load to begin with, so
+**car_charging_hold** is forced Off and the car plan always supplies the demand.
+
 - **car_charging_energy** - Set in `apps.yaml` to point to an entity which is the daily incrementing kWh data for the car charger.
 This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors,
 or edit as necessary in `apps.yaml` for your charger sensor.<BR>
@@ -428,6 +442,138 @@ mode: single
 ```
 
 Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned with Predbat.
+
+## Opportunistic solar (sun-following) charging
+
+If you charge your car opportunistically from solar surplus using an **external charger or app** (for example [EVCC](https://evcc.io/) or another solar diverter),
+Predbat does not control the car - the external app does. In that situation you do not want Predbat to plan grid/low-rate charging slots for the car,
+but you *do* want Predbat's forecast to reflect that the daytime solar surplus is going into the car instead of into the home battery or to export.
+Without this, Predbat's home battery forecast is too optimistic on exactly the sunny days when the most solar is diverted to the car.
+
+The `car_charging_solar` mode models this behaviour. It is **modelling only**: Predbat reflects the diverted energy in its forecast but never commands the car.
+It generalises the iBoost solar diversion logic to the car loadpoint, without the iBoost power cap, so it works at the full charge power of a 3-phase charger.
+
+This works with **any** charger that follows the surplus itself - a Zappi in ECO+, a Wallbox in Eco-Smart, an Easee, a go-e, EVCC, or a Home Assistant automation
+of your own. It does not need the [evcc component](components.md#evcc-ev-charger-evcc): the settings below are ordinary `apps.yaml` keys, and evcc simply fills
+them in for you when you use it. Set them by hand and the model behaves identically.
+
+When enabled for a car:
+
+- Predbat plans **no** grid/low-rate slots for that car (unless a departure plan is active).
+- In the forecast, the car takes the PV surplus that is left **after the house load is served** (it does not steal PV from the house), so the home battery SoC and
+  export are lower on sunny days, and the modelled car SoC rises towards its limit.
+- The diversion is bounded by the available PV surplus, the configured power band, the remaining car capacity up to its solar limit, and a home battery SoC threshold.
+
+Configuration (all per-car, set in `apps.yaml` unless noted):
+
+- **car_charging_solar** - boolean per car (default off). Turns on the solar diversion model and suppresses grid scheduling for that car.
+- **car_charging_plugged** - optional sensor per car indicating the car is plugged in across the forecast horizon. If not supplied it falls back to **car_charging_now**.
+  This is needed because "charging now" says nothing about future daylight slots.
+- **car_charging_solar_max_power** - maximum diversion power in kW. Defaults to the configured **car_charging_rate** and is uncapped (3-phase chargers can exceed the rate slider limit).
+- **car_charging_solar_min_power** - minimum power in kW before the charger will start diverting (e.g. 3-phase 6A is about 4.1kW). Below this surplus, no solar is diverted.
+- **car_charging_solar_power_step** - optional discrete charge-power step in kW (default 0 = continuous). Real chargers only switch in whole current steps
+  (1A on a 3-phase charger is about 0.69kW), so they charge at the largest discrete level at or below the surplus and leave a small remainder to the home battery/export.
+  Set this to model that quantisation; leave at 0 to let the car follow the surplus exactly.
+- **car_charging_solar_limit** - the SoC (%) the opportunistic solar charging fills the car to, **independent of the grid plan target** (`car_charging_limit`).
+  Defaults to `car_charging_limit` when not set. With EVCC this is the loadpoint's limit SoC (its PV cap), while `car_charging_limit` is the departure plan target.
+- **input_number.predbat_car_charging_solar_min_soc** - home battery SoC threshold (%) in Home Assistant. The car only takes solar once the home battery is above this level,
+  so the home battery is charged first. Default 0%. This is yours to set for any charger - with the [evcc component](components.md#evcc-ev-charger-evcc) and
+  `evcc_automatic` on it is taken from evcc's own `prioritySoc` instead, which means the same thing, so the two cannot drift apart. Even then it is only written when
+  the value in evcc changes, so adjusting it in Home Assistant is not undone on the next poll.
+
+### Setting it up by hand
+
+A worked example for a 3-phase 6-16A charger that diverts surplus on its own, charging one car to 80% from the sun while a plan still guarantees the departure target:
+
+```yaml
+  car_charging_solar:
+    - True
+  # Needed to know about future daylight hours - "charging now" says nothing about this afternoon
+  car_charging_plugged:
+    - 're:binary_sensor.myenergi_zappi_[0-9a-z]+_plug_status'
+  car_charging_solar_max_power:
+    - 11.0    # 3-phase 16A
+  car_charging_solar_min_power:
+    - 4.1     # 3-phase 6A - below this the charger will not start
+  car_charging_solar_power_step:
+    - 0.69    # 1A on 3 phases
+  car_charging_solar_limit:
+    - 80      # the PV cap, independent of the car_charging_limit departure target
+```
+
+Three of those numbers decide how closely the model tracks reality, so it is worth getting them from the charger's own settings rather than estimating:
+
+- **car_charging_solar_min_power** too low models a diversion that never happens; too high and real diversions are missed.
+- **car_charging_solar_power_step** left at 0 makes the model follow the surplus exactly, which slightly over-estimates on a day of moving cloud - a real charger
+  switches in whole current steps and leaves the remainder to the battery or export.
+- **input_number.predbat_car_charging_solar_min_soc** should match whatever "home battery priority" setting the charger has, or model and reality diverge
+  exactly around midday.
+
+What the model does *not* capture is hysteresis: it follows the surplus every 5 minute step, while a real charger usually waits a few minutes before starting and
+stopping so it does not flip back and forth under moving cloud. On a settled sunny day that makes no difference; on a showery one the model diverts a little more
+than the charger actually does.
+
+The cheapest way to calibrate is to let it run for a couple of sunny days and compare the green car column on the plan against what `car_charging_energy` actually
+recorded. If the model sits high, `car_charging_solar_min_power` or `car_charging_solar_power_step` is usually set too low.
+
+On the [Predbat plan](predbat-plan-card.md), the car column is **green** for every slot where the charger is free to divert
+solar - the car is plugged in, there is PV, it has room below its solar limit and the export is not worth more - as opposed
+to yellow for planned grid charging. The figure is what Predbat expects the car to take, and a green slot showing `0` is
+meaningful: the charger may divert, but the surplus is too small to start it (see **car_charging_solar_min_power**). That is
+deliberately distinct from a slot with no sun at all, which stays blank.
+
+### Selling the surplus instead of putting it in the car
+
+Diverting PV to the car is not free: its opportunity cost is the export income you give up. Per kWh delivered to the
+car battery the solar route costs `export_rate / car_charging_loss` and the grid route costs `import_rate / car_charging_loss`,
+so the charging loss cancels and the comparison is simply **the export rate now against the cheapest import available
+before the car has to be ready**. When exporting pays better, the surplus should be sold and the car charged from the
+cheap slot instead. Which way round that falls changes with the season: in summer a cheap night rate rarely beats the
+export price, while in autumn and winter it often does.
+
+- **switch.predbat_car_charging_solar_export_smart** (default Off) makes Predbat work this out every cycle. When On,
+  solar is only diverted while the export rate is at or below the cheapest import rate between now and
+  **select.predbat_car_charging_plan_time**. A fixed threshold would have to be re-tuned every time rates move; this
+  does not.
+
+The decision is published per car as **binary_sensor.predbat_car_charging_solar_slot** (`_1`, `_2`, … for further cars),
+with the current export rate, the threshold and a `reason` as attributes. It is On when the surplus should go to the car
+and Off when it should be sold.
+
+### The charging mode
+
+Rather than leaving you to combine that sensor with **binary_sensor.predbat_car_charging_slot**, Predbat publishes the
+decision itself as **sensor.predbat_car_charging_mode** (`_1`, `_2`, … for further cars), with a `reason` attribute
+saying why. This is what an external charger should follow - the [evcc component](components.md#evcc-ev-charger-evcc)
+maps it straight onto evcc's own modes, and a Home Assistant automation driving any other charger can read the same
+sensor and get identical behaviour.
+
+| Mode | `reason` | Meaning |
+|---|---|---|
+| `now` | `grid_slot` | Predbat has planned a grid slot to hit your target - charge at full rate (evcc: `now`) |
+| `solar` | `solar` | Take the surplus, it is worth less exported than the charge it displaces (evcc: `pv`, or `minpv` with `evcc_use_minpv`) |
+| `solar` | `idle` | Nothing planned and the car is not plugged in - keep following the sun (evcc: `pv`) |
+| `off` | `export_better` | Sell the surplus instead; the car is charged from the planned cheap slots |
+| `off` | `solar_disabled` | This car does not do solar charging (`car_charging_solar` is off) |
+
+Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - and for a charger
+that keeps its own departure plan, evcc included, off takes that plan down with it. So off is published only when it is
+meant: the export pays better, or the car does no solar charging at all. Not being plugged in is an absence, not a
+decision, and leaves the charger following the sun.
+
+Safeguards, so the switch can never leave the car short:
+
+- It only applies when there **is** a departure plan to fall back on (**car_charging_planned** is true). Without
+  one there is no cheap charge planned, so refusing the solar would simply waste it and the diversion is left alone.
+- The grid plan still guarantees **car_charging_limit** by the ready time, and because solar is applied before the
+  planned grid charging in each step, any solar that *is* taken reduces what has to be bought.
+- It is Off by default, so nothing changes unless you turn it on.
+
+**Pairing with a departure plan:** if you also set a departure plan for the car (i.e. `car_charging_planned` is active), Predbat's normal planner still runs to guarantee the
+departure target, *and* the solar diversion is modelled on top. The two SoC targets are independent: solar fills the car up to `car_charging_solar_limit` (the PV cap), while
+the grid plan tops the car up to `car_charging_limit` (the departure target). So you can, for example, let solar charge to 60% opportunistically while a plan still guarantees
+80% by departure, or let solar charge to 80% while the plan only guarantees 60% from grid - both are modelled correctly. Solar is always applied **before** the planned grid
+charging in each step, so free solar is used first and the grid only covers the remainder, matching how EVCC keeps a plan while still soaking up any remaining solar.
 
 ## Additional Car charging configurations
 

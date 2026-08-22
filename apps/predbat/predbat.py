@@ -66,8 +66,10 @@ from const import (
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
     INVERTER_QUICK_UPDATE_SECONDS,
+    CAR_SOLAR_EXPORT_ALWAYS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
+from prediction_kernel import KERNEL_MAX_CARS
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from octopus import Octopus
@@ -348,6 +350,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.predict_soc = {}
         self.predict_soc_best = {}
         self.predict_iboost_best = {}
+        self.predict_car_solar_best = {}
+        self.predict_car_solar_possible_best = {}
         self.predict_metric_best = {}
         self.metric_min_improvement = 0.0
         self.metric_min_improvement_export = 0.1
@@ -450,6 +454,18 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_soc_next = [None]
         self.car_charging_rate = [7.4]
         self.car_charging_loss = 1.0
+        # Per-car lists are re-sized to num_cars by get_car_charging_planned every fetch cycle, but num_cars can
+        # be raised without one (debug replays, scenario runs), so start them at the kernel's maximum car count
+        self.car_charging_solar = [False] * KERNEL_MAX_CARS
+        self.car_charging_plugged = [False] * KERNEL_MAX_CARS
+        self.car_charging_solar_max_power = [7.4] * KERNEL_MAX_CARS
+        self.car_charging_solar_min_power = [0.0] * KERNEL_MAX_CARS
+        self.car_charging_solar_power_step = [0.0] * KERNEL_MAX_CARS
+        self.car_charging_solar_limit = [100.0] * KERNEL_MAX_CARS
+        self.car_charging_solar_min_soc = 0.0
+        self.car_charging_solar_export_smart = False
+        # Export rate at or below which solar may be diverted to the car; CAR_SOLAR_EXPORT_ALWAYS = no limit
+        self.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS] * KERNEL_MAX_CARS
         self.export_window = []
         self.export_limits = []
         self.export_limits_best = []
@@ -465,6 +481,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.charge_rate_now = 0
         self.discharge_rate_now = 0
         self.car_charging_hold = False
+        self.car_charging_in_load_history = False
         self.car_charging_manual_soc = []
         self.car_charging_threshold = 99
         self.car_charging_energy = {}

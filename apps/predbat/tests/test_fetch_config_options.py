@@ -374,6 +374,25 @@ def test_fetch_config_options(my_predbat):
     # Restore num_cars for any tests appended after this one
     mock_config.config["num_cars"] = 2
 
+    # Test 15: car_charging_in_load_history is derived, not configured
+    print("\n*** Test 15: car_charging_in_load_history derivation ***")
+
+    # The car energy is left in the load history exactly when it is inside the CT clamp
+    # (car_energy_reported_load) and has not been stripped back out again (car_charging_hold), so all four
+    # combinations of the two switches are pinned here.
+    for hold, reported, expect in [(True, True, False), (True, False, False), (False, False, False), (False, True, True)]:
+        mock_config.config["car_charging_hold"] = hold
+        mock_config.config["car_energy_reported_load"] = reported
+        my_predbat.fetch_config_options()
+        assert my_predbat.car_charging_in_load_history == expect, "car_charging_in_load_history should be {} with car_charging_hold {} and car_energy_reported_load {}, got {}".format(expect, hold, reported, my_predbat.car_charging_in_load_history)
+
+    # Restore the defaults so later tests are unaffected, and put them back on my_predbat itself
+    mock_config.config["car_charging_hold"] = True
+    mock_config.config["car_energy_reported_load"] = True
+    my_predbat.fetch_config_options()
+
+    print("✓ car_charging_in_load_history derivation test passed")
+
     # Restore original methods
     my_predbat.get_arg = original_get_arg
     my_predbat.manual_times = original_manual_times
