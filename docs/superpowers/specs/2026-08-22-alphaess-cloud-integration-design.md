@@ -429,8 +429,8 @@ recorder keeps them.
 | Predbat arg | Source | Notes |
 |:--|:--|:--|
 | `soc_max` | `cobat` (kWh) | Direct |
-| `inverter_limit` | `poinv` (kW × 1000) | Direct |
-| `battery_rate_max` | **Not in the API** | Mapped only from `alphaess_battery_rate_max`; otherwise a warning to set it in `apps.yaml` |
+| `inverter_limit` | `poinv` (kW × 1000) | Direct — the AC/grid-side limit |
+| `battery_rate_max` | `poinv` (kW × 1000), overridable by `alphaess_battery_rate_max` | Derived, not reported — see "Battery rate max" below |
 | `export_limit` | **Not in the API** | Unmapped, with a warning — otherwise Predbat falls back to the 99999 W default and plans exports the grid connection clips |
 | `battery_min_soc` | Deliberately **not** mapped | `batUseCap` is a field Predbat *writes*; reading it back as the floor would be circular |
 | `battery_temperature` | Not available | Unmapped |
@@ -446,6 +446,41 @@ is no ambiguity.
 Throughout, the Sunsynk rule applies: an arg is mapped only when **every** discovered
 inverter reports the underlying value. An arg pointing at a sensor that never appears is
 worse than an absent arg the user can fill in.
+
+### Battery rate max
+
+The API reports no battery charge/discharge power limit and no pack current or voltage
+from which to derive one, so unlike `sunsynk.py` there is nothing to compute. It is
+nevertheless **derived from `poinv` rather than left unmapped**, because leaving it
+unmapped is not neutral:
+
+- `inverter.py:410` falls back to a hard-coded **2600 W** when `battery_rate_max` is
+  absent from `base.args`. On a SMILE5 (`poinv` 5.0 kW) that is roughly half the real
+  rate, applied silently to every plan, with nothing in the log to indicate it.
+- `inverter.py:423` computes
+  `battery_rate_max_charge = min(inverter_limit_charge, battery_rate_max_raw)`, and
+  `inverter_limit_charge` itself defaults to `battery_rate_max_raw` (`inverter.py:415`).
+  So `battery_rate_max` is the governing value; mapping `inverter_limit` from `poinv`
+  does **not** rescue it.
+
+`poinv` is the inverter's nominal AC power, which on a matched AlphaESS package (a SMILE5
+paired with SMILE-BAT modules) is close to the battery rate. Where it is not — a small
+battery on a large inverter, where the BMS C-rate binds first — the estimate is high, and
+that error is the safer one to make: `inverter.py:1295-1318` measures the achieved rate,
+derives a charge/discharge power curve, and logs
+`Consider setting in HA: input_number.battery_rate_max_scaling: X`, with
+`battery_charge_power_curve_auto` able to apply the curve automatically. An over-estimate
+is therefore self-reporting and correctable; the 2600 W default is invisible.
+
+`alphaess_battery_rate_max` overrides the derived value outright, for a user who knows
+their pack's real limit. The startup log states which of the two is in use and where the
+derived figure came from.
+
+`export_limit` is treated differently and deliberately left unmapped, because there is no
+equivalent proxy: `poinv` is the inverter rating, not the site's grid-connection limit, and
+a G98/G99-capped site can sit far below it. Guessing there would produce a plan that
+over-exports with no feedback path, whereas the warning prompts the user to enter the one
+number only they know.
 
 ## Control entities
 
@@ -625,7 +660,7 @@ Six modules, registered in `TEST_REGISTRY` in `unit_test.py`:
 | `test_alphaess_const.py` | Endpoint map, return-code table, time-grid snapping helpers, field maps |
 | `test_alphaess_api.py` | Signature construction, header set, envelope parsing, `msg`/`info` success forms, every return code in the table, bind/unbind code mapping including `6003`/`6005` as success, clock-skew detection |
 | `test_alphaess_control.py` | The full control mapping table, `batUseCap` dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, `24:00` → `23:45`), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and `6017` caching, read-only and `control_enable` gating, unbind switch latch idempotency and latch survival across restart, `device_list` removal after unbind |
-| `test_alphaess_publish.py` | Every sensor in the monitoring tables, `pgrid` negation, the three `*_invert` flags forced to `False`, `eload` null fallback to the energy balance, "only map when every inverter reports it" |
+| `test_alphaess_publish.py` | Every sensor in the monitoring tables, `pgrid` negation, the three `*_invert` flags forced to `False`, `eload` null fallback to the energy balance, `battery_rate_max` derived from `poinv` and overridden by `alphaess_battery_rate_max`, `export_limit` left unmapped with a warning, "only map when every inverter reports it" |
 | `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping |
 | `test_alphaess_storage.py` | Cache round-trip for all four files, `storage is None` path, empty-discovery refusal, tier freshness only on success |
 
@@ -653,7 +688,12 @@ Each is marked `VERIFY@FIELD` in `alphaess_const.py`:
    and its default should rise.
 5. **`usCapacity` semantics** — current SOC or configured usable depth. Not relied on
    either way; confirmation would let it be published with an accurate friendly name.
-6. **Periodic entitlement in the wild.** How many real systems answer `200` rather than
+6. **How closely `poinv` tracks the real battery rate.** `battery_rate_max` is derived
+   from the inverter's nominal AC power for want of anything better. A tester's
+   `battery_rate_max_scaling` suggestion from `inverter.py:1295-1318` after a few full
+   charge cycles is exactly the evidence needed; if it lands consistently below 1.0
+   across systems, the derivation should apply that factor rather than `poinv` raw.
+7. **Periodic entitlement in the wild.** How many real systems answer `200` rather than
    `6017` for `getTimeChargeBySn` determines whether the periodic path is the common case
    or a rarity.
 
@@ -666,7 +706,10 @@ and `sign` redacted. Flipped to `False` once the format is confirmed.
   AppSecret from <https://open.alphaess.com/>, every `alphaess_*` arg, the EXPERIMENTAL
   status, that `alphaess_control_enable` defaults to false, the cloud-to-inverter latency,
   the last-writer-wins interaction with the phone app, that a non-zero charge rate is not
-  honoured on the legacy path, and that the unbind switch is one-way.
+  honoured on the legacy path, that `battery_rate_max` is estimated from the inverter
+  rating and how to correct it with `battery_rate_max_scaling` or
+  `alphaess_battery_rate_max`, that `export_limit` must be set by hand for a
+  G98/G99-capped site, and that the unbind switch is one-way.
 - `docs/inverter-setup.md` — an AlphaESS entry.
 - `templates/alphaess_cloud.yaml` — a complete example.
 
