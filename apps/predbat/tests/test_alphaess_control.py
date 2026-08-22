@@ -264,20 +264,31 @@ def test_alphaess_rate_zero_is_freeze():
     assert not failed, "test_alphaess_rate_zero_is_freeze"
 
 
-def test_alphaess_both_rates_zero_is_not_a_freeze():
-    """Both rates zero is an absence of a plan, not a freeze.
+def test_alphaess_both_rates_zero_still_holds_the_battery():
+    """Both rates at zero is an ordinary, reachable hold - not evidence of "no plan".
 
-    Do not strand an unconfigured system holding its battery all day - Sunsynk hit exactly
-    this and it needed an explicit case.
+    Predbat reaches this combination through set_freeze_export_during_demand zeroing the
+    charge rate (execute.py:532/538 - AlphaESSCloud has has_timed_pause False, so the "else"
+    branch fires) together with a car-charging-from-battery-disable (execute.py:564) or
+    iboost_prevent_discharge (execute.py:591) hold zeroing the discharge rate in the same
+    pass. Treating that as "no plan" would let the battery discharge into the EV or iBoost
+    load, silently defeating the explicit hold Predbat asked for. Stranding a genuinely
+    unconfigured system is prevented elsewhere, by the control_active gate in
+    _reconcile_control (Task 10), which only re-applies once a serial's write button has
+    been pressed.
     """
     failed = False
     client = _client()
     schedule = _schedule(reserve=15, charge_power=0, export_power=0)
     discharge = client.build_discharge_payload("AL70", schedule)
-    if discharge.get("ctrDis") != 0:
-        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 0 when there is no plan at all")
+    if discharge.get("ctrDis") != 1:
+        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 1 - both rates zero still means hold")
         failed = True
-    assert not failed, "test_alphaess_both_rates_zero_is_not_a_freeze"
+    for key in ("timeDisf1", "timeDise1", "timeDisf2", "timeDise2"):
+        if discharge.get(key) != "00:00":
+            print(f"ERROR: {key} = {discharge.get(key)} should be disabled to hold SOC")
+            failed = True
+    assert not failed, "test_alphaess_both_rates_zero_still_holds_the_battery"
 
 
 def test_alphaess_times_snap_inward_to_the_15_minute_grid():
@@ -334,17 +345,62 @@ def test_alphaess_period_two_carries_the_midnight_split():
     assert not failed, "test_alphaess_period_two_carries_the_midnight_split"
 
 
-def test_alphaess_reserve_is_clamped_at_the_api_boundary():
-    """The entity is published unclamped; the payload is where the API's limits apply."""
+def test_alphaess_period_one_collapse_does_not_disable_period_two():
+    """A collapsed period 1 must not throw away a valid period 2.
+
+    A genuine midnight-crossing window (23:50 today -> 02:00 tomorrow) snaps period 1 - whose
+    raw start (23:50) is already past the API's 23:45 maximum - down to an empty
+    23:45-23:45, while period 2 (00:00-02:00) survives untouched. Disabling the whole
+    payload because period 1 alone collapsed would silently stop a real overnight
+    charge/export window (a missed night charge, or a missed peak-rate export); only both
+    periods collapsing together should disable it.
+    """
     failed = False
     client = _client()
-    low = client.build_discharge_payload("AL70", _schedule(reserve=0))
-    if not 0 <= low.get("batUseCap", -1) <= 100:
-        print(f"ERROR: batUseCap {low.get('batUseCap')} out of range")
+    schedule = _schedule(
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "23:50:00", "end": "26:00:00"},
+        export={"enable": True, "soc": 20, "power": 3000, "start": "23:50:00", "end": "26:00:00"},
+    )
+    charge = client.build_charge_payload("AL70", schedule)
+    if charge.get("gridCharge") != 1:
+        print(f"ERROR: gridCharge {charge.get('gridCharge')} should still be 1 - period 2 is a valid window")
         failed = True
-    high = client.build_charge_payload("AL70", _schedule(charge={"enable": True, "soc": 150, "power": 3000, "start": "01:00:00", "end": "05:00:00"}))
+    if charge.get("timeChaf1") != "00:00" or charge.get("timeChae1") != "00:00":
+        print(f"ERROR: collapsed period 1 {charge.get('timeChaf1')}-{charge.get('timeChae1')} should be disabled")
+        failed = True
+    if charge.get("timeChaf2") != "00:00" or charge.get("timeChae2") != "02:00":
+        print(f"ERROR: period 2 {charge.get('timeChaf2')}-{charge.get('timeChae2')} should carry the remainder 00:00-02:00")
+        failed = True
+
+    discharge = client.build_discharge_payload("AL70", schedule)
+    if discharge.get("ctrDis") != 1:
+        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should still be 1 - period 2 is a valid window")
+        failed = True
+    if discharge.get("timeDisf1") != "00:00" or discharge.get("timeDise1") != "00:00":
+        print(f"ERROR: collapsed period 1 {discharge.get('timeDisf1')}-{discharge.get('timeDise1')} should be disabled")
+        failed = True
+    if discharge.get("timeDisf2") != "00:00" or discharge.get("timeDise2") != "02:00":
+        print(f"ERROR: period 2 {discharge.get('timeDisf2')}-{discharge.get('timeDise2')} should carry the remainder 00:00-02:00")
+        failed = True
+    assert not failed, "test_alphaess_period_one_collapse_does_not_disable_period_two"
+
+
+def test_alphaess_reserve_is_clamped_at_the_api_boundary():
+    """The entity is published unclamped; the payload is where the API's limits apply.
+
+    Asserts the EXACT clamped value against genuinely out-of-range input on both sides - a
+    loose `0 <= x <= 100` range check passes for almost any implementation, including one
+    whose floor is wrong (for example clamping negative input to 5 instead of 0).
+    """
+    failed = False
+    client = _client()
+    low = client.build_discharge_payload("AL70", _schedule(reserve=-20))
+    if low.get("batUseCap") != 0:
+        print(f"ERROR: batUseCap {low.get('batUseCap')} should clamp -20 down to exactly 0")
+        failed = True
+    high = client.build_charge_payload("AL70", _schedule(charge={"enable": True, "soc": 250, "power": 3000, "start": "01:00:00", "end": "05:00:00"}))
     if high.get("batHighCap") != 100:
-        print(f"ERROR: batHighCap {high.get('batHighCap')} should clamp to 100")
+        print(f"ERROR: batHighCap {high.get('batHighCap')} should clamp 250 down to exactly 100")
         failed = True
     assert not failed, "test_alphaess_reserve_is_clamped_at_the_api_boundary"
 
@@ -368,6 +424,32 @@ def test_alphaess_payload_is_a_full_replacement():
     assert not failed, "test_alphaess_payload_is_a_full_replacement"
 
 
+def test_alphaess_payloads_equal_is_type_strict_and_order_independent():
+    """payloads_equal drives Task 10's reconciliation: only rewrite when the live payload differs.
+
+    Key order must not matter - dict construction order is not guaranteed to match the API's
+    read-back order. But the comparison is type-strict: 90 and 90.0 compare UNEQUAL. Task 10
+    depends on knowing that, since a numeric type mismatch alone is otherwise indistinguishable
+    from a real value difference.
+    """
+    failed = False
+    client = _client()
+    a = {"sysSn": "AL70", "gridCharge": 1, "batHighCap": 90, "timeChaf1": "01:00"}
+    b = {"timeChaf1": "01:00", "batHighCap": 90, "sysSn": "AL70", "gridCharge": 1}
+    if not client.payloads_equal(a, b):
+        print("ERROR: identical payloads with keys in a different order compared unequal")
+        failed = True
+    c = dict(a, gridCharge=0)
+    if client.payloads_equal(a, c):
+        print("ERROR: payloads with one differing value compared equal")
+        failed = True
+    d = dict(a, batHighCap=90.0)
+    if client.payloads_equal(a, d):
+        print("ERROR: payloads_equal is meant to be type-strict, but 90 and 90.0 compared equal")
+        failed = True
+    assert not failed, "test_alphaess_payloads_equal_is_type_strict_and_order_independent"
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -380,13 +462,15 @@ def run_alphaess_control_tests(my_predbat):
         ("controls_pass_through", test_alphaess_controls_pass_straight_through),
         ("batusecap_is_reserve", test_alphaess_batusecap_is_the_reserve_outside_an_export_window),
         ("rate_zero_is_freeze", test_alphaess_rate_zero_is_freeze),
-        ("both_rates_zero_not_freeze", test_alphaess_both_rates_zero_is_not_a_freeze),
+        ("both_rates_zero_still_holds", test_alphaess_both_rates_zero_still_holds_the_battery),
         ("snap_inward", test_alphaess_times_snap_inward_to_the_15_minute_grid),
         ("collapsed_disabled", test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped),
         ("midnight_end_snaps", test_alphaess_midnight_end_snaps_to_the_maximum),
         ("midnight_split", test_alphaess_period_two_carries_the_midnight_split),
+        ("period_one_collapse_keeps_period_two", test_alphaess_period_one_collapse_does_not_disable_period_two),
         ("clamped_at_boundary", test_alphaess_reserve_is_clamped_at_the_api_boundary),
         ("full_replacement", test_alphaess_payload_is_a_full_replacement),
+        ("payloads_equal_type_strict", test_alphaess_payloads_equal_is_type_strict_and_order_independent),
     ]:
         try:
             if fn():

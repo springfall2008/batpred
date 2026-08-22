@@ -960,7 +960,14 @@ class AlphaESSAPI(ComponentBase):
         if enabled and rate <= 0:
             enabled = False
         (start1, end1), (start2, end2) = self._snapped_periods(sn, "charge", window.get("start"), window.get("end"), enabled)
-        if start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED:
+        # Period 1 collapsing under snapping does not disable the payload on its own - period
+        # 2 carries the midnight-split remainder and can be a valid window in its own right.
+        # Only disable the payload when BOTH periods have nothing left to write, otherwise a
+        # midnight-crossing charge window whose period 1 collapses would silently stop
+        # charging even though its period 2 is still a real window.
+        period1_empty = start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED
+        period2_empty = start2 == ALPHAESS_TIME_DISABLED and end2 == ALPHAESS_TIME_DISABLED
+        if period1_empty and period2_empty:
             enabled = False
         return {
             "sysSn": sn,
@@ -983,13 +990,17 @@ class AlphaESSAPI(ComponentBase):
         enabled = bool(window.get("enable"))
         reserve = self._clamp_percent(schedule.get("reserve", 0))
         export_rate = self._as_float(window.get("power"), 0.0)
-        charge_rate = self._as_float((schedule.get("charge") or {}).get("power"), 0.0)
 
         # discharge_rate zero means hold SOC (freeze export): discharge time control ON
-        # with no permitted period, so the battery cannot discharge at all. But BOTH rates
-        # zero is an absence of a plan rather than a freeze - do not strand an
-        # unconfigured system holding its battery all day.
-        if export_rate <= 0 and charge_rate > 0:
+        # with no permitted period, so the battery cannot discharge at all. This does NOT
+        # depend on the charge rate - Predbat reaches discharge_rate == 0 together with
+        # charge_rate == 0 through ordinary, reachable combinations (set_freeze_export_during_demand
+        # zeroing the charge rate while a car-charging-from-battery hold or
+        # iboost_prevent_discharge zeroes the discharge rate in the same pass), and that
+        # combination is an explicit hold, not an absence of a plan. Treating it as "no plan"
+        # would let the battery discharge into the EV or iBoost load against the hold Predbat
+        # asked for.
+        if export_rate <= 0:
             return {
                 "sysSn": sn,
                 "ctrDis": 1,
@@ -1001,7 +1012,12 @@ class AlphaESSAPI(ComponentBase):
             }
 
         (start1, end1), (start2, end2) = self._snapped_periods(sn, "export", window.get("start"), window.get("end"), enabled)
-        if start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED:
+        # Same rule as build_charge_payload: only disable the payload when BOTH periods have
+        # collapsed, so a period-1 collapse never throws away a genuine period-2 remainder and
+        # costs a missed peak-rate export.
+        period1_empty = start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED
+        period2_empty = start2 == ALPHAESS_TIME_DISABLED and end2 == ALPHAESS_TIME_DISABLED
+        if period1_empty and period2_empty:
             enabled = False
         return {
             "sysSn": sn,
