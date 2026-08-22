@@ -33,7 +33,7 @@ import threading
 import time
 
 import prediction_kernel
-from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
+from const import PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, MINUTE_WATT
 from prediction import Prediction
 from prediction_kernel import create_kernel_context, run_prediction_kernel, load_kernel
 from utils import remove_intersecting_windows
@@ -221,7 +221,7 @@ def apply_random_scenario(my_predbat, rng):
     my_predbat.set_export_freeze = rng.choice([True, False])
     my_predbat.set_export_freeze_only = rng.choice([True, False, False, False])
     # Exercise a non-zero value without consuming another RNG draw, preserving seeded scenarios.
-    my_predbat.inverter_freeze_export_discharge_rate = 240.0 if my_predbat.set_export_freeze else 0.0
+    my_predbat.inverter_freeze_export_discharge_rate = (240.0 / MINUTE_WATT) if my_predbat.set_export_freeze else 0.0
     my_predbat.set_charge_window = rng.choice([True, True, False])
     my_predbat.set_export_window = rng.choice([True, True, False])
     my_predbat.set_discharge_during_charge = rng.choice([True, False])

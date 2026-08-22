@@ -1097,8 +1097,7 @@ class Prediction(PredictionBatch):
                 # any surplus may reach the grid. Respect the battery reserve and physical export
                 # limit rather than capping the discharge at house demand.
                 if inverter_freeze_export_discharge_rate > 0 and battery_draw >= 0:
-                    freeze_soc_available = min(inverter_freeze_export_discharge_rate * step / 60000.0, max(soc - reserve_expected, 0))
-                    freeze_draw = freeze_soc_available * battery_loss_discharge
+                    freeze_draw = min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min)
                     freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
                     if freeze_diff < 0 and abs(freeze_diff) > export_limit:
                         freeze_draw = max(freeze_draw - (abs(freeze_diff) - export_limit) * inverter_loss_recp, 0)

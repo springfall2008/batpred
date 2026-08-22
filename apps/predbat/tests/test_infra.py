@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
-from const import PREDBAT_MAX_CARS
+from const import PREDBAT_MAX_CARS, MINUTE_WATT
 from prediction import Prediction
 from matplotlib import pyplot as plt
 import asyncio
@@ -702,7 +702,7 @@ def simple_scenario(
     my_predbat.pv_ac_limit = pv_ac_limit / 60.0
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
-    my_predbat.inverter_freeze_export_discharge_rate = inverter_freeze_export_discharge_rate
+    my_predbat.inverter_freeze_export_discharge_rate = inverter_freeze_export_discharge_rate / MINUTE_WATT
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_dc / 60.0
     my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0

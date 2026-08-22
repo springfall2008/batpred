@@ -169,7 +169,7 @@ struct PkContext {
     double battery_loss;
     double battery_loss_discharge;
     double inverter_loss;
-    double inverter_freeze_export_discharge_rate; // W, residual battery-side discharge entering the AC balance during Freeze Export
+    double inverter_freeze_export_discharge_rate; // per-minute rate (multiplied by step in the kernel), residual battery-side discharge entering the AC balance during Freeze Export
     double inverter_limit;    // per-minute rate (multiplied by step in the kernel)
     double export_limit;      // per-minute rate
     double pv_ac_limit;       // per-minute rate
@@ -1085,8 +1085,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // balance so load consumes it first and any surplus may export, while respecting
             // the reserve and the physical grid export limit.
             if (inverter_freeze_export_discharge_rate > 0 && battery_draw >= 0) {
-                const double freeze_soc_available = std::min(inverter_freeze_export_discharge_rate * step / 60000.0, std::max(soc - reserve_expected, 0.0));
-                double freeze_draw = freeze_soc_available * battery_loss_discharge;
+                double freeze_draw = std::min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min);
                 const double freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
                 if (freeze_diff < 0 && std::abs(freeze_diff) > export_limit) {
                     freeze_draw = std::max(freeze_draw - (std::abs(freeze_diff) - export_limit) * inverter_loss_recp, 0.0);
