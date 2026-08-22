@@ -105,6 +105,17 @@ class Execute:
     adjustment, and multi-inverter balancing.
     """
 
+    def clear_control_ledger(self):
+        """Drop every control ownership record, if the ledger is present.
+
+        Called wherever PredBat stops controlling the inverter - read-only mode and
+        calibration. Reached defensively because execute_plan() runs against test harnesses
+        that construct the engine without a ledger.
+        """
+        ledger = getattr(self, "control_ledger", None)
+        if ledger is not None:
+            ledger.clear()
+
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
@@ -129,6 +140,13 @@ class Execute:
         if self.inverter_needs_reset:
             self.reset_inverter()
 
+        # Belt and braces: the read-only branch below runs before anything that could confer
+        # ownership - but ownership from BEFORE read-only was enabled would survive, and
+        # PredBat is no longer controlling anything, so it is not ours to claim. set_read_only
+        # is a global flag, so this is decided once rather than re-decided per inverter.
+        if self.set_read_only:
+            self.clear_control_ledger()
+
         isCharging = False
         isExporting = False
         for inverter in self.inverters:
@@ -151,6 +169,11 @@ class Execute:
                     inverter.adjust_discharge_rate(inverter.battery_rate_max_discharge * MINUTE_WATT)
                     inverter.adjust_battery_target(100.0, False)
                     inverter.adjust_reserve(0)
+                # Those writes go through the ordinary helpers, so they CONFER ownership - in
+                # exactly the mode where the inverter's own firmware is driving its settings.
+                # A value found moved next cycle is the inverter calibrating, not a third
+                # party, so ownership is dropped after the writes rather than before them.
+                self.clear_control_ledger()
                 break
 
             resetDischarge = self.set_charge_window or self.set_export_window
