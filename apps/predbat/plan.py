@@ -5256,6 +5256,31 @@ class Plan:
             car_charging_kwh = dp2(car_charging_kwh)
         return car_charging_kwh
 
+    def car_charge_slot_rate(self, minute_start, minute_end):
+        """
+        Work out the car's own effective import rate (p/kWh) for the given
+        self.plan_interval_minutes-minute slot - the kWh-weighted average across any
+        car_charging_slots windows active in it. This can differ from the general household
+        import rate once a car's IOG dispatch cap is exhausted for the day (batpred#4646).
+        Returns None if no car charging in this slot.
+        """
+        total_kwh = 0.0
+        total_cost = 0.0
+        if self.num_cars > 0:
+            for car_n in range(self.num_cars):
+                for window in self.car_charging_slots[car_n]:
+                    start = window["start"]
+                    end = window["end"]
+                    if start < minute_end and end > minute_start and end != start:
+                        overlap_start = max(start, minute_start)
+                        overlap_end = min(end, minute_end)
+                        kwh = dp2(window["kwh"]) * (overlap_end - overlap_start) / (end - start)
+                        total_kwh += kwh
+                        total_cost += kwh * window.get("average", 0)
+        if total_kwh > 0.0001:
+            return dp2(total_cost / total_kwh)
+        return None
+
     def hit_car_window(self, window_start, window_end, cache=None):
         """Does this window intersect a car charging window?
 

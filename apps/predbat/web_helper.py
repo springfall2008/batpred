@@ -6526,6 +6526,16 @@ def get_plan_renderer_js():
                 }
                 if (editable) {
                     html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
+                } else if (row.rate_split) {
+                    // Car's own rate has diverged from the house rate (IOG dispatch cap reached) -
+                    // split the cell, house on the left, car on the right, each with its own tooltip.
+                    const houseTitle = escapeAttr(`House rate: ${row.import_rate.toFixed(2)}${currencyMinor}/kWh`);
+                    const carTitle = escapeAttr(`Car rate: ${row.car_rate.toFixed(2)}${currencyMinor}/kWh (IOG dispatch cap reached)`);
+                    html += `<td id=import data-minute="${row.slot_minute}" data-rate="${row.import_rate}" style="padding:0;">`;
+                    html += `<div style="display:flex;">`;
+                    html += `<div style="flex:1;padding:4px;background-color:${row.rate_color_import || '#FFFFFF'};" title="${houseTitle}">${importText}</div>`;
+                    html += `<div style="flex:1;padding:4px;background-color:${row.car_rate_color || '#FFFFFF'};" title="${carTitle}">${row.car_rate.toFixed(2)}</div>`;
+                    html += `</div></td>`;
                 } else {
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }

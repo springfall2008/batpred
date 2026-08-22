@@ -80,6 +80,10 @@ def run_load_octopus_slots_tests(my_predbat):
     my_predbat.rate_max_base = 10
     my_predbat.car_charging_rate = [5.0]
     my_predbat.args["octopus_slot_max"] = 12
+    # load_octopus_slots() short-circuits to [] when car_n >= self.num_cars - set this explicitly
+    # rather than relying on whatever a previous test in the same run left num_cars as (a shared
+    # my_predbat instance persists across tests within a run).
+    my_predbat.num_cars = 1
 
     # Created 8 slots in total in the next 16 hours
     soc = 2.0

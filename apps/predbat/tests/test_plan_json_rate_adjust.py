@@ -140,6 +140,42 @@ def run_test_plan_json_rate_adjust(my_predbat):
     my_predbat.rate_import_replicated = {}
     my_predbat.rate_export_replicated = {}
 
+    # --- Test 3: car rate diverging from the house rate (batpred#4646) ---
+    print("Test plan JSON output with a car rate that diverges from the house rate")
+    my_predbat.num_cars = 1
+    car_minute = my_predbat.minutes_now
+    my_predbat.car_charging_slots[0] = [{"start": car_minute, "end": car_minute + 30, "kwh": 3.0, "average": 28.0, "cost": 84.0, "soc": 0.0, "octopus": True}]
+
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
+    if car_row is None:
+        print("WARNING: Could not find row for car minute {} in plan output".format(car_minute))
+    else:
+        if car_row.get("car_rate") != 28.0:
+            print("ERROR: Expected car_rate=28.0 got {}".format(car_row.get("car_rate")))
+            failed = True
+        if car_row.get("rate_split") is not True:
+            print("ERROR: Expected rate_split=True when car rate (28.0) diverges from house rate (10.0), got {}".format(car_row.get("rate_split")))
+            failed = True
+        if not car_row.get("car_rate_color"):
+            print("ERROR: Expected car_rate_color to be set when rate_split is True")
+            failed = True
+        if "House rate: 10.00" not in html_plan or "Car rate: 28.00" not in html_plan:
+            print("ERROR: Expected split-cell HTML with house and car rate tooltips, got:\n{}".format(html_plan))
+            failed = True
+
+    # Same car window, but priced the same as the house rate - must not split
+    my_predbat.car_charging_slots[0] = [{"start": car_minute, "end": car_minute + 30, "kwh": 3.0, "average": 10.0, "cost": 30.0, "soc": 0.0, "octopus": True}]
+    html_plan, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+    car_row = next((row for row in raw_plan["rows"] if row.get("slot_minute") == car_minute), None)
+    if car_row is not None and car_row.get("rate_split") is not False:
+        print("ERROR: Expected rate_split=False when car rate matches house rate, got {}".format(car_row.get("rate_split")))
+        failed = True
+
+    # Clean up
+    my_predbat.num_cars = 0
+    my_predbat.car_charging_slots[0] = []
+
     if not failed:
         print("All plan JSON rate adjust type tests passed")
     return failed

@@ -1069,6 +1069,16 @@ class Output:
         if self.rate_best_cost_threshold_export:
             export_cost_threshold = self.rate_best_cost_threshold_export
 
+        def import_rate_color(rate):
+            """Colour an import rate the same way as the plan's own Import p column (blue/green/yellow/red)."""
+            if rate <= 0:
+                return "#74C1FF"
+            elif rate <= import_cost_threshold:
+                return "#3AEE85"
+            elif rate > (import_cost_threshold * 1.5):
+                return "#F18261"
+            return "#FFFFAA"
+
         raw_plan["import_cost_threshold"] = import_cost_threshold
         raw_plan["export_cost_threshold"] = export_cost_threshold
         raw_plan["reason_templates"] = REASON_TEMPLATES
@@ -1310,12 +1320,7 @@ class Output:
             if plan_debug and load_forecast10 > 0.0:
                 load_forecast += " (%s)" % (str(load_forecast10))
 
-            if rate_value_import <= 0:  # colour the import rate, blue for negative, then green, yellow and red
-                rate_color_import = "#74C1FF"
-            elif rate_value_import <= import_cost_threshold:
-                rate_color_import = "#3AEE85"
-            elif rate_value_import > (import_cost_threshold * 1.5):
-                rate_color_import = "#F18261"
+            rate_color_import = import_rate_color(rate_value_import)  # blue for negative, then green, yellow and red
 
             if rate_value_export >= (1.5 * export_cost_threshold):
                 rate_color_export = "#F18261"
@@ -1501,15 +1506,25 @@ class Output:
                 cost_color = "#FFFFFF"
 
             # Car charging?
+            car_rate = None
             if self.num_cars > 0:
                 car_charging_kwh = self.car_charge_slot_kwh(minute_start, minute_end)
                 car_total += car_charging_kwh
                 if car_charging_kwh > 0.0:
                     car_charging_str = str(car_charging_kwh)
                     car_color = "FFFF00"
+                    car_rate = self.car_charge_slot_rate(minute_start, minute_end)
                 else:
                     car_charging_str = "&#9866;"
                     car_color = "#FFFFFF"
+
+            # The car's own rate can diverge from the general household rate once its IOG dispatch
+            # cap is used up for the day - the car falls back to the peak rate while the house keeps
+            # its real (possibly still cheap) rate for the same clock-time (batpred#4646). Split the
+            # Import p cell to show both when that happens.
+            rate_split = car_rate is not None and abs(car_rate - rate_value_import) > 0.01
+            if rate_split:
+                car_rate_color = import_rate_color(car_rate)
 
             # iBoost
             iboost_amount_str = "&#9866;"
@@ -1582,7 +1597,16 @@ class Output:
             # Table row
             html += '<tr style="color:black">'
             html += "<td id=time bgcolor=#FFFFFF>" + rate_start.strftime("%a %H:%M") + "</td>"
-            html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + " " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
+            if rate_split:
+                house_title = "House rate: {:.2f}{}/kWh".format(rate_value_import, self.currency_symbols[1])
+                car_title = "Car rate: {:.2f}{}/kWh (IOG dispatch cap reached)".format(car_rate, self.currency_symbols[1])
+                html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + ' style="padding:0;">'
+                html += '<div style="display:flex;">'
+                html += '<div style="flex:1;padding:4px;background-color:' + rate_color_import + ';" title="' + house_title + '">' + str(rate_str_import) + "</div>"
+                html += '<div style="flex:1;padding:4px;background-color:' + car_rate_color + ';" title="' + car_title + '">' + "{:.2f}".format(car_rate) + "</div>"
+                html += "</div></td>"
+            else:
+                html += "<td id=import data-minute=" + str(minute) + " data-rate=" + str(rate_value_import) + " " + cell_style + " bgcolor=" + rate_color_import + ">" + str(rate_str_import) + " </td>"
             html += "<td id=export data-minute=" + str(minute) + " data-rate=" + str(rate_value_export) + " " + cell_style + " bgcolor=" + rate_color_export + ">" + str(rate_str_export) + " </td>"
             if start_span:
                 if split:  # for slots that are both charging and exporting, just output the (split cell) state
@@ -1689,6 +1713,9 @@ class Output:
             if self.num_cars > 0:
                 json_row["car_charging"] = car_charging_kwh
                 json_row["car_color"] = car_color
+                json_row["car_rate"] = car_rate
+                json_row["car_rate_color"] = car_rate_color if rate_split else None
+                json_row["rate_split"] = rate_split
             if self.iboost_enable:
                 json_row["iboost"] = iboost_amount
                 json_row["iboost_change"] = iboost_change
