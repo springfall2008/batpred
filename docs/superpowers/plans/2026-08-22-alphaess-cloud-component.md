@@ -3144,20 +3144,30 @@ def test_alphaess_rate_zero_is_freeze():
     assert not failed, "test_alphaess_rate_zero_is_freeze"
 
 
-def test_alphaess_both_rates_zero_is_not_a_freeze():
-    """Both rates zero is an absence of a plan, not a freeze.
+def test_alphaess_both_rates_zero_still_holds_the_battery():
+    """Both rates zero is a HOLD, not an absence of a plan.
 
-    Do not strand an unconfigured system holding its battery all day - Sunsynk hit exactly
-    this and it needed an explicit case.
+    Predbat reaches this state through ordinary settings, so it must not be read as "no
+    plan": set_freeze_export_during_demand zeroes the charge rate (execute.py:532/538 -
+    AlphaESSCloud has has_timed_pause False, so the else branch fires), while
+    car-charging-from-battery-disable (execute.py:564) or iboost_prevent_discharge
+    (execute.py:591) zeroes the discharge rate in the same pass. Emitting ctrDis 0 here
+    would discharge the battery into the EV or iBoost load - the exact hold Predbat asked
+    to prevent, and silently. Stranding an undriven system is prevented by the
+    control_active gate in _reconcile_control instead.
     """
     failed = False
     client = _client()
     schedule = _schedule(reserve=15, charge_power=0, export_power=0)
     discharge = client.build_discharge_payload("AL70", schedule)
-    if discharge.get("ctrDis") != 0:
-        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 0 when there is no plan at all")
+    if discharge.get("ctrDis") != 1:
+        print(f"ERROR: ctrDis {discharge.get('ctrDis')} should be 1 - both rates zero is a hold")
         failed = True
-    assert not failed, "test_alphaess_both_rates_zero_is_not_a_freeze"
+    for key in ("timeDisf1", "timeDise1", "timeDisf2", "timeDise2"):
+        if discharge.get(key) != "00:00":
+            print(f"ERROR: {key} = {discharge.get(key)} should be disabled to hold SOC")
+            failed = True
+    assert not failed, "test_alphaess_both_rates_zero_still_holds_the_battery"
 
 
 def test_alphaess_times_snap_inward_to_the_15_minute_grid():
@@ -3254,7 +3264,7 @@ Add to the `run_alphaess_control_tests` list:
         ("controls_pass_through", test_alphaess_controls_pass_straight_through),
         ("batusecap_is_reserve", test_alphaess_batusecap_is_the_reserve_outside_an_export_window),
         ("rate_zero_is_freeze", test_alphaess_rate_zero_is_freeze),
-        ("both_rates_zero_not_freeze", test_alphaess_both_rates_zero_is_not_a_freeze),
+        ("both_rates_zero_holds", test_alphaess_both_rates_zero_still_holds_the_battery),
         ("snap_inward", test_alphaess_times_snap_inward_to_the_15_minute_grid),
         ("collapsed_disabled", test_alphaess_window_collapsed_by_snapping_is_disabled_not_wrapped),
         ("midnight_end_snaps", test_alphaess_midnight_end_snaps_to_the_maximum),
@@ -3360,7 +3370,12 @@ Append to `AlphaESSAPI`:
         if enabled and rate <= 0:
             enabled = False
         (start1, end1), (start2, end2) = self._snapped_periods(sn, "charge", window.get("start"), window.get("end"), enabled)
-        if start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED:
+        # BOTH periods must be empty before the payload is disabled. Period 2 is an
+        # independent window carrying the midnight-split remainder, so a period 1 that
+        # snapping collapsed must not take a valid period 2 down with it - a 23:50-26:00
+        # window collapses period 1 to 23:45-23:45 and leaves a real 00:00-02:00 in
+        # period 2, which would otherwise be written and then never run.
+        if window_is_empty(start1, end1) and window_is_empty(start2, end2):
             enabled = False
         return {
             "sysSn": sn,
@@ -3383,13 +3398,20 @@ Append to `AlphaESSAPI`:
         enabled = bool(window.get("enable"))
         reserve = self._clamp_percent(schedule.get("reserve", 0))
         export_rate = self._as_float(window.get("power"), 0.0)
-        charge_rate = self._as_float((schedule.get("charge") or {}).get("power"), 0.0)
 
-        # discharge_rate zero means hold SOC (freeze export): discharge time control ON
-        # with no permitted period, so the battery cannot discharge at all. But BOTH rates
-        # zero is an absence of a plan rather than a freeze - do not strand an
-        # unconfigured system holding its battery all day.
-        if export_rate <= 0 and charge_rate > 0:
+        # discharge_rate zero means hold SOC (freeze export): discharge time control ON with
+        # no permitted period, so the battery cannot discharge at all. This is NOT
+        # conditioned on the charge rate. Predbat reaches both-rates-zero through ordinary
+        # settings - set_freeze_export_during_demand zeroes the charge rate
+        # (execute.py:532/538, and AlphaESSCloud has has_timed_pause False so the else
+        # branch fires), while car-charging-from-battery-disable (execute.py:564) or
+        # iboost_prevent_discharge (execute.py:591) zeroes the discharge rate in the same
+        # pass. Treating that as "no plan" would emit ctrDis 0 and discharge the battery
+        # into the EV or iBoost load, defeating the exact hold Predbat asked for. Stranding
+        # an undriven system is instead prevented by the control_active gate in
+        # _reconcile_control, which only re-applies for a serial Predbat has been asked to
+        # drive.
+        if export_rate <= 0:
             return {
                 "sysSn": sn,
                 "ctrDis": 1,
@@ -3401,7 +3423,9 @@ Append to `AlphaESSAPI`:
             }
 
         (start1, end1), (start2, end2) = self._snapped_periods(sn, "export", window.get("start"), window.get("end"), enabled)
-        if start1 == ALPHAESS_TIME_DISABLED and end1 == ALPHAESS_TIME_DISABLED:
+        # Both periods, for the same reason as the charge side: a collapsed period 1 must
+        # not discard a valid midnight-split period 2, which here costs a peak-rate export.
+        if window_is_empty(start1, end1) and window_is_empty(start2, end2):
             enabled = False
         return {
             "sysSn": sn,
