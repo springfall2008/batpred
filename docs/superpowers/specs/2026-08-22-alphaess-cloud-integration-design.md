@@ -49,10 +49,12 @@ The user supplies an AlphaESS developer **AppID** and **AppSecret**, obtained fr
 - **Battery and solar only.** The EV charger endpoints are read for an informational
   power sensor only. No EV charger control, no system binding management beyond
   bind/unbind, no meter offset.
-- **Control is opt-in until field-verified.** Nobody on the project has an AlphaESS
-  account. Monitoring is always active; writes happen only when `alphaess_control_enable`
-  is true, and every request/response is traced to the log by default so a tester's log
-  is usable evidence.
+- **Control on by default, EXPERIMENTAL wire format.** `alphaess_control_enable` defaults
+  to true, as `sunsynk_control_enable` does — an inverter component that does not drive
+  the inverter is not what a user configuring it expects. Nobody on the project has an
+  AlphaESS account, so every request/response is traced to the log by default and a
+  tester's log is usable evidence. `switch.predbat_set_read_only` gates every write,
+  including the component's own reconcile loop.
 - **No history backfill.** `getOneDayPowerBySn` returns a ~288-sample daily series that
   could seed load history on a fresh install, and `GECloudData` is the existing pattern
   for that. Explicitly out of scope: the 5-minute energy tier supplies data on a regular
@@ -185,7 +187,7 @@ by this design: see "Write minimisation".
         "inverter_sn": {"required": False, "config": "alphaess_inverter_sn"},
         "automatic": {"required": False, "default": False, "config": "alphaess_automatic"},
         "automatic_ignore_pv": {"required": False, "default": False, "config": "alphaess_automatic_ignore_pv"},
-        "control_enable": {"required": False, "default": False, "config": "alphaess_control_enable"},
+        "control_enable": {"required": False, "default": True, "config": "alphaess_control_enable"},
         "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
         "api_delay": {"required": False, "default": 2, "config": "alphaess_api_delay"},
         "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
@@ -196,10 +198,11 @@ by this design: see "Write minimisation".
 },
 ```
 
-`control_enable` defaults to **false**, unlike `sunsynk_control_enable`. The AlphaESS
-write endpoints carry a documented 24-hour rate limit and no project member has hardware,
-so writes are opt-in until a tester confirms behaviour. This is stated in the docs and
-logged at startup.
+`control_enable` defaults to **true**, matching `sunsynk_control_enable`: a user who has
+configured an inverter component expects it to drive the inverter. Set it false for
+monitoring only. The documented 24-hour write limit is handled by write minimisation
+rather than by refusing to write at all, and `switch.predbat_set_read_only` remains the
+per-run way to hold every write back.
 
 ### Files
 
@@ -366,12 +369,33 @@ the change-detection gate on every single cycle — exactly the DEYE bug above.
 
 Writes are suppressed when either:
 
-- `alphaess_control_enable` is false (monitoring only, the default), or
+- `alphaess_control_enable` is false (monitoring only — it defaults to **true**, matching
+  `sunsynk_control_enable`), or
 - `switch.predbat_set_read_only` is on.
 
-`_reconcile_control` is a no-op for a serial Predbat has not yet been asked to drive
-(`control_active`), so a startup cycle can never clobber an inverter before there is a
-plan to apply.
+**The read-only gate belongs on the component's own writes, and this is easy to get
+wrong.** Predbat's upstream read-only handling (`execute.py:145`) stops Predbat driving
+the control entities, which covers every write that originates from a plan. It does *not*
+cover a write the component initiates by itself — and this component has one:
+`_reconcile_control` re-applies the schedule on every tick.
+
+That re-apply is not idle. The payload depends on whether an export window is currently
+programmed, because `batUseCap` switches between the export target and the reserve, so a
+window transition changes the payload with no plan change at all. Without an explicit
+gate, that transition would write to the inverter while Predbat was in read-only mode.
+This is precisely GH#4436, fixed for DEYE and Sunsynk by adding `_is_read_only()` to their
+reconcile loops (`deye.py:1661`, `sunsynk.py:1346`); the same gate is required here from
+the start rather than added after someone reports it.
+
+Concretely, `_reconcile_control(sn)` returns early when **any** of these hold:
+
+- `switch.predbat_set_read_only` is on,
+- `alphaess_control_enable` is false, or
+- the serial is not in `control_active` — Predbat has not yet been asked to drive it, so a
+  startup cycle can never clobber an inverter before there is a plan to apply.
+
+The bind/unbind path is deliberately outside this gate: read-only guards writes to the
+inverter, and unbinding is account management, not an inverter write.
 
 ## Monitoring and sensor mapping
 
@@ -779,7 +803,7 @@ Six modules, registered in `TEST_REGISTRY` in `unit_test.py`:
 |:--|:--|
 | `test_alphaess_const.py` | Endpoint map, return-code table, time-grid snapping helpers, field maps |
 | `test_alphaess_api.py` | Signature construction, header set, envelope parsing, `msg`/`info` success forms, every return code in the table, bind/unbind code mapping including `6003`/`6005` as success, clock-skew detection |
-| `test_alphaess_control.py` | The full control mapping table, `batUseCap` dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, `24:00` → `23:45`), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and `6017` caching, read-only and `control_enable` gating, unbind switch latch idempotency and latch survival across restart, `device_list` removal after unbind |
+| `test_alphaess_control.py` | The full control mapping table, `batUseCap` dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, `24:00` → `23:45`), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and `6017` caching, read-only gating of `_reconcile_control` specifically (a window transition that changes `batUseCap` must not write while `switch.predbat_set_read_only` is on - GH#4436), `control_enable` gating, unbind staying outside both gates, unbind switch latch idempotency and latch survival across restart, `device_list` removal after unbind |
 | `test_alphaess_publish.py` | Every sensor in the monitoring tables, `pgrid` negation, the three `*_invert` flags forced to `False`, `eload` null fallback to the energy balance, `battery_rate_max` derived from `poinv` and overridden by `alphaess_battery_rate_max`, `export_limit` left unmapped with a warning, "only map when every inverter reports it" |
 | `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping, hybrid inference (all-null `ppvDetail` plus `popv`/`epv` disagreement leaves the switch alone; both agreeing flips it via `set_state_external`; a hybrid at night with zero-valued `ppvDetail` is never misread), history fallback when `getLastPowerData` fails or returns no `soc` (grid reconstructed as `gridCharge - feedIn`, `cbat` preferred over `cobat`, demotion latched after N failures, re-probe restoring 60 s live data, serial skipped when neither path yields a SOC), systems with zero/null/missing `cobat` skipped at discovery (including when named in `alphaess_inverter_sn`) |
 | `test_alphaess_storage.py` | Cache round-trip for all four files, `storage is None` path, empty-discovery refusal, tier freshness only on success |
@@ -838,7 +862,8 @@ and `sign` redacted. Flipped to `False` once the format is confirmed.
 
 - `docs/apps-yaml.md` — an "AlphaESS Cloud API" section covering obtaining the AppID and
   AppSecret from <https://open.alphaess.com/>, every `alphaess_*` arg, the EXPERIMENTAL
-  status, that `alphaess_control_enable` defaults to false, the cloud-to-inverter latency,
+  status, that `alphaess_control_enable` defaults to true and how to set it false for
+  monitoring only, the cloud-to-inverter latency,
   the last-writer-wins interaction with the phone app, that a non-zero charge rate is not
   honoured on the legacy path, that `battery_rate_max` is estimated from the inverter
   rating and how to correct it with `battery_rate_max_scaling` or
