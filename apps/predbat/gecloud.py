@@ -1165,7 +1165,7 @@ class GECloudDirect(ComponentBase):
                     break
         entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
         self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
-        await self.base.ha_interface.set_state_external(entity_id, not ac_coupled)
+        await self.set_state_external(entity_id, not ac_coupled)
 
         self.log("GECloud: Automatic configuration complete")
 
@@ -2157,23 +2157,12 @@ class GECloudData(ComponentBase):
         return self.mdata, self.oldest_data_time
 
 
-class MockHAInterface:  # pragma: no cover
-    """Mock HA interface for testing"""
-
-    def __init__(self):
-        pass
-
-    async def set_state_external(self, entity_id, state):
-        print(f"Set state external {entity_id} = {state}")
-
-
 class MockBase(SharedMockBase):  # pragma: no cover
-    """Mock base for the GE Cloud command-line harness, with its own cache root and HA interface."""
+    """Mock base for the GE Cloud command-line harness, with its own cache root."""
 
     def __init__(self):
-        """Initialise the shared mock with the GE Cloud cache root and a mock HA interface."""
+        """Initialise the shared mock with the GE Cloud cache root."""
         super().__init__(config_root="./temp_gecloud")
-        self.ha_interface = MockHAInterface()
 
 
 def find_registers_by_name(gecloud_direct, register_name, device=None):  # pragma: no cover

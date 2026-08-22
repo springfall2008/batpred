@@ -1134,7 +1134,7 @@ class MCPServerWrapper:
                 return {"success": False, "error": "Both 'entity_id' and 'value' must be provided", "data": None}
 
             # Update the configuration setting
-            await self.base.ha_interface.set_state_external(entity_id, value)
+            await self.set_state_external(entity_id, value)
 
             return {"success": True, "error": None, "data": {"entity_id": entity_id, "new_value": value}, "timestamp": datetime.now().isoformat(), "description": f"Configuration setting '{entity_id}' updated successfully"}
 

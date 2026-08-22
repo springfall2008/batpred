@@ -57,6 +57,9 @@ POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treate
 
 OPERATION_MODES = ["self_consumption", "autonomous", "backup"]
 EXPORT_RULES = ["never", "pv_only", "battery_ok"]
+# Large nested tariff structures that are never worth republishing - hidden from both the debug log
+# summary and the site_info review entity.
+TARIFF_BLOB_KEYS = ("tariff_content", "tariff_content_v2")
 # tou_settings.optimization_strategy: the OTHER dial the Fleet API exposes alongside the tariff itself,
 # deciding whether Time-Based Control actually acts on price. "balanced" (the device default, and what
 # is left in place if this is never sent) only discharges to offset house load and never exports stored
@@ -240,7 +243,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         for key in ("time_series", "SmartBreakerEnergyLogs"):
             if isinstance(response.get(key), list):
                 response[key] = "[{} entries hidden]".format(len(response[key]))
-        for key in ("tariff_content", "tariff_content_v2"):
+        for key in TARIFF_BLOB_KEYS:
             if isinstance(response.get(key), dict):
                 response[key] = "[hidden, code={}]".format(response[key].get("code"))
         return {"response": response}
@@ -251,6 +254,21 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if unit:
             attributes["unit_of_measurement"] = unit
         self.dashboard_item(self.entity(suffix), state, attributes, app="teslemetry")
+
+    def publish_site_info(self, response):
+        """Publish the site_info response as one entity so the device's own view of the site is reviewable.
+
+        Capacity, AC rating, battery coupling and the export rule all come from here and all change how
+        Predbat models the site, but none of it was visible outside a debug log line. The whole response
+        is published rather than a hand-picked subset, so fields added by future firmware appear without
+        a code change - and so nothing is lost to a wrong guess about where a field is nested (batteries,
+        customer_preferred_export_rule and net_meter_mode all live under components, not at the top).
+        Only the tariff blobs are dropped, the same large nested structures _summarize_for_log hides.
+        """
+        attributes = {key: value for key, value in response.items() if key not in TARIFF_BLOB_KEYS}
+        attributes["friendly_name"] = "Powerwall Site Info"
+        attributes["state_class"] = None
+        self.dashboard_item(self.entity("site_info"), response.get("site_name") or "unknown", attributes, app="teslemetry")
 
     def publish_soc_max(self, kwh, estimate=False):
         """Publish the battery capacity (soc_max) in kWh, preferring a real device value over an estimate.
@@ -322,6 +340,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if not data:
             return False
         response = data.get("response", {})
+        self.publish_site_info(response)
         nameplate_wh = response.get("nameplate_energy", 0)
         battery_count = response.get("battery_count")
         if nameplate_wh:
@@ -634,6 +653,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         max_site_meter_power_ac, so wiring them unconditionally would point Predbat at entities
         that never exist on a site missing those fields. Predbat falls back to its own defaults
         for absent args, so skipping the wiring here is safe.
+
+        Unlike the args above, inverter_hybrid is one of Predbat's OWN config switches rather than a
+        component entity, so it is written through set_state_external (see below).
         """
         self.log("Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type")
         self.set_arg("inverter_type", ["TESLA"])
@@ -664,6 +686,16 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.set_arg("discharge_target_soc", [self.entity("schedule_discharge_soc", domain="number")])
         self.set_arg("scheduled_discharge_enable", [self.entity("schedule_discharge_enable", domain="switch")])
         self.set_arg("schedule_write_button", [self.entity("schedule_write", domain="switch")])
+        # Every Powerwall is an AC-coupled battery, so Predbat must not model it as a hybrid. Left at
+        # Predbat's default (on), get_total_inverted() folds PV into the inverter_limit budget, so the
+        # Powerwall's own AC rating is applied as a cap on battery + PV combined - modelling a
+        # separately inverted solar array as clipping against a limit it never passes through, which
+        # invents both the clipping and the export windows that "recover" it.
+        # set_state_external is the write path that updates the matching CONFIG_ITEMS value; a plain
+        # state write would move the entity without changing the setting Predbat plans with.
+        hybrid_entity = "switch.{}_inverter_hybrid".format(self.prefix)
+        self.log("Info: Teslemetry setting {} off - Tesla Powerwall batteries are AC coupled".format(hybrid_entity))
+        await self.set_state_external(hybrid_entity, False)
 
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.
