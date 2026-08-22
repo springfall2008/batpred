@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-
 """Base inverter abstraction layer.
 
 Provides the unified Inverter class that abstracts control of different
