@@ -22,6 +22,14 @@
 - **Individual test functions** end with `assert not failed, "test_name"`; the runner catches the exception and reports it.
 - **Storage:** never touch the filesystem directly — use the Storage component via `self.storage`.
 - **Unit tests are required for all new code** (CLAUDE.md).
+- **Pre-commit:** CLAUDE.md says `./run_pre_commit`, but **that script does not exist in
+  this repo**. The working invocation is
+  `coverage/venv/bin/pre-commit run --all-files`
+  (`pre-commit` is not on PATH — it lives in the coverage venv). Confirm the exit status;
+  "files were modified by this hook" is a FAILURE, not a pass.
+- **ruff is configured `--select=F401 --fix`**, so it silently auto-DELETES an unused
+  import and then reports failure. Add each import in the same task that first uses it,
+  never ahead of time.
 - **Copyright header** on every new file — copy the 5-line banner from `apps/predbat/sunsynk.py`.
 - **API constant values, copied verbatim from the spec:**
   - Base URL: `https://openapi.alphaess.com/api`
@@ -5513,8 +5521,11 @@ Expected: `**** All tests passed ...`, and no FAILED lines.
 
 ```bash
 cd /Users/treforsouthwell/predbat/batpred
-./run_pre_commit > /tmp/t16-pre.log 2>&1; tail -30 /tmp/t16-pre.log
+coverage/venv/bin/pre-commit run --all-files > /tmp/t16-pre.log 2>&1; echo "exit=$?"; tail -30 /tmp/t16-pre.log
 ```
+
+Exit 0 is the only pass. "files were modified by this hook" means a hook rewrote your
+files — re-stage and re-run until it is clean.
 
 Expected: everything passes. If `interrogate` reports a missing docstring, add it — 100%
 coverage is required for every function *and* class. If CSpell reports an unknown word,
@@ -5547,7 +5558,7 @@ git commit -m "docs(alphaess): add the AlphaESS Cloud API guide, template and di
 ```bash
 cd /Users/treforsouthwell/predbat/batpred/coverage
 ./run_all > /tmp/final.log 2>&1; tail -3 /tmp/final.log
-./run_pre_commit > /tmp/final-pre.log 2>&1; tail -5 /tmp/final-pre.log
+cd /Users/treforsouthwell/predbat/batpred && coverage/venv/bin/pre-commit run --all-files > /tmp/final-pre.log 2>&1; echo "exit=$?"; tail -5 /tmp/final-pre.log
 git log --oneline main..HEAD
 ```
 
