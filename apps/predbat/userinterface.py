@@ -30,7 +30,7 @@ from const import (
     PREDBAT_MODE_MONITOR,
 )
 from config import CONFIG_API_OVERRIDE
-from predbat import THIS_VERSION
+from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
@@ -817,7 +817,7 @@ class UserInterface:
         """
 
         text = ""
-        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION)
+        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION_DISPLAY)
         text += "type: entities\n"
         text += "Title: Predbat\n"
         text += "entities:\n"

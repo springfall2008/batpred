@@ -209,8 +209,8 @@ hadashboard
 hahistory
 hainterface
 halfhourly
-Hanchu
 hanchu
+Hanchu
 hanchuess
 hanres
 HAOS
