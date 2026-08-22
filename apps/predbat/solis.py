@@ -1264,7 +1264,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         inverter that once cycled MWh can still legitimately report no battery today.
 
         (batteryTypeCode is '0000' in this state, against '0001'/'0063' for real packs, but it is
-        left out on purpose: a code that means "unknown" on some firmware would silently unenrol a
+        left out on purpose: a code that means "unknown" on some firmware would silently ignore a
         working battery, and the names above already cover every case seen.)
         """
         if str(detail.get("batteryType", "")).strip().lower() == "no battery":
