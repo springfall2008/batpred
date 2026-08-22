@@ -727,3 +727,159 @@ class AlphaESSAPI(ComponentBase):
         self.set_arg_auto("schedule_write_button", [self._control_name("switch", sn, "battery_schedule_charge_write") for sn in devices])
 
         await self.apply_hybrid_verdict()
+
+    @staticmethod
+    def _empty_schedule():
+        """Return a fresh, disabled schedule shape - the single source of truth for its defaults.
+
+        Used where a schedule has to be seeded from nothing: a control event arriving for a
+        serial local_schedule has not seen yet. Kept as one helper rather than a literal
+        repeated at each call site, so adding or renaming a field cannot silently diverge
+        between copies. run() deliberately does NOT seed from here - it reads the control
+        entities instead, whose per-field defaults produce exactly this shape when nothing
+        has been published yet, but which hold Predbat's live plan after a restart.
+        """
+        return {
+            "reserve": 0,
+            "charge": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+            "export": {"enable": False, "soc": 0, "power": 0, "start": "00:00:00", "end": "00:00:00"},
+        }
+
+    async def publish_schedule_settings_ha(self, sn):
+        """Publish the charge/export schedule control entities for one inverter."""
+        local = self.local_schedule.get(sn, {})
+        # Deliberately NOT clamped to any floor. This entity is Predbat's control surface:
+        # it writes a value then reads it back to confirm (write_and_poll_value), so
+        # publishing anything other than what was written guarantees a mismatch and a retry
+        # storm. Clamping happens at the API boundary in the payload builder.
+        self.dashboard_item(
+            self._control_name("number", sn, "battery_schedule_reserve"),
+            state=int(local.get("reserve", 0)),
+            attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "AlphaESS {} Battery Schedule Reserve".format(sn), "icon": "mdi:gauge"},
+            app="alphaess",
+        )
+        for direction in ("charge", "export"):
+            window = local.get(direction, {})
+            # HH:MM:SS to match INVERTER_DEF charge_time_format. Any other value makes
+            # Predbat replace these entities with its own dummies (inverter.py, the
+            # inv_charge_time_format != "HH:MM:SS" branch) and the window never arrives.
+            self.dashboard_item(
+                self._control_name("select", sn, "battery_schedule_{}_start_time".format(direction)),
+                state=window.get("start", "00:00:00"),
+                attributes={"friendly_name": "AlphaESS {} {} Start".format(sn, direction.title()), "icon": "mdi:clock-outline"},
+                app="alphaess",
+            )
+            self.dashboard_item(
+                self._control_name("select", sn, "battery_schedule_{}_end_time".format(direction)),
+                state=window.get("end", "00:00:00"),
+                attributes={"friendly_name": "AlphaESS {} {} End".format(sn, direction.title()), "icon": "mdi:clock-outline"},
+                app="alphaess",
+            )
+            self.dashboard_item(
+                self._control_name("number", sn, "battery_schedule_{}_soc".format(direction)),
+                state=int(window.get("soc", 0)),
+                attributes={"min": 0, "max": 100, "step": 1, "unit_of_measurement": "%", "friendly_name": "AlphaESS {} {} SoC".format(sn, direction.title()), "icon": "mdi:gauge"},
+                app="alphaess",
+            )
+            self.dashboard_item(
+                self._control_name("number", sn, "battery_schedule_{}_power".format(direction)),
+                state=int(window.get("power", 0)),
+                attributes={"min": 0, "max": 20000, "step": 100, "unit_of_measurement": "W", "friendly_name": "AlphaESS {} {} Power".format(sn, direction.title()), "icon": "mdi:flash"},
+                app="alphaess",
+            )
+            self.dashboard_item(
+                self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)),
+                state="on" if window.get("enable") else "off",
+                attributes={"friendly_name": "AlphaESS {} {} Enable".format(sn, direction.title()), "icon": "mdi:check-circle-outline"},
+                app="alphaess",
+            )
+        self.dashboard_item(self._control_name("switch", sn, "battery_schedule_charge_write"), state="off", attributes={"friendly_name": "AlphaESS {} Schedule Write".format(sn), "icon": "mdi:content-save"}, app="alphaess")
+
+    async def get_schedule_settings_ha(self, sn):
+        """Read the control entities into the schedule shape the payload builder consumes.
+
+        Numeric casts route through _as_float so an entity legitimately reporting
+        "unknown"/"unavailable" - for instance right after a HA restart, before Predbat
+        republishes - falls back to 0 rather than raising and killing the control loop.
+        """
+        schedule = {"reserve": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_reserve"), default=0), 0))}
+        for direction in ("charge", "export"):
+            schedule[direction] = {
+                "enable": self.get_state_wrapper(self._control_name("switch", sn, "battery_schedule_{}_enable".format(direction)), default="off") == "on",
+                "start": self.get_state_wrapper(self._control_name("select", sn, "battery_schedule_{}_start_time".format(direction)), default="00:00:00"),
+                "end": self.get_state_wrapper(self._control_name("select", sn, "battery_schedule_{}_end_time".format(direction)), default="00:00:00"),
+                "soc": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_{}_soc".format(direction)), default=0), 0)),
+                "power": int(self._as_float(self.get_state_wrapper(self._control_name("number", sn, "battery_schedule_{}_power".format(direction)), default=0), 0)),
+            }
+        self.local_schedule[sn] = schedule
+        return schedule
+
+    def _sn_from_entity(self, entity_id):
+        """Extract the serial from an AlphaESS entity id, or None if unresolvable.
+
+        Entity ids are always {domain}.{prefix}_alphaess_{sn}_{leaf}, so the serial is
+        always followed by "_". Matching sn + "_" rather than a bare prefix keeps
+        prefix-colliding serials apart - an entity for AL701 must never route to AL70,
+        which would send a control write to the wrong inverter.
+        """
+        text = str(entity_id).lower()
+        for sn in self.device_list:
+            if "_alphaess_{}_".format(sn.lower()) in text:
+                return sn
+        return None
+
+    @staticmethod
+    def _to_bool(value, current=False):
+        """Coerce a switch service or state to a boolean, keeping current when unknown."""
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("turn_on", "on", "true", "1"):
+            return True
+        if text in ("turn_off", "off", "false", "0"):
+            return False
+        if text == "toggle":
+            return not current
+        return current
+
+    def update_local_schedule(self, sn, entity_id, value):
+        """Apply one control-entity change to the locally held schedule."""
+        schedule = self.local_schedule.setdefault(sn, self._empty_schedule())
+        leaf = str(entity_id).split("_alphaess_{}_".format(sn.lower()), 1)[-1]
+        if leaf == "battery_schedule_reserve":
+            schedule["reserve"] = int(self._as_float(value, 0))
+            return
+        for direction in ("charge", "export"):
+            prefix = "battery_schedule_{}_".format(direction)
+            if not leaf.startswith(prefix):
+                continue
+            field = leaf[len(prefix) :]
+            window = schedule.setdefault(direction, {})
+            if field in ("start_time", "end_time"):
+                window[field.replace("_time", "")] = str(value)
+            elif field in ("soc", "power"):
+                window[field] = int(self._as_float(value, 0))
+            elif field == "enable":
+                window["enable"] = self._to_bool(value, window.get("enable", False))
+            return
+
+    async def select_event(self, entity_id, value):
+        """Handle a select entity change."""
+        await self._handle_control_event(entity_id, value)
+
+    async def number_event(self, entity_id, value):
+        """Handle a number entity change."""
+        await self._handle_control_event(entity_id, value)
+
+    async def switch_event(self, entity_id, service):
+        """Handle a switch entity service call."""
+        await self._handle_control_event(entity_id, service)
+
+    async def _handle_control_event(self, entity_id, value):
+        """Route one control-entity event to the right inverter and apply it."""
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            self.log("Warn: AlphaESS could not resolve an inverter for {}".format(entity_id))
+            return
+        self.update_local_schedule(sn, entity_id, value)
+        await self.publish_schedule_settings_ha(sn)

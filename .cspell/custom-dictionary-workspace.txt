@@ -125,6 +125,7 @@ dimport
 dischargeenergytotal
 dischargefreeze
 Dischg
+Dise
 Disf
 diverter
 dlimit
