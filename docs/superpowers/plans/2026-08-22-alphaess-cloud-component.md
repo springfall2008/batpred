@@ -1475,11 +1475,21 @@ def test_alphaess_refresh_static_never_clears_a_working_device_list():
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok)):
         run_async_local(client.refresh_static())
     before = list(client.device_list)
+    tier_before = client._tier_refreshed.get("static")
     bad = create_aiohttp_mock_response(status=200, json_data=_envelope(6053, None, msg="too fast"))
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(bad)):
-        run_async_local(client.refresh_static())
+        result = run_async_local(client.refresh_static())
     if client.device_list != before:
         print(f"ERROR: device_list cleared by a transient failure: {client.device_list} != {before}")
+        failed = True
+    # The return value and the tier clock are the parts that actually catch the bug:
+    # device_list being unchanged is trivially true on the failure path, so a test that
+    # checked only that would pass even with the guard unreachable.
+    if result is not False:
+        print(f"ERROR: refresh_static returned {result!r} after a failed discovery, must be False")
+        failed = True
+    if client._tier_refreshed.get("static") != tier_before:
+        print("ERROR: the static tier clock advanced despite a failed discovery")
         failed = True
     assert not failed, "test_alphaess_refresh_static_never_clears_a_working_device_list"
 
@@ -1626,15 +1636,25 @@ Append to `AlphaESSAPI` in `apps/predbat/alphaess.py`:
         """
         previous = list(self.device_list)
         serials = await self.get_device_list()
-        if not serials and previous:
-            self.log("Warn: AlphaESS discovery returned nothing; keeping the {} previously known inverter(s)".format(len(previous)))
+        # Branch on discovery_ok, NOT on the list being empty. get_device_list returns the
+        # EXISTING list on failure, and `previous` was captured before the call, so
+        # `if not serials` can never fire once a device_list exists - the guard would be
+        # unreachable and the tier would be stamped fresh on every failed poll, making an
+        # ongoing outage look like a steady stream of successful refreshes.
+        if self.discovery_ok is False:
             self.device_list = previous
-            return False
-        if not serials:
-            if self.discovery_ok:
-                self.log("Warn: AlphaESS this account has no battery systems bound to it")
+            if previous:
+                self.log("Warn: AlphaESS discovery call failed; keeping the {} previously known inverter(s)".format(len(previous)))
             else:
                 self.log("Warn: AlphaESS inverter discovery failed; the account may still have systems")
+            return False
+        if not serials:
+            # Discovery SUCCEEDED and returned nothing. A filter matching nothing looks
+            # identical to an empty account from the list alone, so say which it was.
+            if self.inverter_sn_filter:
+                self.log("Warn: AlphaESS discovery succeeded but the configured serial filter {} matched no system on this account".format(self.inverter_sn_filter))
+            else:
+                self.log("Warn: AlphaESS this account has no battery systems bound to it")
             return False
         self.mark_refreshed("static")
         return True
