@@ -378,6 +378,7 @@ class EvccAPI(ComponentBase):
         self.sticky_vehicle = {}
         self.written_mode = {}
         self.written_priority_soc = None
+        self.written_solar_enabled = {}
         self.last_write = {}
         self.override_until = {}
         self.last_connected = {}
@@ -700,13 +701,31 @@ class EvccAPI(ComponentBase):
             self.auto_set("car_charging_now", per_car("binary_sensor", "charging"))
 
         if self.solar:
-            self.auto_set("car_charging_solar", [car_n in self.loadpoint_map for car_n in range(count)])
+            self.publish_solar_enabled(count)
             self.auto_set("car_charging_solar_limit", per_car("sensor", "limit_soc"))
             self.auto_set("car_charging_solar_max_power", per_car("sensor", "max_power"))
             self.auto_set("car_charging_solar_min_power", per_car("sensor", "min_power"))
             self.auto_set("car_charging_solar_power_step", per_car("sensor", "power_step"))
 
         self.log("EvccAPI: auto-configured {} car(s) from evcc{}".format(len(cars), " (left alone: {})".format(self.overridden_keys) if self.overridden_keys else ""))
+
+    def publish_solar_enabled(self, count):
+        """
+        Turn the per-car solar charging switch on for the cars evcc actually drives a loadpoint for.
+
+        car_charging_solar is a Home Assistant switch rather than an apps.yaml key, so this writes it
+        the way publish_priority_soc writes the priority SoC: only when evcc's own answer changes, so a
+        user who turns the switch off in Home Assistant is not overruled on the next poll. evcc wins
+        again when its topology moves - a loadpoint appearing or going away.
+        """
+        for car_n in range(count):
+            wired = car_n in self.loadpoint_map
+            if self.written_solar_enabled.get(car_n) == wired:
+                continue
+            self.written_solar_enabled[car_n] = wired
+            key = "car_charging_solar" + self.car_postfix(car_n)
+            self.log("EvccAPI: car {} solar charging {} from evcc".format(car_n, "on" if wired else "off"))
+            self.base.expose_config(key, wired)
 
     def signature(self, loadpoints):
         """Build a signature of the evcc topology, so auto-config re-runs when it changes."""

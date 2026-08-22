@@ -466,7 +466,7 @@ When enabled for a car:
 
 Configuration (all per-car, set in `apps.yaml` unless noted):
 
-- **car_charging_solar** - boolean per car (default off). Turns on the solar diversion model and suppresses grid scheduling for that car.
+- **switch.predbat_car_charging_solar** - one switch per car in Home Assistant (`_1`, `_2`, … for further cars), default off. Turns on the solar diversion model and suppresses grid scheduling for that car. It is a switch rather than an apps.yaml key so the model can be turned off without editing YAML and restarting.
 - **car_charging_plugged** - optional sensor per car indicating the car is plugged in across the forecast horizon. If not supplied it falls back to **car_charging_now**.
   This is needed because "charging now" says nothing about future daylight slots.
 - **car_charging_solar_max_power** - maximum diversion power in kW. Defaults to the configured **car_charging_rate** and is uncapped (3-phase chargers can exceed the rate slider limit).
@@ -511,9 +511,9 @@ The `Car ... scored charging windows` line in the log shows the same, along with
 
 A worked example for a 3-phase 6-16A charger that diverts surplus on its own, charging one car to 80% from the sun while a plan still guarantees the departure target:
 
+Turn on **switch.predbat_car_charging_solar** in Home Assistant first, then describe the charger in apps.yaml:
+
 ```yaml
-  car_charging_solar:
-    - True
   # Needed to know about future daylight hours - "charging now" says nothing about this afternoon
   car_charging_plugged:
     - 're:binary_sensor.myenergi_zappi_[0-9a-z]+_plug_status'

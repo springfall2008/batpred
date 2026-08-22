@@ -2284,6 +2284,9 @@ class Fetch:
         self.car_charging_planned_response = [str(response).lower() for response in self.get_arg("car_charging_planned_response", ["yes", "on", "enable", "true"])]
         self.car_charging_now_response = [str(response).lower() for response in self.get_arg("car_charging_now_response", ["yes", "on", "enable", "true"])]
         self.car_charging_from_battery = self.get_arg("car_charging_from_battery")
+        if isinstance(getattr(self, "args_from_apps_yaml", {}).get("car_charging_solar"), list):
+            self.log("Warn: car_charging_solar is now a Home Assistant switch per car (switch.predbat_car_charging_solar), the apps.yaml list is ignored - see the car charging docs")
+            self.record_status("Warn: car_charging_solar has moved from apps.yaml to a Home Assistant switch", had_errors=True)
         self.car_charging_solar_min_soc = self.get_arg("car_charging_solar_min_soc", 0.0)
         self.car_charging_solar_export_smart = self.get_arg("car_charging_solar_export_smart", False)
 
@@ -2321,8 +2324,9 @@ class Fetch:
             self.car_charging_limit[car_n] = dp3((float(self.get_arg("car_charging_limit", 100.0, index=car_n)) * self.car_charging_battery_size[car_n]) / 100.0)
             self.car_charging_exclusive[car_n] = self.get_arg("car_charging_exclusive", False, index=car_n)
 
-            # Opportunistic solar (sun-following) charging - models PV diverted to the car by an external charger (e.g. EVCC)
-            self.car_charging_solar[car_n] = self.get_arg("car_charging_solar", False, index=car_n)
+            # Opportunistic solar (sun-following) charging - models PV diverted to the car by an external charger (e.g. EVCC).
+            # A Home Assistant switch per car, like car_charging_rate, so it can be turned off without editing apps.yaml
+            self.car_charging_solar[car_n] = self.get_arg("car_charging_solar" + car_postfix, False)
 
             # Maximum diversion power - defaults to the configured car charging rate, but is uncapped (3-phase chargers exceed the rate slider limit)
             self.car_charging_solar_max_power[car_n] = float(self.get_arg("car_charging_solar_max_power", self.car_charging_rate[car_n], index=car_n))

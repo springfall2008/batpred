@@ -366,9 +366,8 @@ pred_bat:
   # Wallbox Eco-Smart, evcc, ...) so the home battery forecast is not too optimistic on sunny days.
   # Modelling only: Predbat never commands the car, it only reflects the energy the charger diverts.
   # Works with any such charger - the evcc component below just fills these in for you.
+  # Turn it on with switch.predbat_car_charging_solar in Home Assistant (one switch per car), not here.
   # See https://springfall2008.github.io/batpred/car-charging/#opportunistic-solar-sun-following-charging
-  #car_charging_solar:
-  #  - True
   # Sensor saying the car is plugged in, needed to know about future daylight hours
   # (falls back to car_charging_now, which only says something about right now)
   #car_charging_plugged:

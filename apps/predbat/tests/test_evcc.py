@@ -341,7 +341,8 @@ def test_publish_and_auto_config():
     check("num_cars", api.args["num_cars"], 1, failures)
     check("wired_soc", api.args["car_charging_soc"], ["sensor.predbat_evcc_soc"], failures)
     check("wired_ready", api.args["car_charging_ready_time"], ["sensor.predbat_evcc_plan_time"], failures)
-    check("wired_solar", api.args["car_charging_solar"], [True], failures)
+    # car_charging_solar is a Home Assistant switch now, so evcc writes the config item rather than an arg
+    check("wired_solar", api.config_written["car_charging_solar"], True, failures)
     check("wired_now", api.args["car_charging_now"], ["binary_sensor.predbat_evcc_charging"], failures)
 
     # A user's own live SoC entity must survive auto-config, while the rest is still filled in
@@ -645,6 +646,31 @@ async def _immediate(value):
     return value
 
 
+def test_solar_enabled_switch():
+    """The per-car solar charging switch is written from evcc's loadpoint wiring, only on change"""
+    print("**** Running Test: evcc_solar_enabled_switch ****")
+    failures = []
+    api = MockEvccAPI(host="http://evcc", automatic=True)
+    api.loadpoint_map = {0: 0}
+
+    api.publish_solar_enabled(2)
+    check("car0_on", api.config_written.get("car_charging_solar"), True, failures)
+    # The second car has no loadpoint, so its switch is turned off rather than left to guess
+    check("car1_off", api.config_written.get("car_charging_solar_1"), False, failures)
+
+    # Unchanged wiring must not be written again, or a switch turned off in HA is fought every poll
+    api.config_written.clear()
+    api.publish_solar_enabled(2)
+    check("no_repeat", api.config_written, {}, failures)
+
+    # A loadpoint appearing in evcc does win
+    api.loadpoint_map = {0: 0, 1: 1}
+    api.publish_solar_enabled(2)
+    check("car1_on", api.config_written.get("car_charging_solar_1"), True, failures)
+
+    return failures
+
+
 def test_priority_soc():
     """The home battery priority SoC is taken from evcc's site configuration"""
     print("**** Running Test: evcc_priority_soc ****")
@@ -701,6 +727,7 @@ def test_evcc(my_predbat=None):
         test_publish_and_auto_config,
         test_sticky_soc,
         test_desired_mode_and_gates,
+        test_solar_enabled_switch,
         test_priority_soc,
         test_override_detection,
         test_apply_modes_writes,
