@@ -54,6 +54,7 @@ from alphaess_const import (
     window_is_empty,
     ALPHAESS_TIME_DISABLED,
     ALPHAESS_TIME_MAX,
+    ALPHAESS_SETTLE_POLLS,
 )
 
 
@@ -1036,6 +1037,50 @@ class AlphaESSAPI(ComponentBase):
             return False
         return json.dumps(first, sort_keys=True, default=str) == json.dumps(second, sort_keys=True, default=str)
 
+    @staticmethod
+    def _owned_fields(direction):
+        """Return the payload fields Predbat writes for one direction.
+
+        Only these count as interference: a field Predbat never writes changing is the
+        user configuring their own inverter, not something overwriting Predbat's plan.
+        """
+        if direction == "charge":
+            return ("gridCharge", "timeChaf1", "timeChae1", "timeChaf2", "timeChae2", "batHighCap")
+        return ("ctrDis", "timeDisf1", "timeDise1", "timeDisf2", "timeDise2", "batUseCap")
+
+    def note_external_change(self, sn, direction, observed):
+        """Report when a Predbat-owned field no longer matches what Predbat last wrote.
+
+        Suppressed for the first ALPHAESS_SETTLE_POLLS reads after a write, because
+        settings only reach the inverter on its next cloud poll - typically one to five
+        minutes later - so an immediate read-back legitimately shows the old values.
+        Without that window every single write would raise a false alarm.
+
+        Does nothing before Predbat has written anything for this serial and direction:
+        with no recorded intent there is nothing to have been overwritten, and what the
+        inverter reports is simply the user's own configuration.
+        """
+        applied = self.applied_payload.get(sn, {}).get(direction)
+        if not applied or not isinstance(observed, dict):
+            return
+        key = (sn, direction)
+        polls = self.settle_count.get(key, 0) + 1
+        self.settle_count[key] = polls
+        if polls <= ALPHAESS_SETTLE_POLLS:
+            return
+        differing = [field for field in self._owned_fields(direction) if field in observed and str(observed.get(field)) != str(applied.get(field))]
+        if not differing:
+            return
+        detail = ", ".join("{}={} (Predbat wrote {})".format(field, observed.get(field), applied.get(field)) for field in differing)
+        self.log(
+            "Warn: AlphaESS {} {} settings no longer match what Predbat wrote: {}. The AlphaESS app, another Predbat instance, or the installer portal may have changed them - these endpoints are whole-object replacements, so the last writer wins.".format(
+                sn, direction, detail
+            )
+        )
+        # Clear the recorded intent so the next cycle re-applies rather than deciding the
+        # payload is unchanged and leaving the inverter on someone else's settings.
+        self.applied_payload.get(sn, {}).pop(direction, None)
+
     async def fetch_config(self, sn):
         """Read the current charge and discharge config for one inverter.
 
@@ -1055,12 +1100,14 @@ class AlphaESSAPI(ComponentBase):
         code, charge = await self._get("charge_config", params={"sysSn": sn})
         charge_ok = code == ALPHAESS_CODE_OK and isinstance(charge, dict)
         if charge_ok:
+            self.note_external_change(sn, "charge", charge)
             entry["charge"] = charge
         if self.api_delay:
             await asyncio.sleep(self.api_delay)
         code, discharge = await self._get("discharge_config", params={"sysSn": sn})
         discharge_ok = code == ALPHAESS_CODE_OK and isinstance(discharge, dict)
         if discharge_ok:
+            self.note_external_change(sn, "discharge", discharge)
             entry["discharge"] = discharge
         if not charge_ok:
             self.log("Warn: AlphaESS {} charge config read failed; keeping the previous cycle's value".format(sn))

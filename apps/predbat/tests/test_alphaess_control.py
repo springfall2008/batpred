@@ -12,6 +12,7 @@ import predbat  # noqa: F401  (import first - avoids circular import: config.py 
 from unittest.mock import patch
 from tests.test_alphaess_api import MockAlphaESS, _envelope
 from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
+from alphaess_const import ALPHAESS_SETTLE_POLLS
 
 
 def _schedule(reserve=10, charge=None, export=None, charge_power=3000, export_power=3000):
@@ -462,6 +463,75 @@ def _writable(sn="AL70"):
     return client
 
 
+def test_alphaess_settle_window_suppresses_a_stale_read_back():
+    """Settings reach the inverter on its NEXT cloud poll, typically one to five minutes
+    after Predbat writes them.
+
+    So a read-back immediately after a write shows the old values. That is not
+    interference and must not be reported as such, or every single write would produce a
+    false alarm.
+    """
+    failed = False
+    client = _writable()
+    client.applied_payload["AL70"] = {"charge": {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}}
+    client.settle_count[("AL70", "charge")] = 0
+    stale = {"gridCharge": 0, "timeChaf1": "00:00", "timeChae1": "00:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 100}
+    client.note_external_change("AL70", "charge", stale)
+    if any("overwritten" in message.lower() or "interference" in message.lower() for message in client.log_messages):
+        print(f"ERROR: a stale read-back inside the settle window was reported as interference: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_settle_window_suppresses_a_stale_read_back"
+
+
+def test_alphaess_external_change_reported_after_the_settle_window():
+    """Past the settle window, a Predbat-owned field that does not match what Predbat
+    wrote means something else changed it - the phone app, or another Predbat instance.
+
+    The write endpoints are whole-object replacements, so the last writer wins.
+    """
+    failed = False
+    client = _writable()
+    client.applied_payload["AL70"] = {"charge": {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}}
+    changed = {"gridCharge": 1, "timeChaf1": "02:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "charge", changed)
+    if not any("timeChaf1" in message for message in client.log_messages):
+        print(f"ERROR: the changed field was not named: {client.log_messages}")
+        failed = True
+    if not any("AlphaESS app" in message or "another" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no interference explanation: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_external_change_reported_after_the_settle_window"
+
+
+def test_alphaess_only_predbat_owned_fields_count_as_interference():
+    """A field Predbat never writes changing is not interference with Predbat's plan."""
+    failed = False
+    client = _writable()
+    client.applied_payload["AL70"] = {"charge": {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}}
+    observed = {"gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90, "someOtherField": "changed"}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "charge", observed)
+    if any("overwritten" in message.lower() for message in client.log_messages):
+        print(f"ERROR: an unowned field was reported as interference: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_only_predbat_owned_fields_count_as_interference"
+
+
+def test_alphaess_no_interference_check_before_predbat_has_written():
+    """With nothing in applied_payload there is no Predbat intent to compare against, so
+    whatever the inverter reports is simply the user's own configuration."""
+    failed = False
+    client = _writable()
+    observed = {"gridCharge": 1, "timeChaf1": "03:00", "timeChae1": "04:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 55}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 2):
+        client.note_external_change("AL70", "charge", observed)
+    if any("overwritten" in message.lower() for message in client.log_messages):
+        print(f"ERROR: reported interference with no prior Predbat write: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_no_interference_check_before_predbat_has_written"
+
+
 def test_alphaess_identical_payload_is_not_rewritten():
     """The write button is pressed EVERY cycle as Predbat's normal 'apply' action, not only
     when the plan changed.
@@ -750,6 +820,10 @@ def run_alphaess_control_tests(my_predbat):
         ("clamped_at_boundary", test_alphaess_reserve_is_clamped_at_the_api_boundary),
         ("full_replacement", test_alphaess_payload_is_a_full_replacement),
         ("payloads_equal_type_strict", test_alphaess_payloads_equal_is_type_strict_and_order_independent),
+        ("settle_suppresses_stale", test_alphaess_settle_window_suppresses_a_stale_read_back),
+        ("external_change_reported", test_alphaess_external_change_reported_after_the_settle_window),
+        ("only_owned_fields", test_alphaess_only_predbat_owned_fields_count_as_interference),
+        ("no_check_before_writing", test_alphaess_no_interference_check_before_predbat_has_written),
         ("identical_not_rewritten", test_alphaess_identical_payload_is_not_rewritten),
         ("independent_gating", test_alphaess_charge_and_discharge_gated_independently),
         ("read_only_gate", test_alphaess_reconcile_is_gated_on_predbat_read_only),
