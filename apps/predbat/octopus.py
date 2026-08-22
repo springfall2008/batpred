@@ -884,11 +884,15 @@ class OctopusAPI(ComponentBase):
             # Join the saving sessions
             self.log("OctopusAPI: Joining saving session event {}".format(event_code))
             result = await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False, use_backend=True)
-            if result is not None:
+            join_info = result.get("joinSavingSessionsEvent") if isinstance(result, dict) else None
+            joined_codes = join_info.get("joinedEventCodes") if isinstance(join_info, dict) else None
+            if joined_codes and event_code in joined_codes:
                 if self.get_arg("set_event_notify"):
                     self.call_notify("Predbat: Joined Octopus saving event {}".format(event_code))
-            else:
+            elif result is None:
                 self.log("Warn: OctopusAPI: Failed to join saving session event {}".format(event_code))
+            else:
+                self.log("Warn: OctopusAPI: Join did not confirm event {} was joined: {}".format(event_code, result))
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
