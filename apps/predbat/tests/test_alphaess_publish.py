@@ -80,7 +80,20 @@ def test_alphaess_automatic_config_maps_the_expected_args():
         if arg not in args:
             print(f"ERROR: arg {arg} not mapped")
             failed = True
-    for arg in ("reserve", "charge_start_time", "charge_end_time", "charge_limit", "charge_rate", "scheduled_charge_enable", "discharge_start_time", "discharge_end_time", "discharge_target_soc", "discharge_rate", "scheduled_discharge_enable", "schedule_write_button"):
+    for arg in (
+        "reserve",
+        "charge_start_time",
+        "charge_end_time",
+        "charge_limit",
+        "charge_rate",
+        "scheduled_charge_enable",
+        "discharge_start_time",
+        "discharge_end_time",
+        "discharge_target_soc",
+        "discharge_rate",
+        "scheduled_discharge_enable",
+        "schedule_write_button",
+    ):
         if arg not in args:
             print(f"ERROR: control arg {arg} not mapped")
             failed = True
