@@ -24,6 +24,7 @@ import hashlib
 import json
 import time
 import aiohttp
+from datetime import datetime
 from component_base import ComponentBase
 from alphaess_const import (
     ALPHAESS_BASE_URL,
@@ -35,6 +36,14 @@ from alphaess_const import (
     ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE,
     ALPHAESS_RETRIES,
     ALPHAESS_TIMEOUT,
+    ALPHAESS_TELEMETRY,
+    ALPHAESS_TELEMETRY_NEGATE,
+    ALPHAESS_HISTORY,
+    ALPHAESS_HISTORY_FEED_IN,
+    ALPHAESS_HISTORY_GRID_CHARGE,
+    ALPHAESS_LIVE_FAIL_LIMIT,
+    ALPHAESS_TTL_POWER,
+    ALPHAESS_TTL_POWER_DEMOTED,
 )
 
 
@@ -353,3 +362,133 @@ class AlphaESSAPI(ComponentBase):
         prevent.
         """
         self._tier_refreshed[tier] = time.time() - (age_minutes * 60)
+
+    def _history_query_date(self):
+        """Return today's date as yyyy-MM-dd in the user's timezone, for the day endpoints."""
+        return datetime.now(self.local_tz).strftime("%Y-%m-%d")
+
+    def power_tier_ttl(self):
+        """Return the power tier interval, longer once any serial is on the history path.
+
+        getOneDayPowerBySn returns ~288 records for a full day, so it must not sit on a
+        60-second loop. Five minutes is the resolution the history actually has anyway.
+        """
+        if any(ok is False for ok in self._live_ok.values()):
+            return ALPHAESS_TTL_POWER_DEMOTED
+        return ALPHAESS_TTL_POWER
+
+    def _apply_live_payload(self, sn, payload):
+        """Map a getLastPowerData object into device_values, or return False without a SOC."""
+        if not isinstance(payload, dict) or payload.get("soc") is None:
+            return False
+        values = {}
+        for leaf, field in ALPHAESS_TELEMETRY.items():
+            value = self._as_float(payload.get(field), 0.0)
+            if leaf in ALPHAESS_TELEMETRY_NEGATE:
+                # pgrid is positive on IMPORT; Predbat's convention is negative on import.
+                # pbat needs no negation - the API's own live sample balances as
+                # pgrid + pbat = pload, so a positive pbat is already discharge.
+                value = -value
+            values[leaf] = value
+        self.device_values[sn] = values
+        return True
+
+    def _apply_history_payload(self, sn, samples):
+        """Map the most recent getOneDayPowerBySn sample into device_values.
+
+        Returns False when the history carries no SOC, which is the only thing that makes
+        a serial undriveable - everything else can be defaulted.
+        """
+        if not isinstance(samples, list) or not samples:
+            return False
+        sample = samples[-1]
+        soc = None
+        for field in ALPHAESS_HISTORY["soc"]:
+            # cbat is what the live API returns; the portal documents cobat and reading
+            # that name silently yields None. Try both, cbat first.
+            if sample.get(field) is not None:
+                soc = self._as_float(sample.get(field), None)
+                break
+        if soc is None:
+            return False
+        feed_in = self._as_float(sample.get(ALPHAESS_HISTORY_FEED_IN), 0.0)
+        grid_charge = self._as_float(sample.get(ALPHAESS_HISTORY_GRID_CHARGE), 0.0)
+        self.device_values[sn] = {
+            "soc": soc,
+            "pv_power": self._as_float(sample.get("ppv"), 0.0),
+            "load_power": self._as_float(sample.get("load"), 0.0),
+            # The history has no signed grid field, so it is reconstructed from the two
+            # positive-only fields and then negated for Predbat's convention.
+            "grid_power": -(grid_charge - feed_in),
+        }
+        return True
+
+    async def fetch_device_history(self, sn):
+        """Populate device_values for one serial from today's power history."""
+        code, data = await self._get("one_day_power", params={"sysSn": sn, "queryDate": self._history_query_date()})
+        if code != ALPHAESS_CODE_OK:
+            return False
+        return self._apply_history_payload(sn, data)
+
+    async def reprobe_live(self, sn):
+        """Re-test getLastPowerData for a demoted serial, restoring it on success.
+
+        Runs on the config tier, so a system that was merely offline or briefly failing
+        climbs back to 60-second live data by itself, and a genuinely incapable one costs
+        two extra calls an hour rather than one per minute.
+        """
+        code, data = await self._get("last_power", params={"sysSn": sn})
+        if code == ALPHAESS_CODE_OK and self._apply_live_payload(sn, data):
+            if self._live_ok.get(sn) is False:
+                self.log("Info: AlphaESS {} is serving live power data again, returning it to the live telemetry path".format(sn))
+            self._live_ok[sn] = True
+            self._live_fail_count[sn] = 0
+            return True
+        return False
+
+    async def fetch_device_data(self, sn):
+        """Populate device_values for one serial, preferring live data over history.
+
+        The rule is behavioural, not model-based: if live data is not present, use the
+        history. That covers the models known not to serve getLastPowerData, any unlisted
+        model with the same gap, and a system that has simply stopped answering - none of
+        which a model list would catch.
+        """
+        if self._live_ok.get(sn) is not False:
+            code, data = await self._get("last_power", params={"sysSn": sn})
+            if code == ALPHAESS_CODE_OK and self._apply_live_payload(sn, data):
+                self._live_ok[sn] = True
+                self._live_fail_count[sn] = 0
+                return True
+            self._live_fail_count[sn] = self._live_fail_count.get(sn, 0) + 1
+            if self._live_fail_count[sn] >= ALPHAESS_LIVE_FAIL_LIMIT:
+                self._live_ok[sn] = False
+                self.log(
+                    "Info: AlphaESS {} has not served live power data {} times running; using the 5-minute history instead. It is re-probed every config refresh, so this reverses by itself if the system recovers.".format(sn, self._live_fail_count[sn])
+                )
+
+        if await self.fetch_device_history(sn):
+            return True
+
+        # No SOC on either path means Predbat cannot plan for this serial. Say which call
+        # failed rather than registering it with a fabricated SOC.
+        self.log("Warn: AlphaESS {} returned no usable soc from getLastPowerData and no cbat in its power history, so Predbat cannot drive it this cycle".format(sn))
+        return False
+
+    async def refresh_power(self):
+        """Poll telemetry for every inverter, reporting whether anything came back.
+
+        The tier clock is started only when a poll actually succeeded - see mark_refreshed.
+        """
+        got_any = False
+        for sn in self.device_list:
+            try:
+                if await self.fetch_device_data(sn):
+                    got_any = True
+            except Exception as error:
+                self.log("Warn: AlphaESS telemetry poll failed for {}: {}".format(sn, error))
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        if got_any:
+            self.mark_refreshed("power")
+        return got_any

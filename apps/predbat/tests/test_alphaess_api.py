@@ -482,6 +482,167 @@ def test_alphaess_discovery_distinguishes_empty_account_from_failure():
     assert not failed, "test_alphaess_discovery_distinguishes_empty_account_from_failure"
 
 
+LAST_POWER_SAMPLE = {
+    "ppv": 0.0,
+    "ppvDetail": {"ppv1": 0.0, "ppv2": 0.0, "ppv3": 0.0, "ppv4": 0.0, "pmeterDc": 0.0},
+    "soc": 56.0,
+    "pev": 0,
+    "pevDetail": {"ev1Power": None, "ev2Power": None, "ev3Power": None, "ev4Power": None},
+    "prealL1": 1159.0,
+    "pgrid": 11.0,
+    "pgridDetail": {"pmeterL1": 11.0, "pmeterL2": 0.0, "pmeterL3": 0.0},
+    "pload": 1275.0,
+    "pbat": 1264.0,
+}
+
+
+def test_alphaess_telemetry_applies_predbat_sign_conventions():
+    """pgrid is positive on IMPORT and Predbat wants negative on import, so it is negated.
+
+    pbat needs NO negation: the API doc's own live sample balances as
+    pgrid 11 + pbat 1264 = pload 1275 with ppv 0, so a positive pbat is discharge, which
+    is already Predbat's convention.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, LAST_POWER_SAMPLE))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        ok = run_async_local(client.fetch_device_data("AL70"))
+    values = client.device_values.get("AL70", {})
+    if not ok:
+        print("ERROR: fetch_device_data returned False")
+        failed = True
+    for leaf, expect in (("soc", 56.0), ("battery_power", 1264.0), ("grid_power", -11.0), ("pv_power", 0.0), ("load_power", 1275.0)):
+        if abs(values.get(leaf, 0.0) - expect) > 0.001:
+            print(f"ERROR: {leaf} {values.get(leaf)} != {expect}")
+            failed = True
+    assert not failed, "test_alphaess_telemetry_applies_predbat_sign_conventions"
+
+
+def test_alphaess_falls_back_to_history_when_live_data_is_unavailable():
+    """Not every system serves getLastPowerData (Storion-S5 is the known case).
+
+    Decided on BEHAVIOUR, not on a model list: a list only covers models someone already
+    wrote down, while this covers Storion-S5, any unlisted model with the same gap, and a
+    system that simply stops answering.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    history = [
+        {"sysSn": "AL70", "uploadTime": "2026-08-22 20:04:04", "ppv": 10.0, "load": 900.0, "cbat": 40.0, "feedIn": 0.0, "gridCharge": 100.0},
+        {"sysSn": "AL70", "uploadTime": "2026-08-22 20:09:04", "ppv": 0.0, "load": 1218.0, "cbat": 56.8, "feedIn": 0.0, "gridCharge": 2.0},
+    ]
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, history)),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.fetch_device_data("AL70"))
+    values = client.device_values.get("AL70", {})
+    if not ok:
+        print("ERROR: history fallback returned False")
+        failed = True
+    # The MOST RECENT sample, not the first.
+    if abs(values.get("soc", 0.0) - 56.8) > 0.001:
+        print(f"ERROR: soc from history {values.get('soc')} != 56.8")
+        failed = True
+    # feedIn and gridCharge are separate positive-only fields, so grid is reconstructed
+    # as gridCharge - feedIn and THEN negated for Predbat.
+    if abs(values.get("grid_power", 0.0) - (-2.0)) > 0.001:
+        print(f"ERROR: grid_power from history {values.get('grid_power')} != -2.0")
+        failed = True
+    if abs(values.get("load_power", 0.0) - 1218.0) > 0.001:
+        print(f"ERROR: load_power from history {values.get('load_power')}")
+        failed = True
+    assert not failed, "test_alphaess_falls_back_to_history_when_live_data_is_unavailable"
+
+
+def test_alphaess_history_reads_cbat_not_the_portal_spelling():
+    """The portal documents the SOC field as cobat; the live API returns cbat.
+
+    Reading the portal name silently yields None, which looks exactly like "this system
+    has no SOC either" and would send a working serial down the skip path.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    for field in ("cbat", "cobat"):
+        sample = [{"uploadTime": "2026-08-22 20:09:04", "ppv": 0.0, "load": 100.0, field: 42.0, "feedIn": 0.0, "gridCharge": 0.0}]
+        responses = [
+            create_aiohttp_mock_response(status=200, json_data=_envelope(-1, None)),
+            create_aiohttp_mock_response(status=200, json_data=_envelope(200, sample)),
+        ]
+        client.device_values = {}
+        client._live_fail_count = {}
+        client._live_ok = {}
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+            run_async_local(client.fetch_device_data("AL70"))
+        if abs(client.device_values.get("AL70", {}).get("soc", 0.0) - 42.0) > 0.001:
+            print(f"ERROR: soc from {field} = {client.device_values.get('AL70', {}).get('soc')}")
+            failed = True
+    assert not failed, "test_alphaess_history_reads_cbat_not_the_portal_spelling"
+
+
+def test_alphaess_live_demotion_latches_and_is_reversible():
+    """~288 records is too big for a 60-second loop, so demotion latches after N failures
+    and is re-probed on the config tier so a transient failure self-heals."""
+    failed = False
+    from alphaess_const import ALPHAESS_LIVE_FAIL_LIMIT
+
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    history = [{"uploadTime": "2026-08-22 20:09:04", "ppv": 0.0, "load": 10.0, "cbat": 50.0, "feedIn": 0.0, "gridCharge": 0.0}]
+    for _ in range(ALPHAESS_LIVE_FAIL_LIMIT):
+        responses = [
+            create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None)),
+            create_aiohttp_mock_response(status=200, json_data=_envelope(200, history)),
+        ]
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+            run_async_local(client.fetch_device_data("AL70"))
+    if client._live_ok.get("AL70") is not False:
+        print(f"ERROR: not demoted after {ALPHAESS_LIVE_FAIL_LIMIT} failures: {client._live_ok}")
+        failed = True
+    # Once demoted, the live endpoint is not called again on the power tier: a single
+    # history response is enough to satisfy the whole call.
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, history)))):
+        ok = run_async_local(client.fetch_device_data("AL70"))
+    if not ok:
+        print("ERROR: demoted fetch failed")
+        failed = True
+    # The config tier re-probes, and success restores 60-second live data.
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, LAST_POWER_SAMPLE)))):
+        run_async_local(client.reprobe_live("AL70"))
+    if client._live_ok.get("AL70") is not True:
+        print(f"ERROR: re-probe did not restore live data: {client._live_ok}")
+        failed = True
+    assert not failed, "test_alphaess_live_demotion_latches_and_is_reversible"
+
+
+def test_alphaess_serial_with_no_soc_on_either_path_is_reported():
+    """No SOC on either path means the serial cannot be driven - say so, do not invent one."""
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, [])),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.fetch_device_data("AL70"))
+    if ok:
+        print("ERROR: fetch_device_data claimed success with no SOC")
+        failed = True
+    if "soc" in client.device_values.get("AL70", {}):
+        print(f"ERROR: a SOC was invented: {client.device_values}")
+        failed = True
+    if not any("AL70" in message and "soc" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no explanatory log, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_serial_with_no_soc_on_either_path_is_reported"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -503,6 +664,11 @@ def run_alphaess_api_tests(my_predbat):
         ("serial_filter_mismatch", test_alphaess_serial_filter_mismatch_reports_the_filter_not_the_account),
         ("refresh_static_keeps_list", test_alphaess_refresh_static_never_clears_a_working_device_list),
         ("empty_vs_failed_discovery", test_alphaess_discovery_distinguishes_empty_account_from_failure),
+        ("telemetry_signs", test_alphaess_telemetry_applies_predbat_sign_conventions),
+        ("history_fallback", test_alphaess_falls_back_to_history_when_live_data_is_unavailable),
+        ("history_cbat_spelling", test_alphaess_history_reads_cbat_not_the_portal_spelling),
+        ("live_demotion_reversible", test_alphaess_live_demotion_latches_and_is_reversible),
+        ("no_soc_reported", test_alphaess_serial_with_no_soc_on_either_path_is_reported),
     ]:
         try:
             if fn():

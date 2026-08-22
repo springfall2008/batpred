@@ -396,6 +396,7 @@ pitem
 pkwh
 plenticore
 pload
+pmeter
 poinv
 popv
 postdata
@@ -404,6 +405,7 @@ powerline
 Powerwall
 ppdetails
 ppkwh
+preal
 preclip
 pred
 predai
@@ -515,6 +517,7 @@ startswith
 startt
 stdlib
 stepline
+Storion
 Stromligning
 strptime
 strtod
