@@ -44,6 +44,37 @@ def test_alphaess_publishes_every_monitoring_sensor():
     assert not failed, "test_alphaess_publishes_every_monitoring_sensor"
 
 
+def test_alphaess_publish_data_tolerates_the_demoted_serial_shape():
+    """A serial demoted to the Task 5 history fallback reports ONLY soc, pv_power,
+    load_power and grid_power - no battery_power, no ev_power, because the history
+    endpoint has no such fields and the code deliberately omits them rather than
+    fabricating zeros. publish_data must use ``if leaf in values`` rather than direct
+    indexing, or a demoted serial raises KeyError and kills the poll loop for every
+    serial behind it.
+    """
+    failed = False
+    client = _ready_client()
+    sn = client.device_list[0]
+    client.device_values[sn] = {"soc": 61.0, "pv_power": 120.0, "load_power": 800.0, "grid_power": -50.0}
+    try:
+        run_async_local(client.publish_data())
+    except Exception as e:
+        print(f"ERROR: publish_data raised on the demoted-serial shape: {e}")
+        failed = True
+    sn_lower = sn.lower()
+    for leaf in ("soc", "pv_power", "load_power", "grid_power"):
+        entity = f"sensor.predbat_alphaess_{sn_lower}_{leaf}"
+        if entity not in client.published:
+            print(f"ERROR: {entity} not published from the demoted shape")
+            failed = True
+    for leaf in ("battery_power", "ev_power"):
+        entity = f"sensor.predbat_alphaess_{sn_lower}_{leaf}"
+        if entity in client.published:
+            print(f"ERROR: {entity} should not be published - the demoted shape has no {leaf}")
+            failed = True
+    assert not failed, "test_alphaess_publish_data_tolerates_the_demoted_serial_shape"
+
+
 def test_alphaess_automatic_config_forces_the_invert_flags_off():
     """base.args is shared and NOT namespaced per inverter type.
 
@@ -199,6 +230,7 @@ def run_alphaess_publish_tests(my_predbat):
     failed = False
     for name, fn in [
         ("monitoring_sensors", test_alphaess_publishes_every_monitoring_sensor),
+        ("publish_tolerates_demoted_shape", test_alphaess_publish_data_tolerates_the_demoted_serial_shape),
         ("invert_flags", test_alphaess_automatic_config_forces_the_invert_flags_off),
         ("automatic_args", test_alphaess_automatic_config_maps_the_expected_args),
         ("export_limit_not_guessed", test_alphaess_export_limit_is_not_guessed),

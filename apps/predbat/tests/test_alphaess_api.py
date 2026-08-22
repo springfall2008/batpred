@@ -520,6 +520,44 @@ def test_alphaess_telemetry_applies_predbat_sign_conventions():
     assert not failed, "test_alphaess_telemetry_applies_predbat_sign_conventions"
 
 
+def test_alphaess_ppv_detail_all_null_signal():
+    """ppv_detail_all_null is the whole hybrid-vs-AC-coupled discriminator.
+
+    Null strings mean no DC strings fitted; a hybrid AT NIGHT reports zeros, not nulls.
+    A field-name typo (``"ppv_{}"`` instead of ``"ppv{}"``) or an inverted all/any would
+    pass every test that only injects ``ppv_detail_all_null`` by hand - this one drives
+    real payload shapes through ``_apply_live_payload`` and checks the computed value.
+    """
+    failed = False
+    client = MockAlphaESS()
+    base = {"soc": 56.0, "pbat": 0.0, "pgrid": 0.0, "ppv": 0.0, "pload": 0.0, "pev": 0.0}
+
+    cases = (
+        ("all null - no DC strings fitted", {"ppv1": None, "ppv2": None, "ppv3": None, "ppv4": None}, True),
+        ("all zero - a hybrid at night, must NOT read as AC-coupled", {"ppv1": 0.0, "ppv2": 0.0, "ppv3": 0.0, "ppv4": 0.0}, False),
+        ("some non-zero - daytime generation", {"ppv1": 340.0, "ppv2": 0.0, "ppv3": 0.0, "ppv4": 0.0}, False),
+        ("mixed null and zero - not EVERY string is null", {"ppv1": None, "ppv2": 0.0, "ppv3": None, "ppv4": None}, False),
+        ("ppvDetail is an empty dict", {}, False),
+    )
+    for name, detail, expect in cases:
+        payload = dict(base, ppvDetail=detail)
+        client._apply_live_payload("AL70", payload)
+        actual = client.device_values.get("AL70", {}).get("ppv_detail_all_null")
+        if actual != expect:
+            print(f"ERROR: {name}: ppv_detail_all_null {actual} != {expect}")
+            failed = True
+
+    # ppvDetail absent from the payload entirely - the bool(pv_detail) guard.
+    payload = dict(base)
+    client._apply_live_payload("AL70", payload)
+    actual = client.device_values.get("AL70", {}).get("ppv_detail_all_null")
+    if actual is not False:
+        print(f"ERROR: ppvDetail absent: ppv_detail_all_null {actual} != False")
+        failed = True
+
+    assert not failed, "test_alphaess_ppv_detail_all_null_signal"
+
+
 def test_alphaess_falls_back_to_history_when_live_data_is_unavailable():
     """Not every system serves getLastPowerData (Storion-S5 is the known case).
 
@@ -770,6 +808,7 @@ def run_alphaess_api_tests(my_predbat):
         ("refresh_static_keeps_list", test_alphaess_refresh_static_never_clears_a_working_device_list),
         ("empty_vs_failed_discovery", test_alphaess_discovery_distinguishes_empty_account_from_failure),
         ("telemetry_signs", test_alphaess_telemetry_applies_predbat_sign_conventions),
+        ("ppv_detail_all_null_signal", test_alphaess_ppv_detail_all_null_signal),
         ("history_fallback", test_alphaess_falls_back_to_history_when_live_data_is_unavailable),
         ("history_cbat_spelling", test_alphaess_history_reads_cbat_not_the_portal_spelling),
         ("live_demotion_reversible", test_alphaess_live_demotion_latches_and_is_reversible),
