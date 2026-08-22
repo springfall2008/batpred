@@ -106,15 +106,13 @@ class Execute:
     """
 
     def clear_control_ledger(self):
-        """Drop every control ownership record, if the ledger is present.
+        """Drop every control ownership record, if the ledger is configured.
 
         Called wherever PredBat stops controlling the inverter - read-only mode and
-        calibration. Reached defensively because execute_plan() runs against test harnesses
-        that construct the engine without a ledger.
+        calibration.
         """
-        ledger = getattr(self, "control_ledger", None)
-        if ledger is not None:
-            ledger.clear()
+        if self.control_ledger is not None:
+            self.control_ledger.clear()
 
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is

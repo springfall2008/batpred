@@ -2042,7 +2042,7 @@ class Inverter:
         if isinstance(current_state, str):
             current_state = current_state.lower() in ["on", "enable", "true"]
 
-        ledger = getattr(self.base, "control_ledger", None)
+        ledger = self.base.control_ledger
         if ledger is not None:
             self._ledger_observe(ledger, name, entity_id, raw_state)
             if current_state != new_value:
@@ -2117,7 +2117,7 @@ class Inverter:
                 current_state = 0.0
             matched = abs(current_state - new_value) <= fuzzy
 
-        ledger = getattr(self.base, "control_ledger", None)
+        ledger = self.base.control_ledger
         if ledger is not None:
             self._ledger_observe(ledger, name, entity_id, raw_state)
             if not matched:
@@ -2196,7 +2196,7 @@ class Inverter:
         if old_value and (":" in old_value) and (":" in new_value) and (len(old_value) == 5) and (len(new_value) == 8):
             new_value = new_value[:5]
 
-        ledger = getattr(self.base, "control_ledger", None)
+        ledger = self.base.control_ledger
         if ledger is not None:
             self._ledger_observe(ledger, name, entity_id, old_value)
             if old_value != new_value:

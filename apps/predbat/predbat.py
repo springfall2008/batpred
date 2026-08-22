@@ -674,6 +674,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.had_errors:
             m.errors_total.labels(type="general").inc()
 
+        # Control ownership ledger
+        conflict_events = self.control_ledger.recent_events(time.time())
+        m.control_conflicts_24h.set(len(conflict_events))
+        sustained = self.control_ledger.sustained_controls(conflict_events)
+        m.control_conflicts_sustained_total.set(len(sustained))
+        m.control_conflicts_events = self.control_ledger.newest_events(20)
+        m.control_conflicts_sustained_controls = sustained
+
     def save_plan(self):
         """Save the current best plan via the storage component so it can be restored on next startup."""
         storage = self.components.get_component("storage") if self.components else None
