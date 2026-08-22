@@ -44,17 +44,34 @@ def test_alphaess_control_entities_round_trip():
     """Published control entities read back into exactly the schedule shape they came from."""
     failed = False
     client = _client()
-    client.local_schedule["AL70"] = _schedule(reserve=12, charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    client.local_schedule["AL70"] = _schedule(
+        reserve=12,
+        charge={"enable": True, "soc": 90, "power": 2500, "start": "01:00:00", "end": "05:00:00"},
+        export={"enable": True, "soc": 20, "power": 1800, "start": "14:30:00", "end": "16:45:00"},
+    )
     run_async_local(client.publish_schedule_settings_ha("AL70"))
     # HH:MM:SS to match INVERTER_DEF charge_time_format. Any other value makes Predbat
     # replace these entities with its own dummies and the window never arrives.
-    start = client.published.get("select.predbat_alphaess_al70_battery_schedule_charge_start_time", {}).get("state")
-    if start != "01:00:00":
-        print(f"ERROR: published start {start}")
+    charge_start = client.published.get("select.predbat_alphaess_al70_battery_schedule_charge_start_time", {}).get("state")
+    if charge_start != "01:00:00":
+        print(f"ERROR: published charge start {charge_start}")
+        failed = True
+    export_end = client.published.get("select.predbat_alphaess_al70_battery_schedule_export_end_time", {}).get("state")
+    if export_end != "16:45:00":
+        print(f"ERROR: published export end {export_end}")
         failed = True
     read_back = run_async_local(client.get_schedule_settings_ha("AL70"))
     if read_back["charge"]["enable"] is not True or read_back["charge"]["soc"] != 90 or read_back["reserve"] != 12:
-        print(f"ERROR: read back {read_back}")
+        print(f"ERROR: charge read back {read_back}")
+        failed = True
+    if read_back["charge"]["power"] != 2500 or read_back["charge"]["end"] != "05:00:00":
+        print(f"ERROR: charge power/end read back {read_back['charge']}")
+        failed = True
+    if read_back["export"]["enable"] is not True or read_back["export"]["soc"] != 20 or read_back["export"]["power"] != 1800:
+        print(f"ERROR: export read back {read_back['export']}")
+        failed = True
+    if read_back["export"]["start"] != "14:30:00" or read_back["export"]["end"] != "16:45:00":
+        print(f"ERROR: export times read back {read_back['export']}")
         failed = True
     assert not failed, "test_alphaess_control_entities_round_trip"
 
@@ -115,6 +132,57 @@ def test_alphaess_update_local_schedule_applies_each_field():
     assert not failed, "test_alphaess_update_local_schedule_applies_each_field"
 
 
+def test_alphaess_fallback_on_unknown_or_unavailable_values():
+    """Control entities reporting unknown/unavailable fall back to safe defaults.
+
+    Home Assistant returns "unknown" or "unavailable" right after a restart, before Predbat
+    republishes - get_schedule_settings_ha must route numeric casts through _as_float to fall
+    back to 0 rather than raising and killing the control loop. Time selects have no _as_float
+    wrapper but fall back to their default when the entity doesn't exist.
+    """
+    failed = False
+    client = _client()
+    # Set up initial schedule with known values
+    client.local_schedule["AL70"] = _schedule(reserve=10)
+    run_async_local(client.publish_schedule_settings_ha("AL70"))
+
+    # Now simulate unknown/unavailable states for various numeric entities.
+    # Numeric casts route through _as_float, which converts non-numeric values to the default.
+    # reserve set to "unknown" → _as_float converts it to 0
+    client.state["number.predbat_alphaess_al70_battery_schedule_reserve"] = "unknown"
+    read_back = run_async_local(client.get_schedule_settings_ha("AL70"))
+    if read_back["reserve"] != 0:
+        print(f"ERROR: reserve 'unknown' did not fall back to 0, got {read_back['reserve']}")
+        failed = True
+
+    # soc entity set to "unavailable" → _as_float converts it to 0
+    client.state["number.predbat_alphaess_al70_battery_schedule_charge_soc"] = "unavailable"
+    read_back = run_async_local(client.get_schedule_settings_ha("AL70"))
+    if read_back["charge"]["soc"] != 0:
+        print(f"ERROR: charge soc 'unavailable' did not fall back to 0, got {read_back['charge']['soc']}")
+        failed = True
+
+    # power entity set to "unknown" → _as_float converts it to 0
+    client.state["number.predbat_alphaess_al70_battery_schedule_export_power"] = "unknown"
+    read_back = run_async_local(client.get_schedule_settings_ha("AL70"))
+    if read_back["export"]["power"] != 0:
+        print(f"ERROR: export power 'unknown' did not fall back to 0, got {read_back['export']['power']}")
+        failed = True
+
+    # time selects have no _as_float wrapper, so they fall back to default only when the
+    # entity doesn't exist at all (not when it's "unknown"). Verify that missing entities
+    # fall back to "00:00:00".
+    # (Don't set the entity at all - it falls back to the default)
+    if "select.predbat_alphaess_al70_battery_schedule_charge_end_time" in client.state:
+        del client.state["select.predbat_alphaess_al70_battery_schedule_charge_end_time"]
+    read_back = run_async_local(client.get_schedule_settings_ha("AL70"))
+    if read_back["charge"]["end"] != "00:00:00":
+        print(f"ERROR: charge end (missing entity) did not fall back to '00:00:00', got {read_back['charge']['end']}")
+        failed = True
+
+    assert not failed, "test_alphaess_fallback_on_unknown_or_unavailable_values"
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -123,6 +191,7 @@ def run_alphaess_control_tests(my_predbat):
         ("reserve_unclamped", test_alphaess_reserve_entity_is_published_unclamped),
         ("entity_routing", test_alphaess_entity_routing_does_not_confuse_prefixed_serials),
         ("update_local_schedule", test_alphaess_update_local_schedule_applies_each_field),
+        ("fallback_on_unknown_or_unavailable", test_alphaess_fallback_on_unknown_or_unavailable_values),
     ]:
         try:
             if fn():
