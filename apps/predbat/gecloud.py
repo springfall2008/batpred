@@ -228,6 +228,35 @@ def regname_to_ha(name):
     return name
 
 
+def merge_non_null(fresh, previous):
+    """
+    Overlay a fresh API reading onto the previous one, ignoring null leaves.
+
+    GE Cloud (notably on Gateway devices) intermittently answers with HTTP 200 and a well-formed
+    envelope whose leaf values are explicitly null. Those nulls mean "no fresh datalog sample this
+    poll", not "zero" - coercing them to 0 is indistinguishable from a real idle inverter or a flat
+    battery, and passing None through poisons every downstream consumer.
+
+    A null leaf keeps the last good value for that field. With no previous reading to fall back on
+    the null is kept as None rather than dropped, so the field carries on reporting "no value" as it
+    does today instead of a fabricated zero (dropping the key would let a .get(field, 0) default
+    invent one).
+    """
+    if fresh is None:
+        return previous
+    if not isinstance(fresh, dict):
+        return fresh
+    merged = dict(previous) if isinstance(previous, dict) else {}
+    for key, value in fresh.items():
+        if value is None:
+            if key not in merged:
+                # Never had a good reading for this field - report no value rather than a fake zero
+                merged[key] = None
+            continue
+        merged[key] = merge_non_null(value, merged.get(key))
+    return merged
+
+
 class GECloudDirect(ComponentBase):
     """
     GivEnergy Cloud Direct API interface
@@ -1799,7 +1828,7 @@ class GECloudDirect(ComponentBase):
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
         if result is None:
             return previous
-        return result
+        return merge_non_null(result, previous)
 
     async def async_get_inverter_meter(self, serial, previous={}):
         """
@@ -1808,7 +1837,15 @@ class GECloudDirect(ComponentBase):
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
         if meter is None:
             return previous
-        return meter
+        merged = merge_non_null(meter, previous)
+        # today/total are objects rather than readings, so a null section with nothing cached to
+        # fall back on cannot be kept as None the way a null leaf is - publish_meter would iterate
+        # it. Drop it and pick the counters up on the next poll rather than failing the whole read,
+        # which would leave a device that nulls one section persistently with no meter data at all.
+        for section in ("today", "total"):
+            if section in merged and not isinstance(merged[section], dict):
+                merged.pop(section)
+        return merged
 
     async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
         """
