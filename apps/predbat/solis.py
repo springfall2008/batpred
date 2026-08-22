@@ -1248,16 +1248,33 @@ class SolisAPI(ComponentBase, OAuthMixin):
         """True only when Solis Cloud explicitly declares this inverter has no battery attached.
 
         Deliberately narrow: absence of these fields (older firmware, other models) means "unknown",
-        which leaves the inverter enrolled exactly as before. Never infer from batteryHealthSoh - a
-        real pack reporting SoH 0 is a documented, valid response and still says batteryType
-        'PYLON_LV'. Never infer from the lifetime counters either: batteryTotalChargeEnergy and
-        friends survive the pack being physically removed, so an inverter that once cycled MWh can
-        still legitimately report no battery today.
+        which leaves the inverter enrolled exactly as before.
+
+        Match on the self-describing name, in both the places Solis reports it. The `noBattery`
+        boolean is checked too but cannot be relied on alone - one firmware sets it True, another
+        leaves it None on an inverter that says "No Battery" everywhere else.
+
+        The name is matched negatively rather than against a list of known batteries, because the
+        positive values vary by pack ('PYLON_LV', 'Lithium Battery LV', ...) and an unrecognised
+        battery must never be read as no battery.
+
+        Never infer from batteryHealthSoh - a real pack reporting SoH 0 is a documented, valid
+        response and still names its battery type. Never infer from the lifetime counters either:
+        batteryTotalChargeEnergy and friends survive the pack being physically removed, so an
+        inverter that once cycled MWh can still legitimately report no battery today.
+
+        (batteryTypeCode is '0000' in this state, against '0001'/'0063' for real packs, but it is
+        left out on purpose: a code that means "unknown" on some firmware would silently unenrol a
+        working battery, and the names above already cover every case seen.)
         """
         if str(detail.get("batteryType", "")).strip().lower() == "no battery":
             return True
         for entry in detail.get("batteryList") or []:
-            if isinstance(entry, dict) and entry.get("noBattery") is True:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("noBattery") is True:
+                return True
+            if str(entry.get("batteryTypeName", "")).strip().lower() == "no battery":
                 return True
         return False
 

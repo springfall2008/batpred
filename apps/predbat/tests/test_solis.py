@@ -1057,6 +1057,33 @@ _DETAIL_NO_BATTERY = {
     "batteryMonthChargeEnergy": 0.0,
 }
 
+# A second firmware, from a different account. Same "No Battery" verdict, but reported differently:
+# noBattery is None rather than True, batteryJump is None rather than a dict, and the only positive
+# statements are the two name fields. This is why the boolean cannot be the sole signal.
+_DETAIL_NO_BATTERY_ALT_FIRMWARE = {
+    "batteryHealthSoh": 0.0,
+    "batteryType": "No Battery",
+    "batteryTypeCode": "0000",
+    "batteryVoltage": 0.0,
+    "batteryCDEnableSet": 0,
+    "batteryJump": None,
+    "batteryList": [{"batteryType": 0, "batteryTypeName": "No Battery", "battSn": "", "noBattery": None, "batteryVoltage": 0.0}],
+    "batteryTotalChargeEnergy": 0.0,
+}
+
+# A real pack on that same firmware. Note the type name is 'Lithium Battery LV', not 'PYLON_LV' -
+# the positive values vary by pack, which is why detection matches "No Battery" rather than a
+# whitelist of known batteries.
+_DETAIL_WITH_BATTERY_ALT_FIRMWARE = {
+    "batteryHealthSoh": 100.0,
+    "batteryType": "Lithium Battery LV",
+    "batteryTypeCode": "0063",
+    "batteryVoltage": 54.83,
+    "batteryCDEnableSet": 1,
+    "batteryJump": None,
+    "batteryList": [{"batteryType": 99, "batteryTypeName": "Lithium Battery LV", "battSn": "", "noBattery": None, "batteryVoltage": 54.83}],
+}
+
 # A real pack that happens to report SoH 0 - a documented, valid SolisCloud response. It must stay
 # enrolled; SoH alone can never be the reason to drop an inverter.
 _DETAIL_REAL_BATTERY_ZERO_SOH = {
@@ -1115,6 +1142,59 @@ async def test_automatic_config_skips_no_battery_inverter():
     return failed
 
 
+async def test_automatic_config_skips_no_battery_on_alt_firmware():
+    """The other firmware leaves noBattery as None - only the name fields say "No Battery"."""
+    failed = False
+    print("**** Testing automatic_config skips a No Battery inverter on the alternate firmware ****")
+
+    with_batt = "6031052256280133"
+    no_batt = "6031052254150188"
+    recorded, _ = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY_ALT_FIRMWARE, no_batt: _DETAIL_NO_BATTERY_ALT_FIRMWARE})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: expected num_inverters 1, got {} - noBattery is None here, so the name fields must carry it".format(recorded.get("num_inverters")))
+        failed = True
+
+    soc_entities = recorded.get("soc_percent") or []
+    if len(soc_entities) != 1 or no_batt.lower() in " ".join(soc_entities):
+        print("ERROR: expected only the battery inverter to be wired up, got soc_percent={}".format(soc_entities))
+        failed = True
+    if soc_entities and with_batt.lower() not in " ".join(soc_entities):
+        print("ERROR: the 'Lithium Battery LV' inverter was dropped - detection must not whitelist pack names, got soc_percent={}".format(soc_entities))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config skips a No Battery inverter on the alternate firmware")
+    return failed
+
+
+async def test_automatic_config_skips_no_battery_named_only_in_battery_list():
+    """ "No Battery" stated only inside batteryList must still be believed.
+
+    Which of Solis's battery fields are populated varies by firmware - one sets noBattery True,
+    another leaves it None, batteryJump is a dict on one and None on the other. So no single field
+    can be the only thing standing between us and inventing an 8 kWh battery; every place Solis
+    names the battery type is checked.
+    """
+    failed = False
+    print("**** Testing automatic_config believes 'No Battery' stated only in batteryList ****")
+
+    detail = {
+        "batteryHealthSoh": 0.0,
+        # No top-level batteryType at all - the list is the only statement.
+        "batteryList": [{"batteryTypeName": "No Battery", "noBattery": None}],
+    }
+    recorded, _ = await _run_automatic_config({"6000000000000001": detail})
+
+    if recorded.get("num_inverters") is not None:
+        print("ERROR: expected no configuration at all (no inverters with batteries), got num_inverters={}".format(recorded.get("num_inverters")))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config believes 'No Battery' stated only in batteryList")
+    return failed
+
+
 async def test_automatic_config_keeps_real_battery_reporting_zero_soh():
     """SoH 0 on a real pack is a valid SolisCloud response - such an inverter must stay enrolled."""
     failed = False
@@ -1151,6 +1231,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
+        failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
+        failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
