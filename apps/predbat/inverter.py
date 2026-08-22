@@ -8,7 +8,6 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-
 """Base inverter abstraction layer.
 
 Provides the unified Inverter class that abstracts control of different
@@ -1494,27 +1493,42 @@ class Inverter:
             elif "charge_start_time" in self.base.args:
                 charge_start_time = time_string_to_stamp(self.base.get_arg("charge_start_time", index=self.id))
                 charge_end_time = time_string_to_stamp(self.base.get_arg("charge_end_time", index=self.id))
-            elif self.rest_api:
-                # A REST data source (givtcp_rest) is configured but hasn't returned anything this
-                # cycle - genuinely transient (a fetch hiccup, or before the first poll on a fresh
-                # start, e.g. GivEnergy cloud "no devices"), so fall through to the same safe-defaults/
-                # retry-next-update handling below as a configured-but-currently-unusable value,
-                # rather than crashing the whole plan for something that should resolve itself.
+            elif self.rest_api or self.base.get_arg("ge_cloud_direct", False, indirect=False):
+                # A data source IS configured but hasn't returned anything this cycle - genuinely
+                # transient (a fetch hiccup, or before the first poll on a fresh start), so fall
+                # through to the same safe-defaults/retry-next-update handling below as a
+                # configured-but-currently-unusable value, rather than crashing the whole plan for
+                # something that should resolve itself.
+                #
+                # ge_cloud_direct belongs here as much as givtcp_rest does. The original comment
+                # named GivEnergy cloud "no devices" as the case this branch exists to catch, but
+                # gating solely on self.rest_api made that unreachable: ge_cloud_direct sets neither
+                # rest_api nor charge_start_time (it auto-configures the charge window at runtime,
+                # from the device the cloud returns), so a cloud-backed instance whose fetch fails
+                # fell straight past this into the permanent-setup-gap branch below.
                 charge_start_time = None
                 charge_end_time = None
             else:
-                # Neither a REST API nor a charge_start_time config value is configured at all - a
-                # permanent setup gap, not something that will resolve on its own. Retrying every
-                # cycle forever would be misleading, so don't pretend to make a plan Predbat can't
-                # actually deliver (maintainer call on #4288/#4179 - see PR review discussion).
-                message = "Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id)
+                # No data source is configured at all - a permanent setup gap, not something that
+                # will resolve on its own. Retrying every cycle forever would be misleading, so
+                # don't pretend to make a plan Predbat can't actually deliver (maintainer call on
+                # #4288/#4179 - see PR review discussion).
+                message = "Error: Inverter {} unable to read charge window time - no source is configured (set givtcp_rest, ge_cloud_direct, or charge_start_time/charge_start_hour in apps.yaml)".format(self.id)
                 self.log(message)
                 self.base.record_status(message, had_errors=True)
                 raise ValueError(message)
 
             if charge_start_time is None or charge_end_time is None:
-                self.log("Warn: Inverter {} unable to read charge window time as charge_start_time or charge_end_time is None, will retry next update".format(self.id))
-                self.base.record_status("Warn: Inverter {} unable to read charge window time, will retry next update".format(self.id), had_errors=True)
+                # Name the source that came back empty. This is the message a user now actually
+                # sees when a configured source is failing, so "charge_start_time is None" on its
+                # own sends them looking at apps.yaml - which is the one thing that is fine. The
+                # real cause is upstream: a cloud account with no devices attached, revoked or
+                # rotated API credentials, or a lapsed entitlement, none of which Predbat can tell
+                # apart from here beyond naming where the data should have come from.
+                source = "GE Cloud" if (not self.rest_api and self.base.get_arg("ge_cloud_direct", False, indirect=False)) else "REST"
+                hint = "check the {} credentials and that the account still has this inverter attached".format(source)
+                self.log("Warn: Inverter {} unable to read charge window time - {} returned no data, {}, will retry next update".format(self.id, source, hint))
+                self.base.record_status("Warn: Inverter {} unable to read charge window time - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
                 # Set safe defaults to allow graceful recovery on next update
                 self.charge_enable_time = False
                 self.charge_start_time_minutes = self.base.forecast_minutes
