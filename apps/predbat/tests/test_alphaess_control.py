@@ -532,6 +532,115 @@ def test_alphaess_no_interference_check_before_predbat_has_written():
     assert not failed, "test_alphaess_no_interference_check_before_predbat_has_written"
 
 
+def test_alphaess_detected_change_clears_applied_payload_so_next_cycle_reapplies():
+    """When interference is detected, the recorded intent is cleared so the next cycle
+    re-applies rather than deciding the payload is unchanged and leaving the inverter
+    on someone else's settings.
+
+    This is the most consequential line: without it, Predbat would cache the old intent,
+    see the inverter now has someone else's settings, and decide "nothing to do".
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 0
+    # Seed with what Predbat wrote
+    original_payload = {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}
+    client.applied_payload["AL70"] = {"charge": original_payload}
+    # Observe that an owned field changed (someone else wrote)
+    changed = {"gridCharge": 1, "timeChaf1": "02:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "charge", changed)
+    # Verify detection was logged
+    if not any("AlphaESS app" in message or "another" in message.lower() for message in client.log_messages):
+        print(f"ERROR: interference not detected: {client.log_messages}")
+        failed = True
+    # CRITICAL: applied_payload must be cleared so next cycle re-applies
+    if "charge" in client.applied_payload.get("AL70", {}):
+        print(f"ERROR: applied_payload['AL70']['charge'] not cleared after detection: {client.applied_payload['AL70']}")
+        failed = True
+    # Now apply the SAME schedule and verify it sends a write (because cache was cleared)
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
+        calls_before = session.return_value.post.call_count
+        run_async_local(client.apply_settings("AL70", schedule))
+        calls_after = session.return_value.post.call_count
+    # Both charge and discharge writes should go out (the schedule differs from a blank slate)
+    if calls_after - calls_before < 1:
+        print(f"ERROR: apply_settings sent {calls_after - calls_before} POST(s) after intent clear, should send at least 1")
+        failed = True
+    assert not failed, "test_alphaess_detected_change_clears_applied_payload_so_next_cycle_reapplies"
+
+
+def test_alphaess_settle_window_boundary_at_exactly_alphaess_settle_polls():
+    """At exactly ALPHAESS_SETTLE_POLLS reads, interference is suppressed. On the very
+    next read (ALPHAESS_SETTLE_POLLS + 1), it is reported.
+
+    This pins the boundary condition: the check must be <= not <.
+    """
+    failed = False
+    client = _writable()
+    client.applied_payload["AL70"] = {"charge": {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}}
+    changed = {"gridCharge": 0, "timeChaf1": "02:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}
+    # Call exactly ALPHAESS_SETTLE_POLLS times - should suppress
+    for _ in range(ALPHAESS_SETTLE_POLLS):
+        client.note_external_change("AL70", "charge", changed)
+    if any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: interference reported at exactly ALPHAESS_SETTLE_POLLS reads: {client.log_messages}")
+        failed = True
+    # One more call - should now report
+    client.note_external_change("AL70", "charge", changed)
+    if not any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: interference not reported after ALPHAESS_SETTLE_POLLS+1 reads: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_settle_window_boundary_at_exactly_alphaess_settle_polls"
+
+
+def test_alphaess_interference_detection_for_discharge_direction():
+    """Discharge direction must also detect interference on owned fields and ignore unowned ones."""
+    failed = False
+    client = _writable()
+    # Set up discharge payload
+    client.applied_payload["AL70"] = {"discharge": {"sysSn": "AL70", "ctrDis": 1, "timeDisf1": "17:00", "timeDise1": "19:00", "timeDisf2": "00:00", "timeDise2": "00:00", "batUseCap": 20}}
+    # Owned field changed: timeDisf1
+    changed_owned = {"ctrDis": 1, "timeDisf1": "18:00", "timeDise1": "19:00", "timeDisf2": "00:00", "timeDise2": "00:00", "batUseCap": 20}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "discharge", changed_owned)
+    if not any("timeDisf1" in message for message in client.log_messages):
+        print(f"ERROR: discharge owned field change not detected: {client.log_messages}")
+        failed = True
+    # Clear logs and test unowned field filter for discharge
+    client.log_messages = []
+    client.applied_payload["AL70"] = {"discharge": {"sysSn": "AL70", "ctrDis": 1, "timeDisf1": "17:00", "timeDise1": "19:00", "timeDisf2": "00:00", "timeDise2": "00:00", "batUseCap": 20}}
+    # Unowned field changed
+    changed_unowned = {"ctrDis": 1, "timeDisf1": "17:00", "timeDise1": "19:00", "timeDisf2": "00:00", "timeDise2": "00:00", "batUseCap": 20, "someUnownedField": "changed"}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "discharge", changed_unowned)
+    if any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: discharge unowned field reported as interference: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_interference_detection_for_discharge_direction"
+
+
+def test_alphaess_absent_owned_field_in_observed_does_not_count_as_differing():
+    """When an owned field is absent from observed, it is skipped (not treated as differing).
+
+    The API read might be missing fields in edge cases; absence is not interference,
+    only presence-with-different-value is.
+    """
+    failed = False
+    client = _writable()
+    client.applied_payload["AL70"] = {"charge": {"sysSn": "AL70", "gridCharge": 1, "timeChaf1": "01:00", "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}}
+    # Observed is missing timeChaf1 (owned field)
+    observed_missing_field = {"gridCharge": 1, "timeChae1": "05:00", "timeChaf2": "00:00", "timeChae2": "00:00", "batHighCap": 90}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "charge", observed_missing_field)
+    if any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: absent owned field reported as interference: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_absent_owned_field_in_observed_does_not_count_as_differing"
+
+
 def test_alphaess_identical_payload_is_not_rewritten():
     """The write button is pressed EVERY cycle as Predbat's normal 'apply' action, not only
     when the plan changed.
@@ -824,6 +933,10 @@ def run_alphaess_control_tests(my_predbat):
         ("external_change_reported", test_alphaess_external_change_reported_after_the_settle_window),
         ("only_owned_fields", test_alphaess_only_predbat_owned_fields_count_as_interference),
         ("no_check_before_writing", test_alphaess_no_interference_check_before_predbat_has_written),
+        ("intent_clearing_enables_reapply", test_alphaess_detected_change_clears_applied_payload_so_next_cycle_reapplies),
+        ("settle_boundary_pins_equality", test_alphaess_settle_window_boundary_at_exactly_alphaess_settle_polls),
+        ("discharge_direction_tested", test_alphaess_interference_detection_for_discharge_direction),
+        ("absent_field_not_differing", test_alphaess_absent_owned_field_in_observed_does_not_count_as_differing),
         ("identical_not_rewritten", test_alphaess_identical_payload_is_not_rewritten),
         ("independent_gating", test_alphaess_charge_and_discharge_gated_independently),
         ("read_only_gate", test_alphaess_reconcile_is_gated_on_predbat_read_only),
