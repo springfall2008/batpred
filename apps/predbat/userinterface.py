@@ -254,20 +254,33 @@ class UserInterface:
 
         if isinstance(default, float):
             # Convert to float?
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # Nothing resolved - not configured, or an out-of-range index on a per-inverter list
+                # (resolve_arg has already logged "Out of range index ..."). That is exactly what the
+                # caller's default is for, so apply it quietly rather than reporting an error: flagging
+                # it pins the warning on the status sensor and ends every run as "Read-Only with Errors"
+                # for a gap the caller already handles. A value that is present but unparseable is a
+                # genuine fault and is still reported below.
                 value = default
+            else:
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, int) and not isinstance(default, bool):
             # Convert to int?
-            try:
-                value = int(float(value))
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # See the float case above - a missing value is what the default is for, not an error
                 value = default
+            else:
+                try:
+                    value = int(float(value))
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
             if value.lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
