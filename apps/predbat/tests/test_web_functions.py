@@ -422,5 +422,21 @@ def run_web_logo_image_tests(my_predbat):
         print("  ERROR: the page header should reference the local logo route")
         failed += 1
 
+    print("Test: the dark mode background colour is set before any render-blocking external resource (issue #2256)")
+    dark_mode_class_pos = header.find("classList.add('dark-mode')")
+    external_resource_pos = header.find("cdn.jsdelivr.net")
+    background_style_pos = header.find("background-color: #121212")
+    if dark_mode_class_pos < 0 or external_resource_pos < 0 or background_style_pos < 0:
+        print("  ERROR: expected to find the dark-mode class script, an external CDN resource, and a dark background-color rule in the header")
+        failed += 1
+    elif not (dark_mode_class_pos < background_style_pos < external_resource_pos):
+        print(
+            "  ERROR: the dark-mode background colour must be set before the external CDN font/chart resources "
+            "(which block rendering while they load) - otherwise a slow fetch flashes the default white "
+            f"background first. Positions: dark-mode class {dark_mode_class_pos}, background colour rule "
+            f"{background_style_pos}, external CDN resource {external_resource_pos}"
+        )
+        failed += 1
+
     print("**** Web logo image tests completed ****")
     return failed
