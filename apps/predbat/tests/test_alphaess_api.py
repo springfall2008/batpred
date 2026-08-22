@@ -704,6 +704,50 @@ def test_alphaess_reprobe_live_failure_leaves_serial_demoted():
     assert not failed, "test_alphaess_reprobe_live_failure_leaves_serial_demoted"
 
 
+ONE_DATE_ENERGY_SAMPLE = {"sysSn": "AL70", "theDate": "2026-08-22", "eCharge": 12.2, "epv": 10.6, "eOutput": 0.42, "eInput": 14.41, "eGridCharge": 9.1, "eDischarge": 7.1, "eChargingPile": 0.0}
+
+
+def test_alphaess_energy_counters_map_to_predbat_args():
+    """The daily kWh counters that feed Predbat's load/import/export/PV learning."""
+    failed = False
+    client = MockAlphaESS()
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, ONE_DATE_ENERGY_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, {"eload": 19.49, "epvtoday": 10.6})),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.fetch_device_energy("AL70"))
+    energy = client.device_energy.get("AL70", {})
+    if not ok:
+        print("ERROR: fetch_device_energy returned False")
+        failed = True
+    for leaf, expect in (("import_today", 14.41), ("export_today", 0.42), ("pv_today", 10.6), ("load_today", 19.49)):
+        if abs(energy.get(leaf, -1) - expect) > 0.001:
+            print(f"ERROR: {leaf} {energy.get(leaf)} != {expect}")
+            failed = True
+    assert not failed, "test_alphaess_energy_counters_map_to_predbat_args"
+
+
+def test_alphaess_load_today_falls_back_to_the_energy_balance():
+    """getOneDateEnergyBySn has no load field at all, and most SumData fields come back
+    null without a configured tariff, so eload needs a fallback."""
+    failed = False
+    client = MockAlphaESS()
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, ONE_DATE_ENERGY_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, {"eload": None})),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        run_async_local(client.fetch_device_energy("AL70"))
+    # epv + eInput - eOutput - eCharge + eDischarge = 10.6 + 14.41 - 0.42 - 12.2 + 7.1
+    expect = 10.6 + 14.41 - 0.42 - 12.2 + 7.1
+    got = client.device_energy.get("AL70", {}).get("load_today")
+    if got is None or abs(got - expect) > 0.001:
+        print(f"ERROR: load_today fallback {got} != {expect}")
+        failed = True
+    assert not failed, "test_alphaess_load_today_falls_back_to_the_energy_balance"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -732,6 +776,8 @@ def run_alphaess_api_tests(my_predbat):
         ("no_soc_reported", test_alphaess_serial_with_no_soc_on_either_path_is_reported),
         ("power_tier_ttl", test_alphaess_power_tier_ttl_returns_correct_interval_based_on_demotion_state),
         ("reprobe_live_failure", test_alphaess_reprobe_live_failure_leaves_serial_demoted),
+        ("energy_counters", test_alphaess_energy_counters_map_to_predbat_args),
+        ("load_today_fallback", test_alphaess_load_today_falls_back_to_the_energy_balance),
     ]:
         try:
             if fn():

@@ -44,6 +44,8 @@ from alphaess_const import (
     ALPHAESS_LIVE_FAIL_LIMIT,
     ALPHAESS_TTL_POWER,
     ALPHAESS_TTL_POWER_DEMOTED,
+    ALPHAESS_ENERGY,
+    ALPHAESS_ENERGY_LOAD_FIELD,
 )
 
 
@@ -491,4 +493,53 @@ class AlphaESSAPI(ComponentBase):
                 await asyncio.sleep(self.api_delay)
         if got_any:
             self.mark_refreshed("power")
+        return got_any
+
+    async def fetch_device_energy(self, sn):
+        """Populate device_energy for one serial from today's energy totals.
+
+        Two calls, because getOneDateEnergyBySn has no load field at all - load energy
+        only exists on getSumDataForCustomer as eload. These counters reset at midnight;
+        minute_data/clean_incrementing_reverse absorbs that.
+        """
+        code, data = await self._get("one_date_energy", params={"sysSn": sn, "queryDate": self._history_query_date()})
+        if code != ALPHAESS_CODE_OK or not isinstance(data, dict):
+            return False
+        energy = {}
+        for leaf, field in ALPHAESS_ENERGY.items():
+            value = data.get(field)
+            if value is not None:
+                energy[leaf] = self._as_float(value, 0.0)
+
+        if self.api_delay:
+            await asyncio.sleep(self.api_delay)
+        sum_code, sum_data = await self._get("sum_data", params={"sysSn": sn})
+        load_today = None
+        if sum_code == ALPHAESS_CODE_OK and isinstance(sum_data, dict):
+            raw_load = sum_data.get(ALPHAESS_ENERGY_LOAD_FIELD)
+            if raw_load is not None:
+                load_today = self._as_float(raw_load, None)
+        if load_today is None:
+            # The API docs warn that most SumData fields are null without a configured
+            # tariff. Derive it rather than leaving load_today unmapped, which would cost
+            # Predbat its load learning entirely.
+            derived = self._as_float(data.get("epv"), 0.0) + self._as_float(data.get("eInput"), 0.0) - self._as_float(data.get("eOutput"), 0.0) - self._as_float(data.get("eCharge"), 0.0) + self._as_float(data.get("eDischarge"), 0.0)
+            load_today = max(0.0, derived)
+        energy["load_today"] = load_today
+        self.device_energy[sn] = energy
+        return True
+
+    async def refresh_energy(self):
+        """Poll the daily energy counters for every inverter."""
+        got_any = False
+        for sn in self.device_list:
+            try:
+                if await self.fetch_device_energy(sn):
+                    got_any = True
+            except Exception as error:
+                self.log("Warn: AlphaESS energy poll failed for {}: {}".format(sn, error))
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        if got_any:
+            self.mark_refreshed("energy")
         return got_any
