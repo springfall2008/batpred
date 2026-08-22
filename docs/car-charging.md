@@ -45,8 +45,9 @@ high battery charge levels when the car was charged previously (e.g. last week).
     - **On (default)** - The car charger is inside the CT clamp and its energy is reported as part of the house load. Predbat will attempt to strip car charging energy from historical load data (via **switch.predbat_car_charging_hold**) and will prevent the battery from discharging into the car when **switch.predbat_car_charging_from_battery** is Off.
     - **Off** - The car charger is wired outside the CT clamp (e.g. directly to the grid connection). The inverter cannot see the car charging load directly. In this case Predbat will:
         - Automatically disable **switch.predbat_car_charging_hold** (no need to strip car data from house load, as it was never included).
-        - Automatically set **switch.predbat_car_charging_from_battery** to On in the model (the battery cannot discharge into the car anyway as it is on a separate circuit).
         - Model that any export from the battery/PV may flow into the car rather than the grid, and so conservatively not credit that energy with export income.
+
+    Being outside the CT clamp only means the charger's draw isn't *measured* as house load - it says nothing about whether it's *electrically* isolated from the battery. Predbat does not assume the two are on separate circuits, and does not change **switch.predbat_car_charging_from_battery** based on this switch: its own default (Off) already prevents the battery discharging into car charging regardless of **car_energy_reported_load**, and that protection applies unconditionally - see **switch.predbat_car_charging_from_battery** below. If your installation genuinely has the charger wired so the battery *can* supply it (e.g. sharing a busbar upstream of the meter), leave **car_charging_from_battery** Off (or set it explicitly) rather than relying on any automatic behaviour from this switch.
 
 - **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 
@@ -351,6 +352,17 @@ Predbat will still assume all Octopus charging slots are low rates even if some 
 
 - The switch **switch.predbat_octopus_intelligent_ignore_unplugged** (*expert mode*) (default value is Off) can be used to prevent Predbat from assuming the car will be charging or that future extra low-rate slots apply when the car is unplugged.
 This will only work correctly if **car_charging_planned** is set correctly in `apps.yaml` to detect your car being plugged in
+
+- **select.predbat_trust_future_dynamic_iog_slots** (*expert mode*) (default value is `planned`) controls whether a future daytime Intelligent dispatch slot (outside the fixed 23:30-05:30 off-peak window) is treated as a guaranteed cheap rate for the **house battery** plan.
+A daytime dispatch is still Octopus's own provisional plan until it actually happens - it can be moved or withdrawn beforehand, which could otherwise lead Predbat to make an irreversible decision (e.g. an early force-export) in anticipation of a cheap recharge that never occurs. The stricter levels below exist for anyone who has been caught out by this; the default matches Predbat's long-standing behaviour so nobody's plan changes unless they opt in.
+Note that a slot's start time passing is not itself confirmation - Octopus can still revoke a dispatch that has technically started but where the car never actually drew power, so none of these levels trust a slot on clock time alone:
+    - `planned` (default) - trusts every daytime dispatch the moment Octopus plans it, with no confirmation at all - the behaviour Predbat has always used. Choose this if you'd rather the house battery plan ahead of a provisional slot (e.g. export in anticipation of it) than wait for any confirmation, and are comfortable with the plan occasionally acting on a slot Octopus later moves or withdraws.
+    - `none` - only the fixed 23:30-05:30 window is trusted as cheap for battery planning; every daytime dispatch is left at the normal rate until Octopus reports it as completed.
+    - `completed` - also trusts a daytime dispatch once Octopus reports it as a completed (metered) dispatch, i.e. it genuinely happened.
+    - `started` - also trusts the current 30-minute block of a still-provisional dispatch if **car_charging_now** reports the car is actually charging right now - waiting for Octopus to report the slot as `completed` can be too slow to still be useful for that block's own planning decision. This level needs **car_charging_now** configured in `apps.yaml`; if it isn't set, Predbat logs a warning and behaves the same as `completed`.
+The fixed overnight window is always trusted regardless of this setting.
+This matters beyond the plan itself: Predbat's "today's actual cost so far" figures (for both the house and, separately, your car's own charging cost) are calculated from these same rates against what was genuinely imported today, so a dispatch that has already happened is always reflected accurately - this setting only ever withholds trust from a slot that hasn't genuinely happened yet, never rewrites what already did.
+This does not affect car charging: future dispatch slots are still used in full to forecast when your EV will charge, regardless of this setting - only whether they're trusted as a cheap rate for the house battery is affected.
 
 - Let the Octopus app control when your car charges.
 

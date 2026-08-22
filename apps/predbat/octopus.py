@@ -2389,6 +2389,15 @@ class Octopus:
             slot["end"] = slot_end_date.strftime(TIME_FORMAT)
             slot["source"] = "car_charging_now"
             slot["kwh"] = self.car_charging_rate[car_n] * 30 / 60  # Scale to 30 minute slot
+            # Not genuinely confirmed - car_charging_now is a single live sensor read, not a settled
+            # Octopus dispatch record, and can be noisy (a charger's readiness sensor can blip on/off
+            # for reasons unrelated to a real charging session). Tagging this True unconditionally
+            # let a single spurious reading get trusted as a cheap house import rate under "completed"
+            # and "none" trust levels too - both of which exist specifically to require more than a
+            # live guess before trusting a dynamic slot. Leave it False and let rate_add_io_slots()'s
+            # own "started" level re-check car_charging_now live (current settlement block only) -
+            # that's the level that deliberately accepts this trade-off, not every level.
+            slot["_confirmed"] = False
             octopus_slots.append(slot)
             self.log("Octopus: Car is charging now - added new IO slot {}".format(slot))
         return octopus_slots
@@ -2519,6 +2528,22 @@ class Octopus:
                         if not export:
                             self.load_scaling_dynamic[minute] = self.load_scaling_saving
 
+    def minute_in_iog_fixed_window(self, minute_abs):
+        """
+        True if minute_abs (minutes-since-midnight-of-today, may be negative or beyond
+        forecast_minutes) falls within the fixed IOG off-peak window (23:30-05:30), which is
+        guaranteed cheap by the tariff itself, not by the dispatch mechanism - so a slot inside it
+        is never at risk of being reclaimed the way an out-of-window dispatch slot is (#4516).
+        """
+        window = OCTOPUS_NIGHT_RATE_WINDOWS["iog"]
+        start_minute = window["start"][0] * 60 + window["start"][1]
+        end_minute = window["end"][0] * 60 + window["end"][1]
+        minute_of_day = minute_abs % 1440
+        if window["cross_midnight"]:
+            return minute_of_day >= start_minute or minute_of_day < end_minute
+        else:
+            return start_minute <= minute_of_day < end_minute
+
     def decode_octopus_slot(self, car_n, slot, raw=False):
         """
         Decode IOG slot
@@ -2532,6 +2557,11 @@ class Octopus:
 
         source = slot.get("source", "")
         location = slot.get("location", "")
+        # Whether this slot is genuinely confirmed (completed_dispatches, or a real-time
+        # car_charging_now draw) versus still Octopus's own provisional plan (planned_dispatches) -
+        # see fetch_sensor_data_cars() where this is tagged. Defaults False for anything untagged
+        # (e.g. the action_config service-call path, which only ever returns planned slots).
+        confirmed = slot.get("_confirmed", False)
 
         start_minutes = minutes_to_time(start, self.midnight_utc)
         end_minutes = minutes_to_time(end, self.midnight_utc)
@@ -2543,7 +2573,7 @@ class Octopus:
             end_minutes = max(min(end_minutes, self.forecast_minutes + self.minutes_now), start_minutes)
 
         if start_minutes == end_minutes:
-            return 0, 0, 0, source, location
+            return 0, 0, 0, source, location, confirmed
 
         cap_minutes = end_minutes - start_minutes
 
@@ -2557,7 +2587,7 @@ class Octopus:
 
         # Remove empty slots
         if kwh is None and location == "" and source == "":
-            return 0, 0, 0, source, location
+            return 0, 0, 0, source, location, confirmed
 
         # Create kWh if missing
         if kwh is None:
@@ -2573,7 +2603,46 @@ class Octopus:
         else:
             kwh = 0
 
-        return start_minutes, end_minutes, kwh, source, location
+        return start_minutes, end_minutes, kwh, source, location, confirmed
+
+    def build_dispatch_timeline(self, car_n, completed, started, planned, window_before_hours=4, window_after_hours=24, step=30):
+        """
+        Build a fixed-width, one-character-per-block dispatch status string for the diagnostic
+        timeline log (#4516 Stage 1 - not yet used for any rate/plan decision, purely observational).
+
+        Each character covers `step` minutes, offset from now, spanning
+        [-window_before_hours, +window_after_hours). '.' = nothing known, 'P' = planned
+        (provisional), 'S' = started, 'C' = completed. Where lists disagree on the same block, the
+        most-confirmed status wins (completed > started > planned) - reflects Octopus's own view
+        having moved on, not a genuine simultaneous claim.
+
+        Stacking consecutive lines (one per 30-minute boundary) in a monospace log viewer reveals
+        dispatch lifecycle as diagonal stripes: a specific dispatch drifts one column per line as
+        `now` advances, so a rescinded slot shows as a stripe that stops before reaching the `now`
+        column, while a genuinely-delivered one runs through into 'C'.
+        """
+        total_before = window_before_hours * 60
+        total_after = window_after_hours * 60
+        num_blocks = (total_before + total_after) // step
+        status = ["."] * num_blocks
+
+        def mark(slots, char):
+            for slot in slots or []:
+                start_minutes, end_minutes, _, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True)
+                if start_minutes == end_minutes:
+                    continue
+                start_offset = start_minutes - self.minutes_now
+                end_offset = end_minutes - self.minutes_now
+                block_start = max(0, (start_offset + total_before) // step)
+                block_end = min(num_blocks, -(-(end_offset + total_before) // step))  # ceil division
+                for block in range(int(block_start), int(block_end)):
+                    status[block] = char
+
+        mark(planned, "P")
+        mark(started, "S")
+        mark(completed, "C")
+
+        return "".join(status)
 
     def load_octopus_slots(self, car_n, octopus_slots, octopus_intelligent_consider_full):
         """
@@ -2592,7 +2661,7 @@ class Octopus:
 
         # Decode the slots
         for slot in octopus_slots:
-            start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
+            start_minutes, end_minutes, kwh, source, location, _ = self.decode_octopus_slot(car_n, slot)
             # Octopus zeros chargeKwh once it calculates the car has hit its target SoC, but the
             # dispatch window stays open and the charger may still draw power. Preserve active slots
             # with a duration-based kwh so the "Hold for car" guard in execute.py still fires.
@@ -2715,6 +2784,11 @@ class Octopus:
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         octopus_slot_max = self.get_arg("octopus_slot_max", OCTOPUS_SLOT_MAX_DEFAULT)
+        trust_future_dynamic_iog_slots = self.trust_future_dynamic_iog_slots
+        # The start of the current 30-min settlement period - only this one can be corroborated by
+        # a live car_charging_now reading (#4516's "started" trust level); car_charging_now reflects
+        # "now", so it says nothing about any other period, past or future.
+        current_block = (self.minutes_now // 30) * 30
 
         # Track slots per 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -2728,7 +2802,7 @@ class Octopus:
         if octopus_slots:
             # Add in IO slots
             for slot in octopus_slots:
-                start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot, raw=True)
+                start_minutes, end_minutes, kwh, source, location, confirmed = self.decode_octopus_slot(car_n, slot, raw=True)
 
                 # Ignore bump-charge slots as their cost won't change
                 if source != "bump-charge" and source != "BOOST" and (not location or location == "AT_HOME"):
@@ -2767,9 +2841,42 @@ class Octopus:
                         # Calculate the 30-min slot start for this minute
                         slot_start = (minute // 30) * 30
 
+                        # A dynamic (out-of-window) dispatch slot is still Octopus's own
+                        # provisional/revisable plan - it can be moved or rescinded before it
+                        # occurs. The fixed 23:30-05:30 window is guaranteed cheap by the tariff
+                        # itself, not by the dispatch mechanism, so it's never gated here (#4516).
+                        #
+                        # For a dynamic slot, trust is graduated by trust_future_dynamic_iog_slots:
+                        # "none" never trusts one; "completed" also trusts one genuinely confirmed
+                        # (completed_dispatches, or a real-time car_charging_now draw - see
+                        # decode_octopus_slot()); "started" additionally trusts the *current*
+                        # settlement period the moment car_charging_now shows the car drawing power
+                        # right now, without waiting for Octopus's own completed record to catch up.
+                        # A slot merely having reached its scheduled start time is deliberately NOT
+                        # enough on its own - the clock passing a boundary is not evidence the car
+                        # actually started, only that it was due to. "planned" restores the pre-#4516
+                        # behaviour of trusting every dynamic slot unconditionally, including one
+                        # Octopus has only provisionally scheduled and could still move or withdraw -
+                        # an explicit opt back into that risk for anyone who prefers Predbat to plan
+                        # ahead of a daytime slot rather than wait for any confirmation at all.
+                        in_fixed_window = self.minute_in_iog_fixed_window(slot_start)
+                        if in_fixed_window:
+                            trusted = True
+                        elif trust_future_dynamic_iog_slots == "planned":
+                            trusted = True
+                        elif trust_future_dynamic_iog_slots == "completed":
+                            trusted = confirmed
+                        elif trust_future_dynamic_iog_slots == "started":
+                            trusted = confirmed or (slot_start == current_block and car_n < len(self.car_charging_now) and self.car_charging_now[car_n])
+                        else:  # "none"
+                            trusted = False
+
+                        if trusted and not in_fixed_window:
+                            self.trusted_dynamic_minutes.add(minute)
+
                         # At the start of each 30-min slot, decide if we can add it
                         if minute % 30 == 0:
-                            if slots_per_day[day_offset] < octopus_slot_max:
+                            if trusted and slots_per_day[day_offset] < octopus_slot_max:
                                 slots_per_day[day_offset] += 1
                                 slots_added_set.add(slot_start)
                                 rates[minute] = assumed_price
@@ -2782,8 +2889,8 @@ class Octopus:
 
                         if minute % 30 == 0 and start_minutes > -24 * 60:
                             self.log(
-                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}".format(
-                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
+                                "Octopus: Intelligent slot at {}-{}, assumed price {}, amount {}, kWh location {}, source {}, octopus_slot_low_rate {}, confirmed {}, trusted {}".format(
+                                    self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate, confirmed, trusted
                                 )
                             )
 
@@ -2791,6 +2898,40 @@ class Octopus:
         for day_offset in sorted(slots_per_day.keys()):
             if slots_per_day[day_offset] > 0:
                 self.log("Octopus: Intelligent slots for day {}: {} of {} max".format(day_offset, slots_per_day[day_offset], octopus_slot_max))
+
+        return rates
+
+    def exclude_dynamic_io_slots(self, rates):
+        """
+        Undo any IOG dispatch discount outside the fixed 23:30-05:30 window that's already present
+        in `rates` before rate_add_io_slots() ever runs, for a minute trust_future_dynamic_iog_slots
+        wouldn't itself have trusted (#4516).
+
+        rate_add_io_slots() only stops *itself* adding a new dynamic-slot discount - it can't touch
+        one that arrived a different way. For a genuine Octopus Intelligent tariff,
+        fetch_octopus_rates() can receive the dispatch-discounted rate directly from the rate feed
+        itself (marked via self.io_adjusted, from its own is_intelligent_adjusted flag), entirely
+        independently of the octopus_slots/octopus_intelligent_slot dispatch-list mechanism
+        rate_add_io_slots() reads. Leaving that alone would defeat the switch for exactly the
+        installs it matters most for. Restores rate_max_base - the true peak rate before any
+        saving-session/override/IOG distortion - and clears the io_adjusted marker so downstream
+        consumers (e.g. plan.py's future-slot risk penalty) don't still treat the minute as
+        IOG-adjusted once its discount has been removed.
+
+        Runs once per cycle (not per car - rates/io_adjusted are shared, not per-car), after
+        rate_add_io_slots() has run for every car but before the independent saving-session/free/
+        manual rate mechanisms apply their own adjustments on top. Consults
+        self.trusted_dynamic_minutes - the set rate_add_io_slots() itself just built while deciding
+        which dynamic minutes it trusted, across all cars - rather than re-deriving trust here, so
+        the two functions can never disagree about what counts as trusted.
+        """
+        if not self.io_adjusted:
+            return rates
+
+        for minute in list(self.io_adjusted.keys()):
+            if self.io_adjusted[minute] and not self.minute_in_iog_fixed_window(minute) and minute not in self.trusted_dynamic_minutes:
+                rates[minute] = self.rate_max_base
+                del self.io_adjusted[minute]
 
         return rates
 

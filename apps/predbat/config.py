@@ -904,6 +904,14 @@ CONFIG_ITEMS = [
         "enable": "expert_mode",
     },
     {
+        "name": "trust_future_dynamic_iog_slots",
+        "friendly_name": "When to trust a dynamic (daytime) Intelligent dispatch slot as cheap for the house battery",
+        "type": "select",
+        "options": ["none", "completed", "started", "planned"],
+        "default": "planned",
+        "enable": "expert_mode",
+    },
+    {
         "name": "car_charging_plan_smart",
         "friendly_name": "Car Charging Plan Smart",
         "type": "switch",
