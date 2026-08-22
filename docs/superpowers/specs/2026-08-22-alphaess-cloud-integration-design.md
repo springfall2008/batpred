@@ -532,23 +532,37 @@ default alone and logs what was observed, naming the model and pointing the user
 `switch.predbat_inverter_hybrid`. A guess that lands on the damaging side of an asymmetric
 error is worse than asking.
 
-## Model capability gating
+## Discovery filtering and model capability
 
-Three AlphaESS models are known to differ in what the API will do for them. The lists live
-in `alphaess_const.py`, seeded from the Home Assistant integration's `const.py` and
-extended as testers report.
+### Systems with no battery are skipped
 
-| Model | Limitation | Handling |
-|:--|:--|:--|
-| `Storion-S5` | `getLastPowerData` is not supported — the HA integration skips the call entirely (`LOWER_INVERTER_API_CALL_LIST`, homeassistant-alphaESS `coordinator.py:2528`) | Fall back to the last sample of `getOneDayPowerBySn` for live state |
-| `VT1000` | Cannot accept charge/discharge settings (`INVERTER_SETTING_BLACKLIST`) | Control refused for that serial; monitoring continues |
-| `Storion-S5` | Limited sensor coverage generally (`LIMITED_INVERTER_SENSOR_LIST`) | Only map args the unit actually reports, per the usual rule |
+`getEssList` returns every product bound to the AppID, and not all of them are battery
+systems — AlphaESS also sells plug-in solar (the VT1000 family), which has nothing for
+Predbat to drive. Any discovered system reporting `cobat` of zero, null or missing is
+skipped at discovery: not registered as a Predbat inverter, no control entities, no
+control writes. It is logged once by serial and model so the user can see it was
+recognised and deliberately passed over, and monitoring sensors are still published for it
+if it reports power data.
 
-**The `Storion-S5` case is the one with teeth**, because `getLastPowerData` is the entire
-60-second power tier — live `soc`, `pbat`, `pgrid`, `ppv` and `pload`. Predbat cannot plan
-without a live SOC. The fallback is `getOneDayPowerBySn`, whose samples carry `cbat` (SOC
-%), `ppv`, `load`, `feedIn` and `gridCharge`; the most recent sample supplies current
-state at roughly five-minute resolution.
+This is a capability filter, not a model filter, which is why it is preferred to a
+blacklist: it catches every non-battery product AlphaESS ships now or later without anyone
+having to maintain a table. A serial the user has explicitly named in
+`alphaess_inverter_sn` is still skipped when it has no battery — there is no plan to apply
+to it — but the log says so explicitly rather than silently returning an empty device
+list, since a filter matching nothing otherwise looks identical to an empty account.
+
+### `Storion-S5` cannot serve `getLastPowerData`
+
+One genuine model capability gap remains, held in `ALPHAESS_NO_LAST_POWER_MODELS` in
+`alphaess_const.py`, seeded from the Home Assistant integration's
+`LOWER_INVERTER_API_CALL_LIST` (homeassistant-alphaESS `coordinator.py:2528`, which skips
+the call entirely for these models).
+
+This one has teeth, because `getLastPowerData` is the whole 60-second power tier — live
+`soc`, `pbat`, `pgrid`, `ppv` and `pload` — and Predbat cannot plan without a live SOC.
+The fallback is `getOneDayPowerBySn`, whose samples carry `cbat` (SOC %), `ppv`, `load`,
+`feedIn` and `gridCharge`; the most recent sample supplies current state at roughly
+five-minute resolution.
 
 That call returns ~288 records for a full day, so it is not something to poll every
 minute. For an affected serial the power tier drops to 5 minutes and requests only the
@@ -557,7 +571,11 @@ drive that inverter at all. `feedIn` and `gridCharge` are separate positive-only
 rather than a signed `pgrid`, so grid power is reconstructed as `gridCharge - feedIn`
 before Predbat's negate-on-import convention is applied.
 
-A serial whose model is unknown is treated as fully capable. The lists are an
+`Storion-S5` also appears in the HA integration's `LIMITED_INVERTER_SENSOR_LIST`, which
+needs no special handling here: the standing rule that an arg is mapped only when every
+inverter actually reports the underlying value already covers it.
+
+A serial whose model is unknown is treated as fully capable. The list is an
 allowlist-of-exceptions, not a gate on recognised hardware — a new AlphaESS model must not
 be locked out because nobody has added it yet.
 
@@ -740,7 +758,7 @@ Six modules, registered in `TEST_REGISTRY` in `unit_test.py`:
 | `test_alphaess_api.py` | Signature construction, header set, envelope parsing, `msg`/`info` success forms, every return code in the table, bind/unbind code mapping including `6003`/`6005` as success, clock-skew detection |
 | `test_alphaess_control.py` | The full control mapping table, `batUseCap` dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, `24:00` → `23:45`), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and `6017` caching, read-only and `control_enable` gating, unbind switch latch idempotency and latch survival across restart, `device_list` removal after unbind |
 | `test_alphaess_publish.py` | Every sensor in the monitoring tables, `pgrid` negation, the three `*_invert` flags forced to `False`, `eload` null fallback to the energy balance, `battery_rate_max` derived from `poinv` and overridden by `alphaess_battery_rate_max`, `export_limit` left unmapped with a warning, "only map when every inverter reports it" |
-| `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping, hybrid inference (all-null `ppvDetail` plus `popv`/`epv` disagreement leaves the switch alone; both agreeing flips it via `set_state_external`; a hybrid at night with zero-valued `ppvDetail` is never misread), model capability gating for `Storion-S5` and `VT1000`, and that an unknown model is treated as fully capable |
+| `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping, hybrid inference (all-null `ppvDetail` plus `popv`/`epv` disagreement leaves the switch alone; both agreeing flips it via `set_state_external`; a hybrid at night with zero-valued `ppvDetail` is never misread), `Storion-S5` falling back to `getOneDayPowerBySn` with grid reconstructed as `gridCharge - feedIn`, systems with zero/null/missing `cobat` skipped at discovery (including when named in `alphaess_inverter_sn`), and that an unknown model is treated as fully capable |
 | `test_alphaess_storage.py` | Cache round-trip for all four files, `storage is None` path, empty-discovery refusal, tier freshness only on success |
 
 Tests use `TestHAInterface` from `tests/test_infra.py` with a stubbed HTTP layer — no
@@ -779,6 +797,8 @@ Each is marked `VERIFY@FIELD` in `alphaess_const.py`:
 8. **Which models are actually AC-coupled.** `ALPHAESS_AC_COUPLED_MODELS` ships empty
    because AlphaESS model names do not encode coupling. Confirmed entries go in as
    testers report them.
+   Separately, whether any battery-bearing system reports a zero `cobat` — if one does,
+   the no-battery discovery filter would wrongly skip it and would need a second signal.
 9. **Whether `Storion-S5` really cannot serve `getLastPowerData`.** Taken from the HA
    integration's model list rather than measured. If it works, the fallback path is dead
    code and the model comes off the list.
