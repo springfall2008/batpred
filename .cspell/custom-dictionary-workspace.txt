@@ -12,8 +12,8 @@ aiomqtt
 aios
 Alertfeed
 allclose
-alphaess
 ALPHAESS
+alphaess
 annualform
 Anson
 apexcharts
@@ -61,6 +61,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+Chaf
 chargedischarge
 chargeenergytotal
 chargefreeze
@@ -123,6 +124,7 @@ dimport
 dischargeenergytotal
 dischargefreeze
 Dischg
+Disf
 diverter
 dlimit
 dnoregion
@@ -159,6 +161,7 @@ enphaseenergy
 Enpower
 entrez
 epod
+ESSAPI
 etoday
 etok
 euids
@@ -166,6 +169,7 @@ EVDC
 evergen
 evse
 exog
+expmsg
 exportlimit
 exportvalue
 fdpwr

@@ -94,6 +94,7 @@ ALPHAESS_CACHE_CONTROL = "control"
 ALPHAESS_SETTLE_POLLS = 3
 
 ALPHAESS_DEBUG_REDACT_KEYS = ("appSecret", "sign", "app_secret", "code", "checkCode")
+ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE = ("appSecret", "sign", "app_secret", "checkCode")
 
 # getLastPowerData field -> published sensor leaf. Watts, except soc which is a percent.
 ALPHAESS_TELEMETRY = {

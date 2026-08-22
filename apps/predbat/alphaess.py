@@ -31,8 +31,8 @@ from alphaess_const import (
     ALPHAESS_RETURN_CODES,
     ALPHAESS_CODE_OK,
     ALPHAESS_CODE_TIMESTAMP,
-    ALPHAESS_CODE_TOO_FAST,
     ALPHAESS_DEBUG_REDACT_KEYS,
+    ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE,
     ALPHAESS_RETRIES,
     ALPHAESS_TIMEOUT,
 )
@@ -125,11 +125,17 @@ class AlphaESSAPI(ComponentBase):
         }
 
     @staticmethod
-    def redact(payload):
-        """Return a log-safe copy of a payload with secrets and one-time codes removed."""
+    def redact(payload, direction="request"):
+        """Return a log-safe copy of a payload with secrets redacted.
+
+        Requests mask the full secret set (appSecret, sign, app_secret, code, checkCode).
+        Responses mask only genuine secrets and never mask code, msg, info or expMsg,
+        which are essential for diagnostics when nobody on the project has AlphaESS hardware.
+        """
         if not isinstance(payload, dict):
             return payload
-        return {key: ("***" if key in ALPHAESS_DEBUG_REDACT_KEYS else value) for key, value in payload.items()}
+        redact_keys = ALPHAESS_DEBUG_REDACT_KEYS if direction == "request" else ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE
+        return {key: ("***" if key in redact_keys else value) for key, value in payload.items()}
 
     def debug_api(self, direction, what, payload=None):
         """Trace one API request or response while api_debug is on."""
@@ -139,7 +145,7 @@ class AlphaESSAPI(ComponentBase):
             self.log("Info: AlphaESS API {} {}".format(direction, what))
             return
         try:
-            rendered = json.dumps(self.redact(payload), default=str)[:2000]
+            rendered = json.dumps(self.redact(payload, direction), default=str)[:2000]
         except (TypeError, ValueError):
             rendered = str(payload)[:2000]
         self.log("Info: AlphaESS API {} {} {}".format(direction, what, rendered))
