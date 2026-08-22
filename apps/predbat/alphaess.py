@@ -220,3 +220,129 @@ class AlphaESSAPI(ComponentBase):
     async def _post(self, endpoint_key, body=None):
         """Perform a signed POST, returning (code, data)."""
         return await self._request("POST", endpoint_key, body=body)
+
+    @staticmethod
+    def _as_float(value, default=0.0):
+        """Coerce an API value to float, returning default for None/'unknown'/junk."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def has_battery(detail):
+        """Return True when a discovered system actually has a battery.
+
+        AlphaESS also sells plug-in solar (the VT1000 family), which has nothing for
+        Predbat to drive. This is a capability check rather than a model blacklist so it
+        catches every non-battery product AlphaESS ships now or later without anyone
+        maintaining a table.
+        """
+        try:
+            return float(detail.get("cobat") or 0) > 0
+        except (TypeError, ValueError):
+            return False
+
+    async def get_device_list(self):
+        """Discover every battery system bound to the AppID, returning its serials.
+
+        Sets discovery_ok so an empty account can be told apart from a failed call - the
+        two are indistinguishable from the returned list alone, and the CLI has to name
+        which one happened.
+        """
+        code, data = await self._get("ess_list")
+        if code != ALPHAESS_CODE_OK:
+            self.discovery_ok = False
+            return list(self.device_list)
+        self.discovery_ok = True
+        wanted = [str(sn).lower() for sn in self.inverter_sn_filter]
+        serials = []
+        detail = {}
+        for entry in data or []:
+            sn = entry.get("sysSn")
+            if not sn:
+                continue
+            if wanted and str(sn).lower() not in wanted:
+                continue
+            if not self.has_battery(entry):
+                # Logged by serial and model so it reads as recognised-and-passed-over
+                # rather than silently missing. Said even for an explicitly requested
+                # serial: there is no plan to apply to a system with no battery, and a
+                # filter matching nothing otherwise looks identical to an empty account.
+                self.log("Info: AlphaESS skipping {} (model {}) - it reports no battery capacity, so there is nothing for Predbat to control".format(sn, entry.get("minv", "unknown")))
+                continue
+            serials.append(sn)
+            detail[sn] = entry
+        self.device_list = serials
+        self.device_detail = detail
+        return serials
+
+    def battery_capacity(self, sn):
+        """Return the battery capacity in kWh from getEssList's cobat."""
+        return self._as_float(self.device_detail.get(sn, {}).get("cobat"), 0.0)
+
+    def inverter_limit(self, sn):
+        """Return the inverter's nominal AC power in watts, from getEssList's poinv (kW)."""
+        return self._as_float(self.device_detail.get(sn, {}).get("poinv"), 0.0) * 1000.0
+
+    def battery_rate_max(self, sn):
+        """Return the battery charge/discharge power limit in watts.
+
+        The API reports no battery power limit and no pack current or voltage to derive one
+        from, so this falls back to the inverter's nominal AC power. That is deliberate
+        rather than lazy: leaving battery_rate_max unmapped is NOT neutral, because
+        inverter.py:410 then uses a hard-coded 2600W - roughly half a SMILE5's real rate -
+        silently, on every plan. inverter.py:423 makes battery_rate_max the governing term
+        in min(inverter_limit_charge, battery_rate_max_raw), so mapping inverter_limit
+        alone does not rescue it.
+
+        On a matched AlphaESS package poinv is close to the battery rate. Where it is not,
+        the estimate is high, and that is the safer error: inverter.py measures the achieved
+        rate and logs a battery_rate_max_scaling suggestion, so an over-estimate reports
+        itself while the 2600W default never does.
+        """
+        if self.battery_rate_max_override > 0:
+            return self.battery_rate_max_override
+        return self.inverter_limit(sn)
+
+    async def refresh_static(self):
+        """Re-discover systems and refresh their static detail. True when discovery worked.
+
+        Deliberately does NOT assign an empty discovery result over a working device_list.
+        This tier re-runs every 8 hours in a long-lived process, so one transient failure
+        must not take a working component down until the next success - and assigning the
+        empty result would additionally write {'device_list': []} to the cache and stamp it
+        fresh, so a restart would restore nothing and skip re-discovery for a full TTL.
+        Absence of a result is not a result.
+        """
+        previous = list(self.device_list)
+        serials = await self.get_device_list()
+        if not serials and previous:
+            self.log("Warn: AlphaESS discovery returned nothing; keeping the {} previously known inverter(s)".format(len(previous)))
+            self.device_list = previous
+            return False
+        if not serials:
+            if self.discovery_ok:
+                self.log("Warn: AlphaESS this account has no battery systems bound to it")
+            else:
+                self.log("Warn: AlphaESS inverter discovery failed; the account may still have systems")
+            return False
+        self.mark_refreshed("static")
+        return True
+
+    def tier_expired(self, tier, ttl_minutes):
+        """Return True when a refresh tier is due, or has never run."""
+        age = self._tier_refreshed.get(tier)
+        if age is None:
+            return True
+        return (time.time() - age) >= (ttl_minutes * 60)
+
+    def mark_refreshed(self, tier, age_minutes=0.0):
+        """Start a tier's clock. Called ONLY on a successful refresh.
+
+        Marking unconditionally would defeat the first-cycle checks in run(): a retry after
+        a deferred startup would find the tier "fresh", skip the poll entirely and then run
+        automatic_config() with no data after all - the very thing those checks exist to
+        prevent.
+        """
+        self._tier_refreshed[tier] = time.time() - (age_minutes * 60)

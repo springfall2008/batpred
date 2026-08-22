@@ -300,6 +300,7 @@ matplotlib
 maximise
 maxrss
 maxsoc
+mbat
 mbuhansen
 mdlrc
 measurand
@@ -318,6 +319,7 @@ minmax
 minsoc
 minsocongrid
 minuteb
+minv
 misclick
 misdetect
 misdetected
@@ -395,6 +397,7 @@ pkwh
 plenticore
 pload
 poinv
+popv
 postdata
 powercontrolmode
 powerline

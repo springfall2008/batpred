@@ -84,6 +84,12 @@ def _envelope(code=200, data=None, msg=None, exp_msg=None):
     return {"code": code, "msg": msg, "expMsg": exp_msg, "extra": None, "data": data}
 
 
+ESS_LIST_SAMPLE = [
+    {"sysSn": "AL70110230306xx", "popv": 9.0, "minv": "SMILE5-INV", "poinv": 5.0, "cobat": 13.34, "mbat": "SMILE-BAT-13.3P", "surplusCobat": 13.34, "usCapacity": 100.0, "emsStatus": "Normal"},
+    {"sysSn": "AL70110230302xx", "popv": 5.0, "minv": "SMILE5-INV", "poinv": 5.0, "cobat": 10.1, "mbat": "SMILE-BAT-10.1P", "surplusCobat": 9.09, "usCapacity": 90.0, "emsStatus": "Normal"},
+]
+
+
 def test_alphaess_sign_matches_the_documented_algorithm():
     """sign is sha512(appId + appSecret + timeStamp), lower-case hex, with both spellings sent."""
     failed = False
@@ -305,6 +311,141 @@ def test_alphaess_response_code_is_logged_even_with_debug_on():
     assert not failed, "test_alphaess_response_code_is_logged_even_with_debug_on"
 
 
+def test_alphaess_discovery_maps_ratings():
+    """cobat becomes soc_max kWh and poinv becomes inverter_limit W."""
+    failed = False
+    client = MockAlphaESS()
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
+    session = create_aiohttp_mock_session(response)
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        serials = run_async_local(client.get_device_list())
+    if serials != ["AL70110230306xx", "AL70110230302xx"]:
+        print(f"ERROR: serials {serials}")
+        failed = True
+    if abs(client.battery_capacity("AL70110230306xx") - 13.34) > 0.001:
+        print(f"ERROR: capacity {client.battery_capacity('AL70110230306xx')}")
+        failed = True
+    if abs(client.inverter_limit("AL70110230306xx") - 5000.0) > 0.1:
+        print(f"ERROR: inverter_limit {client.inverter_limit('AL70110230306xx')}")
+        failed = True
+    if client.discovery_ok is not True:
+        print(f"ERROR: discovery_ok {client.discovery_ok}")
+        failed = True
+    assert not failed, "test_alphaess_discovery_maps_ratings"
+
+
+def test_alphaess_battery_rate_max_defaults_to_the_inverter_limit():
+    """Leaving battery_rate_max unmapped is NOT neutral - inverter.py:410 falls back to
+    a hard-coded 2600W, roughly half a SMILE5's rate, silently, on every plan. poinv is
+    the best available estimate and an over-estimate self-reports via
+    battery_rate_max_scaling, so it is used rather than nothing.
+    """
+    failed = False
+    client = MockAlphaESS()
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
+    session = create_aiohttp_mock_session(response)
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        run_async_local(client.get_device_list())
+    if abs(client.battery_rate_max("AL70110230306xx") - 5000.0) > 0.1:
+        print(f"ERROR: derived battery_rate_max {client.battery_rate_max('AL70110230306xx')}")
+        failed = True
+    # The explicit override wins outright.
+    override = MockAlphaESS()
+    override.battery_rate_max_override = 3600.0
+    override.device_detail = client.device_detail
+    if abs(override.battery_rate_max("AL70110230306xx") - 3600.0) > 0.1:
+        print(f"ERROR: override battery_rate_max {override.battery_rate_max('AL70110230306xx')}")
+        failed = True
+    assert not failed, "test_alphaess_battery_rate_max_defaults_to_the_inverter_limit"
+
+
+def test_alphaess_systems_without_a_battery_are_skipped():
+    """AlphaESS also sells plug-in solar, which has nothing for Predbat to drive.
+
+    A capability filter rather than a model filter, so it catches every non-battery
+    product AlphaESS ships now or later with no table to maintain.
+    """
+    failed = False
+    client = MockAlphaESS()
+    payload = list(ESS_LIST_SAMPLE) + [
+        {"sysSn": "VT100000000001", "minv": "VT1000", "poinv": 0.8, "popv": 0.8, "cobat": 0},
+        {"sysSn": "VT100000000002", "minv": "VT1000", "poinv": 0.8, "popv": 0.8},
+    ]
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, payload))
+    session = create_aiohttp_mock_session(response)
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        serials = run_async_local(client.get_device_list())
+    if "VT100000000001" in serials or "VT100000000002" in serials:
+        print(f"ERROR: battery-less systems registered: {serials}")
+        failed = True
+    if len(serials) != 2:
+        print(f"ERROR: expected 2 serials, got {serials}")
+        failed = True
+    # Logged once by serial and model, so the user can see it was recognised and passed
+    # over rather than silently missing.
+    if not any("VT100000000001" in message and "batter" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no skip log, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_systems_without_a_battery_are_skipped"
+
+
+def test_alphaess_serial_filter_restricts_discovery():
+    """alphaess_inverter_sn narrows discovery, case-insensitively."""
+    failed = False
+    client = MockAlphaESS(inverter_sn="al70110230302XX")
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
+    session = create_aiohttp_mock_session(response)
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        serials = run_async_local(client.get_device_list())
+    if serials != ["AL70110230302xx"]:
+        print(f"ERROR: filtered serials {serials}")
+        failed = True
+    assert not failed, "test_alphaess_serial_filter_restricts_discovery"
+
+
+def test_alphaess_refresh_static_never_clears_a_working_device_list():
+    """Absence of a result is not a result.
+
+    This tier re-runs every 8 hours in a long-lived process; one transient failure must
+    not take a working component down until the next success, and it must not write an
+    empty list to the cache and then stamp it fresh.
+    """
+    failed = False
+    client = MockAlphaESS()
+    ok = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok)):
+        run_async_local(client.refresh_static())
+    before = list(client.device_list)
+    bad = create_aiohttp_mock_response(status=200, json_data=_envelope(6053, None, msg="too fast"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(bad)):
+        run_async_local(client.refresh_static())
+    if client.device_list != before:
+        print(f"ERROR: device_list cleared by a transient failure: {client.device_list} != {before}")
+        failed = True
+    assert not failed, "test_alphaess_refresh_static_never_clears_a_working_device_list"
+
+
+def test_alphaess_discovery_distinguishes_empty_account_from_failure():
+    """An empty account and a failed call look identical without this, and the CLI needs
+    to name which one actually happened."""
+    failed = False
+    empty = MockAlphaESS()
+    ok = create_aiohttp_mock_response(status=200, json_data=_envelope(200, []))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok)):
+        run_async_local(empty.get_device_list())
+    if empty.discovery_ok is not True:
+        print(f"ERROR: empty account discovery_ok {empty.discovery_ok} should be True")
+        failed = True
+    broken = MockAlphaESS()
+    bad = create_aiohttp_mock_response(status=200, json_data=_envelope(6007, None, msg="Sign verification error"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(bad)):
+        run_async_local(broken.get_device_list())
+    if broken.discovery_ok is not False:
+        print(f"ERROR: failed discovery_ok {broken.discovery_ok} should be False")
+        failed = True
+    assert not failed, "test_alphaess_discovery_distinguishes_empty_account_from_failure"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -319,6 +460,12 @@ def run_alphaess_api_tests(my_predbat):
         ("transport_failure", test_alphaess_transport_failure_returns_minus_one),
         ("redact_function", test_alphaess_redact_function_masks_secrets_but_preserves_ordinary_keys),
         ("response_code_logged", test_alphaess_response_code_is_logged_even_with_debug_on),
+        ("discovery_ratings", test_alphaess_discovery_maps_ratings),
+        ("battery_rate_max_from_poinv", test_alphaess_battery_rate_max_defaults_to_the_inverter_limit),
+        ("no_battery_skipped", test_alphaess_systems_without_a_battery_are_skipped),
+        ("serial_filter", test_alphaess_serial_filter_restricts_discovery),
+        ("refresh_static_keeps_list", test_alphaess_refresh_static_never_clears_a_working_device_list),
+        ("empty_vs_failed_discovery", test_alphaess_discovery_distinguishes_empty_account_from_failure),
     ]:
         try:
             if fn():
