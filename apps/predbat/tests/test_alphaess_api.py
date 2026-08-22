@@ -513,7 +513,7 @@ def test_alphaess_telemetry_applies_predbat_sign_conventions():
     if not ok:
         print("ERROR: fetch_device_data returned False")
         failed = True
-    for leaf, expect in (("soc", 56.0), ("battery_power", 1264.0), ("grid_power", -11.0), ("pv_power", 0.0), ("load_power", 1275.0)):
+    for leaf, expect in (("soc", 56.0), ("battery_power", 1264.0), ("grid_power", -11.0), ("pv_power", 0.0), ("load_power", 1275.0), ("ev_power", 0.0)):
         if abs(values.get(leaf, 0.0) - expect) > 0.001:
             print(f"ERROR: {leaf} {values.get(leaf)} != {expect}")
             failed = True
@@ -643,6 +643,67 @@ def test_alphaess_serial_with_no_soc_on_either_path_is_reported():
     assert not failed, "test_alphaess_serial_with_no_soc_on_either_path_is_reported"
 
 
+def test_alphaess_power_tier_ttl_returns_correct_interval_based_on_demotion_state():
+    """power_tier_ttl returns the longer interval once any serial is demoted to history.
+
+    getOneDayPowerBySn returns ~288 records for a full day, so it must not sit on a
+    60-second loop. The interval doubles when any serial enters the history path.
+    """
+    from alphaess_const import ALPHAESS_TTL_POWER, ALPHAESS_TTL_POWER_DEMOTED
+
+    failed = False
+    client = MockAlphaESS()
+
+    # No serials demoted - empty _live_ok dict
+    if client.power_tier_ttl() != ALPHAESS_TTL_POWER:
+        print(f"ERROR: empty _live_ok should return short interval {ALPHAESS_TTL_POWER}, got {client.power_tier_ttl()}")
+        failed = True
+
+    # No serials demoted - all True
+    client._live_ok = {"AL70": True, "AL71": True}
+    if client.power_tier_ttl() != ALPHAESS_TTL_POWER:
+        print(f"ERROR: all True _live_ok should return short interval {ALPHAESS_TTL_POWER}, got {client.power_tier_ttl()}")
+        failed = True
+
+    # At least one demoted
+    client._live_ok = {"AL70": False}
+    if client.power_tier_ttl() != ALPHAESS_TTL_POWER_DEMOTED:
+        print(f"ERROR: demoted serial should return long interval {ALPHAESS_TTL_POWER_DEMOTED}, got {client.power_tier_ttl()}")
+        failed = True
+
+    # Mix of demoted and healthy - should still return demoted (longer) interval
+    client._live_ok = {"AL70": True, "AL71": False, "AL72": True}
+    if client.power_tier_ttl() != ALPHAESS_TTL_POWER_DEMOTED:
+        print(f"ERROR: mix with one demoted should return long interval {ALPHAESS_TTL_POWER_DEMOTED}, got {client.power_tier_ttl()}")
+        failed = True
+
+    assert not failed, "test_alphaess_power_tier_ttl_returns_correct_interval_based_on_demotion_state"
+
+
+def test_alphaess_reprobe_live_failure_leaves_serial_demoted():
+    """A failed reprobe_live does not restore the serial or reset the fail count."""
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    # Mark it as demoted
+    client._live_ok["AL70"] = False
+    client._live_fail_count["AL70"] = 5
+    # Try to reprobe but it still fails
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        ok = run_async_local(client.reprobe_live("AL70"))
+    if ok:
+        print("ERROR: reprobe_live returned True when live data still unavailable")
+        failed = True
+    if client._live_ok.get("AL70") is not False:
+        print(f"ERROR: reprobe failure should keep serial demoted, got {client._live_ok.get('AL70')}")
+        failed = True
+    if client._live_fail_count.get("AL70") != 5:
+        print(f"ERROR: reprobe failure should not reset fail count, got {client._live_fail_count.get('AL70')} != 5")
+        failed = True
+    assert not failed, "test_alphaess_reprobe_live_failure_leaves_serial_demoted"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -669,6 +730,8 @@ def run_alphaess_api_tests(my_predbat):
         ("history_cbat_spelling", test_alphaess_history_reads_cbat_not_the_portal_spelling),
         ("live_demotion_reversible", test_alphaess_live_demotion_latches_and_is_reversible),
         ("no_soc_reported", test_alphaess_serial_with_no_soc_on_either_path_is_reported),
+        ("power_tier_ttl", test_alphaess_power_tier_ttl_returns_correct_interval_based_on_demotion_state),
+        ("reprobe_live_failure", test_alphaess_reprobe_live_failure_leaves_serial_demoted),
     ]:
         try:
             if fn():
