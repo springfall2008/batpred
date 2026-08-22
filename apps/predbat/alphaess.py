@@ -32,6 +32,7 @@ from alphaess_const import (
     ALPHAESS_RETURN_CODES,
     ALPHAESS_CODE_OK,
     ALPHAESS_CODE_TIMESTAMP,
+    ALPHAESS_CODE_TOO_FAST,
     ALPHAESS_DEBUG_REDACT_KEYS,
     ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE,
     ALPHAESS_RETRIES,
@@ -881,15 +882,6 @@ class AlphaESSAPI(ComponentBase):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
 
-    async def _handle_control_event(self, entity_id, value):
-        """Route one control-entity event to the right inverter and apply it."""
-        sn = self._sn_from_entity(entity_id)
-        if not sn:
-            self.log("Warn: AlphaESS could not resolve an inverter for {}".format(entity_id))
-            return
-        self.update_local_schedule(sn, entity_id, value)
-        await self.publish_schedule_settings_ha(sn)
-
     @staticmethod
     def _clamp_percent(value, low=0, high=100):
         """Clamp a SOC percentage to the API's accepted range."""
@@ -1037,3 +1029,158 @@ class AlphaESSAPI(ComponentBase):
         if not isinstance(first, dict) or not isinstance(second, dict):
             return False
         return json.dumps(first, sort_keys=True, default=str) == json.dumps(second, sort_keys=True, default=str)
+
+    async def fetch_config(self, sn):
+        """Read the current charge and discharge config, the read-modify-write baseline."""
+        ok = False
+        code, charge = await self._get("charge_config", params={"sysSn": sn})
+        entry = self.device_config.setdefault(sn, {})
+        if code == ALPHAESS_CODE_OK and isinstance(charge, dict):
+            entry["charge"] = charge
+            ok = True
+        if self.api_delay:
+            await asyncio.sleep(self.api_delay)
+        code, discharge = await self._get("discharge_config", params={"sysSn": sn})
+        if code == ALPHAESS_CODE_OK and isinstance(discharge, dict):
+            entry["discharge"] = discharge
+            ok = True
+        return ok
+
+    async def refresh_config(self):
+        """Refresh the config baseline for every inverter, and re-probe demoted telemetry.
+
+        The live re-probe lives here rather than on the power tier so a demoted serial
+        costs two extra calls an hour instead of one a minute, while still self-healing.
+        """
+        got_any = False
+        for sn in self.device_list:
+            try:
+                if await self.fetch_config(sn):
+                    got_any = True
+            except Exception as error:
+                self.log("Warn: AlphaESS config read failed for {}: {}".format(sn, error))
+            if self._live_ok.get(sn) is False:
+                try:
+                    await self.reprobe_live(sn)
+                except Exception as error:
+                    self.log("Warn: AlphaESS live re-probe failed for {}: {}".format(sn, error))
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+        if got_any:
+            self.mark_refreshed("config")
+        return got_any
+
+    def _is_read_only(self):
+        """Return True when Predbat is in read-only mode and must not write to the inverter."""
+        return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+
+    def _write_allowed(self, sn, direction, force=False):
+        """Return True when a write for one serial and direction may go out now.
+
+        The minimum interval treats the documented 24-hour write limit as a real budget.
+        A change arriving inside the window is HELD, not dropped: apply_settings leaves the
+        applied-payload cache untouched, so the next eligible tick rebuilds and sends it.
+        """
+        if force or not self.min_write_interval:
+            return True
+        last = self.last_write_time.get((sn, direction))
+        if last is None:
+            return True
+        return (time.time() - last) >= self.min_write_interval
+
+    async def _write_payload(self, sn, direction, endpoint_key, payload, force=False):
+        """Send one payload if it differs from the last applied one and pacing allows."""
+        cache = self.applied_payload.setdefault(sn, {})
+        if not force and self.payloads_equal(cache.get(direction), payload):
+            self.log("Info: AlphaESS {} {} settings unchanged, nothing sent".format(sn, direction))
+            return True
+        if not self._write_allowed(sn, direction, force=force):
+            self.log("Info: AlphaESS {} {} change is held by alphaess_min_write_interval ({}s) and will be applied on the next eligible cycle".format(sn, direction, self.min_write_interval))
+            return True
+        code, _ = await self._post(endpoint_key, body=payload)
+        if code != ALPHAESS_CODE_OK:
+            if code == ALPHAESS_CODE_TOO_FAST:
+                # A pacing signal, not a broken component. Deliberately NOT cached as
+                # applied, so the next cycle retries.
+                self.log("Info: AlphaESS rate-limited the {} write for {}; it will be retried".format(direction, sn))
+            else:
+                self.log("Warn: AlphaESS {} write for {} was rejected with {}".format(direction, sn, self.describe_code(code)))
+            return False
+        cache[direction] = payload
+        self.last_write_time[(sn, direction)] = time.time()
+        self.settle_count[(sn, direction)] = 0
+        self.log("Info: AlphaESS wrote {} settings for {}".format(direction, sn))
+        return True
+
+    async def apply_settings(self, sn, schedule, force=False):
+        """Build and send both payloads for one inverter, gated independently.
+
+        Charge and discharge are gated separately so a charge-only change does not consume
+        a discharge write - both endpoints are documented as writable once per 24 hours.
+        """
+        if not self.control_enable:
+            return False
+        charge_payload = self.build_charge_payload(sn, schedule)
+        discharge_payload = self.build_discharge_payload(sn, schedule)
+        charge_ok = await self._write_payload(sn, "charge", "update_charge_config", charge_payload, force=force)
+        if self.api_delay:
+            await asyncio.sleep(self.api_delay)
+        discharge_ok = await self._write_payload(sn, "discharge", "update_discharge_config", discharge_payload, force=force)
+        return charge_ok and discharge_ok
+
+    async def apply_schedule(self, sn, force=False):
+        """Apply the locally held schedule for one inverter."""
+        schedule = self.local_schedule.get(sn)
+        if not schedule:
+            return False
+        return await self.apply_settings(sn, schedule, force=force)
+
+    async def _reconcile_control(self, sn):
+        """Re-apply sn's schedule if Predbat already controls it, unforced.
+
+        Gated on read-only for a specific reason. Predbat's own read-only handling
+        (execute.py:145) covers every write that originates from a plan, but NOT one this
+        component initiates itself - and this is exactly that. The payload is time-aware
+        because batUseCap switches between the export target and the reserve, so a window
+        transition changes it with no plan change at all, and without this gate that
+        transition would write to the inverter while Predbat was in read-only mode. This is
+        GH#4436 (deye.py:1661, sunsynk.py:1346).
+        """
+        if sn not in self.control_active or self._is_read_only() or not self.control_enable:
+            return
+        try:
+            await self.apply_schedule(sn)
+        except Exception as error:
+            self.log("Warn: AlphaESS schedule apply failed for {}: {}".format(sn, error))
+
+    async def _handle_control_event(self, entity_id, value):
+        """Route one control-entity event to the right inverter and apply it."""
+        sn = self._sn_from_entity(entity_id)
+        if not sn:
+            self.log("Warn: AlphaESS could not resolve an inverter for {}".format(entity_id))
+            return
+        if str(entity_id).endswith("_unbind"):
+            await self._handle_unbind_event(sn, value)
+            return
+        # The write button is NOT forced. Predbat presses this on every cycle as its normal
+        # "apply the schedule" action (INVERTER_DEF time_button_press), not only when the
+        # plan actually changed, so force=True here would bypass the applied-payload
+        # change-detection gate on every single cycle. DEYE hit this exact bug first:
+        # PR #4371 (commit 3e1de759) measured 40 button presses producing 36 byte-identical
+        # control orders over two hours on a live site once the button forced the write.
+        # Do not reintroduce force=True here.
+        if str(entity_id).endswith("battery_schedule_charge_write"):
+            if self._to_bool(value):
+                # Predbat is now actively driving this inverter, so the reconcile loop may
+                # re-apply from here on. Marked on the press itself rather than on a
+                # successful write: a write that failed still means Predbat owns this
+                # inverter and the next tick should retry.
+                self.control_active.add(sn)
+                await self.apply_schedule(sn)
+            return
+        self.update_local_schedule(sn, entity_id, value)
+        await self.publish_schedule_settings_ha(sn)
+
+    async def _handle_unbind_event(self, sn, value):
+        """Handle the unbind toggle. Replaced with the real implementation in Task 12."""
+        return

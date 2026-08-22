@@ -9,8 +9,9 @@
 """Tests for the AlphaESS control entities, payload derivation and write gating."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
-from tests.test_alphaess_api import MockAlphaESS
-from tests.test_infra import run_async as run_async_local
+from unittest.mock import patch
+from tests.test_alphaess_api import MockAlphaESS, _envelope
+from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 def _schedule(reserve=10, charge=None, export=None, charge_power=3000, export_power=3000):
@@ -450,6 +451,202 @@ def test_alphaess_payloads_equal_is_type_strict_and_order_independent():
     assert not failed, "test_alphaess_payloads_equal_is_type_strict_and_order_independent"
 
 
+def _writable(sn="AL70"):
+    """A client whose serial Predbat has already been asked to drive."""
+    client = _client(sn)
+    client.control_active.add(sn)
+    return client
+
+
+def test_alphaess_identical_payload_is_not_rewritten():
+    """The write button is pressed EVERY cycle as Predbat's normal 'apply' action, not only
+    when the plan changed.
+
+    DEYE hit this first: PR #4371 (commit 3e1de759) measured 40 button presses producing 36
+    byte-identical control orders over two hours on a live site once the button forced the
+    write. The applied-payload cache is the single source of truth for whether a write is
+    needed.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 0
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
+        run_async_local(client.apply_settings("AL70", schedule))
+        first_calls = session.return_value.post.call_count if hasattr(session.return_value, "post") else None
+        run_async_local(client.apply_settings("AL70", schedule))
+        second_calls = session.return_value.post.call_count if hasattr(session.return_value, "post") else None
+    # Second identical apply must send nothing: the POST count must not move at all, not
+    # merely end up holding the same cached value - a value can be identical either because
+    # nothing was sent, or because something identical was sent again and just landed on the
+    # same bytes, and only the call count tells those two apart.
+    if second_calls != first_calls:
+        print(f"ERROR: second identical apply sent {second_calls} - {first_calls} POST(s), should send zero")
+        failed = True
+    if client.applied_payload.get("AL70", {}).get("charge") is None:
+        print("ERROR: applied payload not cached")
+        failed = True
+    if not any("unchanged" in message.lower() or "no change" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no 'unchanged' log on the second apply, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_identical_payload_is_not_rewritten"
+
+
+def test_alphaess_charge_and_discharge_gated_independently():
+    """A charge-only change must not consume a discharge write.
+
+    Both endpoints are documented as writable once per 24 hours, so a shared gate would
+    burn half the budget for nothing.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 0
+    base = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
+        run_async_local(client.apply_settings("AL70", base))
+        discharge_before = dict(client.applied_payload["AL70"]["discharge"])
+        calls_after_base = session.return_value.post.call_count
+        changed = _schedule(charge={"enable": True, "soc": 80, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+        run_async_local(client.apply_settings("AL70", changed))
+        calls_after_changed = session.return_value.post.call_count
+    if client.applied_payload["AL70"]["charge"]["batHighCap"] != 80:
+        print(f"ERROR: charge payload not updated: {client.applied_payload['AL70']['charge']}")
+        failed = True
+    if client.applied_payload["AL70"]["discharge"] != discharge_before:
+        print("ERROR: discharge payload rewritten by a charge-only change")
+        failed = True
+    # The value check above passes even if discharge was needlessly re-sent with identical
+    # bytes, so the call count is what actually proves the discharge write was skipped -
+    # exactly one POST (charge only) must have gone out for the charge-only change.
+    if calls_after_changed - calls_after_base != 1:
+        print(f"ERROR: a charge-only change sent {calls_after_changed - calls_after_base} POST(s), should send exactly 1 (charge only, discharge held back)")
+        failed = True
+    assert not failed, "test_alphaess_charge_and_discharge_gated_independently"
+
+
+def test_alphaess_reconcile_is_gated_on_predbat_read_only():
+    """execute.py:145 covers every write that ORIGINATES FROM A PLAN, but not one the
+    component initiates itself - and _reconcile_control is exactly that.
+
+    The payload is time-dependent because batUseCap switches between the export target and
+    the reserve, so a window transition changes it with no plan change at all. Without this
+    gate that transition would write during read-only. GH#4436, fixed for DEYE and Sunsynk
+    after the fact (deye.py:1661, sunsynk.py:1346).
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 0
+    client.state["switch.predbat_set_read_only"] = "on"
+    client.local_schedule["AL70"] = _schedule(export={"enable": True, "soc": 20, "power": 3000, "start": "17:00:00", "end": "19:00:00"})
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))):
+        run_async_local(client._reconcile_control("AL70"))
+    if client.applied_payload.get("AL70"):
+        print(f"ERROR: wrote while read-only: {client.applied_payload}")
+        failed = True
+    assert not failed, "test_alphaess_reconcile_is_gated_on_predbat_read_only"
+
+
+def test_alphaess_reconcile_is_gated_on_control_enable():
+    """control_enable false means monitoring only."""
+    failed = False
+    client = _writable()
+    client.control_enable = False
+    client.min_write_interval = 0
+    client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))):
+        run_async_local(client._reconcile_control("AL70"))
+    if client.applied_payload.get("AL70"):
+        print(f"ERROR: wrote with control disabled: {client.applied_payload}")
+        failed = True
+    assert not failed, "test_alphaess_reconcile_is_gated_on_control_enable"
+
+
+def test_alphaess_reconcile_skips_a_serial_predbat_has_not_been_asked_to_drive():
+    """A startup cycle must never clobber an inverter before there is a plan to apply."""
+    failed = False
+    client = _client()  # NOT in control_active
+    client.min_write_interval = 0
+    client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))):
+        run_async_local(client._reconcile_control("AL70"))
+    if client.applied_payload.get("AL70"):
+        print(f"ERROR: wrote for an undriven serial: {client.applied_payload}")
+        failed = True
+    assert not failed, "test_alphaess_reconcile_skips_a_serial_predbat_has_not_been_asked_to_drive"
+
+
+def test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it():
+    """The 24h documented write limit is treated as a real budget, but a held change must
+    be applied on the next eligible tick - not lost."""
+    failed = False
+    client = _writable()
+    client.min_write_interval = 300
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    first = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    second = _schedule(charge={"enable": True, "soc": 70, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+        with patch("alphaess.time.time", return_value=1000.0):
+            run_async_local(client.apply_settings("AL70", first))
+        with patch("alphaess.time.time", return_value=1010.0):
+            run_async_local(client.apply_settings("AL70", second))
+        held = client.applied_payload["AL70"]["charge"]["batHighCap"]
+        if held != 90:
+            print(f"ERROR: write not held inside the interval, batHighCap {held}")
+            failed = True
+        # Past the interval, the held change goes out.
+        with patch("alphaess.time.time", return_value=1400.0):
+            run_async_local(client.apply_settings("AL70", second))
+    if client.applied_payload["AL70"]["charge"]["batHighCap"] != 70:
+        print(f"ERROR: held change never applied: {client.applied_payload['AL70']['charge']}")
+        failed = True
+    assert not failed, "test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it"
+
+
+def test_alphaess_6053_backs_off_rather_than_counting_as_a_failure():
+    """Too-fast is a pacing signal, not a broken component."""
+    failed = False
+    client = _writable()
+    client.min_write_interval = 0
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    busy = create_aiohttp_mock_response(status=200, json_data=_envelope(6053, None, msg="The request was too fast"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(busy)):
+        run_async_local(client.apply_settings("AL70", schedule))
+    # A rejected write must NOT be cached as applied, or the retry never happens.
+    if client.applied_payload.get("AL70", {}).get("charge") is not None:
+        print("ERROR: a 6053-rejected write was cached as applied")
+        failed = True
+    assert not failed, "test_alphaess_6053_backs_off_rather_than_counting_as_a_failure"
+
+
+def test_alphaess_write_button_is_not_forced():
+    """Predbat presses this every cycle as its normal apply action (time_button_press), so
+    force=True here would bypass the change-detection gate on every single cycle."""
+    failed = False
+    client = _client()
+    client.min_write_interval = 0
+    client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    captured = {}
+
+    async def fake_apply(sn, force=False):
+        """Record how apply_schedule was called."""
+        captured["force"] = force
+        return True
+
+    client.apply_schedule = fake_apply
+    run_async_local(client._handle_control_event("switch.predbat_alphaess_al70_battery_schedule_charge_write", "turn_on"))
+    if captured.get("force") is not False:
+        print(f"ERROR: the write button forced the write: {captured}")
+        failed = True
+    # Pressing it marks the serial as driven, on the press itself: a write that failed
+    # still means Predbat owns this inverter and the next tick should retry.
+    if "AL70" not in client.control_active:
+        print("ERROR: the write button did not mark the serial as driven")
+        failed = True
+    assert not failed, "test_alphaess_write_button_is_not_forced"
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -471,6 +668,14 @@ def run_alphaess_control_tests(my_predbat):
         ("clamped_at_boundary", test_alphaess_reserve_is_clamped_at_the_api_boundary),
         ("full_replacement", test_alphaess_payload_is_a_full_replacement),
         ("payloads_equal_type_strict", test_alphaess_payloads_equal_is_type_strict_and_order_independent),
+        ("identical_not_rewritten", test_alphaess_identical_payload_is_not_rewritten),
+        ("independent_gating", test_alphaess_charge_and_discharge_gated_independently),
+        ("read_only_gate", test_alphaess_reconcile_is_gated_on_predbat_read_only),
+        ("control_enable_gate", test_alphaess_reconcile_is_gated_on_control_enable),
+        ("undriven_serial_skipped", test_alphaess_reconcile_skips_a_serial_predbat_has_not_been_asked_to_drive),
+        ("min_write_interval", test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it),
+        ("6053_backoff", test_alphaess_6053_backs_off_rather_than_counting_as_a_failure),
+        ("write_button_not_forced", test_alphaess_write_button_is_not_forced),
     ]:
         try:
             if fn():
