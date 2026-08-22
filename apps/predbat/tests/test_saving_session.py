@@ -1120,6 +1120,76 @@ friendly_name: Predbat Octopus Power Down For Predbat
     return failed
 
 
+def test_saving_session_select_entity_join_defers_notify(my_predbat):
+    """
+    Test that the select-entity join path (octopus_saving_session_join, used by Octopus Energy
+    Direct or similar) writes the select entity but sends no "joined" notification itself - the
+    real join happens asynchronously on a later cycle (OctopusAPI's own select_event() ->
+    process_commands() -> async_join_saving_session_events()), so notifying at write time would
+    claim success before the join has even been attempted. Covers GitHub issue #4593.
+    """
+    print("Test select-entity join defers the joined notification (issue #4593)")
+    ha = my_predbat.ha_interface
+    failed = False
+    date_today = datetime.now().strftime("%Y-%m-%d")
+    tz_offset = int(my_predbat.midnight_utc.tzinfo.utcoffset(my_predbat.midnight_utc).total_seconds() / 3600)
+    tz_offset = f"{tz_offset:02d}"
+
+    session_sensor = f"""
+state: '2025-01-23T12:10:11.108+{tz_offset}:00'
+account_id: A-4DD6C5EE
+available_events:
+    - id: 9999
+      start: '{date_today}T18:30:00+{tz_offset}:00'
+      end: '{date_today}T19:30:00+{tz_offset}:00'
+      duration_in_minutes: 60
+      rewarded_octopoints: null
+      octopoints_per_kwh: 500
+      code: TEST123
+joined_events: []
+friendly_name: Octoplus Saving Session Events
+"""
+
+    saved_args = my_predbat.args.copy()
+    try:
+        ha.dummy_items.clear()
+        ha.dummy_items["event.octopus_energy_test_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
+        ha.dummy_items["sensor.octopus_free_session"] = {}
+        ha.dummy_items["select.predbat_saving_session_join"] = {"state": "", "attributes": {"options": []}}
+        my_predbat.args["octopus_saving_session"] = "event.octopus_energy_test_octoplus_saving_session_event"
+        my_predbat.args["octopus_saving_session_join"] = "select.predbat_saving_session_join"
+        my_predbat.args["octopus_free_session"] = "sensor.octopus_free_session"
+        if "octopus_free_url" in my_predbat.args:
+            del my_predbat.args["octopus_free_url"]
+        my_predbat.args["octopus_saving_session_octopoints_per_penny"] = 10
+        my_predbat.octopus_last_joined_try = None
+
+        ha.service_store_enable = True
+        ha.service_store = []
+        my_predbat.fetch_octopus_sessions()
+        service_result = ha.get_service_store()
+        ha.service_store_enable = False
+
+        select_calls = [svc for svc in service_result if svc[0] == "select/select_option"]
+        notify_calls = [svc for svc in service_result if svc[0] == "notify/notify"]
+        if len(select_calls) != 1:
+            print(f"ERROR: Expected 1 select_option call to queue the join, got {len(select_calls)}: {service_result}")
+            failed = True
+        elif select_calls[0][1].get("entity_id") != "select.predbat_saving_session_join" or select_calls[0][1].get("option") != "TEST123":
+            print(f"ERROR: select_option call had unexpected args: {select_calls[0][1]}")
+            failed = True
+        elif notify_calls:
+            print(f"ERROR: Expected no notification from the select-entity path (deferred to the real join), got {notify_calls}")
+            failed = True
+        else:
+            print("PASS: select_option queued the join with no premature notification")
+    finally:
+        my_predbat.args = saved_args
+        my_predbat.octopus_last_joined_try = None
+
+    return failed
+
+
 def test_saving_session_default_rate(my_predbat):
     """
     Test that saving sessions with no octopoints_per_kwh use the default rate

@@ -879,11 +879,26 @@ class OctopusAPI(ComponentBase):
     async def async_join_saving_session_events(self, account_id, event_code):
         """
         Join the saving session events
+
+        The "joined" notification is sent here, not by the caller that triggers this (the
+        select-entity join path in fetch_octopus_sessions()), because this is the only point
+        where the real GraphQL result is known - the select-entity write just queues this call
+        for a later cycle, so notifying at write time would claim success before the join has
+        even been attempted (issue #4593).
         """
         if event_code:
             # Join the saving sessions
             self.log("OctopusAPI: Joining saving session event {}".format(event_code))
-            await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False, use_backend=True)
+            result = await self.async_graphql_query(octoplus_saving_session_join_mutation.format(account_id=account_id, event_code=event_code), "join-saving-session-event", returns_data=False, use_backend=True)
+            join_info = result.get("joinSavingSessionsEvent") if isinstance(result, dict) else None
+            joined_codes = join_info.get("joinedEventCodes") if isinstance(join_info, dict) else None
+            if joined_codes and event_code in joined_codes:
+                if self.get_arg("set_event_notify"):
+                    self.call_notify("Predbat: Joined Octopus saving event {}".format(event_code))
+            elif result is None:
+                self.log("Warn: OctopusAPI: Failed to join saving session event {}".format(event_code))
+            else:
+                self.log("Warn: OctopusAPI: Join did not confirm event {} was joined: {}".format(event_code, result))
             # Re-fetch the saving sessions if we have joined any
             self.saving_sessions = await self.async_get_saving_sessions(account_id)
 
@@ -3034,7 +3049,11 @@ class Octopus:
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
                             if entity_id_join:
                                 # Join via selector (Octopus Energy Direct, or any other integration wired
-                                # up this way) - unaffected by which Bottle Cap Dave service name is current
+                                # up this way) - unaffected by which Bottle Cap Dave service name is current.
+                                # This only queues the join - OctopusAPI's own select_event() picks up the
+                                # entity write and performs the real join on a later cycle, so the "joined"
+                                # notification is sent there (async_join_saving_session_events()), once the
+                                # actual result is known, not here (issue #4593).
                                 self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
                             else:
                                 # Join via Bottle Cap Dave's Octopus Energy HA integration. Try the current
@@ -3062,8 +3081,8 @@ class Octopus:
                                 else:
                                     self.log("Note: octopus_energy/join_octoplus_power_down_session_event not available, falling back to the deprecated join_octoplus_saving_session_event service")
                                     self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            if self.get_arg("set_event_notify"):
-                                self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
+                                if self.get_arg("set_event_notify"):
+                                    self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             self.octopus_last_joined_try = self.now_utc
 
             # Default saving session rate for when octopoints_per_kwh is not available
