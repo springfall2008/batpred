@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Open-Meteo Primary Source Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Open-Meteo Primary Source Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-07-30-open-meteo-primary-source.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Open-Meteo Primary Source Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="open-meteo-primary-source-implementation-plan">Open-Meteo Primary Source Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Add a single boolean, <code>forecast_solar_open_meteo_first</code>, that makes Predbat fetch solar forecasts from Open-Meteo first and fall back to Forecast.solar, reusing the existing <code>forecast_solar</code> configuration unchanged.</p>
+<p><strong>Architecture:</strong> A new branch is added ahead of the existing <code>self.forecast_solar</code> branch in <code>SolarAPI.fetch_pv_forecast()</code>. It mirrors the existing Open-Meteo backup path in reverse: Open-Meteo is called first, and Forecast.solar is called only when Open-Meteo returns no data. The <code>forecast_solar</code> config entries are passed straight to <code>download_open_meteo_data()</code> because both download paths read the same keys and apply <code>azimuth_zero_south</code> identically.</p>
+<p><strong>Tech Stack:</strong> Python 3, asyncio, aiohttp. Tests use the project's own <code>TestSolarAPI</code> harness in <code>apps/predbat/tests/test_solcast.py</code> with mocked HTTP; no pytest.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length: 256 chars (Black), 250 chars (Flake8).</li>
+<li>Docstrings required on every function and class (<code>interrogate</code>, 100% coverage). The new helper method must have one.</li>
+<li>Spell checking is British English via CSpell. <code>docs/superpowers/</code> is excluded, but <code>docs/apps-yaml.md</code> and <code>docs/install.md</code> are <strong>not</strong> — new words there must be added to <code>.cspell/custom-dictionary-workspace.txt</code>.</li>
+<li>Variable naming: <code>lower_case_with_underscores</code>.</li>
+<li>Tests are run from the <code>coverage/</code> directory. Always redirect test output to a file and grep the file afterwards; never pipe directly to grep.</li>
+<li>The existing <code>forecast_solar_open_meteo_backup</code> setting must not change in type or behaviour.</li>
+<li>Do not modify the caps in <code>pv_calibration()</code> or the <code>kwp * efficiency</code> value sent to Forecast.solar. Both are explicitly out of scope in the spec.</li>
+</ul>
+<h2 id="reference-how-to-run-the-tests">Reference: how to run the tests</h2>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all --test solcast &gt; /tmp/solcast_out.txt 2&gt;&amp;1
+grep -E &quot;ERROR|FAIL|Passed|failed&quot; /tmp/solcast_out.txt
+</code></pre>
+<p>A passing run prints no <code>ERROR:</code> lines from the solcast tests. Each test function returns a <code>failed</code> boolean; <code>run_solcast_tests</code> ORs them together.</p>
+<hr />
+<h3 id="task-1-add-the-setting-and-reverse-the-source-order">Task 1: Add the setting and reverse the source order</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/config.py:2367</code> (add schema entry)
+- Modify: <code>apps/predbat/components.py:109</code> (add component arg)
+- Modify: <code>apps/predbat/solcast.py:47-76</code> (add <code>initialize()</code> parameter and assignment)
+- Modify: <code>apps/predbat/solcast.py:1218-1226</code> (reverse the source order)
+- Test: <code>apps/predbat/tests/test_solcast.py</code> (harness update at line 171, plus four new tests)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>SolarAPI.download_open_meteo_data(configs=...)</code> returning <code>(sorted_data, max_kwh)</code>; <code>SolarAPI.download_forecast_solar_data()</code> returning <code>(sorted_data, max_kwh)</code>.
+- Produces: <code>self.forecast_solar_open_meteo_first</code> (bool, default <code>False</code>) on the <code>SolarAPI</code> instance. Task 2 reads nothing from this task beyond the branch structure it edits.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the four failing tests</strong></li>
+</ul>
+<p>Add these four functions to <code>apps/predbat/tests/test_solcast.py</code>, immediately after <code>test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success</code> (which ends around line 1822, just before <code>def test_fetch_pv_forecast_ha_sensors</code>).</p>
+<pre><code class="language-python">def test_fetch_pv_forecast_open_meteo_first_used_when_set(my_predbat):
+    &quot;&quot;&quot;
+    When forecast_solar_open_meteo_first is True, Open-Meteo is used as the primary
+    source and forecast.solar is not called at all.
+    &quot;&quot;&quot;
+    print(&quot;  - test_fetch_pv_forecast_open_meteo_first_used_when_set&quot;)
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{&quot;latitude&quot;: 51.5, &quot;longitude&quot;: -0.1, &quot;declination&quot;: 30, &quot;azimuth&quot;: 0, &quot;kwp&quot;: 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        # Both sources would succeed - Open-Meteo must win and forecast.solar must not be called
+        test_api.set_mock_response(
+            &quot;api.open-meteo.com&quot;,
+            {
+                &quot;hourly&quot;: {
+                    &quot;time&quot;: [&quot;2025-06-15T12:00&quot;, &quot;2025-06-15T13:00&quot;, &quot;2025-06-15T14:00&quot;],
+                    &quot;global_tilted_irradiance&quot;: [500.0, 600.0, 550.0],
+                    &quot;temperature_2m&quot;: [25.0, 25.0, 25.0],
+                    &quot;wind_speed_10m&quot;: [1.0, 1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            &quot;ensemble-api.open-meteo.com&quot;,
+            {
+                &quot;hourly&quot;: {
+                    &quot;time&quot;: [&quot;2025-06-15T12:00&quot;, &quot;2025-06-15T13:00&quot;, &quot;2025-06-15T14:00&quot;],
+                    &quot;global_tilted_irradiance_member01&quot;: [400.0, 480.0, 440.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            &quot;forecast.solar&quot;,
+            {
+                &quot;result&quot;: {&quot;watts&quot;: {&quot;2025-06-15T12:00:00+0000&quot;: 500, &quot;2025-06-15T12:30:00+0000&quot;: 600}},
+                &quot;message&quot;: {&quot;info&quot;: {&quot;time&quot;: &quot;2025-06-15T11:30:00+0000&quot;}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            &quot;&quot;&quot;Create a mock aiohttp session.&quot;&quot;&quot;
+            return test_api.mock_aiohttp_session()
+
+        with patch(&quot;solcast.aiohttp.ClientSession&quot;, side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        open_meteo_calls = [r for r in test_api.request_log if &quot;open-meteo.com&quot; in r[&quot;url&quot;]]
+        if len(open_meteo_calls) == 0:
+            print(&quot;ERROR: Expected Open-Meteo API call when open_meteo_first is set, got none&quot;)
+            failed = True
+
+        forecast_calls = [r for r in test_api.request_log if &quot;forecast.solar&quot; in r[&quot;url&quot;]]
+        if len(forecast_calls) != 0:
+            print(f&quot;ERROR: Expected no forecast.solar calls when Open-Meteo succeeds, got {len(forecast_calls)}&quot;)
+            failed = True
+
+        if f&quot;sensor.{test_api.mock_base.prefix}_pv_today&quot; not in test_api.dashboard_items:
+            print(&quot;ERROR: Expected pv_today sensor to be published from Open-Meteo primary&quot;)
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat):
+    &quot;&quot;&quot;
+    When forecast_solar_open_meteo_first is True and Open-Meteo returns no data,
+    fetch_pv_forecast falls back to forecast.solar.
+    &quot;&quot;&quot;
+    print(&quot;  - test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure&quot;)
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{&quot;latitude&quot;: 51.5, &quot;longitude&quot;: -0.1, &quot;declination&quot;: 30, &quot;azimuth&quot;: 0, &quot;kwp&quot;: 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        # Open-Meteo fails
+        test_api.set_mock_response(&quot;api.open-meteo.com&quot;, {&quot;error&quot;: &quot;server error&quot;}, 500)
+        test_api.set_mock_response(&quot;ensemble-api.open-meteo.com&quot;, {&quot;error&quot;: &quot;server error&quot;}, 500)
+        # forecast.solar succeeds
+        test_api.set_mock_response(
+            &quot;forecast.solar&quot;,
+            {
+                &quot;result&quot;: {&quot;watts&quot;: {&quot;2025-06-15T12:00:00+0000&quot;: 500, &quot;2025-06-15T12:30:00+0000&quot;: 600}},
+                &quot;message&quot;: {&quot;info&quot;: {&quot;time&quot;: &quot;2025-06-15T11:30:00+0000&quot;}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            &quot;&quot;&quot;Create a mock aiohttp session.&quot;&quot;&quot;
+            return test_api.mock_aiohttp_session()
+
+        with patch(&quot;solcast.aiohttp.ClientSession&quot;, side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_calls = [r for r in test_api.request_log if &quot;forecast.solar&quot; in r[&quot;url&quot;]]
+        if len(forecast_calls) == 0:
+            print(&quot;ERROR: Expected forecast.solar fallback call when Open-Meteo fails, got none&quot;)
+            failed = True
+
+        if f&quot;sensor.{test_api.mock_base.prefix}_pv_today&quot; not in test_api.dashboard_items:
+            print(&quot;ERROR: Expected pv_today sensor to be published after forecast.solar fallback&quot;)
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat):
+    &quot;&quot;&quot;
+    When forecast_solar_open_meteo_first is False the existing ordering is unchanged:
+    forecast.solar is primary and Open-Meteo is not called.
+    &quot;&quot;&quot;
+    print(&quot;  - test_fetch_pv_forecast_open_meteo_first_ignored_when_unset&quot;)
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{&quot;latitude&quot;: 51.5, &quot;longitude&quot;: -0.1, &quot;declination&quot;: 30, &quot;azimuth&quot;: 0, &quot;kwp&quot;: 3.0}]
+        test_api.solar.forecast_solar_open_meteo_first = False
+        test_api.set_mock_response(
+            &quot;forecast.solar&quot;,
+            {
+                &quot;result&quot;: {&quot;watts&quot;: {&quot;2025-06-15T12:00:00+0000&quot;: 500, &quot;2025-06-15T12:30:00+0000&quot;: 600}},
+                &quot;message&quot;: {&quot;info&quot;: {&quot;time&quot;: &quot;2025-06-15T11:30:00+0000&quot;}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            &quot;&quot;&quot;Create a mock aiohttp session.&quot;&quot;&quot;
+            return test_api.mock_aiohttp_session()
+
+        with patch(&quot;solcast.aiohttp.ClientSession&quot;, side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_calls = [r for r in test_api.request_log if &quot;forecast.solar&quot; in r[&quot;url&quot;]]
+        if len(forecast_calls) == 0:
+            print(&quot;ERROR: Expected forecast.solar to remain primary when open_meteo_first is False&quot;)
+            failed = True
+
+        open_meteo_calls = [r for r in test_api.request_log if &quot;open-meteo.com&quot; in r[&quot;url&quot;]]
+        if len(open_meteo_calls) != 0:
+            print(f&quot;ERROR: Expected no Open-Meteo calls when open_meteo_first is False, got {len(open_meteo_calls)}&quot;)
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+def test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat):
+    &quot;&quot;&quot;
+    A forecast_solar entry with azimuth_zero_south True must reach the Open-Meteo request
+    with the azimuth unconverted. A regression here would silently mis-orient every array.
+    &quot;&quot;&quot;
+    print(&quot;  - test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south&quot;)
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{&quot;latitude&quot;: 54.81306, &quot;longitude&quot;: -1.38647, &quot;declination&quot;: 32, &quot;azimuth&quot;: 85, &quot;azimuth_zero_south&quot;: True, &quot;kwp&quot;: 6.44}]
+        test_api.solar.forecast_solar_open_meteo_first = True
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            &quot;api.open-meteo.com&quot;,
+            {
+                &quot;hourly&quot;: {
+                    &quot;time&quot;: [&quot;2025-06-15T12:00&quot;, &quot;2025-06-15T13:00&quot;],
+                    &quot;global_tilted_irradiance&quot;: [500.0, 600.0],
+                    &quot;temperature_2m&quot;: [25.0, 25.0],
+                    &quot;wind_speed_10m&quot;: [1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            &quot;ensemble-api.open-meteo.com&quot;,
+            {&quot;hourly&quot;: {&quot;time&quot;: [&quot;2025-06-15T12:00&quot;, &quot;2025-06-15T13:00&quot;], &quot;global_tilted_irradiance_member01&quot;: [400.0, 480.0]}},
+        )
+
+        def create_mock_session(*args, **kwargs):
+            &quot;&quot;&quot;Create a mock aiohttp session.&quot;&quot;&quot;
+            return test_api.mock_aiohttp_session()
+
+        with patch(&quot;solcast.aiohttp.ClientSession&quot;, side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        forecast_urls = [r[&quot;url&quot;] for r in test_api.request_log if &quot;api.open-meteo.com&quot; in r[&quot;url&quot;]]
+        if not forecast_urls:
+            print(&quot;ERROR: Expected an Open-Meteo forecast request, got none&quot;)
+            failed = True
+        for url in forecast_urls:
+            if &quot;azimuth=85&quot; not in url:
+                print(f&quot;ERROR: Expected azimuth=85 (unconverted) in Open-Meteo URL, got {url}&quot;)
+                failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+</code></pre>
+<p>Register all four in <code>run_solcast_tests</code>. Find the block near line 3709 and add them immediately after the existing <code>..._backup_not_used_on_success</code> line:</p>
+<pre><code class="language-python">    failed |= test_fetch_pv_forecast_forecast_solar_open_meteo_backup_not_used_on_success(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_used_when_set(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_falls_back_on_failure(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_ignored_when_unset(my_predbat)
+    failed |= test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south(my_predbat)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the tests to verify they fail</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all --test solcast &gt; /tmp/solcast_step2.txt 2&gt;&amp;1
+grep -E &quot;ERROR|Traceback|AttributeError&quot; /tmp/solcast_step2.txt
+</code></pre>
+<p>Expected: failures. <code>test_api.solar.forecast_solar_open_meteo_first = True</code> sets an attribute that <code>fetch_pv_forecast</code> never reads, so Open-Meteo is not called and <code>test_..._used_when_set</code> reports <code>ERROR: Expected Open-Meteo API call when open_meteo_first is set, got none</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the schema entry</strong></li>
+</ul>
+<p>In <code>apps/predbat/config.py</code>, find line 2367 and insert the new key directly after it:</p>
+<pre><code class="language-python">    &quot;forecast_solar_open_meteo_backup&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;forecast_solar_open_meteo_first&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+    &quot;open_meteo_forecast&quot;: {&quot;type&quot;: &quot;dict_list&quot;},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Add the component arg</strong></li>
+</ul>
+<p>In <code>apps/predbat/components.py</code>, insert directly after line 109:</p>
+<pre><code class="language-python">            &quot;forecast_solar_open_meteo_backup&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;forecast_solar_open_meteo_backup&quot;, &quot;default&quot;: False},
+            &quot;forecast_solar_open_meteo_first&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;forecast_solar_open_meteo_first&quot;, &quot;default&quot;: False},
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 5: Add the initialize() parameter</strong></li>
+</ul>
+<p>In <code>apps/predbat/solcast.py</code>, add the parameter to <code>SolarAPI.initialize()</code> directly after <code>forecast_solar_open_meteo_backup,</code> (line 56):</p>
+<pre><code class="language-python">        forecast_solar_open_meteo_backup,
+        forecast_solar_open_meteo_first,
+</code></pre>
+<p>And the assignment directly after line 73:</p>
+<pre><code class="language-python">        self.forecast_solar_open_meteo_backup = forecast_solar_open_meteo_backup
+        self.forecast_solar_open_meteo_first = forecast_solar_open_meteo_first
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Update the test harness</strong></li>
+</ul>
+<p><code>TestSolarAPI.__init__</code> calls <code>initialize()</code> with keyword arguments, so it must pass the new one or every solcast test raises <code>TypeError</code>. In <code>apps/predbat/tests/test_solcast.py</code>, add directly after line 171:</p>
+<pre><code class="language-python">            forecast_solar_open_meteo_backup=False,
+            forecast_solar_open_meteo_first=False,
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 7: Reverse the source order</strong></li>
+</ul>
+<p>In <code>apps/predbat/solcast.py</code>, replace lines 1218-1226 (the <code>if self.forecast_solar:</code> block through the existing backup fallback) with:</p>
+<pre><code class="language-python">        if self.forecast_solar and self.forecast_solar_open_meteo_first:
+            self.log(&quot;SolarAPI: Obtaining solar forecast from Open-Meteo API (primary, Forecast Solar fallback)&quot;)
+            primary_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=primary_configs)
+            divide_by = 30.0
+            create_pv10 = True
+            if not pv_forecast_data:
+                self.log(&quot;Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar&quot;)
+                pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+        elif self.forecast_solar:
+            self.log(&quot;SolarAPI: Obtaining solar forecast from Forecast Solar API&quot;)
+            pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+            divide_by = 30.0
+            create_pv10 = True
+            if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
+                self.log(&quot;SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup&quot;)
+                backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+                pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
+</code></pre>
+<p>Leave the <code>elif self.open_meteo_forecast:</code> branch and everything below it untouched.</p>
+<ul>
+<li>[ ] <strong>Step 8: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all --test solcast &gt; /tmp/solcast_step8.txt 2&gt;&amp;1
+grep -E &quot;ERROR|Traceback|FAIL&quot; /tmp/solcast_step8.txt
+</code></pre>
+<p>Expected: no output from grep. If <code>test_..._ignored_when_unset</code> fails, the <code>elif</code> ordering is wrong — the <code>open_meteo_first</code> branch must be checked before the plain <code>forecast_solar</code> branch.</p>
+<ul>
+<li>[ ] <strong>Step 9: Run pre-commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred
+source coverage/venv/bin/activate
+pre-commit run --files apps/predbat/solcast.py apps/predbat/config.py apps/predbat/components.py apps/predbat/tests/test_solcast.py
+</code></pre>
+<p>Expected: all hooks Passed. Black may reformat; if it does, re-stage the files.</p>
+<ul>
+<li>[ ] <strong>Step 10: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/solcast.py apps/predbat/config.py apps/predbat/components.py apps/predbat/tests/test_solcast.py
+git commit -m &quot;feat(solar): add forecast_solar_open_meteo_first to use Open-Meteo as primary source&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-warn-when-the-active-forecast-source-changes">Task 2: Warn when the active forecast source changes</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/solcast.py</code> (add <code>log_source_change()</code> helper; set <code>active_source</code> in each branch of <code>fetch_pv_forecast</code>; call the helper before the <code>if pv_forecast_data:</code> block at line 1267)
+- Test: <code>apps/predbat/tests/test_solcast.py</code> (one new test)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>self.storage</code> (may be <code>None</code>), <code>self.storage.load(module, filename)</code> and <code>self.storage.save(module, filename, data, format=, expiry=)</code>, both async.
+- Produces: <code>async SolarAPI.log_source_change(source)</code> returning <code>None</code>. Persists <code>{"source": &lt;str&gt;}</code> under module <code>"solcast"</code>, filename <code>"active_forecast_source"</code>.</p>
+<p>Source names used: <code>"open_meteo"</code>, <code>"forecast_solar"</code>, <code>"solcast"</code>, <code>"ha_sensors"</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test</strong></li>
+</ul>
+<p>Add to <code>apps/predbat/tests/test_solcast.py</code>, after <code>test_fetch_pv_forecast_open_meteo_first_preserves_azimuth_zero_south</code>:</p>
+<pre><code class="language-python">def test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat):
+    &quot;&quot;&quot;
+    Switching the active forecast source emits a warning so the 7-day PV calibration
+    settling period is visible in the log rather than silently skewing the scaling factor.
+    &quot;&quot;&quot;
+    print(&quot;  - test_fetch_pv_forecast_open_meteo_first_logs_source_change&quot;)
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.solar.forecast_solar = [{&quot;latitude&quot;: 51.5, &quot;longitude&quot;: -0.1, &quot;declination&quot;: 30, &quot;azimuth&quot;: 0, &quot;kwp&quot;: 3.0}]
+        test_api.solar.open_meteo_forecast_max_age = 1.0
+        test_api.set_mock_response(
+            &quot;api.open-meteo.com&quot;,
+            {
+                &quot;hourly&quot;: {
+                    &quot;time&quot;: [&quot;2025-06-15T12:00&quot;, &quot;2025-06-15T13:00&quot;],
+                    &quot;global_tilted_irradiance&quot;: [500.0, 600.0],
+                    &quot;temperature_2m&quot;: [25.0, 25.0],
+                    &quot;wind_speed_10m&quot;: [1.0, 1.0],
+                }
+            },
+        )
+        test_api.set_mock_response(
+            &quot;ensemble-api.open-meteo.com&quot;,
+            {&quot;hourly&quot;: {&quot;time&quot;: [&quot;2025-06-15T12:00&quot;, &quot;2025-06-15T13:00&quot;], &quot;global_tilted_irradiance_member01&quot;: [400.0, 480.0]}},
+        )
+        test_api.set_mock_response(
+            &quot;forecast.solar&quot;,
+            {
+                &quot;result&quot;: {&quot;watts&quot;: {&quot;2025-06-15T12:00:00+0000&quot;: 500, &quot;2025-06-15T12:30:00+0000&quot;: 600}},
+                &quot;message&quot;: {&quot;info&quot;: {&quot;time&quot;: &quot;2025-06-15T11:30:00+0000&quot;}},
+            },
+            200,
+        )
+
+        def create_mock_session(*args, **kwargs):
+            &quot;&quot;&quot;Create a mock aiohttp session.&quot;&quot;&quot;
+            return test_api.mock_aiohttp_session()
+
+        # MockBase.log only prints, so capture messages by replacing the copied log reference.
+        # ComponentBase copies base.log onto the component, so this override is local to the test.
+        captured = []
+
+        def capture_log(message, quiet=True):
+            &quot;&quot;&quot;Capture a log message emitted by SolarAPI.&quot;&quot;&quot;
+            captured.append(message)
+
+        test_api.solar.log = capture_log
+
+        # First run on forecast.solar establishes the stored source, no warning expected
+        test_api.solar.forecast_solar_open_meteo_first = False
+        with patch(&quot;solcast.aiohttp.ClientSession&quot;, side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_first_run = [m for m in captured if &quot;forecast source changed&quot; in m]
+        if changed_first_run:
+            print(f&quot;ERROR: Did not expect a source change warning on the first run, got {changed_first_run}&quot;)
+            failed = True
+
+        # Second run flips to Open-Meteo - a warning is expected
+        captured.clear()
+        test_api.solar.forecast_solar_open_meteo_first = True
+        with patch(&quot;solcast.aiohttp.ClientSession&quot;, side_effect=create_mock_session):
+            run_async(test_api.solar.fetch_pv_forecast())
+
+        changed_second_run = [m for m in captured if &quot;forecast source changed&quot; in m]
+        if not changed_second_run:
+            print(&quot;ERROR: Expected a source change warning after switching to Open-Meteo, got none&quot;)
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+</code></pre>
+<p>Register it in <code>run_solcast_tests</code> after the four added in Task 1:</p>
+<pre><code class="language-python">    failed |= test_fetch_pv_forecast_open_meteo_first_logs_source_change(my_predbat)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run the test to verify it fails</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all --test solcast &gt; /tmp/solcast_t2_step3.txt 2&gt;&amp;1
+grep -E &quot;ERROR|Traceback&quot; /tmp/solcast_t2_step3.txt
+</code></pre>
+<p>Expected: <code>ERROR: Expected a source change warning after switching to Open-Meteo, got none</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Add the helper method</strong></li>
+</ul>
+<p>In <code>apps/predbat/solcast.py</code>, add this method directly above <code>async def fetch_pv_forecast(self):</code> (line 1204):</p>
+<pre><code class="language-python">    async def log_source_change(self, source):
+        &quot;&quot;&quot;Warn when the active solar forecast source changes so the PV calibration settling period is visible.&quot;&quot;&quot;
+        if not self.storage:
+            return
+        stored = await self.storage.load(&quot;solcast&quot;, &quot;active_forecast_source&quot;)
+        previous = stored.get(&quot;source&quot;) if isinstance(stored, dict) else None
+        if previous == source:
+            return
+        if previous:
+            self.log(&quot;Warn: SolarAPI: Solar forecast source changed from {} to {}, PV calibration will settle over the next 7 days&quot;.format(previous, source))
+        await self.storage.save(&quot;solcast&quot;, &quot;active_forecast_source&quot;, {&quot;source&quot;: source}, format=&quot;json&quot;, expiry=None)
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 4: Record the active source in each branch</strong></li>
+</ul>
+<p>In <code>fetch_pv_forecast()</code>, add <code>active_source = "..."</code> assignments. In the <code>open_meteo_first</code> branch added in Task 1:</p>
+<pre><code class="language-python">        if self.forecast_solar and self.forecast_solar_open_meteo_first:
+            self.log(&quot;SolarAPI: Obtaining solar forecast from Open-Meteo API (primary, Forecast Solar fallback)&quot;)
+            primary_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+            pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=primary_configs)
+            divide_by = 30.0
+            create_pv10 = True
+            active_source = &quot;open_meteo&quot;
+            if not pv_forecast_data:
+                self.log(&quot;Warn: SolarAPI: Open-Meteo returned no data, falling back to Forecast Solar&quot;)
+                pv_forecast_data, max_kwh = await self.download_forecast_solar_data()
+                active_source = &quot;forecast_solar&quot;
+</code></pre>
+<p>In the existing <code>elif self.forecast_solar:</code> branch:</p>
+<pre><code class="language-python">            active_source = &quot;forecast_solar&quot;
+            if not pv_forecast_data and self.forecast_solar_open_meteo_backup:
+                self.log(&quot;SolarAPI: Forecast Solar returned no data, falling back to Open-Meteo backup&quot;)
+                backup_configs = self.open_meteo_forecast if self.open_meteo_forecast else self.forecast_solar
+                pv_forecast_data, max_kwh = await self.download_open_meteo_data(configs=backup_configs)
+                active_source = &quot;open_meteo&quot;
+</code></pre>
+<p>In the <code>elif self.open_meteo_forecast:</code> branch add <code>active_source = "open_meteo"</code>; in the <code>elif self.solcast_host and self.solcast_api_key:</code> branch add <code>active_source = "solcast"</code>; in the final <code>else:</code> (HA sensors) branch add <code>active_source = "ha_sensors"</code> immediately after <code>using_ha_data = True</code>.</p>
+<ul>
+<li>[ ] <strong>Step 5: Call the helper</strong></li>
+</ul>
+<p>Insert immediately before the <code>if pv_forecast_data:</code> line (line 1267 before this task's edits), after the whole if/elif chain has completed:</p>
+<pre><code class="language-python">        await self.log_source_change(active_source)
+
+        if pv_forecast_data:
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 6: Run the tests to verify they pass</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all --test solcast &gt; /tmp/solcast_t2_step6.txt 2&gt;&amp;1
+grep -E &quot;ERROR|Traceback|FAIL&quot; /tmp/solcast_t2_step6.txt
+</code></pre>
+<p>Expected: no output from grep.</p>
+<ul>
+<li>[ ] <strong>Step 7: Run the full quick suite</strong></li>
+</ul>
+<p><code>fetch_pv_forecast</code> is on the main path, so check nothing else regressed:</p>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all --quick &gt; /tmp/quick_out.txt 2&gt;&amp;1
+grep -E &quot;ERROR|FAIL|Traceback&quot; /tmp/quick_out.txt
+tail -5 /tmp/quick_out.txt
+</code></pre>
+<p>Expected: no errors. Note: if the suite hangs, a locally running Predbat may be holding port 5052 — stop it and re-run.</p>
+<ul>
+<li>[ ] <strong>Step 8: Run pre-commit and commit</strong></li>
+</ul>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred
+source coverage/venv/bin/activate
+pre-commit run --files apps/predbat/solcast.py apps/predbat/tests/test_solcast.py
+git add apps/predbat/solcast.py apps/predbat/tests/test_solcast.py
+git commit -m &quot;feat(solar): warn when the active solar forecast source changes&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-document-the-setting">Task 3: Document the setting</h3>
+<p><strong>Files:</strong>
+- Modify: <code>docs/apps-yaml.md:1584-1598</code> (the "Open-Meteo backup for Forecast.solar" section)
+- Modify: <code>docs/install.md</code> (the matching backup section, around line 155)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: the setting name <code>forecast_solar_open_meteo_first</code> from Task 1.
+- Produces: nothing consumed by later tasks.</p>
+<ul>
+<li>[ ] <strong>Step 1: Extend the apps-yaml.md section</strong></li>
+</ul>
+<p>In <code>docs/apps-yaml.md</code>, append to the "Open-Meteo backup for Forecast.solar" section, after the existing example block:</p>
+<pre><code class="language-markdown">### Using Open-Meteo as the primary source
+
+Setting `forecast_solar_open_meteo_first: true` reverses the order: Predbat fetches from Open-Meteo
+first and only calls Forecast.solar if Open-Meteo returns no data. Your existing `forecast_solar`
+entries are reused as-is, so no other configuration changes are needed. If you also have an
+`open_meteo_forecast` section, that is used instead, which lets you apply Open-Meteo-specific
+options such as `shading_factors`.
+
+```yaml
+  forecast_solar:
+    - postcode: SW1A 2AB
+      kwp: 3
+      azimuth: 45
+      declination: 45
+  forecast_solar_open_meteo_first: true
+```
+
+While Open-Meteo is succeeding, Forecast.solar is not called at all, so no Forecast.solar API quota
+is consumed.
+
+Note that PV calibration compares the last seven days of recorded forecasts against actual
+generation. After changing the source, that history still holds values from the previous source, so
+the calibration scaling factor takes up to seven days to settle. Predbat logs a warning when the
+source changes. Do not judge the accuracy of the new source until the settling period has passed.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Add the matching note to install.md</strong></li>
+</ul>
+<p>In <code>docs/install.md</code>, after the existing <code>azimuth_zero_south</code> paragraph around line 155, add:</p>
+<pre><code class="language-markdown">Setting `forecast_solar_open_meteo_first: true` makes Predbat use Open-Meteo as the primary forecast
+source and fall back to Forecast.solar only if Open-Meteo returns no data. Your existing
+`forecast_solar` settings are reused unchanged. See the Open-Meteo section in
+[apps-yaml.md](apps-yaml.md) for details.
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 3: Run pre-commit</strong></li>
+</ul>
+<p>Both files are spell-checked and markdown-linted (unlike <code>docs/superpowers/</code>).</p>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred
+source coverage/venv/bin/activate
+pre-commit run --files docs/apps-yaml.md docs/install.md
+</code></pre>
+<p>Expected: all Passed. If CSpell rejects a word, add it to <code>.cspell/custom-dictionary-workspace.txt</code>, then re-run pre-commit and re-stage — the dictionary file is auto-sorted on commit.</p>
+<ul>
+<li>[ ] <strong>Step 4: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add docs/apps-yaml.md docs/install.md
+git commit -m &quot;docs(solar): document forecast_solar_open_meteo_first&quot;
+</code></pre>
+<hr />
+<h2 id="verification">Verification</h2>
+<p>After all three tasks:</p>
+<pre><code class="language-bash">cd /Users/treforsouthwell/source/batpred/coverage
+source venv/bin/activate
+./run_all &gt; /tmp/full_out.txt 2&gt;&amp;1
+grep -E &quot;ERROR|FAIL|Traceback&quot; /tmp/full_out.txt
+tail -20 /tmp/full_out.txt
+</code></pre>
+<p>Expected: the full suite passes.</p>
+<p>Manual check on the target site: set <code>forecast_solar_open_meteo_first: true</code>, restart, and confirm the
+log shows <code>SolarAPI: Obtaining solar forecast from Open-Meteo API (primary, Forecast Solar fallback)</code>,
+a source change warning, and no <code>https://api.forecast.solar/</code> request.</p>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../img/favicon.ico" />
+    <title>What If Annual Prediction - Predbat Documentation</title>
+    <link rel="stylesheet" href="../css/theme.css" />
+    <link rel="stylesheet" href="../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "What If Annual Prediction";
+        var mkdocs_page_input_path = "annual-prediction.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href=".." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul class="current">
+                <li class="toctree-l1 current"><a class="reference internal current" href="#">What If Annual Prediction</a>
+    <ul class="current">
+    <li class="toctree-l2"><a class="reference internal" href="#using-the-whatif-tab">Using the WhatIf tab</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#the-form">The form</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#running">Running</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#fast-mode">Fast mode</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#the-results-view">The results view</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#comparing-runs">Comparing runs</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#what-the-numbers-mean">What the numbers mean</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#cost-and-payback">Cost and payback</a>
+    </li>
+    <li class="toctree-l3"><a class="reference internal" href="#if-you-have-a-real-quote">If you have a real quote</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#how-it-works">How it works</a>
+        <ul>
+    <li class="toctree-l3"><a class="reference internal" href="#how-car-charging-is-spread-across-the-year">How car charging is spread across the year</a>
+    </li>
+        </ul>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#limitations">Limitations</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#advanced-running-it-from-the-command-line">Advanced: running it from the command line</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#advanced-the-configuration-file">Advanced: the configuration file</a>
+    </li>
+    <li class="toctree-l2"><a class="reference internal" href="#debugging-a-run">Debugging a run</a>
+    </li>
+    </ul>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href=".." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">What If Annual Prediction</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="what-if-annual-prediction">What If Annual Prediction</h1>
+<p>"What would solar and a battery actually save me?" — this answers that, by projecting a
+year of household electricity costs through the real Predbat planning engine rather than
+a rule of thumb. For each month it reports four scenarios:</p>
+<ol>
+<li><strong>No PV, no battery</strong> — the counterfactual bill.</li>
+<li><strong>PV only</strong> — solar with no battery to store or arbitrage it.</li>
+<li><strong>PV and battery, without Predbat</strong> — a battery charging on a static cheap-rate timer.</li>
+<li><strong>PV and battery, with Predbat</strong> — the optimiser's plan.</li>
+</ol>
+<p>Most people will use it through the <strong>WhatIf</strong> tab in the Predbat web interface, which is
+what the next section covers. It also runs as a standalone command line tool for anyone
+who wants to script it — see <a href="#advanced-running-it-from-the-command-line">Running it from the command
+line</a> at the end.</p>
+<p>Either way it needs neither Home Assistant nor a configured Predbat instance, and it
+changes nothing about a running installation: it is the tool a prospective buyer reaches
+for before they have installed anything, as much as one for an existing user.</p>
+<h2 id="using-the-whatif-tab">Using the WhatIf tab</h2>
+<p>The Predbat web UI has a <strong>WhatIf</strong> tab alongside Dash, Plan, Entities, Charts and
+Compare. Its pages are titled <strong>What If Annual Prediction</strong>.</p>
+<p>WhatIf is three pages, not one — Configure (<code>/annual</code>), Results
+(<code>/annual_view</code>) and Compare (<code>/annual_compare</code>) — sharing a tab strip with
+previous/next arrows across the top of all three:</p>
+<pre><code class="language-text">◀   [ Configure ]  [ Results ]  [ Compare ]   ▶
+</code></pre>
+<p>The current page is marked in the strip. The arrows step through that order and stop
+at the ends rather than wrapping — pressing "next" on Compare does not loop back round
+to Configure. Configure holds the form and the <strong>Run simulations</strong> button; Results
+holds the run selector, "what this run used", the annual totals, chart, month table,
+cost and payback, the plan viewer and the caveats; Compare holds the run-comparison
+table described below. Each is a real URL you can bookmark, so the browser's back button
+and a saved link both behave.</p>
+<h3 id="the-form">The form</h3>
+<p>The form prefills from your live Predbat setup wherever it can: location, solar arrays,
+battery capacity and inverter/export limits, and any Octopus import/export tariff URLs
+and DNO region already configured. If your <code>octopus_api_key</code> and <code>octopus_api_account</code>
+are both set, those two boxes are filled in too, so choosing <strong>Import from Octopus</strong> is a
+click rather than a paste. Only a complete pair counts — a key with no account cannot
+download anything, so an incomplete one is left blank rather than offered as a run that
+would fail partway through. The load source itself always starts on <strong>Enter my usage</strong>:
+the Octopus option reads your import meter, which is only sound for a home with no solar
+or battery fitted, so it is never selected for you.</p>
+<p>Anything it cannot determine — most commonly the
+whole form, on an instance with no battery and no solar array configured — falls back to
+example values for a plausible UK home, and a banner above the form says so explicitly
+("Predbat isn't configured yet — these are example values, edit them to match your
+home"). When your own setup supplies a battery or a solar array, the banner is absent and
+the fields it can read are the real ones; any remaining gaps still use the same example
+values, so the form is always complete rather than partially blank.</p>
+<p><strong>Add another array</strong> and <strong>Remove array</strong> under <strong>Solar</strong> change how many roof aspects
+are modelled, for a house with panels facing more than one way. Both re-render the form
+with everything you have already typed still in place, and the arrays renumber
+themselves. Removing every array is allowed and gives a battery-only run — the form says
+so rather than leaving you wondering whether it took. Neither button saves: like any
+other edit, the change is yours until you press <strong>Save settings</strong> or <strong>Run simulations</strong>.</p>
+<p><strong>Import tariff</strong> and <strong>Export tariff</strong> are chosen separately, so any combination can be
+modelled — Agile import with a fixed export deal, the price cap with Octopus Outgoing
+Prime, or anything else you want to try. Each dropdown lists a curated set of built-in
+products (Agile, Cosy, Flux, Intelligent Go, Outgoing Fixed, Outgoing Prime, Agile
+Outgoing and so on) plus, if your <code>apps.yaml</code> has a <code>compare_list</code>, your own entries from
+it — a user entry with the same id as a built-in replaces it rather than appearing twice.
+A <code>compare_list</code> entry defining both sides is offered in both dropdowns; one defining
+only an import is offered only as an import.</p>
+<p><strong>No export payment</strong> is the export option for a home with no export agreement, and
+prices export at 0p rather than leaving it unpriced. If your tariff has no export source
+at all this is what the dropdown shows, because it is the accurate description of that
+situation rather than a missing setting. It is also the right choice for a physical
+zero-export (G99) limitation: unpaid export and curtailed export both earn nothing, so
+the costs come out the same, though the reported export kWh will still show the surplus
+leaving the house.</p>
+<p><strong>The dropdowns are what run.</strong> Picking an entry takes that tariff's rates straight from
+the catalogue, whether it is defined by an Octopus URL or by a fixed rate structure. Each
+URL field appears only when you choose <strong>Custom</strong> for that side, because that is the only
+case where what you type in it is used — and the two sides are independent, so a custom
+import leaves the export box alone. If a chosen URL contains <code>{dno_region}</code> (as the
+Octopus product codes do), the <strong>Octopus region letter</strong> field is required; leaving it
+blank is rejected up front, with the field named in the error, rather than left to fail
+as a 404 partway through the run. Choosing <strong>Custom</strong> reveals that side's URL field,
+pre-filled with whichever tariff you were looking at, so hand-entering one starts from
+something rather than from nothing.</p>
+<p><strong>Import tariff without PV or a battery</strong> sets what the no-PV/battery comparison is priced on,
+and defaults to the price cap. This matters more than it looks: a household with no system
+would not be on a battery tariff, because the cheap overnight rates those offer are only
+worth having once you have somewhere to put the energy. Pricing the counterfactual on your
+own smart tariff therefore credits it with a saving it could never have had, and
+understates what the system is worth. It applies to the no-PV/battery scenario only —
+every other scenario uses your main tariff. Only the import side is offered, because a
+home with no PV and no battery has nothing to export.</p>
+<p>One simplification to know about: both are charged the <strong>main tariff's standing charge</strong>,
+so if the two tariffs differ there, that difference is not included in the savings or
+payback.</p>
+<p>Every field the <a href="#advanced-the-configuration-file">configuration file</a> accepts has a form equivalent, including the
+manual-usage/Octopus-consumption choice under <strong>Load</strong> and the year, sample count and P10
+fallback derate under <strong>Advanced</strong>. <strong>Save settings</strong> stores the configuration without
+running it, so you can park a half-adjusted setup and come back to it; <strong>Run simulations</strong>
+validates, stores it and starts a run.</p>
+<h3 id="running">Running</h3>
+<p>A run takes roughly one to three minutes with the default two samples per month, or two
+to six minutes with a car configured (each sampled day is planned twice — with and
+without a charging session — to work out how often the car overflows the cheap window). With
+<strong>Fast mode</strong> on (see below) those fall to roughly 30 to 90 seconds, or one to two and a
+half minutes with a car.
+Once started it shows a progress bar with the current step and elapsed time, and it keeps
+running on the server if you navigate away or close the tab — come back to the WhatIf tab
+later and the same run is still there, or already finished. The progress area appears on
+all three pages, not just Configure, so switching to Results or Compare mid-run does not
+lose sight of it. Only one run is active at a time: submitting <strong>Run</strong> again while one is
+already in progress does not queue a second run or interrupt the first, though any form
+edits you made are still saved.</p>
+<p><strong>Cancel</strong> stops the running job. When the run finishes, the tab you pressed <strong>Run
+simulations</strong> in navigates straight to the Results page.</p>
+<p>Any other tab you have open only gets a <strong>view results</strong> link rather than being
+navigated. The progress poll runs in every open tab, so reloading them all would
+silently discard whatever had been typed into a form somewhere else — an earlier
+version of the page did exactly that. Only the tab that actually started the run
+follows the completion.</p>
+<h3 id="fast-mode">Fast mode</h3>
+<p><strong>Fast mode</strong>, under <strong>Advanced</strong> on the Configure page, plans March, June, September and
+December only and estimates the other eight months from those four against the year's
+actual solar yield. It takes about 2.5 times less time — less than the four-months-in-twelve
+might suggest, because the weather download, the rate downloads and starting the engine
+all still happen.</p>
+<p>It exists for comparing systems: try 5 kWh against 10 kWh, or one tariff against another,
+without waiting three minutes for each answer. Measured against a full run of the same
+system, the annual savings came out within 0.5% and the payback within 0.2%.</p>
+<p>Individual months are rougher — typically within about 10%, worse in the tails — so the
+month table and the chart both mark every estimated month. If you want to read one
+particular month's figure, turn fast mode off.</p>
+<p><strong>Some tariffs get a full run anyway.</strong> Estimating one month from another only works while
+a month's economics follow the solar curve. On a tariff whose prices swing from day to day
+rather than following a fixed daily pattern — Agile most obviously — they do not, and the
+estimated savings can be tens of percent out. Predbat measures this before planning starts
+and, when it finds it, plans all twelve months instead. You get the slower, correct answer
+rather than a fast wrong one, the run says so in its caveats, and "what this run used"
+reports that fast mode was requested but a full run was needed.</p>
+<p>Rate data is still downloaded for all twelve months in fast mode, so a month with no rates
+available is still reported as unavailable rather than quietly estimated over.</p>
+<h3 id="the-results-view">The results view</h3>
+<p>The Results page shows what this run used, an annual totals table, the chart below it, a
+month-by-month breakdown and the run's caveats. "What this run used" is read from the
+run's own stored settings rather than from the form, so switching the selector to a run
+made on a different system relabels every figure with that system's settings. It names
+all three tariffs — baseline, import and export — because a saving quoted without the
+baseline it is measured from cannot be checked. One thing carries over unchanged from how
+the engine reports it, and matters for reading the numbers correctly: a month with
+<code>status: unavailable</code> is left out of the chart and the totals — it is never drawn as a
+zero-cost bar or counted as a free month.</p>
+<p>Every completed run is saved automatically — there is nothing to press — and the last
+twenty are kept, each labelled with a short summary of its configuration (battery size,
+solar size, tariff) rather than just a timestamp. A selector above the results lets you
+switch between them — instantly, with no re-run — so you can compare a 5 kWh battery
+against a 10 kWh one, or two tariffs, side by side. Each stored run can also be
+downloaded as its raw JSON results document; a debug run's captured plans are not part
+of that download (see <a href="#debugging-a-run">Debugging a run</a>).</p>
+<h3 id="comparing-runs">Comparing runs</h3>
+<p>The Compare page lists every stored run in one table, newest first, so you do not have
+to hold numbers in your head while flipping the Results selector back and forth. Each
+row is: run (label, linking to that run in the Results page), solar size, battery size,
+system cost, the run's three tariffs, cost with Predbat, saving versus no system, and
+three payback columns — PV only, PV + battery, and + Predbat. A system cost that came
+from a quote you entered rather than from the cost model is marked "quoted", so the two
+are never confused. The row for the run the Results page is currently showing is
+highlighted. Thirteen columns is wide, so the table scrolls sideways inside its own
+container rather than widening the whole page.</p>
+<p>The three tariff columns are <strong>Baseline</strong>, <strong>Import</strong> and <strong>Export</strong>, in that order —
+the baseline first because it is what the other two are being judged against, so the row
+reads "instead of this, on these, it costs this". Each names the tariff as the dropdown
+that chose it does, including your own <code>compare_list</code> tariffs; a hand-entered URL that
+matches no entry shows its Octopus product code instead. A run stored before a tariff
+was recorded shows a dash for it.</p>
+<p><strong>A dash in this table means the figure could not be computed — it is not a zero.</strong>
+This is the distinction the table turns on, so it is worth being explicit about it:</p>
+<ul>
+<li>A run covering less than a full year has no payback figures at all — the totals
+  themselves refuse to extrapolate a partial year (see <a href="#cost-and-payback">Cost and
+  payback</a>) — and all three payback cells show a dash. Hovering
+  one explains why, in the same words as the run's own caveats (for example, "only
+  11 of 12 months could be modelled").</li>
+<li>A payback option that <em>was</em> costed but genuinely never earns back its capital says
+  <strong>does not pay back</strong> in words, never a number — that is a different fact from
+  "unavailable" and the table keeps the two apart rather than collapsing them onto
+  the same dash.</li>
+</ul>
+<p>Each row has a <strong>Delete</strong> button, which asks for confirmation first — a deleted run
+cannot be recovered, only re-run. Deleting removes the run's stored results and any
+captured plans as well as its row, so it leaves nothing behind.</p>
+<p>Each row reads only that run's own stored summary, never the live form and never
+another run's figures, so the columns are guaranteed to describe the system named at
+the start of the row. Treat this table as a comparison aid for the same reason the
+payback figures it shows are one: it is a quick way to see which of your stored runs
+looks better, not a substitute for reading a run's own caveats before quoting it.</p>
+<h2 id="what-the-numbers-mean">What the numbers mean</h2>
+<p>Everything below applies whether you are reading the Results page or the raw JSON — the
+web pages are a view onto the same results document, and the field names are given so the
+two line up.</p>
+<p>Each month carries a <code>status</code>:</p>
+<ul>
+<li><code>ok</code> — every sampled day planned successfully.</li>
+<li><code>degraded</code> — some sampled days failed to plan or cost; the survivors are reweighted
+  so the month still represents a full month, and the failed dates are listed under
+  <code>failed_days</code>. It is still included in the annual totals.</li>
+<li><code>unavailable</code> — no rate data, no usable weather days, or every sampled day failed.
+  Excluded from the annual totals entirely, rather than counted as zero.</li>
+</ul>
+<p>Within each included month, every scenario reports <code>cost_p</code>, <code>import_kwh</code>, <code>export_kwh</code>,
+<code>pv_generated_kwh</code>, <code>battery_throughput_kwh</code> and <code>export_credit_p_estimate</code>.</p>
+<p><code>export_credit_p_estimate</code> is <strong>not</strong> extra money on top of <code>cost_p</code> — <code>cost_p</code> already
+prices every export minute at its real per-minute rate, so the export credit is already
+inside it. <code>export_credit_p_estimate</code> is a cruder second estimate of that same income
+(the day's flat average export rate applied to total export), kept only as a
+human-readable "how much of that came from export" figure. Adding it to <code>cost_p</code>
+double-counts export income.</p>
+<p>There is deliberately no self-consumption figure. It cannot be derived from these
+totals: <code>pv_generated_kwh − export_kwh</code> assumes all export comes from PV, which is false
+whenever the battery exports grid-charged energy — on an arbitrage tariff such as
+Intelligent Octopus Go, export routinely exceeds generation and the subtraction goes
+negative. Reporting a clamped zero there would look like a real measurement rather than
+a broken one, so the field was removed instead. Measuring it properly needs a
+per-minute PV-to-load accumulator inside the prediction engine.</p>
+<p>The top-level <code>annual</code> block sums the included months' scenarios and reports two savings
+figures: <code>pv_battery_vs_none_p</code> (PV and battery vs. no system) and
+<code>predbat_vs_baseline_p</code> (Predbat vs. the dumb timer baseline). If no month produced a
+usable result, <code>annual.scenarios</code> and <code>annual.standing_charge_p</code> are <code>null</code> and
+<code>annual.savings</code> is an empty object (<code>{}</code>), rather than a fabricated zero-cost year.</p>
+<p><strong><code>predbat_vs_baseline_p</code> is not equally hard to beat on every tariff.</strong> The "without
+Predbat" baseline charges in the cheapest contiguous band of the day (mirroring
+Predbat's own <code>calculate_yesterday()</code> savings baseline, deliberately kept consistent with
+it rather than made tariff-aware here). On a banded tariff such as Economy 7, Cosy or
+Flux, where the cheap rate holds for several contiguous hours, that band is almost the
+whole cheap period, so the baseline is a strong comparator and Predbat's measured saving
+mostly reflects genuine optimisation. On a half-hourly tariff such as Agile, where the
+day's single cheapest rate is often just one 30 minute slot, the same rule yields a much
+narrower baseline window - a comparator that is easier to beat - so <code>predbat_vs_baseline_p</code>
+reads more flattering on Agile than the equivalent system would on a banded tariff. This
+is a property of the comparator, not of Predbat performing differently; treat cross-tariff
+comparisons of this figure with that in mind.</p>
+<h3 id="cost-and-payback">Cost and payback</h3>
+<p>The <code>annual.costs</code> block estimates what the modelled system would cost to install, and
+<code>annual.payback</code> turns that into how long it takes to earn back — both computed from
+published 2025/26 median install prices, not anything specific to your quotes.</p>
+<p>PV cost is size in kWp times a £/kWp rate, floored at a minimum install price
+(<code>pv_minimum_gbp</code>, default £2,500) so a token array is never costed at pennies. The rate
+itself interpolates between three published band medians — <code>pv_rate_small_gbp_per_kwp</code>
+(£1,780, anchored at 2 kWp), <code>pv_rate_medium_gbp_per_kwp</code> (£1,697, anchored at 7 kWp) and
+<code>pv_rate_large_gbp_per_kwp</code> (£1,262, anchored at 30 kWp) — rather than stepping between
+them, so cost stays monotonic across the size range instead of a 4.1 kWp system coming out
+cheaper than a 4.0 kWp one purely from crossing a band boundary. Battery cost is a flat
+<code>battery_install_gbp</code> (default £500) plus <code>battery_per_kwh_gbp</code> (default £300) times
+usable capacity. A system with no PV, or no battery, costs nothing for the part it does
+not have.</p>
+<p>All seven of these — the three PV band rates, <code>pv_minimum_gbp</code>, <code>battery_install_gbp</code>,
+<code>battery_per_kwh_gbp</code> and <code>predbat_annual_gbp</code> below — are editable under <strong>Advanced</strong> on
+the web form, or <code>annual.costs</code> in the config file, if your own quotes differ from the
+published medians.</p>
+<h3 id="if-you-have-a-real-quote">If you have a real quote</h3>
+<p>A quote beats any model of one. <code>quoted_pv_gbp</code> (<strong>solar only</strong>) and <code>quoted_total_gbp</code>
+(<strong>solar and battery together</strong>), both £0 by default meaning "no quote", replace the
+estimate. They sit on the configuration page rather than under <strong>Advanced</strong>, because a
+real figure is the most useful thing you can tell the tool.</p>
+<p>They are deliberately <em>solar-only</em> and <em>whole-system</em> rather than solar and battery
+separately, because that is the shape real quotes come in — an installer prices the
+installation, and nobody is handed a battery-only figure to copy out. <strong>The battery cost
+is taken as the difference between the two</strong>, so a single whole-system quote can be
+entered as it stands with no arithmetic.</p>
+<p>Either can be used on its own. Give only the whole-system price and the solar stays
+modelled, which is what the PV-only payback is worked out from; give only the solar price
+and the battery stays modelled. If a whole-system quote comes in below the solar figure
+beside it the battery is held at zero rather than going negative — a contradiction only
+you can resolve, but not one that should produce a total disagreeing with its own parts.</p>
+<p>Anything priced from a quote is labelled as such in the results and on the comparison
+page, so an estimate is never passed off as a real price.</p>
+<p>The configuration page shows the estimated install cost as you type, updating from the
+same cost model the run itself uses.</p>
+<p><code>predbat_annual_gbp</code> (default £0) is different from the other six: it is a <strong>recurring</strong>
+yearly cost, not a one-off capital cost, and it is not added to the install price. Predbat
+itself is free when self-hosted, which is what the default reflects; the hosted
+Predbat.com product is expected to charge around £100 a year, and setting this field
+subtracts it from the "with Predbat" scenario's annual saving before payback is worked
+out, so a subscription that ate the whole saving would correctly never pay back.</p>
+<p><code>annual.payback</code> reports three simple payback periods, one per purchase you could
+actually make: <code>pv_only</code> (PV cost against the PV-only scenario's saving), <code>pv_battery</code>
+(the full system cost against the un-optimised battery's saving) and
+<code>pv_battery_predbat</code> (the full system cost against Predbat's saving, net of
+<code>predbat_annual_gbp</code>). Each row's <code>years</code> is capital divided by net annual saving; when
+the saving is zero or negative — <code>predbat_annual_gbp</code> outweighing the benefit, most
+plausibly — <code>pays_back</code> is <code>false</code> and <code>years</code> is <code>null</code> rather than a negative or
+enormous number, since neither would mean "pays back", they would mean "never does".</p>
+<p>Payback needs a full twelve months of modelled data: with even one month unavailable,
+every included month's saving is for a different twelve months than the one being priced,
+so <code>annual.payback.available</code> is <code>false</code> and <code>annual.payback.reason</code> says how many months
+were actually covered instead. This mirrors how the annual totals themselves refuse to
+extrapolate a partial year (see <code>months_included</code> above).</p>
+<p>Simple payback is a comparison aid, not a financial projection: capital divided by one
+year's saving, held constant. It ignores panel degradation, electricity price inflation,
+battery replacement, and finance costs (a loan or the opportunity cost of paying cash) —
+all of which would move the real number, in either direction, over a payback period that
+can run to a decade or more.</p>
+<p>The <code>caveats</code> list in the results document records anything that could affect how much
+to trust the numbers — a P10 fallback, a missing month's rate data, the
+<code>export_credit_p_estimate</code> note above, and a summary of the payback caveat too — and is
+worth reading before quoting the totals.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>For each month the tool picks sample days by irradiance percentile (ranked by actual PV
+energy, not what was forecast), so the answer does not swing on whether the sampled days
+happened to be sunny. Two samples per month is the default; each represents half the
+month. On a battery-only run (no solar arrays configured) there is nothing to rank by, so
+days are instead spread evenly across the calendar.</p>
+<p>Each sampled day gets a 48-hour plan starting at midnight, but only the first 24 hours
+are billed — the second day exists so the optimiser does not artificially drain the
+battery at the horizon. Whatever charge is left at the end is valued, so a scenario
+cannot look cheap by finishing empty.</p>
+<p>Predbat plans against the <strong>archived weather forecast</strong> for that date and is costed
+against <strong>ERA5 actuals</strong>. This matters: costing against the same series it planned from
+would hand Predbat perfect foresight and overstate its savings.</p>
+<p>Solar uncertainty (P10) is derived from measured forecast error — for each month, the
+10th percentile of the actual-over-forecast daily energy ratio, taken across every day in
+that month with both a usable actual and forecast reading. A month needs at least seven
+such day pairs before its measured P10 ratio is trusted; below that it falls back to a
+flat derate (0.7 by default, <code>pv10_derate_fallback</code>), and the run's caveats say so.</p>
+<h3 id="how-car-charging-is-spread-across-the-year">How car charging is spread across the year</h3>
+<p>The car does <strong>not</strong> charge a little every day. Spreading an annual figure evenly across
+365 days would make every top-up short enough to fit inside the cheapest overnight
+window, so a dumb timer would price just as well as Predbat and the car would contribute
+almost nothing to the measured saving. Real sessions are large enough to overflow a short
+cheap band, and that overflow is where smart charging earns its money.</p>
+<p>The schedule is derived from <code>car_charging_kwh</code> and <code>car_rate_kw</code> rather than configured
+directly:</p>
+<ul>
+<li>One session a week, carrying the whole week's energy.</li>
+<li>If that session would run longer than <strong>six hours</strong> at the configured rate, the week's
+  energy is split across as many sessions as needed to bring each under six hours, up to
+  a maximum of one a day.</li>
+</ul>
+<p>Each sampled day is then planned <strong>twice</strong> — once carrying a full session, once with no
+car — and the two results are blended by how often charging actually happens that week.
+Blending each sampled day, rather than setting aside separate "car" and "no car" sample
+days, keeps the irradiance stratification intact instead of tying charging state to how
+sunny the sampled day happened to be.</p>
+<p>Two consequences worth knowing. A configuration with a car doubles the number of plan
+runs, so it takes roughly twice as long. And if even one session a day cannot get under
+six hours (a very low charge rate against very high mileage), the tool still uses seven
+sessions but logs a warning: the sessions run long, so the overflow effect — and
+therefore Predbat's advantage — is understated.</p>
+<h2 id="limitations">Limitations</h2>
+<ul>
+<li>The Open-Meteo forecast archive only reaches back to about 2021. For earlier years the
+  tool plans against actuals instead and P10 uses the flat fallback derate, which it
+  states in the results' caveats — savings are likely overstated for those years.</li>
+<li>Self-consumption is not reported, for the reason described above.</li>
+<li>The forecast-versus-ERA5 gap includes systematic model bias as well as genuine
+  forecast error, so measured solar uncertainty is slightly overstated.</li>
+<li>A month with no rate data, no usable weather days, or where every sampled day failed to
+  plan is reported as <code>unavailable</code> and excluded from the annual total, rather than
+  counted as zero.</li>
+<li>Heat pump, iBoost and gas modelling are not included.</li>
+</ul>
+<h2 id="advanced-running-it-from-the-command-line">Advanced: running it from the command line</h2>
+<p>Everything above is available from the web tab. The command line exists for scripting a
+run, or for running one somewhere without a browser; it produces the same results
+document.</p>
+<pre><code class="language-bash">cd apps/predbat
+python3 annual_cli.py --config annual.yaml --out results.json
+</code></pre>
+<p>Other options: <code>--fast</code> enables fast mode for that run, overriding the config file —
+four months are planned and the rest estimated, subject to the same tariff check described
+under <a href="#fast-mode">Fast mode</a>. <code>--work-dir</code> (default <code>./annual_work</code>) sets where the
+headless Predbat instance and the download cache live, and <code>--quiet</code> suppresses only the
+per-month progress lines written to stderr. Warnings - a P10 fallback, missing rate data, a failed
+sample day, a car-charging shortfall - are never suppressed, <code>--quiet</code> or not: failures
+stay visible. A human-readable table is always printed to stdout; <code>--out</code> additionally
+writes the full results document as JSON.</p>
+<p>A run takes roughly one to three minutes with the default two samples per month: 24 plan
+calculations (12 months × 2 samples) plus the weather, tariff and (if configured)
+Octopus consumption downloads, which are cached between runs in <code>--work-dir</code>. With
+<code>--fast</code> it is 8 plan calculations instead of 24, so roughly 30 to 90 seconds.</p>
+<h2 id="advanced-the-configuration-file">Advanced: the configuration file</h2>
+<p>The web form writes this file for you, and every field on it has an equivalent here. You
+only need to read this section if you are running from the command line, or want to hand-
+edit something the form does not expose.</p>
+<pre><code class="language-yaml">annual:
+  location:
+    postcode: &quot;SW1A 1AA&quot;        # or latitude/longitude
+  year: 2025                     # defaults to the most recent complete calendar year
+
+  solar:                         # omit for a battery-only run
+    - kwp: 5.6
+      declination: 35            # pitch in degrees, default 35
+      azimuth: 180               # 180 = south, default 180
+      efficiency: 0.95           # default 0.95, must be greater than 0 and at most 1
+
+  battery:                       # omit for a PV-only run
+    size_kwh: 9.5
+    inverter_kw: 5.0
+    export_limit_kw: 5.0         # defaults to inverter_kw
+    hybrid: true                 # false = AC coupled
+    charge_rate_kw: 3.6          # defaults to inverter_kw
+    discharge_rate_kw: 3.6       # defaults to inverter_kw
+
+  load:
+    annual_kwh: 3800
+    shape: flat                  # night | day | flat
+    car_charging_kwh: 2500       # annual, 0 to disable
+    car_rate_kw: 7.4             # charger power, default 7.4, must be greater than 0
+
+  tariff:
+    import_octopus_url: &quot;https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/&quot;
+    export_octopus_url: &quot;...&quot;
+    dno_region: &quot;A&quot;              # required when a URL contains {dno_region}
+    standing_charge_p_per_day: 60.0
+
+  baseline_tariff:               # priced for the no-PV/battery scenario only
+    rates_import:                # defaults to the Ofgem price cap
+      - rate: 26.11
+    rates_export:
+      - rate: 4.1
+
+  samples_per_month: 2
+  fast_mode: false               # plan 4 months and estimate the rest, see Fast mode
+  debug: false                   # keep each sampled day's plan, see Debugging a run
+</code></pre>
+<p>At least one of <code>solar</code> or <code>battery</code> must be given — with neither there is nothing to
+evaluate. <code>annual.location</code> needs either <code>postcode</code> or both <code>latitude</code> and <code>longitude</code>;
+if both are given, latitude/longitude wins.</p>
+<p>Octopus product codes are region-suffixed. If your tariff URL contains <code>{dno_region}</code>
+you must also set <code>dno_region</code> to your region letter (<code>A</code> for Eastern England, and so
+on) — the config is rejected up front with an error naming the offending field, rather
+than left to 404 at fetch time and reported as an unavailable month, which would look
+like an Octopus outage rather than a config mistake.</p>
+<p>Numeric fields are range-checked and a bad value is rejected with an explanatory message
+rather than silently producing a nonsense result: <code>kwp</code>, <code>size_kwh</code>, <code>inverter_kw</code>,
+<code>charge_rate_kw</code> and <code>discharge_rate_kw</code> must all be greater than zero; <code>efficiency</code> and
+<code>pv10_derate_fallback</code> must be greater than zero and at most one; <code>samples_per_month</code>
+must be a whole number of at least one; and <code>year</code> must be between 1940 (the start of
+the Open-Meteo ERA5 archive) and the most recently completed calendar year - the current,
+still-in-progress year is rejected, since Open-Meteo answers a mid-year request with
+short but internally-consistent data that looks complete, and it would then be cached
+permanently as if it were.</p>
+<p>Instead of <code>annual_kwh</code>, <code>shape</code> and <code>car_charging_kwh</code> you may supply real consumption:</p>
+<pre><code class="language-yaml">  load:
+    octopus:
+      api_key: !secret octopus_key
+      account_id: A-1234ABCD
+</code></pre>
+<p>These two forms are <strong>mutually exclusive</strong> and supplying both is rejected. The Octopus
+consumption series already includes any EV charging, so accepting both would
+double-count it. The trade-off is that a car baked into the meter data cannot be
+smart-planned separately. A day missing from the downloaded consumption falls back to a
+synthetic UK-average profile rather than being billed as zero. <code>car_rate_kw</code> has no
+effect on an Octopus load and is ignored there — there is no separately-tracked car
+energy to apply a charging rate to.</p>
+<p><strong>Only use the Octopus option if you do not already have solar or a battery.</strong> An import
+meter records what you <em>bought from the grid</em>, not what your home used. If you already
+generate or store your own energy, that self-consumption and battery discharge have
+already been subtracted from every reading — so the series is your residual grid demand,
+not your household load. Feeding it in and then modelling a solar and battery system on
+top applies the same saving twice: the tool would credit you for displacing import that
+your existing system had already displaced, and overstate what a new system is worth.</p>
+<p>For a home that already has a system, use <code>annual_kwh</code> instead, and give your <strong>total
+household consumption</strong> — generation included — rather than the figure on your bill. The
+web form says the same, and says it more loudly when it can see that your Predbat
+instance already has a battery or an array configured.</p>
+<p><code>car_rate_kw</code> is the charger's power, used to size both the dumb timer's charge window
+(scenarios 1 and 2, which share the same fixed timer) and the smart plan's charging rate
+(scenario 3): a smaller number (say 3.0 for a granny charger) spreads the same energy over
+a longer window, while a larger one (up to a three-phase charger's 22 kW) charges it
+faster. It must be greater than zero.</p>
+<p>Instead of an Octopus URL you may give a fixed rate structure:</p>
+<pre><code class="language-yaml">  tariff:
+    rates_import:
+      - start: &quot;00:30:00&quot;
+        end: &quot;05:30:00&quot;
+        rate: 7.0
+      - start: &quot;05:30:00&quot;
+        end: &quot;00:30:00&quot;
+        rate: 28.0
+    rates_export:
+      - rate: 15.0
+</code></pre>
+<h2 id="debugging-a-run">Debugging a run</h2>
+<p>When a figure looks wrong, a normal run gives you no way to see why: you get the monthly
+totals and nothing about the plans that produced them. Ticking <strong>Save plans for
+debugging</strong> on the Annual tab — or setting <code>debug: true</code> in the config file — keeps the
+plan for every sampled day and makes it viewable.</p>
+<p>What is kept is the plan as it was actually billed: the same charge and export windows,
+against the same PV and load series the cost came from. That is what makes it usable for
+cross-checking. A plan drawn against a different series would look plausible and prove
+nothing.</p>
+<p>Every scenario is kept, not just Predbat's — <code>no_pvbat</code>, <code>pv_only</code> and <code>without_predbat</code>
+too, so you can see what all three baselines did rather than inferring it from their
+totals. When a car
+is configured each sampled day is planned twice, once with a charging session and once
+without, and the month's figures blend the two (see <a href="#how-it-works">How it works</a>); both
+legs are kept and labelled, since a suspicious monthly figure may come from either.</p>
+<p>The results page then offers a plan viewer below the monthly table, with a day and
+scenario selector. It renders with exactly the same code as the live
+<a href="../predbat-plan-card/">plan page</a> — same columns, same colours, same debug-column toggle —
+so anything you already know about reading a Predbat plan applies unchanged.</p>
+<p>Captured plans are stored separately from the run's results document, one storage key
+per sampled day's leg, rather than embedded inside it. That keeps the results document
+itself small — the totals, chart and month table you look at on every visit do not carry
+the plans — and a plan is only fetched off storage the moment you actually pick a day and
+scenario in the viewer, not every time the results page loads. A run downloaded as JSON
+is that results document as stored, which means it is the results <strong>without</strong> the
+captured plans; the plan viewer is the only place to get at them.</p>
+<p>Two things to know before turning it on:</p>
+<ul>
+<li><strong>The saved run gets much larger.</strong> A year at the default two samples per month keeps
+  72 plans (144 with a car configured). Runs are stored through the same twenty-run
+  rotation as any other, so a debug run displaces older runs at the same rate.</li>
+<li><strong>It does not change the numbers.</strong> The flag only retains plan data that the engine
+  already computes; it does not enable Predbat's own <code>debug_enable</code>, which would disable
+  the prediction kernel and slow every plan down substantially.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+    <div class="rst-footer-buttons" role="navigation" aria-label="Footer Navigation">
+        <a href="../compare/" class="btn btn-neutral float-left" title="Comparing Energy Tariffs"><span class="icon icon-circle-arrow-left"></span> Previous</a>
+        <a href="../todo-list/" class="btn btn-neutral float-right" title="To-do list">Next <span class="icon icon-circle-arrow-right"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+      <span><a href="../compare/" style="color: #fcfcfc">&laquo; Previous</a></span>
+    
+    
+      <span><a href="../todo-list/" style="color: #fcfcfc">Next &raquo;</a></span>
+    
+  </span>
+</div>
+    <script src="../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "..";</script>
+    <script src="../js/theme_extra.js"></script>
+    <script src="../js/theme.js"></script>
+      <script src="../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
