@@ -12,6 +12,8 @@ aiomqtt
 aios
 Alertfeed
 allclose
+alphaess
+ALPHAESS
 annualform
 Anson
 apexcharts
@@ -53,6 +55,7 @@ byok
 cadata
 calib
 Cantarell
+cbat
 CDLL
 cdn
 Cerbo
@@ -66,6 +69,7 @@ chargelater
 Chrg
 citem
 cloudfront
+cobat
 Codespaces
 COEFF
 collapsable
@@ -130,6 +134,7 @@ eauth
 Eddi
 elif
 elinter
+eload
 EMEA
 emqx
 emszzzz
@@ -209,8 +214,8 @@ hadashboard
 hahistory
 hainterface
 halfhourly
-hanchu
 Hanchu
+hanchu
 hanchuess
 hanres
 HAOS
@@ -378,10 +383,12 @@ pendings
 perc
 percnt
 peterhaban
+pgrid
 photovoltaics
 pitem
 pkwh
 plenticore
+pload
 postdata
 powercontrolmode
 powerline
