@@ -1,3 +1,8 @@
+GIT_HASH=$(git -C .. rev-parse --short HEAD)
+if [ -n "$(git -C .. status --porcelain)" ]; then
+  GIT_HASH="${GIT_HASH}-dirty"
+fi
+echo "$GIT_HASH" > /Volumes/addon_configs/6adb4f0d_predbat/git_version.txt
 cp ../apps/predbat/*.py /Volumes/addon_configs/6adb4f0d_predbat
 cp ../apps/predbat/*.proto /Volumes/addon_configs/6adb4f0d_predbat
 cp ../apps/predbat/*.so /Volumes/addon_configs/6adb4f0d_predbat
