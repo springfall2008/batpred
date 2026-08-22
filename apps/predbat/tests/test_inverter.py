@@ -116,35 +116,9 @@ def test_disable_charge_window(test_name, ha, inv, dummy_rest, prev_charge_start
         print("ERROR: Inverter time button press should be {} got {}".format("on" if expect_inverter_time_button_press else "off", ha.get_state("switch.inverter_button")))
         failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Timeslots"] = {}
-    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
-    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disabled"
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = "00:00:00"
-    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = "00:00:00"
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "disabled"
-
-    print("REST Mode")
-    inv.disable_charge_window()
-    print("After disable charge window")
-    rest_command = dummy_rest.get_commands()
-    charge_start_time = "00:00:00"
-    charge_end_time = "00:00:00"
-    if (prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time) and not has_charge_enable_time:
-        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
-    else:
-        expect_data = []
-    if prev_enable_charge and has_charge_enable_time:
-        expect_data.append(["dummy/enableChargeSchedule", {"state": "disable"}])
-
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # disable_charge_window now always writes via entity (write_and_poll_switch/write_and_poll_option),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
     return failed
 
 
@@ -213,31 +187,9 @@ def test_adjust_charge_window(
             print("ERROR: charge_end_time_minutes should be {} got {}".format(expect_charge_end_time_minutes, inv.charge_end_time_minutes))
             failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Timeslots"] = {}
-    inv.rest_data["Timeslots"]["Charge_start_time_slot_1"] = prev_charge_start_time
-    inv.rest_data["Timeslots"]["Charge_end_time_slot_1"] = prev_charge_end_time
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Enable_Charge_Schedule"] = "enable" if prev_enable_charge else "disable"
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Timeslots"]["Charge_start_time_slot_1"] = charge_start_time
-    dummy_rest.rest_data["Timeslots"]["Charge_end_time_slot_1"] = charge_end_time
-    dummy_rest.rest_data["Control"]["Enable_Charge_Schedule"] = "enable"
-
-    inv.adjust_charge_window(charge_start_time_tm, charge_end_time_tm, minutes_now)
-    rest_command = dummy_rest.get_commands()
-    if prev_charge_start_time != charge_start_time or prev_charge_end_time != charge_end_time:
-        expect_data = [["dummy/setChargeSlot1", {"start": charge_start_time[0:5], "finish": charge_end_time[0:5]}]]
-    else:
-        expect_data = []
-    if prev_enable_charge != True:
-        expect_data.append(["dummy/enableChargeSchedule", {"state": "enable"}])
-
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_charge_window now always writes via entity (write_and_poll_option/write_and_poll_switch),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
     return failed
 
 
@@ -268,23 +220,9 @@ def test_adjust_reserve(test_name, ha, inv, dummy_rest, prev_reserve, reserve, e
         print("ERROR: Reserve should be {} got {}".format(expect_reserve, ha.get_state("number.reserve")))
         failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Battery_Power_Reserve"] = prev_reserve
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Control"]["Battery_Power_Reserve"] = expect_reserve
-
-    inv.adjust_reserve(reserve)
-    rest_command = dummy_rest.get_commands()
-    if prev_reserve != expect_reserve:
-        expect_data = [["dummy/setBatteryReserve", {"reservePercent": expect_reserve}]]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_reserve now always writes via entity (write_and_poll_value), regardless of whether
+    # REST is configured - there's no REST-specific branch left to exercise separately here
+    # (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
 
     return failed
 
@@ -379,10 +317,10 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     if new_discharge_target != prev_discharge_target:
         dummy_rest.queue_rest_data(dummy1)
 
+    # Discharge start/end time is now written via entities (write_and_poll_option), not REST -
+    # only the target SoC and inverter mode below are still written via the direct REST client.
     dummy1["Timeslots"]["Discharge_start_time_slot_1"] = new_start
     dummy1["Timeslots"]["Discharge_end_time_slot_1"] = new_end
-    if prev_start != expect_start or prev_end != expect_end:
-        dummy_rest.queue_rest_data(dummy1)
 
     dummy1["Control"]["Mode"] = new_mode
     dummy1["Control"]["Enable_Discharge_Schedule"] = export_schedule_discharge
@@ -403,9 +341,6 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     expect_data = []
     if new_discharge_target != prev_discharge_target:
         expect_data.append(["dummy/setDischargeTarget", {"dischargeToPercent": int(new_discharge_target), "slot": 1}])
-
-    if prev_start != expect_start or prev_end != expect_end:
-        expect_data.append(["dummy/setDischargeSlot1", {"start": expect_start[0:5], "finish": expect_end[0:5]}])
 
     if prev_mode != new_mode:
         expect_data.append(["dummy/setBatteryMode", {"mode": new_mode}])
@@ -446,37 +381,9 @@ def test_adjust_charge_rate(test_name, ha, inv, dummy_rest, prev_rate, rate, exp
         print("ERROR: Inverter rate percent should be {} got {} - rate {} max_rate_raw {}".format(expect_percent, ha.get_state(entity_percent), rate, inv.battery_rate_max_raw))
         failed = True
 
-    # REST Mode
-    rest_entity = "Battery_Discharge_Rate" if discharge else "Battery_Charge_Rate"
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"][rest_entity] = prev_rate
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Control"][rest_entity] = expect_rate
-
-    rest_command = dummy_rest.get_commands()
-    if rest_command:
-        print("ERROR Previous was command was not cleared, started with:".format(rest_command))
-        failed = True
-
-    if discharge:
-        inv.adjust_discharge_rate(rate)
-    else:
-        inv.adjust_charge_rate(rate)
-
-    rest_command = dummy_rest.get_commands()
-    if prev_rate != expect_rate:
-        print("Prev_rate {} expect_rate {}".format(prev_rate, expect_rate))
-        if discharge:
-            expect_data = [["dummy/setDischargeRate", {"dischargeRate": expect_rate}]]
-        else:
-            expect_data = [["dummy/setChargeRate", {"chargeRate": expect_rate}]]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_charge_rate/adjust_discharge_rate now always write via entity (write_and_poll_value),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
 
     return failed
 
@@ -687,28 +594,9 @@ def test_adjust_battery_target(test_name, ha, inv, dummy_rest, prev_soc, soc, is
         print("ERROR: Button state should be {} got {}".format(expected_button_state, button_state))
         failed = True
 
-    # REST Mode
-    inv.rest_api = "dummy"
-    inv.rest_data = {}
-    inv.rest_data["Control"] = {}
-    inv.rest_data["Control"]["Target_SOC"] = prev_soc
-    dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-    dummy_rest.rest_data["Control"]["Target_SOC"] = expect_soc
-    # enableChargeTarget always enables (True), so set Enable_Charge_Target to "enable" so it passes on first try
-    dummy_rest.rest_data["Control"]["Enable_Charge_Target"] = "enable"
-
-    inv.adjust_battery_target(soc, isCharging=isCharging, isExporting=isExporting)
-    rest_command = dummy_rest.get_commands()
-    if expect_soc != prev_soc:
-        expect_data = [
-            ["dummy/enableChargeTarget", {"state": "enable"}],
-            ["dummy/setChargeTarget", {"chargeToPercent": expect_soc}],
-        ]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
-        failed = True
+    # adjust_battery_target now always writes charge_limit via entity (write_and_poll_value),
+    # regardless of whether REST is configured - there's no REST-specific branch left to exercise
+    # separately here (unlike pause_mode/inverter_mode/discharge_target, which remain REST-only).
 
     return failed
 
@@ -823,21 +711,14 @@ def test_inverter_self_test(test_name, my_predbat):
     expected = []
 
     # Define the command patterns (each repeated INVERTER_MAX_RETRY_REST times due to the retry loop).
-    # Enable_Charge_Target is not set in the mock rest_data so enableChargeTarget exhausts all retries,
-    # same as setChargeTarget exhausts retries because Target_SOC stays at 99.
+    # Battery target/rate/reserve/charge & discharge window/schedule-enable all now write via
+    # entities regardless of REST config, so they no longer show up as REST commands here - only
+    # adjust_inverter_mode's mode write remains REST-only (see the "REST exceptions" note in
+    # inverter.py's Inverter.__init__). old_inverter_mode is read once from the mocked rest_data's
+    # "Mode" ("Eco") and never mutated by the dummy POSTs, so only the Eco->Timed Export transition
+    # (mid self_test) ever produces a command; the return to Eco afterwards is a no-op against that
+    # same stale "Eco" reading.
     commands = [
-        ["dummy/enableChargeTarget", {"state": "enable"}],
-        ["dummy/setChargeTarget", {"chargeToPercent": 100}],
-        ["dummy/setChargeRate", {"chargeRate": 215}],
-        ["dummy/setChargeRate", {"chargeRate": 0}],
-        ["dummy/setDischargeRate", {"dischargeRate": 220}],
-        ["dummy/setDischargeRate", {"dischargeRate": 0}],
-        ["dummy/setBatteryReserve", {"reservePercent": 100}],
-        ["dummy/setBatteryReserve", {"reservePercent": 6}],
-        ["dummy/enableChargeSchedule", {"state": "disable"}],
-        ["dummy/setChargeSlot1", {"start": "23:01", "finish": "05:01"}],
-        ["dummy/setChargeSlot1", {"start": "23:00", "finish": "05:00"}],
-        ["dummy/setDischargeSlot1", {"start": "23:00", "finish": "23:01"}],
         ["dummy/setBatteryMode", {"mode": "Timed Export"}],
     ]
 
@@ -856,24 +737,20 @@ def test_inverter_rest_template(
     my_predbat,
     filename,
     assert_soc_max=9.52,
-    assert_soc=0,
-    assert_voltage=52,
     assert_inverter_limit=3600,
     assert_battery_rate_max=2600,
     assert_serial_number="Unknown",
-    assert_pv_power=0,
-    assert_load_power=0,
-    assert_charge_start_time_minutes=0,
-    assert_charge_end_time_minutes=0,
-    assert_charge_enable=False,
-    assert_discharge_start_time_minutes=0,
-    assert_discharge_end_time_minutes=0,
-    assert_discharge_enable=False,
-    assert_pause_start_time_minutes=0,
-    assert_pause_end_time_minutes=0,
     assert_nominal_capacity=9.52,
     assert_battery_temperature=0,
 ):
+    """
+    SoC, power, battery voltage and charge/discharge window/enable state are no longer parsed
+    from raw REST data by Inverter (that now goes via entities, published in production by
+    GivTCPComponent - see test_givtcp_component.py, and exercised here via test_inverter_update).
+    This template only still exercises what Inverter.__init__ genuinely discovers from raw REST
+    data: battery/capacity discovery, calibration, and inverter limits/model info - the REST
+    exceptions documented in inverter.py's Inverter.__init__.
+    """
     failed = False
     print("**** Running Test: {} ****".format(test_name))
     dummy_rest = DummyRestAPI()
@@ -899,12 +776,6 @@ def test_inverter_rest_template(
     if assert_soc_max != inv.soc_max:
         print("ERROR: SOC Max should be {} got {}".format(assert_soc_max, inv.soc_max))
         failed = True
-    if assert_soc != inv.soc_kw:
-        print("ERROR: SOC should be {} got {}".format(assert_soc, inv.soc_kw))
-        failed = True
-    if assert_voltage != inv.battery_voltage:
-        print("ERROR: Voltage should be {} got {}".format(assert_voltage, inv.battery_voltage))
-        failed = True
     if assert_inverter_limit != inv.inverter_limit * MINUTE_WATT:
         print("ERROR: Inverter limit should be {} got {}".format(assert_inverter_limit, inv.inverter_limit * MINUTE_WATT))
         failed = True
@@ -917,30 +788,6 @@ def test_inverter_rest_template(
         failed = True
     if assert_serial_number != inv.serial_number:
         print("ERROR: Serial number should be {} got {}".format(assert_serial_number, inv.serial_number))
-        failed = True
-    if assert_pv_power != inv.pv_power:
-        print("ERROR: PV power should be {} got {}".format(assert_pv_power, inv.pv_power))
-        failed = True
-    if assert_load_power != inv.load_power:
-        print("ERROR: Load power should be {} got {}".format(assert_load_power, inv.load_power))
-        failed = True
-    if assert_charge_start_time_minutes != inv.charge_start_time_minutes:
-        print("ERROR: Charge start time should be {} got {}".format(assert_charge_start_time_minutes, inv.charge_start_time_minutes))
-        failed = True
-    if assert_charge_end_time_minutes != inv.charge_end_time_minutes:
-        print("ERROR: Discharge end time should be {} got {}".format(assert_charge_end_time_minutes, inv.charge_end_time_minutes))
-        failed = True
-    if assert_charge_enable != inv.charge_enable_time:
-        print("ERROR: Charge enable should be {} got {}".format(assert_charge_enable, inv.charge_enable_time))
-        failed = True
-    if assert_discharge_start_time_minutes != inv.discharge_start_time_minutes:
-        print("ERROR: Discharge start time should be {} got {}".format(assert_discharge_start_time_minutes, inv.discharge_start_time_minutes))
-        failed = True
-    if assert_discharge_end_time_minutes != inv.discharge_end_time_minutes:
-        print("ERROR: Discharge end time should be {} got {}".format(assert_discharge_end_time_minutes, inv.discharge_end_time_minutes))
-        failed = True
-    if assert_discharge_enable != inv.discharge_enable_time:
-        print("ERROR: Discharge enable should be {} got {}".format(assert_discharge_enable, inv.discharge_enable_time))
         failed = True
     if assert_nominal_capacity != inv.nominal_capacity:
         print("ERROR: Nominal capacity should be {} got {}".format(assert_nominal_capacity, inv.nominal_capacity))
@@ -1129,7 +976,9 @@ def test_inverter_update(
     dummy_rest.rest_data["raw"] = {}
     dummy_rest.rest_data["raw"]["invertor"] = {}
     dummy_rest.rest_data["raw"]["invertor"]["discharge_target_soc_1"] = 4
-    dummy_items["sensor.soc_kw"] = -1
+    # sensor.soc_kw is deliberately left as whatever the entity-mode block above set it to:
+    # update_status() now reads SoC/power/window state from entities even when REST is configured
+    # (only battery/capacity discovery in __init__ still comes from REST), so it must match here too.
     dummy_items["sensor.battery_capacity"] = -1
 
     inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
@@ -1510,65 +1359,6 @@ def test_charge_window_no_source_configured(test_name, my_predbat, dummy_items):
             my_predbat.args["charge_start_time"] = original_charge_start_time
         if original_charge_end_time is not None:
             my_predbat.args["charge_end_time"] = original_charge_end_time
-
-    return failed
-
-
-def test_charge_window_rest_configured_but_no_data_yet(test_name, my_predbat, dummy_items):
-    """
-    Test charge window handling when a REST API (givtcp_rest) *is* configured but rest_data hasn't
-    successfully returned anything yet this cycle (issue #4179's actual production trigger -
-    GivEnergy cloud "no devices" or a fresh start before the first poll). Unlike the "nothing
-    configured at all" case above, this is genuinely transient - the data source is legitimate, it
-    just hasn't produced a value yet - so it should fall through to the same safe-defaults/
-    retry-next-update handling as a configured-but-currently-unusable value, not raise.
-    """
-    failed = False
-    print(f"**** Running Test: {test_name} ****")
-
-    inv = Inverter(my_predbat, 0)
-    inv.sleep = dummy_sleep
-    inv.inv_has_charge_enable_time = True
-    inv.rest_api = "http://givtcp:6345"
-    inv.rest_data = None
-
-    original_charge_start_time = my_predbat.args.pop("charge_start_time", None)
-    original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
-    dummy_items["switch.scheduled_charge_enable"] = "on"
-
-    try:
-        inv.update_status(my_predbat.minutes_now)
-    except ValueError as e:
-        print(f"ERROR: {test_name} - update_status should not raise while a configured REST source just hasn't returned data yet, got ValueError({e})")
-        failed = True
-        if original_charge_start_time is not None:
-            my_predbat.args["charge_start_time"] = original_charge_start_time
-        if original_charge_end_time is not None:
-            my_predbat.args["charge_end_time"] = original_charge_end_time
-        return failed
-
-    # Should set the same safe defaults as the "value is None" case
-    if inv.charge_enable_time != False:
-        print(f"ERROR: {test_name} - charge_enable_time should be False, got {inv.charge_enable_time}")
-        failed = True
-    if inv.charge_start_time_minutes != my_predbat.forecast_minutes:
-        print(f"ERROR: {test_name} - charge_start_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_start_time_minutes}")
-        failed = True
-    if inv.charge_end_time_minutes != my_predbat.forecast_minutes:
-        print(f"ERROR: {test_name} - charge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.charge_end_time_minutes}")
-        failed = True
-    if inv.track_charge_start != "00:00:00":
-        print(f"ERROR: {test_name} - track_charge_start should be '00:00:00', got {inv.track_charge_start}")
-        failed = True
-    if inv.track_charge_end != "00:00:00":
-        print(f"ERROR: {test_name} - track_charge_end should be '00:00:00', got {inv.track_charge_end}")
-        failed = True
-
-    # Restore config for later tests
-    if original_charge_start_time is not None:
-        my_predbat.args["charge_start_time"] = original_charge_start_time
-    if original_charge_end_time is not None:
-        my_predbat.args["charge_end_time"] = original_charge_end_time
 
     return failed
 
@@ -2753,15 +2543,6 @@ def run_inverter_tests(my_predbat_dummy):
         my_predbat,
         filename="cases/rest_v2.json",
         assert_soc_max=9.523,
-        assert_soc=3.333,
-        assert_pv_power=10,
-        assert_load_power=624,
-        assert_charge_start_time_minutes=1410,
-        assert_charge_end_time_minutes=1770,
-        assert_discharge_start_time_minutes=1380,
-        assert_discharge_end_time_minutes=1441,
-        assert_discharge_enable=False,
-        assert_charge_enable=True,
         assert_nominal_capacity=9.5232,
         assert_battery_temperature=15.3,
     )
@@ -2771,17 +2552,8 @@ def run_inverter_tests(my_predbat_dummy):
         "rest2",
         my_predbat,
         filename="cases/rest_v3.json",
-        assert_voltage=53.65,
         assert_battery_rate_max=3600,
         assert_serial_number="EA2303G082",
-        assert_soc=7.62,
-        assert_pv_power=247.0,
-        assert_load_power=197.0,
-        assert_charge_start_time_minutes=1440,
-        assert_charge_end_time_minutes=1440,
-        assert_discharge_start_time_minutes=1445,
-        assert_discharge_end_time_minutes=1531,
-        assert_discharge_enable=True,
         assert_nominal_capacity=9.52,
         assert_battery_temperature=25.0,
     )
@@ -3309,9 +3081,12 @@ charge_start_service:
     if failed:
         return failed
 
-    failed |= test_charge_window_rest_configured_but_no_data_yet("charge_window_rest_configured_but_no_data_yet", my_predbat, dummy_items)
-    if failed:
-        return failed
+    # test_charge_window_rest_configured_but_no_data_yet was removed: charge_start_time is no
+    # longer read from REST at all by Inverter.update_status(), so the "REST configured but data
+    # not returned yet" transient case it covered can no longer happen here - GivTCPComponent now
+    # owns that retry/backoff (see component_base.py's start()), and Components.start(phase=1)
+    # blocks predbat startup until the component's automatic_config() has already populated
+    # charge_start_time in self.base.args, before any Inverter is constructed.
 
     # Test discharge window None handling
     failed |= test_discharge_window_none_illegal_time("discharge_window_illegal_time", my_predbat, dummy_items)
