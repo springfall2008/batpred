@@ -576,8 +576,16 @@ class MockAlphaESS(AlphaESSAPI):
         return None
 
 
-def _envelope(code=200, data=None, msg="Success", exp_msg=None):
-    """Build an AlphaESS response envelope."""
+def _envelope(code=200, data=None, msg=None, exp_msg=None):
+    """Build an AlphaESS response envelope.
+
+    msg defaults to "Success" ONLY for code 200. The client treats msg == "Success" as
+    success regardless of code (the periodic endpoints report status in msg/info rather
+    than code), so a helper that defaulted every envelope to "Success" would make a
+    failure envelope read as a success and let tests pass for the wrong reason.
+    """
+    if msg is None:
+        msg = "Success" if code == 200 else "Failed"
     return {"code": code, "msg": msg, "expMsg": exp_msg, "extra": None, "data": data}
 
 
