@@ -84,6 +84,7 @@ from compare import Compare
 from plugin_system import PluginSystem
 from github import GitHub
 from ha import run_async
+from control_ledger import ControlLedger
 
 
 class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, Marginal, Execute, Output, UserInterface, GitHub):
@@ -300,6 +301,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.watch_list = []
         self.restart_active = False
+        self.control_ledger = ControlLedger()
+        self.control_ledger_restored = False
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
         self.inverters = []
@@ -671,6 +674,14 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         if self.had_errors:
             m.errors_total.labels(type="general").inc()
 
+        # Control ownership ledger
+        conflict_events = self.control_ledger.recent_events(time.time())
+        m.control_conflicts_24h.set(len(conflict_events))
+        sustained = self.control_ledger.sustained_controls(conflict_events)
+        m.control_conflicts_sustained_total.set(len(sustained))
+        m.control_conflicts_events = self.control_ledger.newest_events(20)
+        m.control_conflicts_sustained_controls = sustained
+
     def save_plan(self):
         """Save the current best plan via the storage component so it can be restored on next startup."""
         storage = self.components.get_component("storage") if self.components else None
@@ -836,6 +847,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.log("Sensor changes require a replan, will recompute the plan")
             recompute = True
 
+        # Open the control-ledger cycle BEFORE the first inverter read. fetch_inverter_data()
+        # runs update_status(), which writes scheduled_charge_enable through write_and_poll_switch
+        # and so CONFIRMS ownership - stamping those with the previous cycle number made the next
+        # observe() of them hit the STALE rung whenever execute_plan() had written the entity in
+        # the prior run. Every write in a run must share that run's cycle number.
+        self.control_ledger.begin_cycle()
+
         # Fetch inverter data
         if not self.fetch_inverter_data():
             self.log("Error: Failed to fetch inverter data, not able to compute a plan")
@@ -949,6 +967,42 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             },
         )
         self.log("Total inverter register writes now {}".format(previous_inverter_writes))
+
+        # Control interference detection. Restored once per process from the entity's own
+        # attributes so the 24h window survives a pod restart - without this "3 in 24h"
+        # silently means "3 since the last restart".
+        now_ts = time.time()
+        if not self.control_ledger_restored:
+            self.control_ledger.restore(self.load_previous_value_from_ha(self.prefix + ".control_conflicts", attribute="events"))
+            self.control_ledger_restored = True
+        # prune() and recent_events() are NOT the same filter and neither can stand in for the
+        # other. prune() maintains the durable store, dropping only what has genuinely aged out;
+        # a future-dated event (a clock behind NTP) stays, because the clock corrects and the
+        # history must survive until it does. recent_events() is what can be JUDGED right now, so
+        # it is what the count and the sustained list are built from. The "events" attribute
+        # publishes the stored list, because that attribute IS the store restore() reads back -
+        # publishing only the events it can judge would delete the rest on the next run.
+        self.control_ledger.prune(now_ts)
+        conflict_events = self.control_ledger.recent_events(now_ts)
+        sustained = self.control_ledger.sustained_controls(conflict_events)
+        self.dashboard_item(
+            self.prefix + ".control_conflicts",
+            state=len(conflict_events),
+            attributes={
+                "friendly_name": "Settings changed outside Predbat (24h)",
+                "state_class": "measurement",
+                "unit_of_measurement": "changes",
+                "icon": "mdi:account-alert",
+                # Newest 20 BY TIME. The stored list is sorted by restore(), so on a pod whose clock
+                # is behind, this run's real event carries a small "at", sorts to index 0, and a
+                # plain [-20:] tail discarded the very event just detected - from the attribute that
+                # IS the durable store.
+                "events": self.control_ledger.newest_events(20),
+                "sustained": sustained,
+            },
+        )
+        if conflict_events:
+            self.log("Control interference: {} change(s) in the last 24h, sustained on {}".format(len(conflict_events), sustained or "nothing"))
 
         if self.calculate_savings:
             # Get current totals
