@@ -482,6 +482,85 @@ a G98/G99-capped site can sit far below it. Guessing there would produce a plan 
 over-exports with no feedback path, whereas the warning prompts the user to enter the one
 number only they know.
 
+### Hybrid versus AC-coupled
+
+`inverter_hybrid` is one of Predbat's own `CONFIG_ITEMS` switches, not an `apps.yaml` arg,
+so it is written with `set_state_external` rather than `set_arg_auto` — writing the entity
+state alone would move the displayed switch without changing the value the planner reads
+(`component_base.py:316-324`). GECloud infers it from the model string
+(`gecloud.py:1188-1197`) and Teslemetry hard-sets it off for every Powerwall
+(`teslemetry.py:689-698`); this component follows GECloud's shape but is deliberately more
+conservative about acting on the verdict.
+
+**The two errors are not symmetric.** `inverter_hybrid` controls whether PV output counts
+against the inverter's capacity and incurs its conversion loss (`prediction.py:38-52`):
+
+- **True on an actually AC-coupled system** — PV wrongly consumes inverter headroom, so
+  Predbat under-uses the battery. Conservative, and it self-limits.
+- **False on an actually hybrid system** — PV stops counting against `inverter_limit`, so
+  Predbat plans charge-plus-PV beyond what the inverter can pass, and the surplus is
+  clipped. Targets are silently missed.
+
+Predbat's default is `True`, and every mainstream AlphaESS unit (SMILE5, SMILE-T10,
+SMILE-G3, Storion-S5) is a hybrid with DC PV inputs, so the default is right for the
+common case. The component therefore only ever moves the switch on positive evidence of
+AC coupling, and never the other way.
+
+**Signals, in confidence order:**
+
+1. **`ppvDetail` all-null.** `getLastPowerData` returns `ppv1`–`ppv4` inside `ppvDetail`.
+   AlphaESS uses null-for-absent in these detail objects — the API docs state `pevDetail`
+   values are "`null` when no charger is fitted" — so a unit with no DC strings should
+   report nulls, while a hybrid at night reports zeros (the docs' live sample shows
+   `"ppv1":0.0` on a hybrid after dark). Null versus zero is the discriminator, and unlike
+   a PV-power threshold it works at any time of day. Applying the `pevDetail` convention
+   to `ppvDetail` is inference, not documented — hence `VERIFY@FIELD`.
+2. **`popv == 0` while `epv > 0`.** A system generating solar energy but declaring no PV
+   nameplate on the AlphaESS unit has its PV somewhere else. Needs daylight to evaluate,
+   so it is assessed on the static tier rather than at startup.
+3. **Model string**, via `ALPHAESS_AC_COUPLED_MODELS` in `alphaess_const.py`. Seeded
+   **empty**. AlphaESS model naming does not encode coupling the way GivEnergy's does —
+   there is no `"ac"` substring to match — and the HA integration's `KNOWN_INVERTERS`
+   list (`Storion-S5`, `SMILE5-INV`, `VT1000`, `SMILE-T10-HV-INV`, `SMILE-G3-B5-INV`,
+   `SMILE-G3-T10-INV`, `SMILE-S6-HV-INV`) contains no confirmed AC-coupled entry.
+   Inventing a table here would be guessing; entries are added only as testers confirm
+   them.
+
+The switch is flipped to AC-coupled only when signal 1 and signal 2 **agree**, or when the
+model appears in `ALPHAESS_AC_COUPLED_MODELS`. Any other combination leaves Predbat's
+default alone and logs what was observed, naming the model and pointing the user at
+`switch.predbat_inverter_hybrid`. A guess that lands on the damaging side of an asymmetric
+error is worse than asking.
+
+## Model capability gating
+
+Three AlphaESS models are known to differ in what the API will do for them. The lists live
+in `alphaess_const.py`, seeded from the Home Assistant integration's `const.py` and
+extended as testers report.
+
+| Model | Limitation | Handling |
+|:--|:--|:--|
+| `Storion-S5` | `getLastPowerData` is not supported — the HA integration skips the call entirely (`LOWER_INVERTER_API_CALL_LIST`, homeassistant-alphaESS `coordinator.py:2528`) | Fall back to the last sample of `getOneDayPowerBySn` for live state |
+| `VT1000` | Cannot accept charge/discharge settings (`INVERTER_SETTING_BLACKLIST`) | Control refused for that serial; monitoring continues |
+| `Storion-S5` | Limited sensor coverage generally (`LIMITED_INVERTER_SENSOR_LIST`) | Only map args the unit actually reports, per the usual rule |
+
+**The `Storion-S5` case is the one with teeth**, because `getLastPowerData` is the entire
+60-second power tier — live `soc`, `pbat`, `pgrid`, `ppv` and `pload`. Predbat cannot plan
+without a live SOC. The fallback is `getOneDayPowerBySn`, whose samples carry `cbat` (SOC
+%), `ppv`, `load`, `feedIn` and `gridCharge`; the most recent sample supplies current
+state at roughly five-minute resolution.
+
+That call returns ~288 records for a full day, so it is not something to poll every
+minute. For an affected serial the power tier drops to 5 minutes and requests only the
+current day, accepting the payload cost because the alternative is a component that cannot
+drive that inverter at all. `feedIn` and `gridCharge` are separate positive-only fields
+rather than a signed `pgrid`, so grid power is reconstructed as `gridCharge - feedIn`
+before Predbat's negate-on-import convention is applied.
+
+A serial whose model is unknown is treated as fully capable. The lists are an
+allowlist-of-exceptions, not a gate on recognised hardware — a new AlphaESS model must not
+be locked out because nobody has added it yet.
+
 ## Control entities
 
 Published per serial, matching `sunsynk.py`'s naming and domains so `inverter.py` drives
@@ -661,7 +740,7 @@ Six modules, registered in `TEST_REGISTRY` in `unit_test.py`:
 | `test_alphaess_api.py` | Signature construction, header set, envelope parsing, `msg`/`info` success forms, every return code in the table, bind/unbind code mapping including `6003`/`6005` as success, clock-skew detection |
 | `test_alphaess_control.py` | The full control mapping table, `batUseCap` dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, `24:00` → `23:45`), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and `6017` caching, read-only and `control_enable` gating, unbind switch latch idempotency and latch survival across restart, `device_list` removal after unbind |
 | `test_alphaess_publish.py` | Every sensor in the monitoring tables, `pgrid` negation, the three `*_invert` flags forced to `False`, `eload` null fallback to the energy balance, `battery_rate_max` derived from `poinv` and overridden by `alphaess_battery_rate_max`, `export_limit` left unmapped with a warning, "only map when every inverter reports it" |
-| `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping |
+| `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping, hybrid inference (all-null `ppvDetail` plus `popv`/`epv` disagreement leaves the switch alone; both agreeing flips it via `set_state_external`; a hybrid at night with zero-valued `ppvDetail` is never misread), model capability gating for `Storion-S5` and `VT1000`, and that an unknown model is treated as fully capable |
 | `test_alphaess_storage.py` | Cache round-trip for all four files, `storage is None` path, empty-discovery refusal, tier freshness only on success |
 
 Tests use `TestHAInterface` from `tests/test_infra.py` with a stubbed HTTP layer — no
@@ -693,7 +772,17 @@ Each is marked `VERIFY@FIELD` in `alphaess_const.py`:
    `battery_rate_max_scaling` suggestion from `inverter.py:1295-1318` after a few full
    charge cycles is exactly the evidence needed; if it lands consistently below 1.0
    across systems, the derivation should apply that factor rather than `poinv` raw.
-7. **Periodic entitlement in the wild.** How many real systems answer `200` rather than
+7. **`ppvDetail` null-versus-zero on an AC-coupled unit.** The hybrid inference rests on
+   AlphaESS reporting null (not zero) for absent DC strings, which is documented for
+   `pevDetail` and inferred for `ppvDetail`. A single log from an AC-coupled system
+   settles it; until then the switch is only moved when two signals agree.
+8. **Which models are actually AC-coupled.** `ALPHAESS_AC_COUPLED_MODELS` ships empty
+   because AlphaESS model names do not encode coupling. Confirmed entries go in as
+   testers report them.
+9. **Whether `Storion-S5` really cannot serve `getLastPowerData`.** Taken from the HA
+   integration's model list rather than measured. If it works, the fallback path is dead
+   code and the model comes off the list.
+10. **Periodic entitlement in the wild.** How many real systems answer `200` rather than
    `6017` for `getTimeChargeBySn` determines whether the periodic path is the common case
    or a rarity.
 
@@ -709,7 +798,9 @@ and `sign` redacted. Flipped to `False` once the format is confirmed.
   honoured on the legacy path, that `battery_rate_max` is estimated from the inverter
   rating and how to correct it with `battery_rate_max_scaling` or
   `alphaess_battery_rate_max`, that `export_limit` must be set by hand for a
-  G98/G99-capped site, and that the unbind switch is one-way.
+  G98/G99-capped site, that `switch.predbat_inverter_hybrid` is only moved on positive
+  evidence of AC coupling and should be checked by hand on a retrofit system, and that
+  the unbind switch is one-way.
 - `docs/inverter-setup.md` — an AlphaESS entry.
 - `templates/alphaess_cloud.yaml` — a complete example.
 
