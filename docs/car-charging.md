@@ -583,16 +583,20 @@ sensor and get identical behaviour.
 | `off` | `home_battery_low` | The home battery is below **car_charging_solar_min_soc**, which the forecast already assumes stops the diversion |
 | `off` | `solar_disabled` | This car does not do solar charging (`car_charging_solar` is off) |
 
-Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - and for a charger
-that keeps its own departure plan, evcc included, off takes that plan down with it. So off is published only when it is
-meant: the export pays better, the home battery is below the priority level, or the car does no solar charging at all.
-Not being plugged in is an absence, not a decision, and leaves the charger following the sun.
+Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - so it is
+published only when it is meant: the export pays better, the home battery is below the priority level, or the car does no
+solar charging at all. Not being plugged in is an absence, not a decision, and leaves the charger following the sun. The
+reason to rest in solar is what happens when Predbat is *not* publishing - a charger left following the sun still
+charges, where one left off would sit idle. A charger that keeps its own departure plan, evcc included, keeps it either
+way: off stops it acting on the plan, it does not delete it.
 
 `home_battery_low` keeps the published decision and the forecast in step. The forecast only diverts to the car once the
 home battery is above **car_charging_solar_min_soc**, so below it the charger must not be told to follow the sun either -
-otherwise it charges out of a battery the house still needs, from energy the plan has already spent elsewhere. Like
-`export_better` it is only published when there are grid slots to fall back on; with nothing planned, refusing the
-surplus would just lose it.
+otherwise it charges out of a battery the house still needs, from energy the plan has already spent elsewhere. Unlike
+`export_better` this needs no departure plan behind it: below the priority level the surplus belongs in the home battery,
+which is what the setting means, and the diversion resumes on its own once the battery climbs back above it. With evcc
+this doubles up with evcc's own `prioritySoc`, which enforces the same thing at its end; for any other charger, or a Home
+Assistant automation reading the sensor, Predbat's decision is the only thing enforcing it.
 
 Safeguards, so the switch can never leave the car short:
 

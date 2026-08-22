@@ -594,8 +594,9 @@ With `evcc_control: True`, Predbat maps its own decision onto evcc's modes:
 The decision is not made here: it is Predbat's own `sensor.predbat_car_charging_mode`, described under
 [the charging mode](car-charging.md#the-charging-mode), so evcc and a plain Home Assistant automation
 driving some other charger act on identical logic. Note that `solar` is the resting state - evcc is left
-in `pv` rather than `off` when nothing is planned, because `off` disables the loadpoint and takes evcc's
-own departure plan down with it, which is the plan this component exists to read.
+in `pv` rather than `off` when nothing is planned, so the car still charges from the sun if Predbat stops
+publishing. The loadpoint's own departure plan survives either mode: `off` stops evcc acting on the plan
+itself, but the plan is kept, stays editable, and is still reported to Predbat.
 
 Writes only happen when the plan is valid and fresh, `switch.predbat_set_read_only` is off, and the runtime
 switch is on; every refusal is published as the `reason` attribute on `sensor.predbat_evcc_target_mode`, so

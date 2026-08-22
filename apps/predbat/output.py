@@ -82,9 +82,9 @@ class Output:
         The forecast only diverts to the car once the home battery is above car_charging_solar_min_soc - see
         Prediction.run_prediction - so below it this must not tell the charger to follow the sun either, or
         the charger does exactly what the plan has assumed it will not, out of a battery the house still
-        needs. That is only withheld when there are grid slots to fall back on, matching
-        set_car_solar_export_threshold: with no plan behind it, refusing the surplus loses the energy and
-        takes the charger's own departure plan down with it.
+        needs. Unlike export_better that needs no fallback plan behind it: below the priority level the
+        surplus belongs in the home battery, which is what the setting means, and the diversion resumes on
+        its own as soon as the battery climbs back above it.
         """
         if not self.car_charging_solar[car_n]:
             return False, "solar_disabled"
@@ -92,8 +92,7 @@ class Output:
         threshold = self.car_charging_solar_export_threshold[car_n]
         export_rate = self.rate_export.get(self.minutes_now, 0)
         battery_percent = calc_percent_limit(self.soc_kw, self.soc_max)
-        has_fallback = self.car_charging_planned[car_n] or self.car_charging_now[car_n]
-        battery_low = (self.soc_max > 0) and (battery_percent < self.car_charging_solar_min_soc) and has_fallback
+        battery_low = (self.soc_max > 0) and (battery_percent < self.car_charging_solar_min_soc)
         allowed = self.car_charging_plugged[car_n] and (export_rate <= threshold) and not battery_low
 
         # Why it is off matters to the caller: "export_better" and "home_battery_low" are decisions to stop
@@ -133,10 +132,11 @@ class Output:
         maps it onto evcc's own modes, and a Home Assistant automation can read it directly. It is one
         sensor rather than two so the three states cannot be combined into something Predbat never meant.
 
-        Solar is the resting state rather than off: off means "do not charge from the sun", which for a
-        charger that has its own departure plan (evcc) takes that plan down with it. Off is therefore
-        reserved for the cases where it is a decision - the surplus is worth more exported, the home
-        battery is below the priority the forecast assumes, or this car does not do solar charging at all.
+        Solar is the resting state rather than off, so a charger left alone keeps following the sun and
+        still charges if Predbat stops publishing. Off is reserved for the cases where it is a decision -
+        the surplus is worth more exported, the home battery is below the priority the forecast assumes,
+        or this car does not do solar charging at all. A charger holding its own departure plan keeps it
+        either way: off stops it acting on the plan, it does not delete it.
         """
         if slot:
             mode, reason = CAR_MODE_NOW, "grid_slot"

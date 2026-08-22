@@ -165,9 +165,9 @@ def run_car_charging_mode_tests(my_predbat):
     """
     Test the charging decision Predbat publishes for an external charger, with or without evcc
 
-    Solar is the resting state so a sun-following charger keeps following the sun (and keeps its own
-    departure plan alive); off is only published when it is a decision - the surplus is worth more
-    exported, or this car does no solar charging at all.
+    Solar is the resting state so a sun-following charger keeps charging even if Predbat stops
+    publishing; off is only published when it is a decision - the surplus is worth more exported, the
+    home battery is below its priority level, or this car does no solar charging at all.
     """
     failed = False
     print("**** Running Car charging mode tests ****")
@@ -215,8 +215,8 @@ def run_car_charging_mode_tests(my_predbat):
         (50.0, True, "solar", "solar"),
         # Below the priority with a plan behind it - stop diverting, the plan still charges the car
         (5.0, True, "off", "home_battery_low"),
-        # Below the priority with nothing planned - refusing the surplus would just lose it
-        (5.0, False, "solar", "solar"),
+        # Below the priority the surplus belongs in the home battery whether or not anything is planned
+        (5.0, False, "off", "home_battery_low"),
     ]
     for soc_kw, planned, expect_mode, expect_reason in battery_cases:
         my_predbat.soc_kw = soc_kw

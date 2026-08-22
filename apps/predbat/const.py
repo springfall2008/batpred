@@ -77,8 +77,8 @@ CAR_PLUGGED_RESPONSE = ["on", "true", "yes", "1", "connected", "charging"]
 CAR_UNPLUGGED_RESPONSE = ["off", "false", "no", "0", "disconnected", "unavailable", "unknown", "none", ""]
 
 # The charging decision Predbat publishes per car as sensor.<prefix>_car_charging_mode. Solar is the
-# resting state, so a charger that follows the sun keeps doing so - and keeps its own departure plan
-# alive - while off is reserved for a deliberate "do not charge from the surplus"
+# resting state, so a charger left alone keeps following the sun and still charges if Predbat stops
+# publishing, while off is reserved for a deliberate "do not charge from the surplus"
 CAR_MODE_NOW = "now"
 CAR_MODE_SOLAR = "solar"
 CAR_MODE_OFF = "off"
