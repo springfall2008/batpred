@@ -270,6 +270,40 @@ Just keep the single-sensor config (or provide a one-entry list) and car 1 will 
 
 *Note:* The `octopus_slot_max` limit applies per-car, so with two cars on IOG each car is subject to its own slot-count cap.
 
+#### How Predbat picks which car goes in which slot (octopus_automatic)
+
+With **octopus_automatic** set to True, Predbat wires the car slots itself from the devices your Octopus account
+reports as live. Devices that Octopus reports as suspended are skipped, and the remaining devices are assigned to
+car slots in a fixed order, so the same set of cars always produces the same car indexes.
+
+Slots are re-packed when a car goes away, so removing or suspending a car can move the cars after it up an index -
+for example if car 0 is removed, the car that was car 1 becomes car 0. `num_cars` is never reduced automatically, so
+the now-unused slot at the end simply falls back to Predbat-led charging. If you set per-car options in `apps.yaml`
+(**car_charging_battery_size**, **car_charging_limit**, **car_charging_exclusive**) or use manual SoC entry, check
+they still line up after adding or removing a car.
+
+Predbat re-checks this on every device poll (roughly every 2 minutes) and re-wires the slots if the set of live,
+non-suspended devices changes - for example when you enrol a second EV, remove one, or suspend one car in favour of
+another. You do not need to restart Predbat for a change made in the Octopus app to be picked up. Each re-wire is
+logged as:
+
+```text
+OctopusAPI: Live intelligent devices changed from [...] to [...], reconfiguring car slots
+OctopusAPI: Car slots wired to intelligent devices [...]
+```
+
+To confirm which car slot is actually following IOG, look for the per-car lines from the plan cycle:
+
+```text
+Car 0 using Octopus Intelligent, charging planned - charging limit ..., ready time ...
+Car 0 using Octopus Intelligent, no charging is planned
+```
+
+The earlier `Cars {n} charging from battery ... smart ... max_price ...` line is **not** the IOG state. It is printed
+during configuration read, before any Octopus dispatch data is merged, and reports the Predbat-led car charging
+settings (`car_charging_plan_smart`, `car_charging_plan_max_price`). It will show `smart: False` and `max_price: 0.0p`
+even when IOG is working correctly, so do not use it to diagnose IOG linkage.
+
 An excellent [worked example of setting up multiple car charging with Predbat](https://github.com/springfall2008/batpred/discussions/3001) is in the 'Show and tell' part of Predbat's GitHub.
 
 ## Ohme car charger direct integration

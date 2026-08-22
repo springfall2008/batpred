@@ -2230,7 +2230,7 @@ class Fetch:
         if self.num_cars > 0:
             car_charging_limit_percent = [dp1(limit / size * 100) if size else 0 for limit, size in zip(self.car_charging_limit, self.car_charging_battery_size)]
             self.log(
-                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}% ({}kWh), rate {}kW, exclusive {}".format(
+                "Cars {} charging from battery {} planned {}, charging_now {} smart {}, max_price {}{}, plan_time {}, battery size {}kWh, limit {}% ({}kWh), rate {}kW, exclusive {} (Predbat-led car settings, not Octopus Intelligent state)".format(
                     self.num_cars,
                     self.car_charging_from_battery,
                     self.car_charging_planned,
