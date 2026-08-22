@@ -1243,6 +1243,24 @@ class SolisAPI(ComponentBase, OAuthMixin):
 
     # ==================== Configuration and Polling ====================
 
+    @staticmethod
+    def _reports_no_battery(detail):
+        """True only when Solis Cloud explicitly declares this inverter has no battery attached.
+
+        Deliberately narrow: absence of these fields (older firmware, other models) means "unknown",
+        which leaves the inverter enrolled exactly as before. Never infer from batteryHealthSoh - a
+        real pack reporting SoH 0 is a documented, valid response and still says batteryType
+        'PYLON_LV'. Never infer from the lifetime counters either: batteryTotalChargeEnergy and
+        friends survive the pack being physically removed, so an inverter that once cycled MWh can
+        still legitimately report no battery today.
+        """
+        if str(detail.get("batteryType", "")).strip().lower() == "no battery":
+            return True
+        for entry in detail.get("batteryList") or []:
+            if isinstance(entry, dict) and entry.get("noBattery") is True:
+                return True
+        return False
+
     async def automatic_config(self):
         """Automatically configure Predbat base args based on discovered inverters"""
         if not self.inverter_sn:
@@ -1253,6 +1271,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         batteries = []
         for inverter_sn in self.inverter_sn:
             detail = self.inverter_details.get(inverter_sn, {})
+            if self._reports_no_battery(detail):
+                self.log("Solis API: Skipping inverter {} - Solis Cloud reports no battery attached (batteryType {!r}), so it will not be managed as a battery inverter".format(inverter_sn, detail.get("batteryType")))
+                continue
             battery_soh = detail.get("batteryHealthSoh")
             try:
                 battery_soh = float(battery_soh) / 100.0

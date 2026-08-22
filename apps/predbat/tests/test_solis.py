@@ -1028,6 +1028,110 @@ async def test_with_retry_aborts_on_oauth_failed():
     return failed
 
 
+# Battery blocks as SolisCloud inverterDetail actually returns them. Trimmed to the fields the
+# enrolment gate looks at; captured from a live two-inverter account where the battery had been
+# moved off the older inverter onto a newer one.
+_DETAIL_WITH_BATTERY = {
+    "batteryHealthSoh": 100.0,
+    "batteryType": "PYLON_LV",
+    "batteryTypeCode": "0001",
+    "batteryVoltage": 51.28,
+    "batteryCDEnableSet": 1,
+    "batteryJump": {"canJump": True, "batteryCount": 1, "batterySn": "1031260253072197BAT01"},
+    "batteryList": [{"batteryTypeName": "PYLON_LV", "battSn": "PYLON", "batteryVoltage": 51.28}],
+}
+
+_DETAIL_NO_BATTERY = {
+    "batteryHealthSoh": 0.0,
+    "batteryType": "No Battery",
+    "batteryTypeCode": "0000",
+    "batteryVoltage": 0.0,
+    "batteryCDEnableSet": 0,
+    "batteryJump": {"canJump": False, "batteryCount": 0},
+    "batteryList": [{"batteryTypeName": "No Battery", "battSn": "", "noBattery": True, "batteryVoltage": 0.0}],
+    # Lifetime counters survive the battery being removed - this inverter really did cycle
+    # 7.3 MWh before the pack was taken off it, so they must NOT be read as "has a battery".
+    "batteryTotalChargeEnergy": 7.332,
+    "batteryTotalDischargeEnergy": 6.619,
+    "batteryYearChargeEnergy": 1.159,
+    "batteryMonthChargeEnergy": 0.0,
+}
+
+# A real pack that happens to report SoH 0 - a documented, valid SolisCloud response. It must stay
+# enrolled; SoH alone can never be the reason to drop an inverter.
+_DETAIL_REAL_BATTERY_ZERO_SOH = {
+    "batteryHealthSoh": 0.0,
+    "batteryType": "PYLON_LV",
+    "batteryTypeCode": "0001",
+    "batteryVoltage": 50.9,
+    "batteryCDEnableSet": 1,
+    "batteryJump": {"canJump": True, "batteryCount": 1},
+    "batteryList": [{"batteryTypeName": "PYLON_LV", "battSn": "PYLON", "batteryVoltage": 50.9}],
+}
+
+
+async def _run_automatic_config(details):
+    """Run automatic_config() over `details` ({sn: detail}) and return the recorded set_arg_auto args."""
+    api = MockSolisAPI()
+    api.inverter_sn = list(details.keys())
+    api.inverter_details = dict(details)
+    recorded = {}
+    api.set_arg_auto = lambda key, value: recorded.__setitem__(key, value)
+    await api.automatic_config()
+    return recorded, api
+
+
+async def test_automatic_config_skips_no_battery_inverter():
+    """An inverter SolisCloud reports as having no battery must not be enrolled as a battery inverter.
+
+    Enrolling it makes num_inverters too high; every per-inverter arg is then short by one entry, so
+    inverter N reads out of range, and inverter.py invents an 8 kWh battery for hardware that has none.
+    """
+    failed = False
+    print("**** Testing automatic_config skips a No Battery inverter ****")
+
+    with_batt = "1031260253072197"
+    no_batt = "6031042245160206"
+    recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, no_batt: _DETAIL_NO_BATTERY})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: expected num_inverters 1 (only the inverter with a battery), got {}".format(recorded.get("num_inverters")))
+        failed = True
+
+    soc_entities = recorded.get("soc_percent") or []
+    if len(soc_entities) != 1 or no_batt.lower() in " ".join(soc_entities):
+        print("ERROR: expected only the battery inverter to be wired up, got soc_percent={}".format(soc_entities))
+        failed = True
+    if soc_entities and with_batt.lower() not in " ".join(soc_entities):
+        print("ERROR: the inverter that does have a battery was dropped, got soc_percent={}".format(soc_entities))
+        failed = True
+
+    if not any("no battery" in m.lower() for m in api.log_messages):
+        print("ERROR: expected a log line explaining the inverter was skipped for having no battery")
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config skips a No Battery inverter")
+    return failed
+
+
+async def test_automatic_config_keeps_real_battery_reporting_zero_soh():
+    """SoH 0 on a real pack is a valid SolisCloud response - such an inverter must stay enrolled."""
+    failed = False
+    print("**** Testing automatic_config keeps a real battery reporting SoH 0 ****")
+
+    sn = "1031260253072197"
+    recorded, _ = await _run_automatic_config({sn: _DETAIL_REAL_BATTERY_ZERO_SOH})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: a real battery reporting SoH 0 must stay enrolled, got num_inverters={}".format(recorded.get("num_inverters")))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config keeps a real battery reporting SoH 0")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -1046,6 +1150,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
+        failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
+        failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())
