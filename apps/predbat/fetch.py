@@ -2645,6 +2645,8 @@ class Fetch:
         self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
+        self.inverter_freeze_export_discharge_rate = max(self.get_arg("inverter_freeze_export_discharge_rate", 0.0), 0.0) / MINUTE_WATT
+        self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0
 
         # Charge curve

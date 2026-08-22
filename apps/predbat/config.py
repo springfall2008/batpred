@@ -2443,6 +2443,7 @@ APPS_SCHEMA = {
     "pause_end_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "inverter_limit": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_can_charge_during_export": {"type": "boolean"},
+    "inverter_freeze_export_discharge_rate": {"type": "float", "zero": True},
     "pv_ac_limit": {"type": "float", "zero": True},
     "inverter_limit_charge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_charge_dc": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},

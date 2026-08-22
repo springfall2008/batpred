@@ -391,6 +391,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
+        self.inverter_freeze_export_discharge_rate = 0.0
         self.inverter_hybrid = True
         self.pv_ac_limit = 0
         self.inverter_soc_reset = False

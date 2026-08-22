@@ -1196,6 +1196,20 @@ If this setting is `false` then the inverter will not charge the battery and the
 
 For Freeze Export specifically, this means the battery still holds its SoC flat while the export limit alone can absorb all the surplus solar - it only starts charging once solar genuinely exceeds what load and the export limit together can use, matching how many hybrid inverters actually behave (e.g. FoxESS's "Feed-in First" mode prioritises house load, then export, then the battery).
 
+### **inverter_freeze_export_discharge_rate**
+
+Global setting, defaults to `0` (disabled).
+
+Controls the way Predbat models your inverter, this does not change the way it is controlled.
+
+Some inverters (observed on AlphaESS) continue a small residual battery discharge during Freeze Export instead of holding the battery perfectly flat. If your inverter behaves this way, set this to the observed battery-side discharge rate in Watts so Predbat's prediction model matches reality.
+
+```yaml
+  inverter_freeze_export_discharge_rate: 269
+```
+
+When set, Predbat feeds this rate into the normal AC balance during a Freeze Export period: house load consumes it first, and any surplus may reach the grid, subject to the battery reserve and the physical export limit. Leave this at `0` (the default) if your inverter holds the battery flat during Freeze Export.
+
 ## Controlling the Inverter
 
 There are a few different ways to control your inverter:
