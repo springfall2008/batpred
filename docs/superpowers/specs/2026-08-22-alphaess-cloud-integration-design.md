@@ -551,33 +551,56 @@ having to maintain a table. A serial the user has explicitly named in
 to it — but the log says so explicitly rather than silently returning an empty device
 list, since a filter matching nothing otherwise looks identical to an empty account.
 
-### `Storion-S5` cannot serve `getLastPowerData`
+### Live telemetry falls back to history
 
-One genuine model capability gap remains, held in `ALPHAESS_NO_LAST_POWER_MODELS` in
-`alphaess_const.py`, seeded from the Home Assistant integration's
-`LOWER_INVERTER_API_CALL_LIST` (homeassistant-alphaESS `coordinator.py:2528`, which skips
-the call entirely for these models).
+Not every system serves `getLastPowerData`. `Storion-S5` is the known example — the Home
+Assistant integration skips the call outright for it (`LOWER_INVERTER_API_CALL_LIST`,
+homeassistant-alphaESS `coordinator.py:2528`) — but the component does **not** keep a
+model list for this. It decides on behaviour instead: if live data is not present, use the
+history.
 
-This one has teeth, because `getLastPowerData` is the whole 60-second power tier — live
-`soc`, `pbat`, `pgrid`, `ppv` and `pload` — and Predbat cannot plan without a live SOC.
-The fallback is `getOneDayPowerBySn`, whose samples carry `cbat` (SOC %), `ppv`, `load`,
-`feedIn` and `gridCharge`; the most recent sample supplies current state at roughly
-five-minute resolution.
+That matters because `getLastPowerData` is the whole 60-second power tier — live `soc`,
+`pbat`, `pgrid`, `ppv` and `pload` — and Predbat cannot plan without a live SOC. A model
+list would only cover the models someone had already written down, while the behavioural
+rule covers `Storion-S5`, any unlisted model with the same gap, and a system that simply
+stops answering.
 
-That call returns ~288 records for a full day, so it is not something to poll every
-minute. For an affected serial the power tier drops to 5 minutes and requests only the
-current day, accepting the payload cost because the alternative is a component that cannot
-drive that inverter at all. `feedIn` and `gridCharge` are separate positive-only fields
-rather than a signed `pgrid`, so grid power is reconstructed as `gridCharge - feedIn`
-before Predbat's negate-on-import convention is applied.
+**The rule.** On the power tier, call `getLastPowerData`. If it fails, or comes back
+without a usable `soc`, fall back to `getOneDayPowerBySn` for today and take the most
+recent sample. Those samples carry everything needed:
+
+| History field | Supplies |
+|:--|:--|
+| `cbat` | Battery SOC % |
+| `ppv` | PV power W |
+| `load` | Load power W |
+| `feedIn`, `gridCharge` | Grid power, reconstructed as `gridCharge - feedIn` |
+
+Two details make the fallback usable rather than merely available:
+
+- **`cbat`, not `cobat`.** The portal documents this field as `cobat`, the live API returns
+  `cbat`, and reading the portal name silently yields `None` — which would look exactly
+  like "this system has no SOC either". Both spellings are read, `cbat` first.
+- **Grid sign.** `feedIn` and `gridCharge` are separate positive-only fields rather than a
+  signed `pgrid`, so grid power is reconstructed as `gridCharge - feedIn` before Predbat's
+  negate-on-import convention is applied.
+
+**Demotion is latched, and reversible.** `getOneDayPowerBySn` returns ~288 records for a
+full day, so it is not something to poll every minute. After a small number of consecutive
+`getLastPowerData` failures a serial is demoted to the history path and its power tier
+drops to 5 minutes, which is the resolution the history has anyway. The demotion is
+re-probed on the config tier (every 30 minutes) with a single `getLastPowerData` call, so
+a system that was merely offline or briefly failing returns to 60-second live data by
+itself and a genuinely incapable one costs two extra calls an hour. The verdict is cached
+so a restart does not re-learn it from scratch.
+
+If neither path yields a SOC — no `getLastPowerData` and no `cbat` in the history — that
+serial cannot be driven. It is logged plainly, saying which of the two calls failed and
+how, and skipped rather than registered with a fabricated SOC.
 
 `Storion-S5` also appears in the HA integration's `LIMITED_INVERTER_SENSOR_LIST`, which
-needs no special handling here: the standing rule that an arg is mapped only when every
-inverter actually reports the underlying value already covers it.
-
-A serial whose model is unknown is treated as fully capable. The list is an
-allowlist-of-exceptions, not a gate on recognised hardware — a new AlphaESS model must not
-be locked out because nobody has added it yet.
+needs no special handling here either: the standing rule that an arg is mapped only when
+every inverter actually reports the underlying value already covers it.
 
 ## Control entities
 
@@ -677,7 +700,7 @@ guards writes to the inverter, and unbinding is account management, not an inver
 |:--|:--|:--|:--|
 | `static` | 8 h | `getEssList` (account-wide, once) | Discovery, capacity, ratings, models |
 | `config` | 30 min | `getChargeConfigInfo`, `getDisChargeConfigInfo` (+ periodic probe once) | The read-modify-write baseline |
-| `power` | 60 s | `getLastPowerData` | Live telemetry |
+| `power` | 60 s, or 5 min when demoted | `getLastPowerData`, or `getOneDayPowerBySn` when demoted | Live telemetry — see "Live telemetry falls back to history" |
 | `energy` | 5 min | `getOneDateEnergyBySn`, `getSumDataForCustomer` | Daily counters for load/import/export/PV learning |
 
 Steady state is roughly 88 calls per hour per serial, plus one account-wide `getEssList`
@@ -758,7 +781,7 @@ Six modules, registered in `TEST_REGISTRY` in `unit_test.py`:
 | `test_alphaess_api.py` | Signature construction, header set, envelope parsing, `msg`/`info` success forms, every return code in the table, bind/unbind code mapping including `6003`/`6005` as success, clock-skew detection |
 | `test_alphaess_control.py` | The full control mapping table, `batUseCap` dual role, rate-zero-is-freeze, midnight split into period 2, snapping edge cases (collapse to zero, `24:00` → `23:45`), write minimisation (change detection, independent charge/discharge gating, minimum interval), periodic probe and `6017` caching, read-only and `control_enable` gating, unbind switch latch idempotency and latch survival across restart, `device_list` removal after unbind |
 | `test_alphaess_publish.py` | Every sensor in the monitoring tables, `pgrid` negation, the three `*_invert` flags forced to `False`, `eload` null fallback to the energy balance, `battery_rate_max` derived from `poinv` and overridden by `alphaess_battery_rate_max`, `export_limit` left unmapped with a warning, "only map when every inverter reports it" |
-| `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping, hybrid inference (all-null `ppvDetail` plus `popv`/`epv` disagreement leaves the switch alone; both agreeing flips it via `set_state_external`; a hybrid at night with zero-valued `ppvDetail` is never misread), `Storion-S5` falling back to `getOneDayPowerBySn` with grid reconstructed as `gridCharge - feedIn`, systems with zero/null/missing `cobat` skipped at discovery (including when named in `alphaess_inverter_sn`), and that an unknown model is treated as fully capable |
+| `test_alphaess_config.py` | `INVERTER_DEF["AlphaESSCloud"]` completeness against the other cloud types, `APPS_SCHEMA` keys, `automatic_config` arg mapping, hybrid inference (all-null `ppvDetail` plus `popv`/`epv` disagreement leaves the switch alone; both agreeing flips it via `set_state_external`; a hybrid at night with zero-valued `ppvDetail` is never misread), history fallback when `getLastPowerData` fails or returns no `soc` (grid reconstructed as `gridCharge - feedIn`, `cbat` preferred over `cobat`, demotion latched after N failures, re-probe restoring 60 s live data, serial skipped when neither path yields a SOC), systems with zero/null/missing `cobat` skipped at discovery (including when named in `alphaess_inverter_sn`) |
 | `test_alphaess_storage.py` | Cache round-trip for all four files, `storage is None` path, empty-discovery refusal, tier freshness only on success |
 
 Tests use `TestHAInterface` from `tests/test_infra.py` with a stubbed HTTP layer — no
@@ -799,9 +822,11 @@ Each is marked `VERIFY@FIELD` in `alphaess_const.py`:
    testers report them.
    Separately, whether any battery-bearing system reports a zero `cobat` — if one does,
    the no-battery discovery filter would wrongly skip it and would need a second signal.
-9. **Whether `Storion-S5` really cannot serve `getLastPowerData`.** Taken from the HA
-   integration's model list rather than measured. If it works, the fallback path is dead
-   code and the model comes off the list.
+9. **Whether a `Storion-S5` really cannot serve `getLastPowerData`, and whether its
+   history carries `cbat`.** The first is taken from the HA integration rather than
+   measured; the behavioural fallback makes it moot either way, but the second is not —
+   if the history has no SOC for such a system, it cannot be driven at all and that needs
+   to be known before a user is told the model is supported.
 10. **Periodic entitlement in the wild.** How many real systems answer `200` rather than
    `6017` for `getTimeChargeBySn` determines whether the periodic path is the common case
    or a rarity.
