@@ -12,10 +12,10 @@ from const import MINUTE_WATT
 from tests.test_infra import reset_inverter, TestInverter
 
 
-def make_stub_inverter(id, inverter_limit_watts):
+def make_stub_inverter(inverter_id, inverter_limit_watts):
     """Build an inverter stub carrying just the values fetch_inverter_data() aggregates"""
     inverter = TestInverter()
-    inverter.id = id
+    inverter.id = inverter_id
     inverter.update_status = lambda minutes_now, quiet=False: None
     inverter.charge_window = []
     inverter.export_window = []
