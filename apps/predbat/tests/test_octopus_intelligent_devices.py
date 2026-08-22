@@ -31,6 +31,8 @@ async def test_octopus_intelligent_devices(my_predbat):
     - Test 9: Future flex dispatch is left untrimmed in planned
     - Test 10: async_update_intelligent_devices prunes a device no longer returned as LIVE
     - Test 11: A transient settings-query failure does not evict a known device
+    - Test 12: A successful poll finding no live EVs is distinguishable from a failed poll
+    - Test 13: The cache empties when the last EV is deregistered, but survives a failed poll
     """
     print("**** Running Octopus intelligent devices tests ****")
     failed = 0
@@ -591,6 +593,88 @@ async def test_octopus_intelligent_devices(my_predbat):
         failed += 1
     else:
         print("PASS: Never-seen device is skipped when its settings query fails")
+
+    # ------------------------------------------------------------------
+    # Test 12: "the devices query failed" and "the account has no EVs on it any more" must not
+    # look the same to the caller. Both used to return {}, so async_update_intelligent_devices
+    # could not tell them apart and skipped pruning for both - which meant deregistering your last
+    # EV left it cached and wired to a car slot forever. A failed query returns None; a successful
+    # query that simply contains no live EV devices returns {}.
+    # ------------------------------------------------------------------
+    print("\n*** Test 12: Failed poll and genuinely empty account are distinguishable ***")
+    api = make_api()
+
+    async def mock_query_devices_fail(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return None
+        return None
+
+    api.async_graphql_query = AsyncMock(side_effect=mock_query_devices_fail)
+    failed_result = await api.async_get_intelligent_devices("test-account", "device-abc")
+
+    if failed_result is not None:
+        print(f"ERROR: Expected None when the devices query fails, got {failed_result!r}")
+        failed += 1
+    else:
+        print("PASS: Failed devices query reports None")
+
+    # The electricity meter stays in the devices list after the EV is removed, so a genuinely
+    # EV-free account still returns a non-empty devices list - just none of type ELECTRIC_VEHICLES.
+    meter_only_data = {
+        "devices": [
+            {
+                "deviceType": "ELECTRICITY_METERS",
+                "status": {"current": "LIVE"},
+                "__typename": "SmartFlexDevice",
+                "id": "meter-1",
+            }
+        ]
+    }
+
+    async def mock_query_meter_only(query, context, ignore_errors=False, returns_data=True):
+        if "get-intelligent-devices" in context:
+            return meter_only_data
+        return None
+
+    api2 = make_api()
+    api2.async_graphql_query = AsyncMock(side_effect=mock_query_meter_only)
+    empty_result = await api2.async_get_intelligent_devices("test-account", "device-abc")
+
+    if empty_result is None:
+        print("ERROR: Expected {} for an account with no live EVs, got None")
+        failed += 1
+    elif empty_result != {}:
+        print(f"ERROR: Expected no devices for a meter-only account, got {list(empty_result.keys())}")
+        failed += 1
+    else:
+        print("PASS: Account with no live EVs reports an empty result, not a failure")
+
+    # ------------------------------------------------------------------
+    # Test 13: the cache follows that distinction - it empties when the last EV really is gone, and
+    # is left alone when the poll simply failed.
+    # ------------------------------------------------------------------
+    print("\n*** Test 13: Cache empties on a real removal but survives a failed poll ***")
+    api = make_api()
+    api.tariffs = {"import": {"tariffCode": "E-1R-INTELLI-VAR-24-10-29-A", "deviceID": "meter-1"}}
+    api.intelligent_devices = {"device-real": {"device_id": "device-real", "suspended": False, "completed_dispatches": [], "planned_dispatches": []}}
+
+    api.async_get_intelligent_devices = AsyncMock(return_value=None)
+    await api.async_update_intelligent_devices("test-account")
+
+    if "device-real" not in api.intelligent_devices:
+        print("ERROR: A failed poll wiped the intelligent device cache")
+        failed += 1
+    else:
+        print("PASS: Cache retained when the poll fails")
+
+        api.async_get_intelligent_devices = AsyncMock(return_value={})
+        await api.async_update_intelligent_devices("test-account")
+
+        if api.intelligent_devices != {}:
+            print(f"ERROR: Expected the cache to empty once the last EV is deregistered, got {list(api.intelligent_devices.keys())}")
+            failed += 1
+        else:
+            print("PASS: Cache empties once the last EV is deregistered")
 
     if failed == 0:
         print("\n**** All Octopus intelligent devices tests PASSED ****")

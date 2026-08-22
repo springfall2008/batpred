@@ -776,7 +776,11 @@ class OctopusAPI(ComponentBase):
         deviceID = import_tariff.get("deviceID", None)
         if deviceID:
             intelligent_devices = await self.async_get_intelligent_devices(account_id, deviceID)
-            if intelligent_devices:
+            # None means the poll failed, so keep what we have. {} means the poll succeeded and the
+            # account has no live EV devices left - the electricity meter stays in the devices list
+            # after the last EV is deregistered, so that is a real removal and must be pruned or the
+            # dead device stays wired to a car slot forever.
+            if intelligent_devices is not None:
                 # Update existing intelligent devices with new dispatch data.
                 # Always call fetch_previous_dispatch when completed dispatches are available to merge historical data.
                 for device_id in intelligent_devices:
@@ -1170,7 +1174,11 @@ class OctopusAPI(ComponentBase):
             if tariff == "import":
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
         devices = self.get_intelligent_devices()
-        if devices:
+        # Also enter this block when the device set has emptied, so the slot args are cleared rather
+        # than left pointing at a device that no longer exists. Only once something has been wired
+        # though (intelligent_config_devices is not None): before the first discovery a user's own
+        # apps.yaml entries are the only wiring there is, and blanking them would break a manual setup.
+        if devices or self.intelligent_config_devices:
             # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
             # account) aren't actively charging, so exclude them from the entity lists and from
             # the num_cars count below - otherwise a stale suspended device can silently push
@@ -1196,7 +1204,10 @@ class OctopusAPI(ComponentBase):
             num_cars = self.get_arg("num_cars", 0)
             if num_cars < len(active_devices):
                 self.set_arg("num_cars", len(active_devices))
-            self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
+            if active_devices:
+                self.log("OctopusAPI: Car slots wired to intelligent devices {}".format(sorted(active_devices)))
+            else:
+                self.log("OctopusAPI: No active intelligent devices remain, cleared the car slot wiring")
 
         # Record the device set this wiring was built for so run() can spot it changing later
         self.intelligent_config_devices = self.get_active_intelligent_device_ids()
@@ -2027,6 +2038,11 @@ class OctopusAPI(ComponentBase):
                         # Store results
                         result = {**intelligent_device, **device_setting_result, "planned_dispatches": planned, "completed_dispatches": completed}
                         results[IntelligentdeviceID] = result
+            else:
+                # The devices query failed. Returning {} here would be indistinguishable from an
+                # account that genuinely has no EVs left on it, and the caller would prune the
+                # cache on every blip - report the failure so it can leave the cache alone.
+                return None
         return results
 
     async def async_intelligent_update_sensor(self, account_id):

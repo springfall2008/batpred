@@ -28,6 +28,7 @@ async def test_octopus_misc(my_predbat):
     failed += test_octopus_get_intelligent_vehicle(my_predbat)
     failed += test_octopus_automatic_config_num_cars(my_predbat)
     failed += test_octopus_automatic_config_slot_order(my_predbat)
+    failed += test_octopus_automatic_config_clears_removed_devices(my_predbat)
     failed += await test_octopus_automatic_config_rewire(my_predbat)
     failed += await test_octopus_run(my_predbat)
 
@@ -2037,6 +2038,69 @@ def test_octopus_automatic_config_slot_order(my_predbat):
         return 1
     else:
         print("\n**** ✅ Octopus automatic_config slot order tests PASSED ****")
+        return 0
+
+
+def test_octopus_automatic_config_clears_removed_devices(my_predbat):
+    """
+    Test that automatic_config clears the car slot args once the last intelligent device is gone.
+
+    The wiring block only ran when the device cache was non-empty, so deregistering the last EV
+    would leave octopus_intelligent_slot / octopus_ready_time / octopus_charge_limit pointed at a
+    device that no longer exists. It must not clear them before any device has ever been
+    discovered though, or it would wipe a hand-written apps.yaml config at startup.
+
+    Tests:
+    - Test 1: Slot args are cleared when the last discovered device disappears
+    - Test 2: Manually configured slot args are untouched when no device was ever discovered
+    """
+    print("\n**** Running Octopus automatic_config device removal tests ****")
+    failed = False
+
+    original_args = dict(my_predbat.args)
+
+    print("\n*** Test 1: Slot args cleared when the last discovered device disappears ***")
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api.automatic_config(["import"])
+
+    if not my_predbat.args.get("octopus_intelligent_slot"):
+        print("ERROR: Expected the device to be wired into a slot before it is removed")
+        failed = True
+
+    api.intelligent_devices = {}
+    api.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot"):
+        print(f"ERROR: Expected slot args to be cleared, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+    elif my_predbat.args.get("octopus_ready_time") or my_predbat.args.get("octopus_charge_limit"):
+        print(f"ERROR: Expected ready time and charge limit to be cleared, got {my_predbat.args.get('octopus_ready_time')} / {my_predbat.args.get('octopus_charge_limit')}")
+        failed = True
+    else:
+        print("PASS: Slot args cleared once the last discovered device disappears")
+
+    print("\n*** Test 2: Manual slot config untouched when no device was ever discovered ***")
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.manually_configured_dispatching"
+    api2 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api2.intelligent_devices = {}
+
+    api2.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.manually_configured_dispatching":
+        print(f"ERROR: Expected the manual slot config to be left alone, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+    else:
+        print("PASS: Manual slot config untouched when no device was ever discovered")
+
+    my_predbat.args.clear()
+    my_predbat.args.update(original_args)
+
+    if failed:
+        print("\n**** ❌ Octopus automatic_config device removal tests FAILED ****")
+        return 1
+    else:
+        print("\n**** ✅ Octopus automatic_config device removal tests PASSED ****")
         return 0
 
 
