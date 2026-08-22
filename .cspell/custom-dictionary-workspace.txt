@@ -12,8 +12,8 @@ aiomqtt
 aios
 Alertfeed
 allclose
-alphaess
 ALPHAESS
+alphaess
 annualform
 Anson
 apexcharts
@@ -61,6 +61,7 @@ cdn
 Cerbo
 cexxxx
 ceyyyy
+Chae
 Chaf
 chargedischarge
 chargeenergytotal
@@ -393,6 +394,7 @@ pitem
 pkwh
 plenticore
 pload
+poinv
 postdata
 powercontrolmode
 powerline
