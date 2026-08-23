@@ -842,7 +842,7 @@ class AlphaESSAPI(ComponentBase):
         self.local_schedule[sn] = schedule
         return schedule
 
-    def _sn_from_entity(self, entity_id):
+    def _sn_from_entity(self, entity_id, include_unbound=False):
         """Extract the serial from an AlphaESS entity id, or None if unresolvable.
 
         Entity ids are always {domain}.{prefix}_alphaess_{sn}_{leaf}, so the serial is
@@ -850,21 +850,24 @@ class AlphaESSAPI(ComponentBase):
         prefix-colliding serials apart - an entity for AL701 must never route to AL70,
         which would send a control write to the wrong inverter.
 
-        Also checks self._unbind_done as a fallback. A successful unbind removes the
-        serial from device_list (the API refuses every call for it now), but the unbind
-        switch's own entity must still resolve afterwards - otherwise a genuine Home
-        Assistant turn_off on that switch can never reach _handle_unbind_event, and the
-        documented "turning it back off clears the latch" behaviour becomes unreachable.
-        The same trailing-underscore anchor is reused here so the AL701/AL70 collision
-        guard still applies to unbound serials too.
+        include_unbound also checks self._unbind_done as a fallback, reusing the same
+        anchored match, so an already-unbound serial's OWN unbind switch keeps resolving
+        after the serial leaves device_list - otherwise a genuine Home Assistant turn_off
+        on that switch could never reach _handle_unbind_event, and the documented
+        "turning it back off clears the latch" behaviour would be unreachable. Every
+        other caller MUST leave this False: an unbound serial's API calls are refused, so
+        resolving it for any entity other than its own unbind switch would let Predbat
+        send a live control write (and _reconcile_control would then keep repeating it
+        every cycle) to a system it has explicitly been told it no longer controls.
         """
         text = str(entity_id).lower()
         for sn in self.device_list:
             if "_alphaess_{}_".format(sn.lower()) in text:
                 return sn
-        for sn in self._unbind_done:
-            if "_alphaess_{}_".format(sn.lower()) in text:
-                return sn
+        if include_unbound:
+            for sn in self._unbind_done:
+                if "_alphaess_{}_".format(sn.lower()) in text:
+                    return sn
         return None
 
     @staticmethod
@@ -1345,12 +1348,20 @@ class AlphaESSAPI(ComponentBase):
             self.log("Warn: AlphaESS schedule apply failed for {}: {}".format(sn, error))
 
     async def _handle_control_event(self, entity_id, value):
-        """Route one control-entity event to the right inverter and apply it."""
-        sn = self._sn_from_entity(entity_id)
+        """Route one control-entity event to the right inverter and apply it.
+
+        The _unbind suffix is checked BEFORE resolving the serial, and only that branch
+        passes include_unbound=True to _sn_from_entity: an unbound serial must resolve
+        for its own unbind switch (so turning it back off can clear the latch) and for
+        nothing else - every other entity type for an unbound serial must stay
+        unresolvable, the same as before it had ever been discovered.
+        """
+        is_unbind = str(entity_id).endswith("_unbind")
+        sn = self._sn_from_entity(entity_id, include_unbound=is_unbind)
         if not sn:
             self.log("Warn: AlphaESS could not resolve an inverter for {}".format(entity_id))
             return
-        if str(entity_id).endswith("_unbind"):
+        if is_unbind:
             await self._handle_unbind_event(sn, value)
             return
         # The write button is NOT forced. Predbat presses this on every cycle as its normal

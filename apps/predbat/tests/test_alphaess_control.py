@@ -134,13 +134,52 @@ def test_alphaess_unbind_fallback_routing_still_respects_prefix_collision():
     client._unbind_done = {"AL70"}
     # AL701 was never unbound - only AL70 was. AL701's own entity must not resolve to AL70
     # just because "AL70" is a string prefix of "AL701".
-    if client._sn_from_entity("switch.predbat_alphaess_al701_unbind") is not None:
+    if client._sn_from_entity("switch.predbat_alphaess_al701_unbind", include_unbound=True) is not None:
         print("ERROR: AL701's entity incorrectly resolved via the AL70 unbind fallback")
         failed = True
-    if client._sn_from_entity("switch.predbat_alphaess_al70_unbind") != "AL70":
+    if client._sn_from_entity("switch.predbat_alphaess_al70_unbind", include_unbound=True) != "AL70":
         print("ERROR: AL70's own unbind entity failed to resolve via the fallback")
         failed = True
     assert not failed, "test_alphaess_unbind_fallback_routing_still_respects_prefix_collision"
+
+
+def test_alphaess_unbound_serial_does_not_resolve_for_non_unbind_entities():
+    """The _unbind_done fallback in _sn_from_entity must be scoped to the unbind switch
+    only.
+
+    _sn_from_entity is consulted BEFORE the _unbind suffix check inside
+    _handle_control_event, so an unscoped fallback would resolve ANY entity type for an
+    already-unbound serial - not just its own unbind switch. Reproduced live by a
+    reviewer: with device_list=[] and _unbind_done={"AL70"}, toggling the write button
+    resolved sn="AL70", added it to control_active, and called apply_schedule("AL70") -
+    a live control write (repeated every cycle by _reconcile_control) to an account the
+    code's own docstring says Predbat "can no longer read or control".
+
+    Drives switch_event, the real routing entry point, for a non-unbind entity while the
+    serial is already unbound and absent from device_list - pinning exactly that
+    scenario - then confirms the unbind switch itself still works for the same serial.
+    """
+    failed = False
+    client = _client()
+    client.device_list = []
+    client._unbind_done = {"AL70"}
+    client.local_schedule["AL70"] = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    with patch("alphaess.aiohttp.ClientSession") as mock_session_cls:
+        run_async_local(client.switch_event("switch.predbat_alphaess_al70_battery_schedule_charge_write", "turn_on"))
+    if mock_session_cls.called:
+        print("ERROR: an unbound serial's write button issued an API call")
+        failed = True
+    if "AL70" in client.control_active:
+        print(f"ERROR: an unbound serial was marked control_active: {client.control_active}")
+        failed = True
+    # The unbind switch itself, for the same serial, must still resolve and still work.
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+        run_async_local(client.switch_event("switch.predbat_alphaess_al70_unbind", "turn_off"))
+    if "AL70" in client._unbind_done:
+        print(f"ERROR: the unbind switch itself failed to resolve/clear the latch: {client._unbind_done}")
+        failed = True
+    assert not failed, "test_alphaess_unbound_serial_does_not_resolve_for_non_unbind_entities"
 
 
 def test_alphaess_update_local_schedule_applies_each_field():
@@ -1270,6 +1309,7 @@ def run_alphaess_control_tests(my_predbat):
         ("reserve_unclamped", test_alphaess_reserve_entity_is_published_unclamped),
         ("entity_routing", test_alphaess_entity_routing_does_not_confuse_prefixed_serials),
         ("unbind_fallback_routing_collision", test_alphaess_unbind_fallback_routing_still_respects_prefix_collision),
+        ("unbound_serial_scoped_to_unbind_only", test_alphaess_unbound_serial_does_not_resolve_for_non_unbind_entities),
         ("update_local_schedule", test_alphaess_update_local_schedule_applies_each_field),
         ("fallback_on_unknown_or_unavailable", test_alphaess_fallback_on_unknown_or_unavailable_values),
         ("controls_pass_through", test_alphaess_controls_pass_straight_through),
