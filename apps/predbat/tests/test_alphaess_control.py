@@ -116,6 +116,33 @@ def test_alphaess_entity_routing_does_not_confuse_prefixed_serials():
     assert not failed, "test_alphaess_entity_routing_does_not_confuse_prefixed_serials"
 
 
+def test_alphaess_unbind_fallback_routing_still_respects_prefix_collision():
+    """_sn_from_entity falls back to _unbind_done once a serial has left device_list, so
+    its own unbind switch keeps resolving after a successful unbind. That fallback must
+    not regress the AL701/AL70 collision guard.
+
+    Deliberately uses a single-element _unbind_done ({"AL70"} only) rather than both
+    serials together: with both present, a missing anchor only misroutes when AL70 happens
+    to be visited before AL701 in set iteration, which is hash-randomised per process and
+    so would make this test pass or fail at random rather than reliably catching the bug.
+    With only AL70 present there is no ordering to depend on - AL701's entity resolving to
+    anything at all can only happen via the (missing) anchor.
+    """
+    failed = False
+    client = _client()
+    client.device_list = []
+    client._unbind_done = {"AL70"}
+    # AL701 was never unbound - only AL70 was. AL701's own entity must not resolve to AL70
+    # just because "AL70" is a string prefix of "AL701".
+    if client._sn_from_entity("switch.predbat_alphaess_al701_unbind") is not None:
+        print("ERROR: AL701's entity incorrectly resolved via the AL70 unbind fallback")
+        failed = True
+    if client._sn_from_entity("switch.predbat_alphaess_al70_unbind") != "AL70":
+        print("ERROR: AL70's own unbind entity failed to resolve via the fallback")
+        failed = True
+    assert not failed, "test_alphaess_unbind_fallback_routing_still_respects_prefix_collision"
+
+
 def test_alphaess_update_local_schedule_applies_each_field():
     """Each control entity change lands on the right field of the held schedule."""
     failed = False
@@ -1172,15 +1199,49 @@ def test_alphaess_failed_unbind_leaves_the_latch_clear_for_retry():
 
 def test_alphaess_unbind_toggle_off_clears_the_latch():
     """Turning it back off lets discovery pick the system up again if it was re-bound via
-    the CLI or the AlphaESS portal. It does NOT re-bind - that needs the emailed code."""
+    the CLI or the AlphaESS portal. It does NOT re-bind - that needs the emailed code.
+
+    Drives the real switch_event -> _handle_control_event -> _sn_from_entity routing path
+    rather than calling _handle_unbind_event directly. That matters here specifically: a
+    successful unbind removes the serial from device_list, and _sn_from_entity used to
+    resolve serials from device_list alone, so a genuine Home Assistant turn_off on this
+    switch could never resolve to a serial once the system was actually unbound - the
+    documented "turning it back off clears the latch" behaviour was unreachable in
+    production even though a test calling the handler directly could not see it.
+    """
     failed = False
     client = _client()
-    client._unbind_done.add("AL70")
-    run_async_local(client._handle_unbind_event("AL70", "turn_off"))
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+        run_async_local(client.switch_event("switch.predbat_alphaess_al70_unbind", "turn_on"))
+    if "AL70" not in client._unbind_done or "AL70" in client.device_list:
+        print(f"ERROR: setup unbind did not complete: unbind_done={client._unbind_done} device_list={client.device_list}")
+        failed = True
+    run_async_local(client.switch_event("switch.predbat_alphaess_al70_unbind", "turn_off"))
     if "AL70" in client._unbind_done:
         print(f"ERROR: latch not cleared: {client._unbind_done}")
         failed = True
     assert not failed, "test_alphaess_unbind_toggle_off_clears_the_latch"
+
+
+def test_alphaess_unbind_toggle_off_skips_save_when_never_latched():
+    """Turning off the switch for a serial that was never unbound is a no-op: discard on
+    an absent member is harmless, but there is nothing changed to persist, so
+    save_control must not be called."""
+    failed = False
+    client = _client()
+    calls = []
+
+    async def fake_save_control():
+        """Record that save_control was invoked."""
+        calls.append(True)
+
+    client.save_control = fake_save_control
+    run_async_local(client.switch_event("switch.predbat_alphaess_al70_unbind", "turn_off"))
+    if calls:
+        print(f"ERROR: save_control called for a no-op toggle-off: {calls}")
+        failed = True
+    assert not failed, "test_alphaess_unbind_toggle_off_skips_save_when_never_latched"
 
 
 def test_alphaess_unbind_is_not_gated_by_read_only():
@@ -1208,6 +1269,7 @@ def run_alphaess_control_tests(my_predbat):
         ("entities_round_trip", test_alphaess_control_entities_round_trip),
         ("reserve_unclamped", test_alphaess_reserve_entity_is_published_unclamped),
         ("entity_routing", test_alphaess_entity_routing_does_not_confuse_prefixed_serials),
+        ("unbind_fallback_routing_collision", test_alphaess_unbind_fallback_routing_still_respects_prefix_collision),
         ("update_local_schedule", test_alphaess_update_local_schedule_applies_each_field),
         ("fallback_on_unknown_or_unavailable", test_alphaess_fallback_on_unknown_or_unavailable_values),
         ("controls_pass_through", test_alphaess_controls_pass_straight_through),
@@ -1252,6 +1314,7 @@ def run_alphaess_control_tests(my_predbat):
         ("unbind_latches", test_alphaess_unbind_latches_and_removes_the_serial),
         ("unbind_failure_retries", test_alphaess_failed_unbind_leaves_the_latch_clear_for_retry),
         ("unbind_toggle_off", test_alphaess_unbind_toggle_off_clears_the_latch),
+        ("unbind_toggle_off_skips_save_when_unlatched", test_alphaess_unbind_toggle_off_skips_save_when_never_latched),
         ("unbind_not_read_only_gated", test_alphaess_unbind_is_not_gated_by_read_only),
     ]:
         try:

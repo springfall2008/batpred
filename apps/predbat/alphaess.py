@@ -849,9 +849,20 @@ class AlphaESSAPI(ComponentBase):
         always followed by "_". Matching sn + "_" rather than a bare prefix keeps
         prefix-colliding serials apart - an entity for AL701 must never route to AL70,
         which would send a control write to the wrong inverter.
+
+        Also checks self._unbind_done as a fallback. A successful unbind removes the
+        serial from device_list (the API refuses every call for it now), but the unbind
+        switch's own entity must still resolve afterwards - otherwise a genuine Home
+        Assistant turn_off on that switch can never reach _handle_unbind_event, and the
+        documented "turning it back off clears the latch" behaviour becomes unreachable.
+        The same trailing-underscore anchor is reused here so the AL701/AL70 collision
+        guard still applies to unbound serials too.
         """
         text = str(entity_id).lower()
         for sn in self.device_list:
+            if "_alphaess_{}_".format(sn.lower()) in text:
+                return sn
+        for sn in self._unbind_done:
             if "_alphaess_{}_".format(sn.lower()) in text:
                 return sn
         return None
@@ -1413,8 +1424,9 @@ class AlphaESSAPI(ComponentBase):
         one-way from Home Assistant.
         """
         if not self._to_bool(value):
-            self._unbind_done.discard(sn)
-            await self.save_control()
+            if sn in self._unbind_done:
+                self._unbind_done.discard(sn)
+                await self.save_control()
             return
         if sn in self._unbind_done:
             return
