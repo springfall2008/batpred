@@ -526,6 +526,71 @@ def test_current_reasserted_on_unchanged_rate(test_name, ha, inv, prev_current, 
     return failed
 
 
+def test_adjust_rate_percent_scaled_entity(test_name, my_predbat, ha, inv):
+    """
+    Test charge_rate/discharge_rate when the configured entity uses % units.
+    """
+    print("Test: {}".format(test_name))
+    failed = False
+    inv.rest_data = None
+    inv.rest_api = None
+
+    rate_entity = "number.charge_discharge_power_ref"
+    original_charge_rate = my_predbat.args.get("charge_rate", None)
+    original_discharge_rate = my_predbat.args.get("discharge_rate", None)
+    had_charge_rate_percent = "charge_rate_percent" in my_predbat.args
+    had_discharge_rate_percent = "discharge_rate_percent" in my_predbat.args
+    original_charge_rate_percent = my_predbat.args.get("charge_rate_percent", None)
+    original_discharge_rate_percent = my_predbat.args.get("discharge_rate_percent", None)
+    original_entity = ha.dummy_items.get(rate_entity, None)
+
+    try:
+        my_predbat.args["charge_rate"] = rate_entity
+        my_predbat.args["discharge_rate"] = rate_entity
+        my_predbat.args.pop("charge_rate_percent", None)
+        my_predbat.args.pop("discharge_rate_percent", None)
+
+        expected_percent = 50
+        target_rate = int(inv.battery_rate_max_raw * expected_percent / 100.0)
+        ha.dummy_items[rate_entity] = {"state": 0, "unit_of_measurement": "%", "min": -100, "max": 100}
+        inv.adjust_charge_rate(target_rate)
+        if ha.get_state(rate_entity) != expected_percent:
+            print("ERROR: Percent-scaled charge_rate should be {} got {}".format(expected_percent, ha.get_state(rate_entity)))
+            failed = True
+
+        ha.dummy_items[rate_entity] = {"state": 0, "unit_of_measurement": "%", "min": -100, "max": 100}
+        inv.adjust_discharge_rate(target_rate)
+        if ha.get_state(rate_entity) != -expected_percent:
+            print("ERROR: Percent-scaled discharge_rate should be {} got {}".format(-expected_percent, ha.get_state(rate_entity)))
+            failed = True
+    finally:
+        if original_entity is None:
+            if rate_entity in ha.dummy_items:
+                del ha.dummy_items[rate_entity]
+        else:
+            ha.dummy_items[rate_entity] = original_entity
+
+        if original_charge_rate is None:
+            my_predbat.args.pop("charge_rate", None)
+        else:
+            my_predbat.args["charge_rate"] = original_charge_rate
+        if original_discharge_rate is None:
+            my_predbat.args.pop("discharge_rate", None)
+        else:
+            my_predbat.args["discharge_rate"] = original_discharge_rate
+
+        if had_charge_rate_percent:
+            my_predbat.args["charge_rate_percent"] = original_charge_rate_percent
+        else:
+            my_predbat.args.pop("charge_rate_percent", None)
+        if had_discharge_rate_percent:
+            my_predbat.args["discharge_rate_percent"] = original_discharge_rate_percent
+        else:
+            my_predbat.args.pop("discharge_rate_percent", None)
+
+    return failed
+
+
 def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, expect_mode=None):
     """
     Test the adjust_inverter_mode function
@@ -2989,6 +3054,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_charge_rate("adjust_discharge_rate1", ha, inv, dummy_rest, 0, 250.1, 250, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate2", ha, inv, dummy_rest, 250, 0, 0, discharge=True)
     failed |= test_adjust_charge_rate("adjust_discharge_rate3", ha, inv, dummy_rest, 200, 210, 200, discharge=True)
+    failed |= test_adjust_rate_percent_scaled_entity("adjust_rate_percent_scaled_entity", my_predbat, ha, inv)
     if failed:
         return failed
 

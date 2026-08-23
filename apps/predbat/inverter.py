@@ -1812,6 +1812,49 @@ class Inverter:
         else:
             self.base.log("Inverter {} Current reserve is {}%, already at target".format(self.id, dp0(current_reserve)))
 
+    def _rate_entity_uses_percent(self, entity_id):
+        """Return True when an entity reports percentage units."""
+        if not entity_id:
+            return False
+        units = self.base.get_state_wrapper(entity_id, attribute="unit_of_measurement")
+        return str(units).strip() == "%"
+
+    def _rate_percent_to_watts(self, current_percent):
+        """Convert a percentage-like rate reading to watts."""
+        try:
+            return int(abs(float(current_percent)) * self.battery_rate_max_raw / 100.0)
+        except (ValueError, TypeError):
+            return self.battery_rate_max_raw
+
+    def _rate_watts_to_percent(self, entity_id, new_rate, discharge=False):
+        """Convert watts to entity percentage and clamp to entity limits when available."""
+        if not self.battery_rate_max_raw:
+            return 0
+
+        percent_value = float(new_rate) * 100.0 / self.battery_rate_max_raw
+        min_value = self.base.get_state_wrapper(entity_id, attribute="min")
+        max_value = self.base.get_state_wrapper(entity_id, attribute="max")
+
+        try:
+            min_value = float(min_value)
+        except (ValueError, TypeError):
+            min_value = None
+
+        try:
+            max_value = float(max_value)
+        except (ValueError, TypeError):
+            max_value = None
+
+        if discharge and min_value is not None and min_value < 0 and (max_value is None or max_value > 0):
+            percent_value = -percent_value
+
+        if min_value is not None:
+            percent_value = max(min_value, percent_value)
+        if max_value is not None:
+            percent_value = min(max_value, percent_value)
+
+        return int(round(percent_value))
+
     def get_current_discharge_rate(self):
         """
         Get the current discharge rate in watts
@@ -1822,6 +1865,8 @@ class Inverter:
         else:
             if "discharge_rate_percent" in self.base.args:
                 current_rate = int(self.base.get_arg("discharge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100)
+            elif self._rate_entity_uses_percent(self.base.get_arg("discharge_rate", indirect=False, index=self.id)):
+                current_rate = self._rate_percent_to_watts(self.base.get_arg("discharge_rate", index=self.id, default=100.0, required_unit="%"))
             else:
                 current_rate = self.base.get_arg("discharge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
 
@@ -1842,6 +1887,8 @@ class Inverter:
         else:
             if "charge_rate_percent" in self.base.args:
                 current_rate = self.base.get_arg("charge_rate_percent", index=self.id, default=100.0, required_unit="%") * self.battery_rate_max_raw / 100
+            elif self._rate_entity_uses_percent(self.base.get_arg("charge_rate", indirect=False, index=self.id)):
+                current_rate = self._rate_percent_to_watts(self.base.get_arg("charge_rate", index=self.id, default=100.0, required_unit="%"))
             else:
                 current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
         try:
@@ -1882,7 +1929,12 @@ class Inverter:
                 self.rest_setChargeRate(new_rate)
             else:
                 if "charge_rate" in self.base.args:
-                    self.write_and_poll_value("charge_rate", self.base.get_arg("charge_rate", indirect=False, index=self.id, required_unit="W"), new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
+                    charge_rate_entity = self.base.get_arg("charge_rate", indirect=False, index=self.id)
+                    if self._rate_entity_uses_percent(charge_rate_entity):
+                        charge_rate_percent = self._rate_watts_to_percent(charge_rate_entity, new_rate)
+                        self.write_and_poll_value("charge_rate", charge_rate_entity, charge_rate_percent, fuzzy=5, required_unit="%")
+                    else:
+                        self.write_and_poll_value("charge_rate", charge_rate_entity, new_rate, fuzzy=(self.battery_rate_max_charge * MINUTE_WATT / 20), required_unit="W")
                 if "charge_rate_percent" in self.base.args:
                     self.write_and_poll_value("charge_rate_percent", self.base.get_arg("charge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
@@ -1926,7 +1978,12 @@ class Inverter:
                 self.rest_setDischargeRate(new_rate)
             else:
                 if "discharge_rate" in self.base.args:
-                    self.write_and_poll_value("discharge_rate", self.base.get_arg("discharge_rate", indirect=False, index=self.id), new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
+                    discharge_rate_entity = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
+                    if self._rate_entity_uses_percent(discharge_rate_entity):
+                        discharge_rate_percent = self._rate_watts_to_percent(discharge_rate_entity, new_rate, discharge=True)
+                        self.write_and_poll_value("discharge_rate", discharge_rate_entity, discharge_rate_percent, fuzzy=5, required_unit="%")
+                    else:
+                        self.write_and_poll_value("discharge_rate", discharge_rate_entity, new_rate, fuzzy=(self.battery_rate_max_discharge * MINUTE_WATT / 20), required_unit="W")
                 if "discharge_rate_percent" in self.base.args:
                     self.write_and_poll_value("discharge_rate_percent", self.base.get_arg("discharge_rate_percent", indirect=False, index=self.id, required_unit="%"), min(int(new_rate / self.battery_rate_max_raw * 100), 100), fuzzy=5, required_unit="%")
 
