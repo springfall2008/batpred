@@ -809,6 +809,10 @@ def test_component_selects_transport():
     # No credentials at all - no transport, and the reason is logged
     component = _make_component(hub_serial=None, api_key=None)
     assert component.transport is None
+
+    # oauth selected but neither the access token nor a stored token hash is set
+    component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key=None, token_hash=None)
+    assert component.transport is None
     print("  ✓ Transport selection and credential validation")
 
 
