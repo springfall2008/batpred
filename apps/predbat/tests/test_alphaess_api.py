@@ -872,6 +872,13 @@ def test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succ
     responses = [
         create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
         create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+        # refresh_config also probes periodic entitlement (getTimeChargeInfo) for a serial
+        # not yet in _periodic_ok, which AL70 is not here. Without this third response the
+        # mock queue is exhausted on that call: session.get() raises StopIteration, which
+        # _request's transport-failure handler retries 3 times with a real (unmocked)
+        # asyncio.sleep(1)/sleep(2) backoff - several real seconds for no test value, since
+        # the probe's own result is not asserted on here.
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
     ]
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
         got_any = run_async_local(client.refresh_config())
@@ -896,6 +903,13 @@ def test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_
         create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
         create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
         # AL71: both reads fail.
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+        # refresh_config also probes periodic entitlement (getTimeChargeInfo) once per
+        # serial not yet in _periodic_ok - both AL70 and AL71 qualify here. Without these
+        # two extra responses the mock queue is exhausted on AL70's probe, and every GET
+        # after that (AL71's discharge read and its own probe) hits the same exhausted-
+        # queue-triggers-StopIteration-triggers-a-real-retry-sleep problem described above.
         create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
         create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
     ]
@@ -984,11 +998,16 @@ def test_alphaess_run_defers_startup_without_telemetry():
     """
     failed = False
     client = MockAlphaESS(automatic=True)
-    responses = [
-        create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE)),
-        create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")),
-        create_aiohttp_mock_response(status=200, json_data=_envelope(200, [])),
-    ]
+    client.api_delay = 0
+    # A full run() cycle over ESS_LIST_SAMPLE's 2 systems issues up to ~13 GET calls
+    # (discovery, then per-serial config/probe/power/history/energy). The queue is padded
+    # well past that so it is never exhausted: an exhausted MagicMock side_effect list
+    # raises StopIteration on the next call, which _request's transport-failure handler
+    # retries 3 times with real (unmocked) asyncio.sleep(1)/sleep(2) backoff between
+    # attempts - costing tens of real seconds per exhausted call for no test value, since
+    # every response after the first is a failure anyway and produces the same "no
+    # telemetry" outcome this test wants.
+    responses = [create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))] + [create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")) for _ in range(20)]
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
         ok = run_async_local(client.run(seconds=0, first=True))
     if ok:
@@ -1037,12 +1056,96 @@ def test_alphaess_run_reads_control_entities_on_every_tick_including_the_first()
     client.state["switch.predbat_alphaess_al70_battery_schedule_charge_enable"] = "on"
     client.state["number.predbat_alphaess_al70_battery_schedule_charge_soc"] = 88
     with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))):
-        run_async_local(client.run(seconds=0, first=True))
+        ok = run_async_local(client.run(seconds=0, first=True))
+    # Deliberately `is True`, not merely truthy: this is the happy-path return that was
+    # previously untested anywhere in this file - a mutation to `return None` on the final
+    # successful-cycle path passed the whole suite until this assertion was added, even
+    # though it is the most-hit line in production (every working cycle after the first
+    # goes through it) and exactly the failure mode the "explicit True, never None"
+    # rationale in run()'s own docstring exists to prevent.
+    if ok is not True:
+        print(f"ERROR: run() returned {ok!r} on a successful cycle, must be exactly True")
+        failed = True
     schedule = client.local_schedule.get("AL70", {})
     if schedule.get("charge", {}).get("soc") != 88:
         print(f"ERROR: retained plan was overwritten: {schedule}")
         failed = True
     assert not failed, "test_alphaess_run_reads_control_entities_on_every_tick_including_the_first"
+
+
+def test_alphaess_run_only_calls_automatic_config_on_the_first_cycle():
+    """The `first and self.automatic` gate must not re-run automatic_config every tick.
+
+    automatic_config() re-derives every apps.yaml binding from current state via
+    set_arg_auto, which is idempotent for unchanged inputs - so checking "the args did
+    not change on the second cycle" would not actually prove the gate exists, since it
+    could pass by coincidence even with the guard weakened to `if self.automatic:` (no
+    `first`). Spy on automatic_config directly instead, so the assertion is about whether
+    it ran at all, not what it happened to write.
+    """
+    failed = False
+    client = MockAlphaESS(automatic=True)
+    client.device_list = ["AL70"]
+    client.device_detail = {"AL70": {"sysSn": "AL70", "cobat": 13.34, "poinv": 5.0}}
+    client.mark_refreshed("static")
+    client.mark_refreshed("config")
+    client.mark_refreshed("power")
+    client.mark_refreshed("energy")
+    client.device_values["AL70"] = {"soc": 50.0}
+    calls = []
+
+    async def fake_automatic_config():
+        """Record a call instead of running the real automatic_config."""
+        calls.append(1)
+
+    client.automatic_config = fake_automatic_config
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        run_async_local(client.run(seconds=0, first=True))
+        run_async_local(client.run(seconds=60, first=False))
+    if len(calls) != 1:
+        print(f"ERROR: automatic_config called {len(calls)} times across two cycles, expected exactly 1 (first cycle only)")
+        failed = True
+    assert not failed, "test_alphaess_run_only_calls_automatic_config_on_the_first_cycle"
+
+
+def test_alphaess_final_persists_all_four_caches():
+    """final() is the shutdown path and has no direct coverage otherwise - the storage
+    tests call save_static/save_config/save_ratings/save_control individually, so a
+    dropped or reordered call inside final() itself would go undetected.
+
+    First confirms final() is safe to call on a freshly initialised client with nothing
+    discovered and no Storage component configured (the standalone-CLI case) - none of
+    the four save_* helpers should raise. Then spies on all four to confirm final() calls
+    every one of them exactly once.
+    """
+    failed = False
+    client = MockAlphaESS()
+    try:
+        run_async_local(client.final())
+    except Exception as error:
+        print(f"ERROR: final() raised on a fresh client with nothing discovered: {error}")
+        failed = True
+
+    calls = []
+    for name in ("save_static", "save_config", "save_ratings", "save_control"):
+
+        def make_spy(name=name):
+            """Build a spy that records its own save_* name when awaited."""
+
+            async def spy():
+                """Record that this save_* method was called."""
+                calls.append(name)
+
+            return spy
+
+        setattr(client, name, make_spy())
+    run_async_local(client.final())
+    expected = {"save_static", "save_config", "save_ratings", "save_control"}
+    if set(calls) != expected or len(calls) != 4:
+        print(f"ERROR: final() called {calls}, expected each of {sorted(expected)} exactly once")
+        failed = True
+    assert not failed, "test_alphaess_final_persists_all_four_caches"
 
 
 def run_alphaess_api_tests(my_predbat):
@@ -1088,6 +1191,8 @@ def run_alphaess_api_tests(my_predbat):
         ("run_defers_without_telemetry", test_alphaess_run_defers_startup_without_telemetry),
         ("run_empty_account", test_alphaess_run_returns_false_when_the_account_has_no_systems),
         ("run_reads_controls_first_tick", test_alphaess_run_reads_control_entities_on_every_tick_including_the_first),
+        ("run_automatic_config_first_cycle_only", test_alphaess_run_only_calls_automatic_config_on_the_first_cycle),
+        ("final_persists_all_caches", test_alphaess_final_persists_all_four_caches),
     ]:
         try:
             if fn():
