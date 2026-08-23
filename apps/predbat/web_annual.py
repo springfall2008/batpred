@@ -61,7 +61,8 @@ SCENARIO_ORDER = ["no_pvbat", "pv_only", "without_predbat", "with_predbat"]
 DEFAULT_CONFIG = {
     "location": {"postcode": "SW1A 1AA"},
     "solar": [{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}],
-    "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
+    "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "hybrid": True},
+    "export_limit_kw": 10.0,
     "load": {"annual_kwh": 3800, "shape": "flat", "car_charging_kwh": 0, "car_rate_kw": 7.4},
     "tariff": {"rates_import": [{"rate": PRICE_CAP_IMPORT_P}], "rates_export": [{"rate": SEG_EXPORT_P}], "standing_charge_p_per_day": PRICE_CAP_STANDING_CHARGE_P},
     "samples_per_month": 2,
@@ -225,14 +226,18 @@ class AnnualPage:
         # internally, and returns the 0.0 default, so every real system silently fell back
         # to the example 5 kW rather than showing its own limits. Summing is what the model
         # wants: two 3.6 kW inverters can move 7.2 kW between them.
-        for arg_name, field, divisor in [("inverter_limit", "inverter_kw", 1000.0), ("export_limit", "export_limit_kw", 1000.0)]:
+        #
+        # inverter_limit is the battery's own inverter rating, so it lands in the battery
+        # block; export_limit is the grid-connection cap, which applies whether or not
+        # there is a battery, so it lands at the top level instead.
+        for arg_name, target, field in [("inverter_limit", config["battery"], "inverter_kw"), ("export_limit", config, "export_limit_kw")]:
             watts = self._arg(arg_name, 0.0, combine=True) or 0
             try:
                 watts = float(watts)
             except (TypeError, ValueError):
                 watts = 0
             if watts > 0:
-                config["battery"][field] = round(watts / divisor, 2)
+                target[field] = round(watts / 1000.0, 2)
 
         # Read the real setting rather than inferring it. This used to set hybrid whenever
         # an inverter_type was present at all, which is true of every configured system -
@@ -444,6 +449,12 @@ class AnnualPage:
         text += self._number_field("longitude", "Longitude", location.get("longitude"))
         text += "</fieldset>\n"
 
+        text += "<fieldset><legend>Grid connection</legend>\n"
+        # Applies whether or not there is a battery - a PV-only system still has a grid
+        # connection with its own export cap - so this lives outside the Battery fieldset.
+        text += self._number_field("export_limit_kw", "Export limit", config.get("export_limit_kw", DEFAULT_CONFIG["export_limit_kw"]), suffix="kW")
+        text += "</fieldset>\n"
+
         text += "<fieldset><legend>Solar</legend>\n"
         for index, array in enumerate(solar):
             mode = "panels" if array.get("panels") else "kwp"
@@ -477,7 +488,6 @@ class AnnualPage:
         text += "<fieldset><legend>Battery</legend>\n"
         text += self._number_field("battery_size_kwh", "Usable capacity", battery.get("size_kwh"), suffix="kWh")
         text += self._number_field("battery_inverter_kw", "Inverter size", battery.get("inverter_kw"), suffix="kW")
-        text += self._number_field("battery_export_limit_kw", "Export limit", battery.get("export_limit_kw"), suffix="kW")
         text += '<div class="annual-field"><label for="battery_hybrid">Hybrid inverter</label><input type="checkbox" id="battery_hybrid" name="battery_hybrid" {}></div>\n'.format("checked" if battery.get("hybrid", True) else "")
         text += "</fieldset>\n"
 
@@ -673,6 +683,10 @@ class AnnualPage:
             location["longitude"] = numeric("longitude")
         config["location"] = location
 
+        # Applies whether or not there is a battery, so it is read unconditionally rather
+        # than alongside the battery block below.
+        config["export_limit_kw"] = numeric("export_limit_kw", DEFAULT_CONFIG["export_limit_kw"])
+
         arrays = []
         index = 0
         while value("solar_kwp_{}".format(index)) is not None or value("solar_panels_{}".format(index)) is not None:
@@ -697,7 +711,6 @@ class AnnualPage:
             config["battery"] = {
                 "size_kwh": numeric("battery_size_kwh"),
                 "inverter_kw": numeric("battery_inverter_kw", 5.0),
-                "export_limit_kw": numeric("battery_export_limit_kw", 5.0),
                 "hybrid": bool(postdata.get("battery_hybrid")),
             }
 
@@ -1206,12 +1219,15 @@ class AnnualPage:
         battery = config.get("battery") or {}
         if isinstance(battery, dict) and battery.get("size_kwh"):
             summary = "{:g} kWh, {:g} kW inverter".format(float(battery["size_kwh"]), float(battery.get("inverter_kw", 0) or 0))
-            if battery.get("export_limit_kw"):
-                summary += ", {:g} kW export limit".format(float(battery["export_limit_kw"]))
             summary += ", hybrid" if battery.get("hybrid", True) else ", AC coupled"
             rows.append(("Battery", html.escape(summary, quote=True)))
         else:
             rows.append(("Battery", "none"))
+
+        # Applies whether or not there is a battery, so it is its own row rather than
+        # folded into the Battery one above - a PV-only run has a grid export cap too.
+        if config.get("export_limit_kw"):
+            rows.append(("Grid export limit", html.escape("{:g} kW".format(float(config["export_limit_kw"])), quote=True)))
 
         load = config.get("load") or {}
         if isinstance(load, dict) and load.get("octopus"):

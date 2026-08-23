@@ -38,6 +38,11 @@ DEFAULT_AZIMUTH = 180
 DEFAULT_EFFICIENCY = 0.95
 DEFAULT_HYBRID = True
 
+# The property's grid-connection export cap. High enough not to bite any real
+# domestic inverter, so an unset value behaves as "no extra restriction" rather
+# than silently clipping exports.
+DEFAULT_EXPORT_LIMIT_KW = 10.0
+
 # A typical domestic panel in 2026. Only used to turn a panel count into kWp.
 DEFAULT_PANEL_WATTS = 400.0
 
@@ -178,7 +183,6 @@ def _validate_battery(raw):
     return {
         "size_kwh": _require_number(raw["size_kwh"], "annual.battery.size_kwh", minimum=0, exclusive_minimum=True),
         "inverter_kw": inverter_kw,
-        "export_limit_kw": _require_number(raw.get("export_limit_kw", inverter_kw), "annual.battery.export_limit_kw", minimum=0),
         "hybrid": _coerce_bool(raw.get("hybrid", DEFAULT_HYBRID)),
         "charge_rate_kw": _require_number(raw.get("charge_rate_kw", inverter_kw), "annual.battery.charge_rate_kw", minimum=0, exclusive_minimum=True),
         "discharge_rate_kw": _require_number(raw.get("discharge_rate_kw", inverter_kw), "annual.battery.discharge_rate_kw", minimum=0, exclusive_minimum=True),
@@ -293,6 +297,17 @@ def validate_config(config, today=None):
     if not solar and battery is None:
         raise AnnualConfigError("annual needs at least one of solar or battery: with neither there is nothing to evaluate")
 
+    # The grid-connection export cap applies whether or not there is a battery, so it lives
+    # at the top level rather than inside the (possibly absent) battery block. A config
+    # written before this moved still has it nested under battery - read it from there as a
+    # fallback so an existing YAML file or stored run keeps behaving the same.
+    raw_battery = raw.get("battery")
+    legacy_export_limit_kw = raw_battery.get("export_limit_kw") if isinstance(raw_battery, dict) else None
+    export_limit_default = legacy_export_limit_kw if legacy_export_limit_kw is not None else DEFAULT_EXPORT_LIMIT_KW
+    # minimum=0 inclusive, not exclusive: a G99 zero-export limitation (see the docs) is a
+    # real, supported scenario, and battery.export_limit_kw allowed 0 before this moved.
+    export_limit_kw = _require_number(raw.get("export_limit_kw", export_limit_default), "annual.export_limit_kw", minimum=0)
+
     samples_per_month = _require_number(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH), "annual.samples_per_month", minimum=1, integer=True)
 
     if today is None:
@@ -309,6 +324,7 @@ def validate_config(config, today=None):
         "year": year,
         "solar": solar,
         "battery": battery,
+        "export_limit_kw": export_limit_kw,
         "load": _validate_load(raw.get("load")),
         "tariff": _validate_tariff(raw.get("tariff")),
         # The counterfactual bill is what the household would pay with no system at all,
@@ -447,7 +463,7 @@ def create_headless_predbat(work_dir, timezone, log):
     return instance
 
 
-def apply_hardware(predbat, battery, solar):
+def apply_hardware(predbat, battery, solar, export_limit_kw):
     """Map the config's battery block onto the PredBat instance.
 
     Rates are stored internally as kW per minute, matching
@@ -460,7 +476,16 @@ def apply_hardware(predbat, battery, solar):
     whatever it happened to hold before, since clamping only makes sense when a
     caller has deliberately set a starting SOC first — a later task does that
     explicitly, after calling this function.
+
+    ``export_limit_kw`` is the property's grid-connection export cap (independent of
+    whether there is a battery) and is applied as a ``min()`` against whatever the
+    hardware itself would otherwise allow to export - it can only tighten the export
+    limit, never loosen it, and never affects ``inverter_limit`` (the inverter's own
+    charge/discharge rate is unrelated to what the grid connection permits leaving
+    the property).
     """
+    export_limit_predbat_units = export_limit_kw * 1000 / MINUTE_WATT
+
     if battery is None:
         predbat.soc_max = 0.0
         predbat.soc_kw = 0.0
@@ -478,14 +503,14 @@ def apply_hardware(predbat, battery, solar):
         # difference between scenarios - this tool's whole output - is computed against
         # two different caps.
         predbat.inverter_limit = (sum(array["kwp"] for array in solar) if solar else 5.0) * 1000 / MINUTE_WATT
-        predbat.export_limit = predbat.inverter_limit
+        predbat.export_limit = min(predbat.inverter_limit, export_limit_predbat_units)
         predbat.inverter_hybrid = False
         return
 
     predbat.soc_max = battery["size_kwh"]
     predbat.soc_kw = predbat.soc_max
     predbat.inverter_limit = battery["inverter_kw"] * 1000 / MINUTE_WATT
-    predbat.export_limit = battery["export_limit_kw"] * 1000 / MINUTE_WATT
+    predbat.export_limit = min(predbat.inverter_limit, export_limit_predbat_units)
     predbat.battery_rate_max_charge = battery["charge_rate_kw"] * 1000 / MINUTE_WATT
     # Synthetic configs have no separate DC figure to scale proportionally (unlike
     # compare.py's apply_hardware_overrides(), which scales an inherited DC/AC ratio), so
@@ -1038,7 +1063,7 @@ def prepare_sample(predbat, config, weather, tariff, load_source, day, midnight_
     rate_import, rate_export = tariff.rates_for(midnight_utc, PLAN_MINUTES)
     _apply_rates(predbat, rate_import, rate_export)
 
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = START_SOC_KWH
 
 
@@ -1182,7 +1207,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
     # Like scenarios 1 and 2 this is a single prediction with empty windows. It must NOT
     # call calculate_plan(): the planner is what makes a run expensive, and there is
     # nothing to plan without a battery.
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = 0
     predbat.charge_limit_best = []
     predbat.charge_window_best = []
@@ -1194,7 +1219,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
         plans["pv_only"] = _capture_plan(predbat, actual_step, actual_step, load_step, load_step, DAY_MINUTES)
 
     # Scenario 2: PV and battery on a dumb cheapest-rate timer, no export optimisation
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = START_SOC_KWH
     charge_window, charge_limit = _baseline_charge_window(predbat)
     predbat.charge_window_best = charge_window
@@ -1235,7 +1260,7 @@ def _run_scenarios(predbat, config, weather, tariff, load_source, day, midnight_
         # loop from iterating it, so this is a shape placeholder rather than a live car.
         predbat.car_charging_slots = [[]]
 
-    apply_hardware(predbat, config["battery"], config["solar"])
+    apply_hardware(predbat, config["battery"], config["solar"], config["export_limit_kw"])
     predbat.soc_kw = START_SOC_KWH
     predbat.pv_forecast_minute = forecast_pv
     predbat.pv_forecast_minute10 = p10_pv
