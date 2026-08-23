@@ -540,16 +540,19 @@ class OhmeAPI(ComponentBase):
             return self.energy_today
 
         gap_seconds = (now - last_time).total_seconds()
+        interval_seconds = gap_seconds
 
         # Roll the day over before any early return below, so a stall spanning midnight cannot
         # leave yesterday's total being published against yesterday's date into the new day
         if self.energy_today_date != now.date():
             # Past midnight - the finished day's total stays in Home Assistant's history, so start
-            # again and count only the part of this interval that falls on the new day
+            # again and count only the part of this interval that falls on the new day. The time of
+            # day is by definition the time elapsed since local midnight, so take it from the wall
+            # clock rather than building a midnight datetime - there is then no timezone offset to
+            # attach, and none to get wrong
             self.energy_today = 0.0
             self.energy_today_date = now.date()
-            midnight = datetime.datetime.combine(now.date(), datetime.time(0, 0)).replace(tzinfo=now.tzinfo)
-            last_time = max(last_time, midnight)
+            interval_seconds = min(interval_seconds, now.hour * 3600 + now.minute * 60 + now.second)
 
         # Measured against the original gap, not the part of it that fell after midnight - a stall
         # is no more evidence of what the charger did either side of midnight
@@ -557,7 +560,7 @@ class OhmeAPI(ComponentBase):
             self.log("Warn: Ohme API: {}s since the last power reading, not counting that gap rather than assuming the charger ran throughout".format(int(gap_seconds)))
             return self.energy_today
 
-        self.energy_today += last_watts * (now - last_time).total_seconds() / 3600.0 / 1000.0
+        self.energy_today += last_watts * interval_seconds / 3600.0 / 1000.0
         return self.energy_today
 
     async def publish_data(self):
