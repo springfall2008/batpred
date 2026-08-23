@@ -3,7 +3,7 @@ repos:
   rev: v5.0.0
   hooks:
   - id: file-contents-sorter
-    files: ^(\.cspell\/custom-dictionary-workspace.txt|requirements\.txt)$
+    files: ^requirements\.txt$
     args: ["--ignore-case", "--unique"]
   - id: trailing-whitespace
     args: [--markdown-linebreak-ext=md]
@@ -12,6 +12,16 @@ repos:
     exclude: (example_chart.yml)
   - id: check-json
     exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
+# The cspell dictionary needs case-insensitive *uniqueness*, which file-contents-sorter cannot do -
+# its --unique is case-sensitive while --ignore-case sorts case-folded, so case-duplicate entries
+# compare equal and their order varies with PYTHONHASHSEED between runs
+- repo: local
+  hooks:
+  - id: cspell-dictionary-sorter
+    name: cspell dictionary sorter
+    language: python
+    entry: python .cspell/sort_dictionary.py
+    files: ^\.cspell\/custom-dictionary-workspace\.txt$
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0
   hooks:

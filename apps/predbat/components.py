@@ -18,6 +18,7 @@ phase order. Routes HA events to components based on entity prefix filtering.
 """
 
 from storage import StorageComponent
+from alphaess import AlphaESSAPI
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
@@ -200,6 +201,18 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "ohme_password",
             },
+            "ohme_automatic": {
+                "required": False,
+                "default": False,
+                "config": "ohme_automatic",
+            },
+            "ohme_control": {
+                "required": False,
+                "default": False,
+                "config": "ohme_control",
+            },
+            # Deliberately has no default: unset means "auto-detect from the Octopus component",
+            # which is distinct from an explicit False meaning "never use Ohme for the car slots"
             "ohme_automatic_octopus_intelligent": {
                 "required": False,
                 "config": "ohme_automatic_octopus_intelligent",
@@ -338,6 +351,33 @@ COMPONENT_LIST = {
         # instance, since all individual args are optional to allow either auth mode.
         "required_or": ["username", "key"],
         "phase": 1,
+    },
+    "alphaess": {
+        "class": AlphaESSAPI,
+        "name": "AlphaESS Cloud API",
+        "event_filter": "predbat_alphaess_",
+        "args": {
+            "app_id": {"required": False, "config": "alphaess_app_id"},
+            "app_secret": {"required": False, "config": "alphaess_app_secret"},
+            "inverter_sn": {"required": False, "config": "alphaess_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "alphaess_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "alphaess_automatic_ignore_pv"},
+            # On by default, matching sunsynk_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only. switch.predbat_set_read_only still gates every write.
+            "control_enable": {"required": False, "default": True, "config": "alphaess_control_enable"},
+            # The API reports no battery power limit and no pack current/voltage to derive
+            # one from, so it is estimated from poinv. This is the escape hatch for a user
+            # who knows their pack's real limit.
+            "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
+            "api_delay": {"required": False, "default": 2, "config": "alphaess_api_delay"},
+            "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
+        },
+        # Gate activation on having an AppID. Without this the component would start for
+        # every instance, since all individual args are optional.
+        "required_or": ["app_id"],
+        "phase": 1,
+        "can_restart": True,
     },
     "enphase": {
         "class": EnphaseAPI,

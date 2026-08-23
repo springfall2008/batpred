@@ -336,6 +336,7 @@ class Compare:
         my_predbat.manual_all_times = []
         my_predbat.octopus_intelligent_charging = False
 
+        self.recompute_iboost()
         self.recompute_car_charging(car_charging_slots)
 
         self.log("Running scenario for tariff: {}".format(name))
@@ -448,6 +449,17 @@ class Compare:
         self.select_best(compare_list, self.comparisons)
         self.publish_data()
 
+    def recompute_iboost(self):
+        """
+        Recompute iBoost plan
+        """
+        my_predbat = self.pb
+
+        if my_predbat.iboost_enable and (((not my_predbat.iboost_solar) and (not my_predbat.iboost_charging)) or my_predbat.iboost_smart):
+            my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
+        else:
+            my_predbat.iboost_plan = []
+
     def recompute_car_charging(self, car_charging_slots):
         """
         Recompute car charging plan
@@ -506,6 +518,7 @@ class Compare:
         save_cost_today_sofar = my_predbat.cost_today_sofar
         save_carbon_today_sofar = my_predbat.carbon_today_sofar
         save_iboost_today = my_predbat.iboost_today
+        save_iboost_plan = my_predbat.iboost_plan
         save_import_today_now = my_predbat.import_today_now
         save_export_today_now = my_predbat.export_today_now
         save_octopus_intelligent_charging = my_predbat.octopus_intelligent_charging
@@ -607,6 +620,7 @@ class Compare:
         my_predbat.cost_today_sofar = save_cost_today_sofar
         my_predbat.carbon_today_sofar = save_carbon_today_sofar
         my_predbat.iboost_today = save_iboost_today
+        my_predbat.iboost_plan = save_iboost_plan
         my_predbat.import_today_now = save_import_today_now
         my_predbat.export_today_now = save_export_today_now
         my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging
