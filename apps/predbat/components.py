@@ -209,7 +209,7 @@ COMPONENT_LIST = {
     },
     "myenergi": {
         "class": MyEnergiAPI,
-        "name": "myenergi",
+        "name": "myenergi Zappi/Eddi",
         "event_filter": "predbat_myenergi_",
         "args": {
             "auth_method": {"required": False, "config": "myenergi_auth_method", "default": "direct"},
@@ -222,6 +222,10 @@ COMPONENT_LIST = {
             "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
             "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
         },
+        # Gate activation on having at least one auth path — api_key is the direct
+        # transport's local hub credential, key is the cloud transport's access token.
+        # Without this the component would start for every instance since all
+        # individual args are optional to allow either auth mode.
         "required_or": ["api_key", "key"],
         "phase": 1,
         "can_restart": True,

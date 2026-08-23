@@ -943,6 +943,11 @@ def test_component_registration():
     for arg_name, spec in entry["args"].items():
         assert arg_name in parameters, "initialize() has no parameter '{}'".format(arg_name)
         assert spec["config"] in APPS_SCHEMA, "{} missing from APPS_SCHEMA".format(spec["config"])
+
+    # The reverse direction: every initialize() parameter must also be declared in
+    # args, or a new parameter silently never receives a value from apps.yaml.
+    expected = {name for name in parameters if name != "self"}
+    assert set(entry["args"]) == expected, "COMPONENT_LIST args and initialize() parameters have diverged"
     print("  ✓ Component registration and schema keys")
 
 
