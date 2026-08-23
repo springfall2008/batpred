@@ -1084,6 +1084,123 @@ def test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_en
     assert not failed, "test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint"
 
 
+def test_alphaess_unbind_switch_is_published_for_every_serial():
+    """One toggle per discovered serial, default off, following the Sigenergy offboard
+    pattern."""
+    failed = False
+    client = _client()
+    client.local_schedule["AL70"] = _schedule()
+    run_async_local(client.publish_schedule_settings_ha("AL70"))
+    entity = "switch.predbat_alphaess_al70_unbind"
+    published = client.published.get(entity)
+    if not published:
+        print(f"ERROR: {entity} not published")
+        failed = True
+    elif published.get("state") != "off":
+        print(f"ERROR: unbind default {published.get('state')} should be off")
+        failed = True
+    # The switch is one-way from Home Assistant: undoing it needs a code emailed to the
+    # system owner, so the friendly name has to say so.
+    name = (published or {}).get("attributes", {}).get("friendly_name", "")
+    if "one-way" not in name.lower() and "cannot be undone" not in name.lower():
+        print(f"ERROR: unbind friendly_name does not warn it is one-way: {name!r}")
+        failed = True
+    assert not failed, "test_alphaess_unbind_switch_is_published_for_every_serial"
+
+
+def test_alphaess_unbind_switch_reflects_an_already_latched_serial():
+    """After a restart, restore_state repopulates _unbind_done from the cache before the
+    first publish - the switch must come back on, not silently reset to off and invite the
+    user to press it again."""
+    failed = False
+    client = _client()
+    client.local_schedule["AL70"] = _schedule()
+    client._unbind_done.add("AL70")
+    run_async_local(client.publish_schedule_settings_ha("AL70"))
+    entity = "switch.predbat_alphaess_al70_unbind"
+    published = client.published.get(entity)
+    if not published or published.get("state") != "on":
+        print(f"ERROR: latched unbind switch published as {published.get('state') if published else None}, expected on")
+        failed = True
+    assert not failed, "test_alphaess_unbind_switch_reflects_an_already_latched_serial"
+
+
+def test_alphaess_unbind_latches_and_removes_the_serial():
+    """A successful unbind must not re-fire on the next tick or after a restart, and the
+    serial has to leave device_list - the API will refuse every call for it now."""
+    failed = False
+    client = _client()
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+        run_async_local(client._handle_unbind_event("AL70", "turn_on"))
+    if "AL70" not in client._unbind_done:
+        print(f"ERROR: unbind not latched: {client._unbind_done}")
+        failed = True
+    if "AL70" in client.device_list:
+        print(f"ERROR: unbound serial still in device_list: {client.device_list}")
+        failed = True
+    if not any("num_inverters" in message or "apps.yaml" in message for message in client.log_messages):
+        print(f"ERROR: no warning that auto-config args now point at a dead system: {client.log_messages}")
+        failed = True
+    # A second turn-on must not call the API again. AssertionError as a side_effect would
+    # be swallowed by _request's own transport-failure retry loop (it catches Exception),
+    # so this checks the mock's call count directly rather than relying on an exception
+    # escaping the client.
+    with patch("alphaess.aiohttp.ClientSession") as mock_session_cls:
+        run_async_local(client._handle_unbind_event("AL70", "turn_on"))
+    if mock_session_cls.called:
+        print("ERROR: unbind must not repeat once latched, but ClientSession was called again")
+        failed = True
+    assert not failed, "test_alphaess_unbind_latches_and_removes_the_serial"
+
+
+def test_alphaess_failed_unbind_leaves_the_latch_clear_for_retry():
+    """Matches _offboard_system_if_needed: a failure must be retried on the next tick."""
+    failed = False
+    client = _client()
+    bad = create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(bad)):
+        run_async_local(client._handle_unbind_event("AL70", "turn_on"))
+    if "AL70" in client._unbind_done:
+        print("ERROR: a failed unbind was latched")
+        failed = True
+    if "AL70" not in client.device_list:
+        print("ERROR: a failed unbind removed the serial anyway")
+        failed = True
+    assert not failed, "test_alphaess_failed_unbind_leaves_the_latch_clear_for_retry"
+
+
+def test_alphaess_unbind_toggle_off_clears_the_latch():
+    """Turning it back off lets discovery pick the system up again if it was re-bound via
+    the CLI or the AlphaESS portal. It does NOT re-bind - that needs the emailed code."""
+    failed = False
+    client = _client()
+    client._unbind_done.add("AL70")
+    run_async_local(client._handle_unbind_event("AL70", "turn_off"))
+    if "AL70" in client._unbind_done:
+        print(f"ERROR: latch not cleared: {client._unbind_done}")
+        failed = True
+    assert not failed, "test_alphaess_unbind_toggle_off_clears_the_latch"
+
+
+def test_alphaess_unbind_is_not_gated_by_read_only():
+    """Read-only guards writes to the INVERTER; unbinding is account management.
+
+    Asserted so nobody 'fixes' this later by folding it into the control gate.
+    """
+    failed = False
+    client = _client()
+    client.state["switch.predbat_set_read_only"] = "on"
+    client.control_enable = False
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+        run_async_local(client._handle_unbind_event("AL70", "turn_on"))
+    if "AL70" not in client._unbind_done:
+        print("ERROR: unbind was blocked by read-only or control_enable")
+        failed = True
+    assert not failed, "test_alphaess_unbind_is_not_gated_by_read_only"
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -1130,6 +1247,12 @@ def run_alphaess_control_tests(my_predbat):
         ("periodic_no_overlap", test_alphaess_periodic_windows_do_not_overlap),
         ("periodic_charge_limit_floor", test_alphaess_periodic_charge_limit_floor_is_clamped),
         ("apply_settings_routes_periodic", test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint),
+        ("unbind_switch_published", test_alphaess_unbind_switch_is_published_for_every_serial),
+        ("unbind_switch_reflects_latch", test_alphaess_unbind_switch_reflects_an_already_latched_serial),
+        ("unbind_latches", test_alphaess_unbind_latches_and_removes_the_serial),
+        ("unbind_failure_retries", test_alphaess_failed_unbind_leaves_the_latch_clear_for_retry),
+        ("unbind_toggle_off", test_alphaess_unbind_toggle_off_clears_the_latch),
+        ("unbind_not_read_only_gated", test_alphaess_unbind_is_not_gated_by_read_only),
     ]:
         try:
             if fn():

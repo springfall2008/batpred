@@ -31,6 +31,8 @@ from alphaess_const import (
     ALPHAESS_ENDPOINTS,
     ALPHAESS_RETURN_CODES,
     ALPHAESS_CODE_OK,
+    ALPHAESS_CODE_ALREADY_BOUND,
+    ALPHAESS_CODE_NOT_BOUND,
     ALPHAESS_CODE_TIMESTAMP,
     ALPHAESS_CODE_TOO_FAST,
     ALPHAESS_CODE_NO_PERMISSION,
@@ -814,6 +816,12 @@ class AlphaESSAPI(ComponentBase):
                 app="alphaess",
             )
         self.dashboard_item(self._control_name("switch", sn, "battery_schedule_charge_write"), state="off", attributes={"friendly_name": "AlphaESS {} Schedule Write".format(sn), "icon": "mdi:content-save"}, app="alphaess")
+        self.dashboard_item(
+            self._control_name("switch", sn, "unbind"),
+            state="on" if sn in self._unbind_done else "off",
+            attributes={"friendly_name": "AlphaESS {} Unbind (one-way - re-binding needs a code emailed to the system owner)".format(sn), "icon": "mdi:link-off"},
+            app="alphaess",
+        )
 
     async def get_schedule_settings_ha(self, sn):
         """Read the control entities into the schedule shape the payload builder consumes.
@@ -1353,9 +1361,74 @@ class AlphaESSAPI(ComponentBase):
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
 
+    async def request_verification_code(self, sn, check_code):
+        """Ask AlphaESS to email a verification code to the system owner.
+
+        GET, despite the portal describing the payload as "request parameter (Json)" - a
+        POST returns HTTP 405. The code is emailed to the END USER's registered address and
+        is never returned here, which is why binding cannot be driven from a toggle.
+        """
+        code, _ = await self._get("verification_code", params={"sysSn": sn, "checkCode": check_code})
+        if code == ALPHAESS_CODE_OK:
+            return True, "AlphaESS has emailed a verification code to the registered owner of {}".format(sn)
+        return False, "Could not request a verification code for {}: {}".format(sn, self.describe_code(code))
+
+    async def bind_system(self, sn, code):
+        """Bind a system to this AppID using the emailed verification code.
+
+        Judged on the response code alone: the endpoint answers data:null whether it
+        succeeded or not. 6003 "You have bound this SN" is an idempotent success.
+        The one-time code is never logged - _post redacts it.
+        """
+        result, _ = await self._post("bind", body={"sysSn": sn, "code": code})
+        if result == ALPHAESS_CODE_OK:
+            return True, "Bound {} to this AppID".format(sn)
+        if result == ALPHAESS_CODE_ALREADY_BOUND:
+            return True, "{} was already bound to this AppID".format(sn)
+        return False, "Could not bind {}: {}".format(sn, self.describe_code(result))
+
+    async def unbind_system(self, sn):
+        """Unbind a system from this AppID.
+
+        6005 "This appId is not bound to the SN" means it was already gone, which is the
+        outcome the caller wanted.
+        """
+        result, _ = await self._post("unbind", body={"sysSn": sn})
+        if result == ALPHAESS_CODE_OK:
+            return True, "Unbound {} from this AppID".format(sn)
+        if result == ALPHAESS_CODE_NOT_BOUND:
+            return True, "{} was not bound to this AppID".format(sn)
+        return False, "Could not unbind {}: {}".format(sn, self.describe_code(result))
+
     async def _handle_unbind_event(self, sn, value):
-        """Handle the unbind toggle. Replaced with the real implementation in Task 12."""
-        return
+        """Drive the per-serial unbind toggle, following Sigenergy's offboard pattern.
+
+        Deliberately NOT gated on switch.predbat_set_read_only or alphaess_control_enable:
+        both guard writes to the INVERTER, and unbinding is account management rather than
+        an inverter write.
+
+        Turning the switch back off clears the latch so discovery picks the system up again
+        if it was re-bound via the CLI or the AlphaESS portal. It does NOT re-bind - that
+        is impossible without the code emailed to the system owner, so the switch is
+        one-way from Home Assistant.
+        """
+        if not self._to_bool(value):
+            self._unbind_done.discard(sn)
+            await self.save_control()
+            return
+        if sn in self._unbind_done:
+            return
+        ok, message = await self.unbind_system(sn)
+        if not ok:
+            # Leave the latch clear so the next tick retries, matching
+            # _offboard_system_if_needed.
+            self.log("Warn: AlphaESS {}".format(message))
+            return
+        self._unbind_done.add(sn)
+        if sn in self.device_list:
+            self.device_list = [serial for serial in self.device_list if serial != sn]
+        self.log("Info: AlphaESS {}. Predbat can no longer read or control it, so num_inverters and the auto-configured args in apps.yaml now reference a system it cannot reach - re-bind it from the portal or the CLI, or update apps.yaml.".format(message))
+        await self.save_control()
 
     async def load_cache(self, name):
         """Load one cache file, returning {} when absent or unreadable.

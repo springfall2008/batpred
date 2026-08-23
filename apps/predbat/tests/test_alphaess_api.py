@@ -910,6 +910,71 @@ def test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_
     assert not failed, "test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds"
 
 
+def test_alphaess_bind_treats_already_bound_as_success():
+    """bindSn answers data:null on success AND on failure, so only the code separates them.
+
+    6003 "You have bound this SN" is an idempotent success, not an error to show a user.
+    """
+    failed = False
+    for code, expect_ok in ((200, True), (6003, True), (6046, False), (6038, False)):
+        client = MockAlphaESS()
+        response = create_aiohttp_mock_response(status=200, json_data=_envelope(code, None))
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+            ok, message = run_async_local(client.bind_system("AL70", "123456"))
+        if ok is not expect_ok:
+            print(f"ERROR: bind code {code} -> ok {ok}, expected {expect_ok}")
+            failed = True
+        if not message:
+            print(f"ERROR: bind code {code} produced no message")
+            failed = True
+    assert not failed, "test_alphaess_bind_treats_already_bound_as_success"
+
+
+def test_alphaess_unbind_treats_not_bound_as_success():
+    """6005 means the AppID was not bound to that SN in the first place - already gone."""
+    failed = False
+    for code, expect_ok in ((200, True), (6005, True), (6042, False)):
+        client = MockAlphaESS()
+        response = create_aiohttp_mock_response(status=200, json_data=_envelope(code, None))
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+            ok, _ = run_async_local(client.unbind_system("AL70"))
+        if ok is not expect_ok:
+            print(f"ERROR: unbind code {code} -> ok {ok}, expected {expect_ok}")
+            failed = True
+    assert not failed, "test_alphaess_unbind_treats_not_bound_as_success"
+
+
+def test_alphaess_verification_code_is_a_get():
+    """The portal describes a JSON body, which reads like a POST. It is GET with query
+    parameters - a POST returns HTTP 405."""
+    failed = False
+    client = MockAlphaESS()
+    session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))
+    with patch("alphaess.aiohttp.ClientSession", return_value=session):
+        ok, _ = run_async_local(client.request_verification_code("AL70", "CHECKCODE"))
+    if not ok:
+        print("ERROR: verification request failed")
+        failed = True
+    if session.post.called:
+        print("ERROR: getVerificationCode was sent as a POST; it is GET only")
+        failed = True
+    assert not failed, "test_alphaess_verification_code_is_a_get"
+
+
+def test_alphaess_bind_code_is_never_logged():
+    """The one-time code is a credential-grade secret while it is valid."""
+    failed = False
+    client = MockAlphaESS()
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        run_async_local(client.bind_system("AL70", "987654"))
+    for message in client.log_messages:
+        if "987654" in message:
+            print(f"ERROR: bind code leaked in log: {message}")
+            failed = True
+    assert not failed, "test_alphaess_bind_code_is_never_logged"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -946,6 +1011,10 @@ def run_alphaess_api_tests(my_predbat):
         ("fetch_config_both_fail", test_alphaess_fetch_config_both_fail_returns_false),
         ("refresh_config_not_marked_on_partial", test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds),
         ("refresh_config_marked_on_one_full_success", test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds),
+        ("bind_already_bound_ok", test_alphaess_bind_treats_already_bound_as_success),
+        ("unbind_not_bound_ok", test_alphaess_unbind_treats_not_bound_as_success),
+        ("verification_is_get", test_alphaess_verification_code_is_a_get),
+        ("bind_code_redacted", test_alphaess_bind_code_is_never_logged),
     ]:
         try:
             if fn():

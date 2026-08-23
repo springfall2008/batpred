@@ -69,6 +69,7 @@ chargeenergytotal
 chargefreeze
 chargehold
 chargelater
+CHECKCODE
 Chrg
 citem
 cloudfront
