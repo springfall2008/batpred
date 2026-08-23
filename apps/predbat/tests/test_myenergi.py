@@ -1209,6 +1209,48 @@ def test_control_switch_is_published_and_toggles_control():
     print("  ✓ The zappi control switch is published and toggles control")
 
 
+def test_control_switch_is_not_published_when_control_cannot_run():
+    """No switch appears when control could never act on it, rather than one that lies.
+
+    With myenergi_enable_controls off the component is monitor only and enable_control()
+    refuses, so a published switch would sit there reading "on" for a feature that cannot
+    run. Toggling it would only make it responsive, not honest - so it is not published.
+    """
+    component = _controlling_component(enable_controls=False)
+    assert component.control_active is False
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") is None
+
+    # It reappears, with its remembered state, once controls are allowed again
+    allowed = _controlling_component()
+    assert allowed.control_active is True
+    run_async(allowed.publish_data())
+    assert allowed.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
+    print("  ✓ No control switch appears when control could not act on it")
+
+
+def test_control_switch_publishes_its_restored_state_on_the_first_cycle():
+    """A restart with control switched off must not show the switch on, even briefly.
+
+    The saved state has to be restored before the first publish, or the switch reads "on"
+    for a cycle and then flips - which looks like Predbat taking control back.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]}, zappi_control=True)
+    component.transport.fetch_devices = AsyncMock(return_value=[_zappi(12345678)])
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    async def _load_off():
+        """Stand in for storage returning a switched-off control state."""
+        component.control_enabled = False
+
+    component.load_control_enabled = _load_off
+
+    run_async(component.run(0, True))
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ The control switch publishes its restored state on the first cycle")
+
+
 def test_control_switch_is_not_published_without_the_feature():
     """With myenergi_zappi_control unset there is no switch, so no dead control appears."""
     component = _control_component()
@@ -2321,6 +2363,8 @@ def test_myenergi(my_predbat=None):
     test_control_releases_to_eco_plus_when_nothing_was_saved()
     test_control_stops_and_resumes_on_read_only()
     test_control_switch_is_published_and_toggles_control()
+    test_control_switch_is_not_published_when_control_cannot_run()
+    test_control_switch_publishes_its_restored_state_on_the_first_cycle()
     test_control_switch_is_not_published_without_the_feature()
     test_run_enables_control_and_drives_the_zappi()
     test_run_does_not_control_when_the_feature_is_off()

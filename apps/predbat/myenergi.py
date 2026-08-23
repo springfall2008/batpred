@@ -1077,14 +1077,16 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
                 return False
             if devices:
                 self.devices = {device.device_id: device for device in devices}
+                if first:
+                    # Before the first publish: the switch has to carry its restored state
+                    # from the start, or a restart with control switched off would show it
+                    # on for a cycle and then flip, looking like Predbat taking control back
+                    await self.load_control_enabled()
+                    self.enable_control()
                 await self.publish_data()
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
                     self._auto_configured = True
-                if first:
-                    # After the first poll, so the Zappis are known before control decides
-                    await self.load_control_enabled()
-                    self.enable_control()
                 if self.control_active:
                     try:
                         await self.control_tick(self.now_utc_exact)
@@ -1192,9 +1194,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
     async def publish_data(self):
         """Publish every known device as Predbat entities."""
-        if self.zappi_control:
-            # Only published when the feature is configured, so no dead control appears
-            # in the dashboard of everyone who is only monitoring.
+        if self.control_active:
+            # Published only when control could actually act on it. Gating on the config
+            # key alone would leave a switch reading "on" for a feature that cannot run -
+            # monitor-only mode, or automatic configuration off - and making that switch
+            # merely respond to a toggle would keep it live without making it honest.
             self.dashboard_item(
                 "switch.{}_myenergi_zappi_control".format(self.prefix),
                 state="on" if self.control_enabled else "off",
