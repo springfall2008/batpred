@@ -598,7 +598,7 @@ Not implemented in this release: mode selection, priority, minimum green level, 
 
 The session energy sensors reset to zero when a charging or heating session ends. Predbat expects that: it treats these sensors as incrementing counters and rebases the series whenever it sees one reset, so both the per-minute load subtraction and the daily `iboost_today` total come out right across any number of sessions in a day.
 
-The one case it cannot see is a small session. A reset is only recognised when a reading lands on zero or the drop is more than 1 kWh, so a session that finishes below roughly 1 kWh — a short top-up, or a brief Eddi diversion — can be missed and its energy left out of the day's figures. That applies equally to `car_charging_energy` and to `iboost_today`. In practice it is a fraction of a kWh, and the planner mostly cares about the larger sessions, but the daily totals can read slightly low if your Zappi or Eddi does a lot of very short sessions.
+The one case it cannot see is a small session. A drop of less than 1 kWh is smoothed over as a dip in the data rather than treated as a reset, so a session that finishes below roughly 1 kWh — a short top-up, or a brief Eddi diversion — can be missed and its energy left out of the day's figures. A reading of zero between the sessions does not help, because the dip is smoothed away before the reset is looked for. That applies equally to `car_charging_energy` and to `iboost_today`. In practice it is a fraction of a kWh, and the planner mostly cares about the larger sessions, but the daily totals can read slightly low if your Zappi or Eddi does a lot of very short sessions.
 
 #### Testing your configuration (myenergi)
 

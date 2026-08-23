@@ -778,11 +778,12 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         handled: get_from_incrementing() clamps negative deltas to zero for the
         per-minute subtraction, and the daily totals go through minute_data_load()'s
         clean_incrementing_reverse(), which rebases the series on a reset. The residual
-        limitation is narrower - a drop only counts as a reset once a sample reads zero
-        or the fall exceeds 1 kWh, so a session that ends below roughly 1 kWh without a
-        zero sample is not rebased and is under-counted. That loss is in the shared
-        cumulative series, so it affects car_charging_energy and iboost_today alike.
-        Documented in docs/components.md.
+        limitation is narrower - minute_data() smooths a fall of less than 1 kWh as a dip
+        in the data (utils.py:565) before clean_incrementing_reverse() ever looks for a
+        reset (utils.py:740), so a session ending below roughly 1 kWh is under-counted.
+        An intervening zero reading does not rescue it, because the dip is smoothed away
+        first. That loss is in the shared cumulative series, so it affects
+        car_charging_energy and iboost_today alike. Documented in docs/components.md.
         """
         zappi_energy_entities = []
         zappi_plug_entities = []

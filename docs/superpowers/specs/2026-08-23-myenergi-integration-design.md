@@ -296,10 +296,12 @@ it detects a reset. A day of several Eddi sessions therefore totals correctly, a
 same holds for `car_charging_energy`.
 
 The residual limitation is narrower, and applies to both keys equally because the loss is
-in the shared cumulative series. `clean_incrementing_reverse()` only recognises a drop as
-a reset when a sample reads `<= 0` or the fall is at least 1.0 kWh (`utils.py:740`), so a
-session that ends below roughly 1 kWh without a sample landing on zero is not rebased and
-its energy is left out. Measured against Predbat's own `minute_data`, two 0.6 kWh sessions
+in the shared cumulative series. `minute_data()` only propagates a fall as a reset when it
+is near midnight or at least 1.0 kWh (`utils.py:565`); anything smaller is interpolated
+over as a dip in the data before `clean_incrementing_reverse()` (`utils.py:740`) ever sees
+it. A session ending below roughly 1 kWh is therefore under-counted, and an intervening
+zero reading does not rescue it — the dip is smoothed away first. Measured against
+Predbat's own `minute_data`, two 0.6 kWh sessions
 in a day total 0.600 kWh rather than 1.20 kWh, while two sessions of 2.0 and 1.5 kWh total
 correctly. This is accepted for this release: it is a fraction of a kWh, and the planner
 is driven by the larger sessions. The fix, if it is wanted later, is to derive the sensor
