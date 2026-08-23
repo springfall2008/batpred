@@ -584,6 +584,13 @@ def predbat_update_move(version, files):
 
     The staged files are re-verified against the staged manifest first, and nothing is
     moved unless every one of them matches, so a corrupted file is never installed.
+
+    The git_version.txt dev marker is cleared before the move runs, not after: a hot-reload
+    triggered by the move itself (predbat.py's mtime changing partway through the mv chain)
+    could otherwise start a new process that reads a now-stale marker before this function
+    gets a chance to clear it. The trade-off is that a failed move loses that diagnostic
+    marker too - acceptable since verify_staged_files() has already ruled out a bad
+    download by this point, so a failure here is a rarer, lower-stakes filesystem issue.
     """
     if not files:
         return False
@@ -601,9 +608,9 @@ def predbat_update_move(version, files):
             cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
         cmd += "echo 'Update complete'"
         clear_deploy_git_version(this_path)
-        os.system(cmd)
+        result = os.system(cmd)
 
-        return True
+        return result == 0
     return False
 
 

@@ -1637,8 +1637,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         except ValueError:
             return False
 
-        # Check if the last updated time is within the last 15 minutes
-        if (datetime.now(timezone.utc) - predbat_last_updated).total_seconds() > 15 * 60:
+        # Check if the last updated time is within the last 15 minutes. An install upgraded
+        # from before record_status() wrote a timezone-aware last_updated may still have the
+        # old naive format persisted in HA until the next record_status() call overwrites it -
+        # comparing against a timezone-aware "now" in that case would raise TypeError.
+        if predbat_last_updated.tzinfo is None:
+            now = datetime.now()
+        else:
+            now = datetime.now(timezone.utc)
+        if (now - predbat_last_updated).total_seconds() > 15 * 60:
             return False
         return True
 
