@@ -38,6 +38,26 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         battery_rate_max_charge=0.0,
         assert_battery_cycle=0.0,
     )
+    # Freeze Export must still let the battery discharge to cover a genuine load shortfall
+    # (customisation.md "Freeze Export during Demand": "allows battery discharge, but not
+    # battery charging") - distinct from the residual-leak path above, which only fires when
+    # nothing else already moved the battery. No PV, no residual-discharge config: before the
+    # #4676 fix this stayed flat (battery_draw pinned at 0) and billed the whole load as import.
+    failed |= simple_scenario(
+        "freeze_export_ac_flow_shortfall_discharges",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=0.0,
+        assert_final_soc=9.0,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=0.0,
+        battery_rate_max_charge=1.0,
+        assert_battery_cycle=1.0,
+    )
     failed |= simple_scenario(
         "freeze_export_ac_flow_240w_one_hour",
         my_predbat,

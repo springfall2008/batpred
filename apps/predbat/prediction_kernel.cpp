@@ -1078,13 +1078,20 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     pv_dc = std::min(std::fabs(battery_draw), pv_now);
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
                 }
+            } else if (diff_freeze > 0) {
+                // Freeze Export still allows the battery to discharge to cover a genuine load
+                // shortfall - only charging is disabled (customisation.md "Freeze Export during
+                // Demand"). Mirrors prediction.py's matching elif - see #4676.
+                battery_draw = std::min({diff_freeze, discharge_rate_now_curve_step, inverter_limit, battery_to_min});
             }
 
             // Some inverters (observed on AlphaESS) continue a small residual battery
             // discharge during Freeze Export. Feed the battery-side rate into the normal AC
             // balance so load consumes it first and any surplus may export, while respecting
-            // the reserve and the physical grid export limit.
-            if (inverter_freeze_export_discharge_rate > 0 && battery_draw >= 0) {
+            // the reserve and the physical grid export limit. Only applies when nothing else
+            // has already decided a movement - a genuine shortfall discharge above already
+            // covers the real load more precisely than this residual estimate.
+            if (inverter_freeze_export_discharge_rate > 0 && battery_draw == 0) {
                 double freeze_draw = std::min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min);
                 const double freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
                 if (freeze_diff < 0 && std::abs(freeze_diff) > export_limit) {
