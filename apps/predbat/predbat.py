@@ -470,6 +470,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
+        # Which component's automatic_config() owns octopus_intelligent_slot/ready_time/charge_limit.
+        # Both OctopusAPI and OhmeAPI can wire the car slots, and Octopus re-runs its automatic_config
+        # whenever the tariff or intelligent device set moves - without a claim it silently takes the
+        # args back off Ohme part way through a run. None means nobody has claimed them.
+        self.car_slot_owner = None
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False

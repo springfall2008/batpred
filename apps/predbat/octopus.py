@@ -1180,7 +1180,13 @@ class OctopusAPI(ComponentBase):
         # below is recorded on every call, including calls that wired nothing, so it is [] and not
         # None after the first run on an account with no devices; treating that as "previously
         # wired" would blank a user's own apps.yaml entries, which auto-discovery never touched.
-        if devices or self.intelligent_config_devices:
+        # Another component may have claimed the car slots - the Ohme component does when it is
+        # set to take the Intelligent slots from the charger instead. This method re-runs whenever
+        # the tariff or device set moves, so without this check it would quietly take them back.
+        slot_owner = getattr(self.base, "car_slot_owner", None)
+        if slot_owner and slot_owner != "octopus":
+            self.log("OctopusAPI: Car slots are wired by the {} component, leaving them alone".format(slot_owner))
+        elif devices or self.intelligent_config_devices:
             # Suspended devices (e.g. an old/decommissioned charger still linked to the Octopus
             # account) aren't actively charging, so exclude them from the entity lists and from
             # the num_cars count below - otherwise a stale suspended device can silently push

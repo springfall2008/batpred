@@ -310,15 +310,49 @@ An excellent [worked example of setting up multiple car charging with Predbat](h
 
 Predbat can talk directly to the Ohme charger by configuring your Ohme account details in `apps.yaml`.
 
-When **ohme_automatic_octopus_intelligent** is set to `true` then Predbat is automatically configured to take Octopus Intelligent car charging slots from Ohme (rather than from Octopus Intelligent directly).
+```yaml
+  ohme_login: "user@domain"
+  ohme_password: "xxxxxxxxx"
+  ohme_automatic: true
+```
+
+There are two separate automatic settings, so you can have Predbat plan for the car without involving Octopus Intelligent at all:
+
+**ohme_automatic** registers the Ohme charger with Predbat as a car. Predbat wires `num_cars`, `car_charging_planned` (from `binary_sensor.predbat_ohme_connected`, on whenever a car is
+plugged in and still wants charge), `car_charging_soc` (from `sensor.predbat_ohme_battery_percent`) and `car_charging_energy` (see [Ohme charge energy](#ohme-charge-energy) below).
+The car's battery size and target charge level are left to your existing `car_charging_battery_size` and `car_charging_limit` settings, as Ohme cannot report them.
+
+**ohme_automatic_octopus_intelligent** takes the Octopus Intelligent car charging slots from Ohme rather than from Octopus Intelligent directly, by pointing `octopus_intelligent_slot`,
+`octopus_ready_time` and `octopus_charge_limit` at the Ohme entities. Left unset it is auto-detected: if `ohme_automatic` is on and the Octopus component reports an Intelligent tariff,
+Predbat uses the Ohme slots. Set it explicitly to override that either way - `true` forces it on (needed if you have no Octopus component for Predbat to detect from), `false` forces it
+off so the slots come from Octopus directly.
 
 ```yaml
   ohme_login: "user@domain"
   ohme_password: "xxxxxxxxx"
+  ohme_automatic: true
   ohme_automatic_octopus_intelligent: true
 ```
 
+If you run the Octopus component as well, only one of them can own the car slot wiring. Whichever source is in use, Predbat records the owner so the other component stops re-wiring
+those settings - previously both could write them and the wiring would alternate as Octopus re-detected your tariff or devices.
+
+Setting only **ohme_automatic_octopus_intelligent** (with no `ohme_automatic`) still behaves as it did before: the Intelligent slots are wired, and nothing else is.
+
 **Note:** It's recommended to store `ohme_password` in `secrets.yaml` and reference it as `ohme_password: !secret ohme_password` - see [Storing secrets](apps-yaml.md#storing-secrets).
+
+### Ohme charge energy
+
+Predbat publishes `sensor.predbat_ohme_energy_today` - the energy the charger has delivered to the car so far today, in kWh, resetting at midnight.
+
+Ohme's API does not report delivered energy directly; the figure it does report is the car's own battery level, which reads zero for cars that don't report their state of charge
+and jumps by the whole battery content for those that do. Predbat therefore builds the sensor itself by summing the charger's power reading over time, the same approach the
+Home Assistant Ohme integration recommends now that its own `energy` sensor has been [removed](devices.md#ohme-ha-in-built-integration). The charge session is polled every two
+minutes, so expect an error of up to a couple of hundred Wh per charging session - fine for filtering car charging out of your house load, but not a revenue-grade meter reading.
+
+When **ohme_automatic** is set to `true`, Predbat points [car_charging_energy](apps-yaml.md#car-charging-integration) at this sensor automatically so that
+[car charging hold](#filtering-car-charging-energy-from-house-load) can subtract your car charging precisely rather than falling back to the `car_charging_threshold` heuristic. If you already have
+another charger's energy sensor configured - a Zappi or Wallbox, say - Predbat leaves your setting alone and logs that it has done so.
 
 ## GivEnergy Gateway OCPP EV charger
 

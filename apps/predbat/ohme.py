@@ -53,8 +53,19 @@ ohme_attribute_table = {
     "energy": {"friendly_name": "Ohme Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "Wh", "device_class": "energy"},
     "battery_percent": {"friendly_name": "Ohme Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
     "current_vehicle": {"friendly_name": "Ohme Current Vehicle", "icon": "mdi:car"},
+    "connected": {"friendly_name": "Ohme Car Connected", "icon": "mdi:ev-plug-type2"},
+    "energy_today": {"friendly_name": "Ohme Charge Energy Today", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "approve_charge": {"friendly_name": "Ohme Approve Charge", "icon": "mdi:check-circle-outline"},
 }
+
+# Delivered-energy sensor built by OhmeAPI.update_energy_today() - see that method for why
+# Ohme's own energy figure cannot be used for this
+ENERGY_TODAY_ENTITY = "sensor.predbat_ohme_energy_today"
+
+# Longest gap between power readings we will still integrate over. The charge session is polled
+# every 120 seconds, so a longer gap means Predbat stalled or was restarted and we have no evidence
+# of what the charger did meanwhile - under-counting is safe, inventing energy is not
+MAX_ENERGY_GAP_SECONDS = 600
 
 BASE_TIME = datetime.datetime.strptime("00:00", "%H:%M")
 OPTIONS_TIME = [((BASE_TIME + timedelta(seconds=minute * 60)).strftime("%H:%M")) for minute in range(0, 24 * 60, 1)]
@@ -153,6 +164,11 @@ class ChargerStatus(Enum):
     FINISHED = "finished"
 
 
+# Charger states that mean a car is plugged in and still wants charge, used for car_charging_planned.
+# FINISHED is excluded deliberately - the car is still plugged in but has nothing left to take
+CONNECTED_STATUSES = (ChargerStatus.PENDING_APPROVAL, ChargerStatus.CHARGING, ChargerStatus.PLUGGED_IN, ChargerStatus.PAUSED)
+
+
 class ChargerMode(Enum):
     """Charger mode enum."""
 
@@ -174,13 +190,20 @@ class ChargerPower:
 class OhmeAPI(ComponentBase):
     """Ohme API component for EV charger integration."""
 
-    def initialize(self, email, password, ohme_automatic_octopus_intelligent):
+    def initialize(self, email, password, ohme_automatic=False, ohme_automatic_octopus_intelligent=None):
         """Initialise the Ohme API component"""
         self.email = email
         self.password = password
         self.client = OhmeApiClient(email, password, self.log)
         self.queued_events = []
+        self.ohme_automatic = ohme_automatic
+        # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
+        self.energy_today = 0.0
+        self.energy_today_date = None
+        self.energy_last_time = None
+        self.energy_last_watts = 0.0
+        self.energy_restored = False
 
     def last_updated_time(self):
         """
@@ -218,20 +241,138 @@ class OhmeAPI(ComponentBase):
             await self.client.async_get_charge_session()
             await self.publish_data()
 
-        if first and self.ohme_automatic_octopus_intelligent and self.client.serial:
-            await self.automatic_config_octopus_intelligent()
+        if first and self.client.serial:
+            if self.ohme_automatic:
+                await self.automatic_config()
+            if self.octopus_intelligent_wanted():
+                await self.automatic_config_octopus_intelligent()
 
         self.update_success_timestamp()
         return True
 
+    def octopus_intelligent_wanted(self):
+        """
+        Decide whether to take the Octopus Intelligent car slots from Ohme.
+
+        The apps.yaml flag is a tri-state. Set explicitly it always wins, so a user who wants the
+        slots read straight from Octopus (or who has no Octopus component for us to ask) keeps
+        control. Left unset it is auto-detected, but only when ohme_automatic is on - otherwise
+        enabling this would start rewiring the config of every existing Ohme user who has asked
+        Predbat for nothing.
+        """
+        if self.ohme_automatic_octopus_intelligent is not None:
+            return bool(self.ohme_automatic_octopus_intelligent)
+        if not self.ohme_automatic:
+            return False
+
+        # OctopusAPI has already detected this by the time we run - it sits earlier in
+        # COMPONENT_LIST and Components.start() waits for each component's first run in turn
+        octopus = self.base.components.get_component("octopus") if self.base.components else None
+        if not octopus:
+            return False
+        tariff_code = (getattr(octopus, "tariffs", {}) or {}).get("import", {}).get("tariffCode")
+        if not octopus.is_intelligent_go_tariff(tariff_code):
+            return False
+        self.log("Info: Ohme API: Detected Intelligent Octopus tariff {}, taking the car slots from Ohme".format(tariff_code))
+        return True
+
+    async def automatic_config(self):
+        """
+        Register the Ohme charger with Predbat as a car.
+
+        Covers everything Ohme can tell us about the car itself. The Octopus Intelligent slot
+        wiring is deliberately separate - see automatic_config_octopus_intelligent().
+        """
+        self.log("Info: Ohme API: Registering the Ohme charger as a car")
+        if self.get_arg("num_cars", 0) < 1:
+            self.set_arg("num_cars", 1)
+        self.set_arg("car_charging_planned", ["binary_sensor.predbat_ohme_connected"])
+        self.set_arg("car_charging_soc", ["sensor.predbat_ohme_battery_percent"])
+
+        # Wire up the delivered-energy sensor so car_charging_hold can subtract car charging
+        # precisely instead of falling back to the car_charging_threshold heuristic. This runs
+        # before auto_config(final=True), so an unmatched regex from the apps.yaml default is
+        # still present as its literal "re:" string rather than having been removed yet - treat
+        # that as unconfigured, but leave a real charger (Zappi, Wallbox, hand-set sensor) alone.
+        existing = self.get_arg("car_charging_energy", default=None, indirect=False)
+        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")):
+            self.set_arg_auto("car_charging_energy", ENERGY_TODAY_ENTITY)
+        else:
+            self.log("Info: Ohme API: Leaving car_charging_energy set to {} rather than using {}".format(existing, ENERGY_TODAY_ENTITY))
+
     async def automatic_config_octopus_intelligent(self):
         """
-        Automatically set the predbat entities to use ohme via octopus
+        Automatically set the predbat entities to take the Intelligent car slots from Ohme.
+
+        Claims the car slot args so OctopusAPI.automatic_config() stops re-wiring them to its own
+        dispatch entities - it re-runs whenever the tariff or intelligent device set moves, which
+        would otherwise silently undo this part way through a run.
         """
         self.log("Info: Ohme API: Setting Predbat to use Ohme")
+        self.base.car_slot_owner = "ohme"
         self.set_arg("octopus_intelligent_slot", "binary_sensor.predbat_ohme_slot_active")
         self.set_arg("octopus_ready_time", "select.predbat_ohme_target_time")
         self.set_arg("octopus_charge_limit", "number.predbat_ohme_target_percent")
+
+    def restore_energy_today(self, now):
+        """
+        Seed today's charge energy from the sensor published before the last restart.
+
+        Without this a Predbat restart drops the running total back to zero mid-day, and any
+        charging already delivered today stops being subtracted from the load history.
+        """
+        self.energy_today_date = now.date()
+        previous_date = self.base.load_previous_value_from_ha(ENERGY_TODAY_ENTITY, attribute="energy_date")
+        if previous_date != now.date().isoformat():
+            # Nothing published yet, or a total left over from an earlier day
+            return
+        try:
+            self.energy_today = max(0.0, float(self.base.load_previous_value_from_ha(ENERGY_TODAY_ENTITY)))
+        except (TypeError, ValueError):
+            return
+        self.log("Info: Ohme API: Restored {} kWh of charge energy already delivered today".format(self.energy_today))
+
+    def update_energy_today(self, watts, now):
+        """
+        Integrate the charger's power reading into a daily incrementing energy total (kWh).
+
+        Ohme reports the car's absolute battery content rather than the energy the charger has
+        delivered, so its own energy figure cannot drive car_charging_energy - it reads zero for
+        cars that do not report SoC, and jumps by the whole battery content for those that do.
+        Summing power over time gives a real delivered-energy figure instead, which is what the
+        Home Assistant Ohme integration now recommends since its energy sensor was removed.
+
+        A left Riemann sum is used - each interval is charged at the power seen at its start - so
+        the ramp missed at the beginning of a charge is traded against the tail counted at the end
+        rather than systematically over-counting.
+        """
+        if not self.energy_restored:
+            self.energy_restored = True
+            self.restore_energy_today(now)
+
+        last_time = self.energy_last_time
+        last_watts = self.energy_last_watts
+        self.energy_last_time = now
+        self.energy_last_watts = watts if watts and watts > 0 else 0.0
+
+        if last_time is None or now <= last_time:
+            return self.energy_today
+
+        gap_seconds = (now - last_time).total_seconds()
+        if gap_seconds > MAX_ENERGY_GAP_SECONDS:
+            self.log("Warn: Ohme API: {}s since the last power reading, not counting that gap rather than assuming the charger ran throughout".format(int(gap_seconds)))
+            return self.energy_today
+
+        if self.energy_today_date != now.date():
+            # Past midnight - the finished day's total stays in Home Assistant's history, so start
+            # again and count only the part of this interval that falls on the new day
+            self.energy_today = 0.0
+            self.energy_today_date = now.date()
+            midnight = datetime.datetime.combine(now.date(), datetime.time(0, 0)).replace(tzinfo=now.tzinfo)
+            last_time = max(last_time, midnight)
+
+        self.energy_today += last_watts * (now - last_time).total_seconds() / 3600.0 / 1000.0
+        return self.energy_today
 
     async def publish_data(self):
         """
@@ -281,6 +422,15 @@ class OhmeAPI(ComponentBase):
             self.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
             self.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
             # self.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
+
+        # A car is plugged in and still wants charge - drives car_charging_planned under ohme_automatic
+        self.dashboard_item(entity_name_binary_sensor + "_connected", state="on" if self.client.status in CONNECTED_STATUSES else "off", attributes=ohme_attribute_table.get("connected", {}), app="ohme")
+
+        # Delivered-energy total, suitable for car_charging_energy unlike Ohme's own energy figure
+        energy_today = self.update_energy_today(power.watts if power else 0, datetime.datetime.now().astimezone())
+        energy_today_attributes = ohme_attribute_table.get("energy_today", {}).copy()
+        energy_today_attributes["energy_date"] = self.energy_today_date.isoformat() if self.energy_today_date else None
+        self.dashboard_item(ENERGY_TODAY_ENTITY, state=round(energy_today, 3), attributes=energy_today_attributes, app="ohme")
 
         # Publish boolean states
         self.dashboard_item(entity_name_switch + "_max_charge", state=max_charge, attributes=ohme_attribute_table.get("max_charge", {}), app="ohme")
@@ -362,7 +512,9 @@ class OhmeAPI(ComponentBase):
         """
         Number event
         """
-        if entity_id.endswith("_target_soc"):
+        # Must match the entity published by publish_data() (number.predbat_ohme_target_percent),
+        # which is also what ohme_automatic_octopus_intelligent binds octopus_charge_limit to
+        if entity_id.endswith("_target_percent"):
             if (isinstance(value, float) or isinstance(value, int)) and 0 <= value <= 100:
                 await self.client.async_apply_session_rule(target_percent=int(value))
             else:

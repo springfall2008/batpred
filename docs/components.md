@@ -491,6 +491,8 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 - Requires your Ohme account credentials
 - Can automatically manage Intelligent Octopus charging slots
 - Monitors real-time charging status and energy consumption
+- Publishes `sensor.predbat_ohme_energy_today`, the energy delivered to the car today, and wires it to `car_charging_energy` when `ohme_automatic_octopus_intelligent` is set -
+  see [Ohme charge energy](car-charging.md#ohme-charge-energy)
 
 #### Configuration Options (ohme)
 
@@ -498,7 +500,8 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
-| `ohme_automatic_octopus_intelligent` | Boolean | No | - | `ohme_automatic_octopus_intelligent` | Set to `true` to automatically sync with Intelligent Octopus |
+| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car |
+| `ohme_automatic_octopus_intelligent` | Boolean | No | auto | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Left unset it is auto-detected when `ohme_automatic` is on; set it explicitly to override |
 
 ---
 

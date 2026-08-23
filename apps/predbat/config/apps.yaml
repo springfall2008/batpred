@@ -296,6 +296,11 @@ pred_bat:
   # Ohme EV charger cloud direct integration
   #ohme_login: !secret ohme_login
   #ohme_password: !secret ohme_password
+  # Register the Ohme charger with Predbat as a car (planned/SoC/energy sensors)
+  #ohme_automatic: True
+  # Take the Octopus Intelligent car slots from Ohme rather than from Octopus directly.
+  # Leave unset to auto-detect an Intelligent tariff when ohme_automatic is on, or set
+  # it explicitly to True/False to override that decision
   #ohme_automatic_octopus_intelligent: True
 
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
