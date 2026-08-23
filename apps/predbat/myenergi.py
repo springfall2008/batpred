@@ -650,18 +650,27 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         return devices
 
     async def send_boost(self, device, amount, target_time=None):
-        """Start a boost, selecting the request body shape by device class."""
+        """Start a boost, selecting the request body shape by device class.
+
+        Sending a Zappi body to an Eddi (or the reverse) is a documented 400, so an
+        unrecognised kind is refused here rather than defaulted into the Eddi shape -
+        matching MyEnergiDirectTransport.send_boost.
+        """
         if device.kind == DEVICE_KIND_ZAPPI:
             body = {"mode": "normal", "parameters": {"energy": _boost_units(amount)}}
             if target_time:
                 body = {"mode": "smart", "parameters": {"energy": _boost_units(amount), "targetTime": target_time}}
-        else:
+        elif device.kind == DEVICE_KIND_EDDI:
             body = {"durationMinutes": _boost_units(amount)}
+        else:
+            raise MyEnergiApiError("cannot boost unsupported device kind '{}'".format(device.kind))
         await self._request("POST", "/devices/{}/boost".format(device.device_id), body=body)
         return True
 
     async def cancel_boost(self, device):
         """Cancel an active boost."""
+        if device.kind not in SUPPORTED_KINDS:
+            raise MyEnergiApiError("cannot cancel a boost on unsupported device kind '{}'".format(device.kind))
         await self._request("DELETE", "/devices/{}/boost".format(device.device_id))
         return True
 

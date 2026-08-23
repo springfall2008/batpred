@@ -1918,7 +1918,7 @@ The direct transport (the default) needs your hub serial number and an API key y
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
 - **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
 
-The component only starts when `myenergi_api_key` or `myenergi_key` is set. That test is a plain either/or and does not look at `myenergi_auth_method`, so with only `myenergi_token_hash` set and no `myenergi_key`, the component is never constructed, silently, with nothing logged to explain why it is missing.
+The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
 
 See [Components - myenergi](components.md#myenergi-myenergi) for the full list of published entities, the boost controls, and a known limitation around very short charging or diversion sessions.
 

@@ -239,7 +239,11 @@ COMPONENT_LIST = {
         # transport's local hub credential, key is the cloud transport's access token.
         # Without this the component would start for every instance since all
         # individual args are optional to allow either auth mode.
-        "required_or": ["api_key", "key"],
+        # api_key is the direct transport's credential; key (the OAuth access token) and
+        # token_hash (which the refresh chain exchanges for one) are the cloud transport's.
+        # token_hash has to be listed too: a refresh-only OAuth setup carries no key, and
+        # initialize() accepts that, so gating on key alone would never construct it.
+        "required_or": ["api_key", "key", "token_hash"],
         "phase": 1,
         "can_restart": True,
     },

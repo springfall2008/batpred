@@ -998,7 +998,9 @@ def test_component_registration():
     assert entry["event_filter"] == "predbat_myenergi_"
     assert entry["phase"] == 1
     assert entry["can_restart"] is True
-    assert entry["required_or"] == ["api_key", "key"]
+    # token_hash must be in the gate: a refresh-only OAuth setup has no key, and
+    # initialize() accepts that, so gating on key alone would never construct the component
+    assert entry["required_or"] == ["api_key", "key", "token_hash"]
 
     # Every declared arg must name a config key that exists in the schema, and every
     # arg must be accepted by initialize()
@@ -1425,6 +1427,27 @@ def test_direct_boost_rejects_unsupported_kinds():
     print("  ✓ Boost and cancel refuse unsupported device kinds")
 
 
+def test_cloud_boost_rejects_unsupported_kinds():
+    """The cloud transport refuses an unknown kind rather than defaulting it to the Eddi body.
+
+    Sending an Eddi body (durationMinutes) to a non-Eddi is a documented 400, so the
+    unsupported case must be caught locally - matching the direct transport above.
+    """
+    harvi = _make_device(kind="harvi", serial="11112222", device_id="HA11112222")
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    session, calls = _cloud_session([_cloud_response({"commandId": "c1"})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        for call in (transport.send_boost(harvi, 10), transport.cancel_boost(harvi)):
+            try:
+                run_async(call)
+                raise AssertionError("Expected MyEnergiApiError")
+            except MyEnergiApiError as exc:
+                assert "harvi" in str(exc), exc
+    assert calls == [], "No request may be made for an unsupported device kind"
+    print("  ✓ Cloud boost and cancel refuse unsupported device kinds")
+
+
 def test_cloud_device_list_cache_expires_on_the_clock():
     """The cached device list is refetched once it is older than CLOUD_DEVICE_LIST_MAX_AGE, and not before.
 
@@ -1711,7 +1734,8 @@ def test_templates_accept_the_connected_zappi_plug_states():
     for name in sorted(os.listdir(templates_dir)):
         if not name.endswith(".yaml"):
             continue
-        text = open(os.path.join(templates_dir, name), encoding="utf-8").read()
+        with open(os.path.join(templates_dir, name), encoding="utf-8") as handle:
+            text = handle.read()
         if "car_charging_planned_response" not in text or "'ev connected'" not in text:
             continue
         checked += 1
@@ -1770,6 +1794,7 @@ def test_myenergi(my_predbat=None):
     test_direct_boost_without_a_status_body_is_success()
     test_direct_boost_amount_and_time_formatting()
     test_direct_boost_rejects_unsupported_kinds()
+    test_cloud_boost_rejects_unsupported_kinds()
     test_cloud_device_list_cache_expires_on_the_clock()
     test_cloud_one_bad_device_does_not_lose_the_others()
     test_cloud_auth_error_still_aborts_the_poll()

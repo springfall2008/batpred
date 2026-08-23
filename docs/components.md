@@ -552,9 +552,10 @@ Predbat supports both of myenergi's APIs:
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
 | `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
 
-The component only starts when `myenergi_api_key` or `myenergi_key` is set. That test is a plain either/or
-and does not look at `myenergi_auth_method`, so with only `myenergi_token_hash` set and no `myenergi_key`,
-the component is never constructed, silently, with nothing logged to explain why it is missing.
+The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash`
+is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging
+to the transport you did not select still starts the component — it then logs which setting is missing
+rather than failing silently.
 
 Example for the direct transport:
 
