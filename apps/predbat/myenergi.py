@@ -422,7 +422,7 @@ class MyEnergiDirectTransport(MyEnergiTransport):
             raise MyEnergiApiError("timed out calling {}".format(path)) from exc
         except aiohttp.ClientError as exc:
             self.needs_asn_refresh = True
-            record_api_call("myenergi", success=False, reason="client_error")
+            record_api_call("myenergi", success=False, reason="connection_error")
             raise MyEnergiApiError("request to {} failed: {}".format(path, exc)) from exc
 
     async def connect(self):
@@ -518,10 +518,16 @@ class MyEnergiCloudTransport(MyEnergiTransport):
                         reason = "server_error" if response.status >= 500 else "client_error"
                         record_api_call("myenergi", success=False, reason=reason)
                         raise MyEnergiApiError("HTTP {} from {} {}".format(response.status, method, path))
-                    record_api_call("myenergi", success=True)
                     if response.status == 204:
+                        record_api_call("myenergi", success=True)
                         return {}
-                    return await response.json(content_type=None)
+                    try:
+                        payload = await response.json(content_type=None)
+                    except (ValueError, TypeError) as exc:
+                        record_api_call("myenergi", success=False, reason="decode_error")
+                        raise MyEnergiApiError("could not decode the response from {} {}".format(method, path)) from exc
+                    record_api_call("myenergi", success=True)
+                    return payload
         except asyncio.TimeoutError as exc:
             record_api_call("myenergi", success=False, reason="connection_error")
             raise MyEnergiApiError("timed out calling {} {}".format(method, path)) from exc
@@ -532,6 +538,8 @@ class MyEnergiCloudTransport(MyEnergiTransport):
     async def _refresh_device_list(self):
         """Reload GET /devices, keeping only the Zappi and Eddi entries."""
         payload = await self._request("GET", "/devices")
+        if not isinstance(payload, dict):
+            raise MyEnergiApiError("unexpected device list response shape from GET /devices")
         meta = {}
         for site in payload.get("sites", []) or []:
             for entry in site.get("devices", []) or []:

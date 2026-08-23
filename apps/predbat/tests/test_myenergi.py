@@ -5,9 +5,12 @@ Unit tests for the myenergi Zappi and Eddi integration
 """
 
 import asyncio
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import aiohttp
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -488,11 +491,21 @@ MOCK_CLOUD_DEVICES = {
 }
 
 
-def _cloud_response(json_data, status=200):
-    """Build a mock aiohttp response for the cloud API."""
+def _cloud_response(json_data=None, status=200, json_error=None):
+    """Build a mock aiohttp response for the cloud API.
+
+    Args:
+        json_data: The value `.json()` resolves to. Ignored when `json_error` is set.
+        status: The HTTP status code to report.
+        json_error: When set, `.json()` raises this instead of returning `json_data`,
+                    simulating an undecodable body such as an HTML error page.
+    """
     response = MagicMock()
     response.status = status
-    response.json = AsyncMock(return_value=json_data)
+    if json_error is not None:
+        response.json = AsyncMock(side_effect=json_error)
+    else:
+        response.json = AsyncMock(return_value=json_data)
     response.__aenter__ = AsyncMock(return_value=response)
     response.__aexit__ = AsyncMock(return_value=False)
     return response
@@ -572,7 +585,14 @@ def test_cloud_boost_bodies():
 
 
 def test_cloud_sets_bearer_header():
-    """Requests carry the current bearer token from the supplied callable."""
+    """Requests carry the current bearer token from the supplied callable, re-read on every call.
+
+    A single request would pass identically for an implementation that captured the
+    token once in __init__, which is exactly the bug the callable design exists to
+    avoid (OAuthMixin refreshing the token on the component must take effect on the
+    very next request). Changing the token mid-test and issuing a second request
+    proves the re-read, not just that a bearer header is sent at all.
+    """
     tokens = ["first-token"]
     session, _calls = _cloud_session([_cloud_response(MOCK_CLOUD_DEVICES)])
     transport = MyEnergiCloudTransport(print, lambda: tokens[0])
@@ -586,9 +606,13 @@ def test_cloud_sets_bearer_header():
 
     with patch("aiohttp.ClientSession", side_effect=_client_session):
         run_async(transport._request("GET", "/devices"))
+        assert captured.get("Authorization") == "Bearer first-token", captured
 
-    assert captured.get("Authorization") == "Bearer first-token", captured
-    print("  ✓ Cloud transport sends the bearer token")
+        tokens[0] = "second-token"
+        run_async(transport._request("GET", "/devices"))
+        assert captured.get("Authorization") == "Bearer second-token", captured
+
+    print("  ✓ Cloud transport re-reads the bearer token on every request")
 
 
 def test_cloud_unauthorised_raises_auth_error():
@@ -633,6 +657,91 @@ def test_cloud_timeout_is_api_error():
     print("  ✓ Cloud transport timeout raises MyEnergiApiError")
 
 
+def test_cloud_non_json_response_is_api_error():
+    """A 200 whose body cannot be decoded as JSON raises MyEnergiApiError, not a raw ValueError.
+
+    aiohttp's json() is called with content_type=None, which disables the
+    content-type guard - so a 200 carrying an HTML error page (CDN, proxy or
+    maintenance interstitial) reaches the JSON decoder and must not escape as a
+    bare json.JSONDecodeError (a ValueError subclass).
+    """
+    session, _calls = _cloud_session([_cloud_response(json_error=json.JSONDecodeError("Expecting value", "", 0))])
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ Cloud transport non-JSON body raises MyEnergiApiError")
+
+
+def test_cloud_non_dict_payload_is_api_error():
+    """A 200 whose decoded body is not a dict raises MyEnergiApiError, not a raw AttributeError.
+
+    GET /devices is documented to return {"sites": [...]}; a body that decodes to a
+    list or string instead must not reach payload.get() and crash with AttributeError.
+    """
+    session, _calls = _cloud_session([_cloud_response(["not", "a", "dict"])])
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ Cloud transport non-dict device list raises MyEnergiApiError")
+
+
+def test_cloud_record_api_call_reasons():
+    """record_api_call receives the documented reason vocabulary for every cloud failure branch."""
+    scenarios = [
+        (_cloud_response({}, status=401), "auth_error"),
+        (_cloud_response({}, status=500), "server_error"),
+        (_cloud_response({}, status=403), "client_error"),
+        (asyncio.TimeoutError(), "connection_error"),
+        (aiohttp.ClientConnectionError(), "connection_error"),
+        (_cloud_response(json_error=ValueError("bad json")), "decode_error"),
+    ]
+    for queued, expected_reason in scenarios:
+        session, _calls = _cloud_session([queued])
+        transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+        with patch("aiohttp.ClientSession", return_value=session), patch("myenergi.record_api_call") as mock_record:
+            try:
+                run_async(transport.fetch_devices())
+                raise AssertionError("Expected a MyEnergiError for reason={}".format(expected_reason))
+            except (MyEnergiAuthError, MyEnergiApiError):
+                pass
+        reasons = [call.kwargs.get("reason") for call in mock_record.call_args_list if call.kwargs.get("reason")]
+        assert reasons == [expected_reason], (expected_reason, reasons)
+    print("  ✓ Cloud transport records the documented reason for every failure branch")
+
+
+def test_direct_client_error_reason_is_connection_error():
+    """A generic aiohttp.ClientError from the active-server request records reason=connection_error.
+
+    _resolve_asn and the cloud transport both use connection_error for this case;
+    _request must be consistent with them rather than labelling it client_error,
+    which is reserved for a non-401 4xx HTTP response, not a transport failure.
+    """
+    session, _calls = _direct_session([_direct_response([]), aiohttp.ClientConnectionError()])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("myenergi.record_api_call") as mock_record:
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+
+    reasons = [call.kwargs.get("reason") for call in mock_record.call_args_list if call.kwargs.get("reason")]
+    assert "connection_error" in reasons, reasons
+    assert "client_error" not in reasons, reasons
+    print("  ✓ Direct transport ClientError records reason=connection_error")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -669,6 +778,10 @@ def test_myenergi(my_predbat=None):
     test_cloud_unauthorised_raises_auth_error()
     test_cloud_non_200_is_api_error()
     test_cloud_timeout_is_api_error()
+    test_cloud_non_json_response_is_api_error()
+    test_cloud_non_dict_payload_is_api_error()
+    test_cloud_record_api_call_reasons()
+    test_direct_client_error_reason_is_connection_error()
 
     print("=" * 70)
     return False
