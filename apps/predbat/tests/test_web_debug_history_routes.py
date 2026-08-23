@@ -33,6 +33,9 @@ class FakeRequest:
 def _make_web(my_predbat, storage=None):
     """Build a minimal WebInterface bound to my_predbat, bypassing ComponentBase.__init__
     (which would stand up the real aiohttp app) - same pattern as test_web_chart_currency.py.
+
+    Note this replaces my_predbat.components, which is shared with every other test in the run - the
+    caller is responsible for putting the original back (see the finally block below).
     """
     w = WebInterface.__new__(WebInterface)
     w.base = my_predbat
@@ -52,6 +55,11 @@ def test_web_debug_history_routes(my_predbat):
     print("**** Testing debug-history web routes ****")
 
     tmpdir = tempfile.mkdtemp(prefix="predbat_test_debug_history_routes_")
+    # _make_web() swaps components out for a stub on the shared my_predbat, so it has to go back
+    # afterwards. Left in place, the next test to reach is_running() dies on
+    # components.is_all_alive(), which the stub does not have - test_web_functions is the one that
+    # trips over it, several tests later and with nothing to point back to here.
+    saved_components = my_predbat.components
     try:
         print("Test: no storage component available - list is empty, downloads 404 without raising")
         w_no_storage = _make_web(my_predbat, storage=None)
@@ -140,6 +148,32 @@ def test_web_debug_history_routes(my_predbat):
             failed = True
 
     finally:
+        my_predbat.components = saved_components
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return failed
+
+
+def test_web_debug_history_routes_restores_components(my_predbat):
+    """The routes test must leave my_predbat.components exactly as it found it.
+
+    my_predbat is shared across the whole run, so a stub left behind here surfaces as an
+    AttributeError in an unrelated test much later - is_running() calling components.is_all_alive()
+    on a SimpleNamespace. Asserted on identity: whatever the caller had before is what it must get
+    back, and a different-but-plausible object would be just as wrong for whoever ran first.
+
+    Note is_running() guards with "if self.components", so the harness leaving this as None is
+    harmless - it is specifically a truthy stub missing the method that breaks things, which is why
+    a straight truthiness check would not catch this.
+    """
+    print("**** Testing debug-history routes leave components intact ****")
+    failed = False
+    before = my_predbat.components
+
+    test_web_debug_history_routes(my_predbat)
+
+    if my_predbat.components is not before:
+        print("  ERROR: components was not restored, got {} instead of the original".format(type(my_predbat.components).__name__))
+        failed = True
 
     return failed
