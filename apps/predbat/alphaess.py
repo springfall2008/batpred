@@ -1679,7 +1679,10 @@ async def test_alphaess_api(args):  # pragma: no cover
     print("Calling run() once (read-only: discover, poll config/telemetry, publish)...")
     ok = await client.run(seconds=0, first=True)
     if not ok:
-        if client.discovery_ok is False:
+        if not client.app_id or not client.app_secret:
+            print("\nMISSING CREDENTIALS - --app-id and --app-secret must both be non-empty.")
+            print("  Get them from https://open.alphaess.com/")
+        elif client.discovery_ok is False:
             print("\nDISCOVERY FAILED - the getEssList call itself was rejected.")
             if client.last_api_error:
                 print(f"  AlphaESS said: {client.last_api_error}")
