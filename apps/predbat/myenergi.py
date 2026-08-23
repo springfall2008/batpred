@@ -363,10 +363,38 @@ class MyEnergiDirectTransport(MyEnergiTransport):
             self.base_url = new_url
 
     async def _resolve_asn(self):
-        """Ask director.myenergi.net which server this account lives on."""
-        async with self._new_session() as session:
-            async with session.get(MYENERGI_DIRECTOR_URL + "/cgi-jstatus-E", timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
-                self._update_asn(response.headers)
+        """Ask director.myenergi.net which server this account lives on.
+
+        Wrapped in the same status/timeout handling as _request, since this
+        cold-start call targets a different host (the shared director, not the
+        account's own server) and is the request most likely to hit a network
+        failure. A non-200 response is reported as MyEnergiApiError rather than
+        diagnosed as bad credentials - an outage or error page from the director
+        has no reason to carry the ASN header, so the missing-header check only
+        applies once the request itself actually succeeded.
+        """
+        path = "/cgi-jstatus-E"
+        try:
+            async with self._new_session() as session:
+                async with session.get(MYENERGI_DIRECTOR_URL + path, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                    if response.status == 401:
+                        record_api_call("myenergi", success=False, reason="auth_error")
+                        raise MyEnergiAuthError("myenergi rejected the credentials for {}".format(path))
+                    if response.status != 200:
+                        self.needs_asn_refresh = True
+                        reason = "server_error" if response.status >= 500 else "client_error"
+                        record_api_call("myenergi", success=False, reason=reason)
+                        raise MyEnergiApiError("HTTP {} from {}".format(response.status, path))
+                    self._update_asn(response.headers)
+                    record_api_call("myenergi", success=True)
+        except asyncio.TimeoutError as exc:
+            self.needs_asn_refresh = True
+            record_api_call("myenergi", success=False, reason="connection_error")
+            raise MyEnergiApiError("timed out calling {}".format(path)) from exc
+        except aiohttp.ClientError as exc:
+            self.needs_asn_refresh = True
+            record_api_call("myenergi", success=False, reason="connection_error")
+            raise MyEnergiApiError("request to {} failed: {}".format(path, exc)) from exc
         self.needs_asn_refresh = False
 
     async def _request(self, path):
@@ -379,17 +407,18 @@ class MyEnergiDirectTransport(MyEnergiTransport):
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     self._update_asn(response.headers)
                     if response.status == 401:
-                        record_api_call("myenergi", success=False, reason="unauthorised")
+                        record_api_call("myenergi", success=False, reason="auth_error")
                         raise MyEnergiAuthError("myenergi rejected the credentials for {}".format(path))
                     if response.status != 200:
                         self.needs_asn_refresh = True
-                        record_api_call("myenergi", success=False, reason="http_{}".format(response.status))
+                        reason = "server_error" if response.status >= 500 else "client_error"
+                        record_api_call("myenergi", success=False, reason=reason)
                         raise MyEnergiApiError("HTTP {} from {}".format(response.status, path))
                     record_api_call("myenergi", success=True)
                     return await response.json(content_type=None)
         except asyncio.TimeoutError as exc:
             self.needs_asn_refresh = True
-            record_api_call("myenergi", success=False, reason="timeout")
+            record_api_call("myenergi", success=False, reason="connection_error")
             raise MyEnergiApiError("timed out calling {}".format(path)) from exc
         except aiohttp.ClientError as exc:
             self.needs_asn_refresh = True

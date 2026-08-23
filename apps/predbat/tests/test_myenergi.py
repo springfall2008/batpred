@@ -4,6 +4,7 @@
 Unit tests for the myenergi Zappi and Eddi integration
 """
 
+import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ from tests.test_infra import run_async
 from myenergi import (
     DEVICE_KIND_EDDI,
     DEVICE_KIND_ZAPPI,
+    MyEnergiApiError,
     MyEnergiAuthError,
     MyEnergiDirectTransport,
     MyEnergiTransport,
@@ -255,15 +257,21 @@ def _direct_response(json_data, asn="s18.myenergi.net", status=200):
 def _direct_session(responses):
     """Build a mock aiohttp session whose get() returns the next queued response.
 
-    Returns (session, calls), where calls records every requested URL in order.
+    Each queued item is either a mock response (from `_direct_response`) or an
+    exception instance, which is raised instead - used to simulate a timeout or
+    connection failure. Returns (session, calls), where calls records every
+    requested URL in order.
     """
     calls = []
     queue = list(responses)
 
     def _get(url, **kwargs):
-        """Record the requested URL and hand back the next queued mock response."""
+        """Record the requested URL, then return or raise the next queued item."""
         calls.append(url)
-        return queue.pop(0) if queue else _direct_response({})
+        item = queue.pop(0) if queue else _direct_response({})
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     session = MagicMock()
     session.get = _get
@@ -351,6 +359,118 @@ def test_direct_smart_boost_url():
     print("  ✓ Direct transport smart boost URL")
 
 
+def test_direct_401_is_auth_error():
+    """A 401 from the active server raises MyEnergiAuthError."""
+    session, _calls = _direct_session([_direct_response([]), _direct_response({}, status=401)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiAuthError")
+        except MyEnergiAuthError:
+            pass
+    print("  ✓ 401 from the active server raises MyEnergiAuthError")
+
+
+def test_direct_401_missing_header_precedence():
+    """A response that is both 401 and missing the ASN header raises via the header check, not the status check."""
+    session, _calls = _direct_session([_direct_response([]), _direct_response({}, asn=None, status=401)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiAuthError")
+        except MyEnergiAuthError as exc:
+            # Proves the header check fired, not the 401 status check, which raises a different message
+            assert "X_MYENERGI-asn" in str(exc), exc
+    print("  ✓ Missing-header check runs ahead of the 401 status check")
+
+
+def test_direct_non_200_sets_needs_asn_refresh():
+    """A non-401 non-200 response from the active server raises MyEnergiApiError and forces ASN re-resolution."""
+    session, _calls = _direct_session([_direct_response([]), _direct_response({}, status=500)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    assert transport.needs_asn_refresh is True
+    print("  ✓ Non-200 from the active server raises MyEnergiApiError and sets needs_asn_refresh")
+
+
+def test_direct_timeout_sets_needs_asn_refresh():
+    """A timeout on the active-server request raises MyEnergiApiError and forces ASN re-resolution."""
+    session, _calls = _direct_session([_direct_response([]), asyncio.TimeoutError()])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    assert transport.needs_asn_refresh is True
+    print("  ✓ Timeout on the active-server request raises MyEnergiApiError and sets needs_asn_refresh")
+
+
+def test_direct_asn_migration_follows_new_host():
+    """A response naming a different active server updates base_url and routes the next call there."""
+    session, calls = _direct_session(
+        [
+            _direct_response([]),  # director resolve -> s18
+            _direct_response(MOCK_JSTATUS_ALL),  # first jstatus-* call, still on s18
+            _direct_response(MOCK_JSTATUS_ALL, asn="s21.myenergi.net"),  # second call, server has migrated
+            _direct_response(MOCK_JSTATUS_ALL),  # third call, now targets s21
+        ]
+    )
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        run_async(transport.fetch_devices())
+        assert transport.base_url == "https://s18.myenergi.net"
+        run_async(transport.fetch_devices())
+        assert transport.base_url == "https://s21.myenergi.net"
+        run_async(transport.fetch_devices())
+
+    assert calls[1] == "https://s18.myenergi.net/cgi-jstatus-*", calls
+    assert calls[2] == "https://s18.myenergi.net/cgi-jstatus-*", calls
+    assert calls[3] == "https://s21.myenergi.net/cgi-jstatus-*", calls
+    print("  ✓ Active server migration is followed on the next request")
+
+
+def test_direct_resolve_asn_non_200_is_api_error():
+    """A non-200 response from the director during ASN resolution is a service outage, not bad credentials."""
+    session, _calls = _direct_session([_direct_response({}, asn=None, status=503)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.connect())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ Non-200 while resolving the ASN raises MyEnergiApiError, not an auth error")
+
+
+def test_direct_resolve_asn_timeout_is_api_error():
+    """A timeout resolving the ASN raises MyEnergiApiError."""
+    session, _calls = _direct_session([asyncio.TimeoutError()])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.connect())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ Timeout while resolving the ASN raises MyEnergiApiError")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -374,6 +494,13 @@ def test_myenergi(my_predbat=None):
     test_direct_missing_asn_is_auth_error()
     test_direct_boost_urls()
     test_direct_smart_boost_url()
+    test_direct_401_is_auth_error()
+    test_direct_401_missing_header_precedence()
+    test_direct_non_200_sets_needs_asn_refresh()
+    test_direct_timeout_sets_needs_asn_refresh()
+    test_direct_asn_migration_follows_new_host()
+    test_direct_resolve_asn_non_200_is_api_error()
+    test_direct_resolve_asn_timeout_is_api_error()
 
     print("=" * 70)
     return False
