@@ -261,6 +261,7 @@ def _direct_session(responses):
     queue = list(responses)
 
     def _get(url, **kwargs):
+        """Record the requested URL and hand back the next queued mock response."""
         calls.append(url)
         return queue.pop(0) if queue else _direct_response({})
 
