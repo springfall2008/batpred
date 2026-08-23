@@ -16,6 +16,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
+    - [myenergi (myenergi)](#myenergi-myenergi)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
     - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
     - [Enphase API (enphase)](#enphase-api-enphase)
@@ -503,6 +504,112 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car |
 | `ohme_control` | Boolean | No | `False` | `ohme_control` | Set to `true` to let Predbat start and stop the charger from its own plan. Requires `ohme_automatic`; released by read only mode |
 | `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on, or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
+
+---
+
+### myenergi (myenergi)
+
+**Can be restarted:** Yes
+
+#### What it does (myenergi)
+
+Monitors myenergi Zappi EV chargers and Eddi hot water diverters, publishing their status, power and session energy as Predbat entities, and provides send-boost and cancel-boost controls.
+
+Predbat supports both of myenergi's APIs:
+
+- **Direct** (default) — HTTP digest authentication against `director.myenergi.net`, using your hub serial number and an API key you generate yourself. This is the same API the `ha-myenergi` Home Assistant integration uses, and any myenergi owner can set it up today.
+- **Cloud OAuth** — the official 3rd party API at `api.s18.myenergi.net`. This needs credentials issued by myenergi through their partner registration process.
+
+#### When to enable (myenergi)
+
+- You have a Zappi or an Eddi and want Predbat to account for their energy use when planning
+- You want Predbat to publish sensors for their status, power and session energy
+- You want to trigger or cancel a boost from Home Assistant
+
+#### Important notes (myenergi)
+
+- With `myenergi_automatic` on (the default), Predbat sets three `apps.yaml` values for you:
+    - `car_charging_energy` — every Zappi's session energy, so charging is subtracted from your house load rather than being learnt as base load. Ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect
+    - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
+    - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
+- Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
+- If you set `car_charging_planned` yourself in `apps.yaml`, Predbat logs a note and auto-discovery still wins — remove your entry to silence it
+- Predbat's shipped `car_charging_planned_response` list covers the plug states a Zappi reports when the car is connected, including `ev ready to charge`. If you maintain your own list, add that value or Predbat will treat a car that is plugged in and waiting as not planned to charge
+- Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
+- Set `myenergi_enable_controls` to `false` for monitor-only operation — the boost switches are still published but stop responding
+
+#### Configuration Options (myenergi)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `auth_method` | String | No | `direct` | `myenergi_auth_method` | `direct` (local digest API) or `oauth` (official cloud API) |
+| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct` |
+| `api_key` | String | No | - | `myenergi_api_key` | API key generated at myaccount.myenergi.com — required when `auth_method` is `direct` |
+| `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
+| `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
+| `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
+| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned` and `iboost_energy_today` automatically |
+| `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
+| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
+
+The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash`
+is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging
+to the transport you did not select still starts the component — it then logs which setting is missing
+rather than failing silently.
+
+Example for the direct transport:
+
+```yaml
+myenergi_hub_serial: '12345678'
+myenergi_api_key: !secret myenergi_api_key
+```
+
+#### How to get your API key (myenergi)
+
+1. Sign in at <https://myaccount.myenergi.com>.
+2. Open **Advanced** then **API Key**.
+3. Generate a key for your hub and copy it.
+4. Your hub serial number is printed on the hub and shown in the myenergi app.
+
+#### Published entities (myenergi)
+
+Per Zappi (`{sn}` is the device serial number):
+
+- `sensor.predbat_myenergi_zappi_{sn}_status`, `_mode`, `_plug_status`, `_power`, `_session_energy`
+- `binary_sensor.predbat_myenergi_zappi_{sn}_charging`
+- `switch.predbat_myenergi_zappi_{sn}_boost`, `number.predbat_myenergi_zappi_{sn}_boost_energy`
+
+Per Eddi:
+
+- `sensor.predbat_myenergi_eddi_{sn}_status`, `_power`, `_session_energy`, `_temp_1`, `_temp_2`
+- `switch.predbat_myenergi_eddi_{sn}_boost`, `number.predbat_myenergi_eddi_{sn}_boost_minutes`
+
+The Eddi temperature sensors are only published when a probe is connected.
+
+#### Controls (myenergi)
+
+Turning a boost switch on sends a boost of the amount selected on the companion number entity — kWh for a Zappi, minutes for an Eddi. Turning it off cancels the boost. The switch state is read back from the device, so a boost started or stopped in the myenergi app is reflected here too.
+
+myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks that one condition before calling, and logs a warning instead. Every other reason a boost can be refused — an Eddi already at its maximum tank temperature, for instance — is only discovered from myenergi's reply, so Predbat issues the call and logs `myenergi: control failed` when it comes back refused. The switch reverts to the device's real state on the next poll either way.
+
+Not implemented in this release: mode selection, priority, minimum green level, phase setting, and charging schedules. These exist on the transport interface as reserved methods, ready for a later release, and nothing in Predbat calls them — there is no entity or service that can reach them, so there is nothing for you to try. If a future release wires one up before it is implemented, it warns once per control rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+
+#### Known limitation (myenergi)
+
+The session energy sensors reset to zero when a charging or heating session ends. Predbat expects that: it treats these sensors as incrementing counters and rebases the series whenever it sees one reset, so both the per-minute load subtraction and the daily `iboost_today` total come out right across any number of sessions in a day.
+
+The one case it cannot see is a small session. A drop of less than 1 kWh is smoothed over as a dip in the data rather than treated as a reset, so a session that finishes below roughly 1 kWh — a short top-up, or a brief Eddi diversion — can be missed and its energy left out of the day's figures. A reading of zero between the sessions does not help, because the dip is smoothed away before the reset is looked for. That applies equally to `car_charging_energy` and to `iboost_today`. In practice it is a fraction of a kWh, and the planner mostly cares about the larger sessions, but the daily totals can read slightly low if your Zappi or Eddi does a lot of very short sessions.
+
+#### Testing your configuration (myenergi)
+
+You can test either transport independently of Predbat:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 myenergi.py --hub-serial YOUR_HUB_SERIAL --api-key YOUR_API_KEY
+```
+
+Add `--boost zappi` or `--boost eddi` (with `--amount`) to send a test boost, or `--cancel-boost zappi`/`--cancel-boost eddi` to cancel one. Use `--token` in place of `--hub-serial`/`--api-key` to test the cloud OAuth transport instead.
 
 ---
 

@@ -117,6 +117,7 @@ pred_bat:
     - 'true'
     - 'connected'
     - 'ev connected'
+    - 'ev ready to charge'
     - 'charging'
     - 'paused'
     - 'waiting for car demand'

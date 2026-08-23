@@ -22,6 +22,7 @@ from alphaess import AlphaESSAPI
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
+from myenergi import MyEnergiAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
 from temperature import TemperatureAPI
@@ -218,6 +219,33 @@ COMPONENT_LIST = {
             },
         },
         "phase": 1,
+    },
+    "myenergi": {
+        "class": MyEnergiAPI,
+        "name": "myenergi Zappi/Eddi",
+        "event_filter": "predbat_myenergi_",
+        "args": {
+            "auth_method": {"required": False, "config": "myenergi_auth_method", "default": "direct"},
+            "hub_serial": {"required": False, "config": "myenergi_hub_serial"},
+            "api_key": {"required": False, "config": "myenergi_api_key"},
+            "key": {"required": False, "config": "myenergi_key"},
+            "token_expires_at": {"required": False, "config": "myenergi_token_expires_at"},
+            "token_hash": {"required": False, "config": "myenergi_token_hash"},
+            "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
+            "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
+            "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
+        },
+        # Gate activation on having at least one auth path — api_key is the direct
+        # transport's local hub credential, key is the cloud transport's access token.
+        # Without this the component would start for every instance since all
+        # individual args are optional to allow either auth mode.
+        # api_key is the direct transport's credential; key (the OAuth access token) and
+        # token_hash (which the refresh chain exchanges for one) are the cloud transport's.
+        # token_hash has to be listed too: a refresh-only OAuth setup carries no key, and
+        # initialize() accepts that, so gating on key alone would never construct it.
+        "required_or": ["api_key", "key", "token_hash"],
+        "phase": 1,
+        "can_restart": True,
     },
     "fox": {
         "class": FoxAPI,

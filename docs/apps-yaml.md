@@ -186,6 +186,7 @@ pred_bat:
   forecast_solar_api_key: !secret forecast_solar_api_key  # Forecast.solar API key (if using Forecast.solar)
   ge_cloud_key: !secret ge_cloud_key  # GivEnergy API key (if using GE Cloud)
   fox_key: !secret fox_key  # Fox ESS API key and username (if using Fox Cloud)
+  myenergi_api_key: !secret myenergi_api_key  # myenergi API key (if using the myenergi direct transport)
   deye_app_id: !secret deye_app_id  # DeyeCloud developer app id (if using DEYE Cloud)
   deye_app_secret: !secret deye_app_secret  # DeyeCloud developer app secret (if using DEYE Cloud)
   deye_username: !secret deye_username  # DeyeCloud account e-mail/username (if using DEYE Cloud)
@@ -1890,6 +1891,36 @@ whether you are within an Octopus Energy "smart charge" slot
 - **ohme_login** - Ohme EV charger account login
 - **ohme_password** - Password for above Ohme account
 - **ohme_automatic_octopus_intelligent** - Controls whether Predbat talks directly to the above Ohme account
+
+## myenergi Integration
+
+If you have a myenergi Zappi EV charger or Eddi hot water diverter, Predbat can monitor them and, with `myenergi_automatic` on (the default),
+automatically set **car_charging_energy** and **car_charging_planned** from your Zappis and **iboost_energy_today** from your first Eddi,
+so those three keys need no `apps.yaml` entries of your own. Everything else about your car setup — **car_charging_battery_size**,
+**car_charging_limit**, **car_charging_soc** and **car_charging_planned_response** — still comes from `apps.yaml` as usual.
+
+The direct transport (the default) needs your hub serial number and an API key you generate yourself:
+
+```yaml
+  myenergi_hub_serial: '12345678'
+  myenergi_api_key: !secret myenergi_api_key
+```
+
+**Configuration options:**
+
+- **myenergi_auth_method** - `direct` (default, local digest API) or `oauth` (official cloud API)
+- **myenergi_hub_serial** - Hub serial number, printed on the hub and shown in the myenergi app - required when `myenergi_auth_method` is `direct`
+- **myenergi_api_key** - API key generated at [myaccount.myenergi.com](https://myaccount.myenergi.com) (Advanced → API Key) - required when `myenergi_auth_method` is `direct`
+- **myenergi_key** - OAuth access token, cloud transport
+- **myenergi_token_hash** - OAuth refresh token hash, used to refresh `myenergi_key` automatically - at least one of `myenergi_key` or `myenergi_token_hash` is required when `myenergi_auth_method` is `oauth`
+- **myenergi_token_expires_at** - OAuth access token expiry, used to trigger a refresh
+- **myenergi_automatic** - Set to `false` to stop Predbat wiring the device sensors into **car_charging_energy**, **car_charging_planned** and **iboost_energy_today** automatically (default: `true`)
+- **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
+- **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (default: `60`)
+
+The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash` is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging to the transport you did not select still starts the component — it then logs which setting is missing rather than failing silently.
+
+See [Components - myenergi](components.md#myenergi-myenergi) for the full list of published entities, the boost controls, and a known limitation around very short charging or diversion sessions.
 
 ## Watch List - automatically start Predbat execution
 

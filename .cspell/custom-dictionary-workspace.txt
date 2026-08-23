@@ -27,6 +27,7 @@ argname
 armhf
 armv
 ASHP
+asn
 asyncio
 atfork
 atleast
@@ -53,6 +54,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+boostable
 brickatius
 byok
 cadata
@@ -235,6 +237,7 @@ hanchu
 hanchuess
 hanres
 HAOS
+harvi
 hasattr
 hass
 hassapi
@@ -272,7 +275,9 @@ isort
 itemsize
 itemtype
 ivtime
+jdayhour
 jedlix
+jstatus
 jsyaml
 kaiming
 keepalive
@@ -291,6 +296,7 @@ kwhb
 labelcolor
 labelnames
 larr
+libbi
 libc
 LIFEPO
 linebreak
@@ -352,6 +358,7 @@ mpxn
 mqtt
 mtok
 mult
+myaccount
 myenergi
 mypy
 nanmean
@@ -441,6 +448,7 @@ pvwatts
 pwindow
 pyjwt
 pylint
+pymyenergi
 pypi
 pyproject
 pytest
@@ -454,6 +462,7 @@ readbacks
 recp
 redownload
 Referer
+refetched
 refetches
 regionid
 regname
@@ -589,6 +598,7 @@ typecode
 typecodes
 tzfile
 tzpath
+unasserted
 unconfigured
 underivable
 undiscounted
@@ -636,4 +646,5 @@ ylabel
 YOURSERIAL
 yuanzhi
 zappi
+Zappis
 zigbee

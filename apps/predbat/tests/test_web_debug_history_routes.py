@@ -33,6 +33,9 @@ class FakeRequest:
 def _make_web(my_predbat, storage=None):
     """Build a minimal WebInterface bound to my_predbat, bypassing ComponentBase.__init__
     (which would stand up the real aiohttp app) - same pattern as test_web_chart_currency.py.
+
+    Note this stubs my_predbat.components, which is shared across the whole test run, so the
+    caller must restore it - see the finally block in test_web_debug_history_routes().
     """
     w = WebInterface.__new__(WebInterface)
     w.base = my_predbat
@@ -52,6 +55,10 @@ def test_web_debug_history_routes(my_predbat):
     print("**** Testing debug-history web routes ****")
 
     tmpdir = tempfile.mkdtemp(prefix="predbat_test_debug_history_routes_")
+    # _make_web() stubs my_predbat.components, and my_predbat is shared with every later
+    # test in the run - leaving the stub in place breaks anything that calls a real method
+    # on it (e.g. is_running() -> components.is_all_alive()).
+    saved_components = getattr(my_predbat, "components", None)
     try:
         print("Test: no storage component available - list is empty, downloads 404 without raising")
         w_no_storage = _make_web(my_predbat, storage=None)
@@ -140,6 +147,7 @@ def test_web_debug_history_routes(my_predbat):
             failed = True
 
     finally:
+        my_predbat.components = saved_components
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     return failed
