@@ -1355,6 +1355,54 @@ def test_alphaess_final_persists_all_four_caches():
     assert not failed, "test_alphaess_final_persists_all_four_caches"
 
 
+def test_alphaess_ev_energy_sourced_from_echargingpile():
+    """ev_energy_today must be SOURCED from eChargingPile, not merely publishable.
+
+    Driving fetch_device_energy rather than seeding device_energy by hand is the point:
+    a publish-only test passes even if the field is missing from ALPHAESS_ENERGY entirely.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    payload = dict(ONE_DATE_ENERGY_SAMPLE, eChargingPile=6.4)
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, payload)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, {"eload": 19.49})),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        run_async_local(client.fetch_device_energy("AL70"))
+    got = client.device_energy.get("AL70", {}).get("ev_energy_today")
+    if got != 6.4:
+        print(f"ERROR: ev_energy_today {got} != 6.4 - is eChargingPile mapped in ALPHAESS_ENERGY?")
+        failed = True
+    assert not failed, "test_alphaess_ev_energy_sourced_from_echargingpile"
+
+
+def test_alphaess_history_carries_ev_power():
+    """The history endpoint spells EV power pchargingPile, not pev.
+
+    Without the mapping a demoted serial silently loses its ev_power sensor - the same
+    trap battery_power fell into. A sample with no charger field must NOT fabricate a 0.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    with_ev = [{"uploadTime": "2026-08-23 10:00:00", "ppv": 0.0, "load": 900.0, "cbat": 50.0, "feedIn": 0.0, "gridCharge": 0.0, "pchargingPile": 7200.0}]
+    if not client._apply_history_payload("AL70", with_ev):
+        print("ERROR: history payload rejected")
+        failed = True
+    if client.device_values.get("AL70", {}).get("ev_power") != 7200.0:
+        print(f"ERROR: ev_power from history {client.device_values.get('AL70', {}).get('ev_power')} != 7200.0")
+        failed = True
+
+    without = [{"uploadTime": "2026-08-23 10:00:00", "ppv": 0.0, "load": 900.0, "cbat": 50.0, "feedIn": 0.0, "gridCharge": 0.0}]
+    client._apply_history_payload("AL70", without)
+    if "ev_power" in client.device_values.get("AL70", {}):
+        print("ERROR: a fabricated ev_power was published for a sample with no charger field")
+        failed = True
+    assert not failed, "test_alphaess_history_carries_ev_power"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -1387,6 +1435,8 @@ def run_alphaess_api_tests(my_predbat):
         ("reprobe_live_failure", test_alphaess_reprobe_live_failure_leaves_serial_demoted),
         ("energy_counters", test_alphaess_energy_counters_map_to_predbat_args),
         ("load_today_fallback", test_alphaess_load_today_falls_back_to_the_energy_balance),
+        ("ev_energy_sourced", test_alphaess_ev_energy_sourced_from_echargingpile),
+        ("history_ev_power", test_alphaess_history_carries_ev_power),
         ("fetch_config_both_succeed", test_alphaess_fetch_config_populates_both_directions_when_both_reads_succeed),
         ("fetch_config_partial_failure", test_alphaess_fetch_config_partial_failure_keeps_the_stale_half_and_returns_false),
         ("fetch_config_both_fail", test_alphaess_fetch_config_both_fail_returns_false),

@@ -119,6 +119,9 @@ ALPHAESS_ENERGY = {
     "battery_charge_today": "eCharge",
     "battery_discharge_today": "eDischarge",
     "grid_charge_today": "eGridCharge",
+    # EV charger energy. Mapped to Predbat's car_charging_energy in automatic_config,
+    # but only for serials that actually have a charger fitted - see ALPHAESS_EV_DETAIL.
+    "ev_energy_today": "eChargingPile",
 }
 ALPHAESS_ENERGY_LOAD_FIELD = "eload"
 
@@ -130,7 +133,16 @@ ALPHAESS_HISTORY = {
     "soc": ("cbat", "cobat"),
     "pv_power": ("ppv",),
     "load_power": ("load",),
+    # The history endpoint spells the EV charger power differently from the live one
+    # (pchargingPile here, pev there). Without this a demoted serial would silently
+    # lose its ev_power sensor, which is exactly the trap battery_power fell into.
+    "ev_power": ("pchargingPile",),
 }
+# Per-charger power keys inside getLastPowerData's pevDetail. The API documents these
+# as "null when no charger is fitted", so a non-null value is the one documented
+# signal that a charger physically exists - pev itself reads 0 either way.
+ALPHAESS_EV_DETAIL = ("ev1Power", "ev2Power", "ev3Power", "ev4Power")
+
 ALPHAESS_HISTORY_FEED_IN = "feedIn"
 ALPHAESS_HISTORY_GRID_CHARGE = "gridCharge"
 

@@ -230,6 +230,114 @@ def test_alphaess_args_only_mapped_when_every_inverter_reports_them():
     assert not failed, "test_alphaess_args_only_mapped_when_every_inverter_reports_them"
 
 
+def test_alphaess_ev_charger_detected_from_pev_detail():
+    """A non-null ev*Power is the API's DOCUMENTED signal that a charger is fitted.
+
+    pev itself reads 0 whether or not one exists, so only pevDetail discriminates. The
+    verdict is sticky: pevDetail can legitimately be absent from a later response, and
+    losing it would unmap car_charging_energy mid-session.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+
+    fitted = {"soc": 50.0, "pev": 0, "pevDetail": {"ev1Power": 0.0, "ev2Power": None, "ev3Power": None, "ev4Power": None}}
+    client._apply_live_payload("AL70", fitted)
+    if client._ev_present.get("AL70") is not True:
+        print(f"ERROR: a non-null ev1Power should mean fitted, got {client._ev_present}")
+        failed = True
+
+    absent = MockAlphaESS()
+    absent.device_list = ["AL70"]
+    absent._apply_live_payload("AL70", {"soc": 50.0, "pev": 0, "pevDetail": {"ev1Power": None, "ev2Power": None, "ev3Power": None, "ev4Power": None}})
+    if absent._ev_present.get("AL70") is not False:
+        print(f"ERROR: all-null pevDetail should mean no charger, got {absent._ev_present}")
+        failed = True
+
+    # A later response with no pevDetail at all must not revoke a positive verdict.
+    client._apply_live_payload("AL70", {"soc": 51.0, "pev": 0})
+    if client._ev_present.get("AL70") is not True:
+        print(f"ERROR: an absent pevDetail revoked the verdict: {client._ev_present}")
+        failed = True
+
+    # No pevDetail and no prior verdict leaves it UNKNOWN, not False.
+    unknown = MockAlphaESS()
+    unknown.device_list = ["AL70"]
+    unknown._apply_live_payload("AL70", {"soc": 50.0, "pev": 0})
+    if "AL70" in unknown._ev_present:
+        print(f"ERROR: an absent pevDetail invented a verdict: {unknown._ev_present}")
+        failed = True
+    assert not failed, "test_alphaess_ev_charger_detected_from_pev_detail"
+
+
+def test_alphaess_car_charging_energy_mapped_only_for_serials_with_a_charger():
+    """On a system with no charger eChargingPile reads a permanent 0.0, which is
+    indistinguishable from a charger that is simply never used - so the arg must not be
+    mapped for it. Multiple charger-equipped serials map as a LIST, which
+    minute_data_import_export sums."""
+    failed = False
+    client = _ready_client()
+    for sn in client.device_list:
+        client.device_energy[sn]["ev_energy_today"] = 4.2
+    # Only the first inverter actually has a charger.
+    client._ev_present = {client.device_list[0]: True, client.device_list[1]: False}
+    run_async_local(client.automatic_config())
+    mapped = client.base.args.get("car_charging_energy")
+    expected = [f"sensor.predbat_alphaess_{client.device_list[0].lower()}_ev_energy_today"]
+    if mapped != expected:
+        print(f"ERROR: car_charging_energy {mapped} != {expected}")
+        failed = True
+
+    # Both charger-equipped -> both mapped, in device order.
+    both = _ready_client()
+    for sn in both.device_list:
+        both.device_energy[sn]["ev_energy_today"] = 4.2
+        both._ev_present[sn] = True
+    run_async_local(both.automatic_config())
+    mapped = both.base.args.get("car_charging_energy")
+    if not isinstance(mapped, list) or len(mapped) != 2:
+        print(f"ERROR: two chargers should map a two-entry list, got {mapped}")
+        failed = True
+    assert not failed, "test_alphaess_car_charging_energy_mapped_only_for_serials_with_a_charger"
+
+
+def test_alphaess_car_charging_energy_unmapped_without_a_charger():
+    """No charger anywhere means the arg stays unset - the same 'never point at a sensor
+    that will not appear' rule the energy args already follow."""
+    failed = False
+    client = _ready_client()
+    for sn in client.device_list:
+        client._ev_present[sn] = False
+        client.device_energy[sn]["ev_energy_today"] = 0.0
+    run_async_local(client.automatic_config())
+    if "car_charging_energy" in client.base.args:
+        print(f"ERROR: car_charging_energy mapped with no charger: {client.base.args.get('car_charging_energy')}")
+        failed = True
+    if not any("no EV charger" in message for message in client.log_messages):
+        print(f"ERROR: no explanatory log, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_car_charging_energy_unmapped_without_a_charger"
+
+
+def test_alphaess_ev_sensors_are_published():
+    """ev_power (W) and ev_energy_today (kWh) both reach the dashboard."""
+    failed = False
+    client = _ready_client()
+    for sn in client.device_list:
+        client.device_energy[sn]["ev_energy_today"] = 4.2
+    run_async_local(client.publish_data())
+    sn = client.device_list[0].lower()
+    power = client.published.get(f"sensor.predbat_alphaess_{sn}_ev_power", {})
+    energy = client.published.get(f"sensor.predbat_alphaess_{sn}_ev_energy_today", {})
+    if power.get("attributes", {}).get("unit_of_measurement") != "W":
+        print(f"ERROR: ev_power attributes {power.get('attributes')}")
+        failed = True
+    if energy.get("attributes", {}).get("device_class") != "energy" or energy.get("state") != 4.2:
+        print(f"ERROR: ev_energy_today {energy}")
+        failed = True
+    assert not failed, "test_alphaess_ev_sensors_are_published"
+
+
 def run_alphaess_publish_tests(my_predbat):
     """Run all AlphaESS publish/config tests."""
     failed = False
@@ -242,6 +350,10 @@ def run_alphaess_publish_tests(my_predbat):
         ("battery_min_soc_not_mapped", test_alphaess_battery_min_soc_is_not_mapped),
         ("hybrid_verdict", test_alphaess_hybrid_switch_only_moves_on_agreeing_evidence),
         ("map_only_when_all_report", test_alphaess_args_only_mapped_when_every_inverter_reports_them),
+        ("ev_charger_detection", test_alphaess_ev_charger_detected_from_pev_detail),
+        ("car_charging_energy_mapping", test_alphaess_car_charging_energy_mapped_only_for_serials_with_a_charger),
+        ("car_charging_energy_unmapped", test_alphaess_car_charging_energy_unmapped_without_a_charger),
+        ("ev_sensors_published", test_alphaess_ev_sensors_are_published),
     ]:
         try:
             if fn():

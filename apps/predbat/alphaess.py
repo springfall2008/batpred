@@ -46,6 +46,7 @@ from alphaess_const import (
     ALPHAESS_TELEMETRY,
     ALPHAESS_TELEMETRY_NEGATE,
     ALPHAESS_HISTORY,
+    ALPHAESS_EV_DETAIL,
     ALPHAESS_HISTORY_FEED_IN,
     ALPHAESS_HISTORY_GRID_CHARGE,
     ALPHAESS_LIVE_FAIL_LIMIT,
@@ -128,6 +129,11 @@ class AlphaESSAPI(ComponentBase):
         self._periodic_ok = {}
         self._live_ok = {}
         self._live_fail_count = {}
+        # Per-serial "is an EV charger physically fitted" verdict: True/False, or absent when
+        # never seen. Cached like _live_ok because it is a hardware fact the history path
+        # cannot observe - getOneDayPowerBySn carries a charger POWER but no fitted/absent
+        # signal, so a serial that starts life demoted would otherwise never learn it.
+        self._ev_present = {}
         self._unbind_done = set()
         self._tier_refreshed = {}
         self._cache_restored = False
@@ -441,6 +447,17 @@ class AlphaESSAPI(ComponentBase):
         pv_detail = payload.get("ppvDetail") or {}
         strings = [pv_detail.get("ppv{}".format(index)) for index in range(1, 5)]
         values["ppv_detail_all_null"] = bool(pv_detail) and all(value is None for value in strings)
+        # Same null-for-absent convention, but here it is DOCUMENTED rather than inferred:
+        # a non-null ev*Power means a charger is fitted. Only ever set to True, never back to
+        # False from a later poll, because pevDetail can legitimately be absent from a
+        # response and losing the verdict would unmap car_charging_energy mid-session.
+        ev_detail = payload.get("pevDetail") or {}
+        if ev_detail and any(ev_detail.get(key) is not None for key in ALPHAESS_EV_DETAIL):
+            if not self._ev_present.get(sn):
+                self.log("Info: AlphaESS {} reports an EV charger fitted; its ev_energy_today sensor is eligible for car_charging_energy".format(sn))
+            self._ev_present[sn] = True
+        elif ev_detail and sn not in self._ev_present:
+            self._ev_present[sn] = False
         self.device_values[sn] = values
         return True
 
@@ -466,6 +483,8 @@ class AlphaESSAPI(ComponentBase):
         grid_charge = self._as_float(sample.get(ALPHAESS_HISTORY_GRID_CHARGE), 0.0)
         pv_power = self._as_float(sample.get(ALPHAESS_HISTORY["pv_power"][0]), 0.0)
         load_power = self._as_float(sample.get(ALPHAESS_HISTORY["load_power"][0]), 0.0)
+        ev_field = ALPHAESS_HISTORY["ev_power"][0]
+        ev_power = self._as_float(sample.get(ev_field), 0.0) if sample.get(ev_field) is not None else None
         self.device_values[sn] = {
             "soc": soc,
             "pv_power": pv_power,
@@ -487,6 +506,11 @@ class AlphaESSAPI(ComponentBase):
             # disable find_battery_size and battery-curve learning for the whole session.
             "battery_power": load_power - pv_power - (grid_charge - feed_in),
         }
+        # Only published when the sample actually carried it. A system with no charger has
+        # no pchargingPile, and publishing a fabricated 0 W would look identical to a
+        # charger that is simply idle.
+        if ev_power is not None:
+            self.device_values[sn]["ev_power"] = ev_power
         return True
 
     async def fetch_device_history(self, sn):
@@ -757,6 +781,21 @@ class AlphaESSAPI(ComponentBase):
                 self.set_arg_auto(leaf, [self._sensor_name(sn, leaf) for sn in devices])
             else:
                 self.log("Warn: AlphaESS not every inverter reports {}, it must be set manually in apps.yaml".format(leaf))
+
+        # car_charging_energy is mapped only for serials whose pevDetail actually reported a
+        # charger, not for every inverter: on a system with none, eChargingPile reads a
+        # permanent 0.0 and pointing Predbat at it would look identical to a charger that is
+        # never used. A list is correct here even though APPS_SCHEMA types this as a single
+        # "sensor" - the validator accepts a list for that type (predbat.py) and
+        # minute_data_import_export sums however many entities it is given, which is what a
+        # household with two charger-equipped inverters needs. Mapping it is inert on its own:
+        # Predbat only subtracts car energy from house load when car_charging_hold is on.
+        ev_devices = [sn for sn in devices if self._ev_present.get(sn) and "ev_energy_today" in self.device_energy.get(sn, {})]
+        if ev_devices:
+            self.set_arg_auto("car_charging_energy", [self._sensor_name(sn, "ev_energy_today") for sn in ev_devices])
+            self.log("Info: AlphaESS mapped car_charging_energy to the EV charger energy of {} inverter(s): {}. It only affects the plan once car_charging_hold is enabled.".format(len(ev_devices), ev_devices))
+        else:
+            self.log("Info: AlphaESS found no EV charger on any inverter, so car_charging_energy is left unset")
 
         if all(self.battery_capacity(sn) > 0 for sn in devices):
             self.set_arg_auto("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
@@ -1687,7 +1726,7 @@ class AlphaESSAPI(ComponentBase):
 
     async def save_ratings(self):
         """Persist the live-telemetry capability verdicts."""
-        await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok})
+        await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok, "ev_present": self._ev_present})
 
     async def save_control(self):
         """Persist the control state that must survive a restart.
@@ -1724,6 +1763,7 @@ class AlphaESSAPI(ComponentBase):
         self._periodic_ok = dict(config.get("periodic_ok") or {})
         ratings = await self.load_cache(ALPHAESS_CACHE_RATINGS)
         self._live_ok = dict(ratings.get("live_ok") or {})
+        self._ev_present = dict(ratings.get("ev_present") or {})
         control = await self.load_cache(ALPHAESS_CACHE_CONTROL)
         self.local_schedule = dict(control.get("local_schedule") or {})
         self.applied_payload = dict(control.get("applied_payload") or {})
