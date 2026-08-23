@@ -1855,7 +1855,9 @@ The direct transport (the default) needs your hub serial number and an API key y
 - **myenergi_token_expires_at** - OAuth access token expiry, used to trigger a refresh
 - **myenergi_automatic** - Set to `false` to stop Predbat wiring the energy sensors into **car_charging_energy** and **iboost_energy_today** automatically (default: `true`)
 - **myenergi_enable_controls** - Set to `false` for monitor-only operation (default: `true`)
-- **myenergi_poll_seconds** - Poll interval in seconds, rounded up to the next whole multiple of 60 (default: `60`)
+- **myenergi_poll_seconds** - Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 (default: `60`)
+
+The component only starts when `myenergi_api_key` or `myenergi_key` is set (whichever matches your `myenergi_auth_method`) - with only `myenergi_token_hash` set and no `myenergi_key`, the component is never constructed, silently, with nothing logged to explain why it is missing.
 
 See [Components - myenergi](components.md#myenergi-myenergi) for the full list of published entities, the boost controls, and a known limitation around the daily `iboost_today` total.
 

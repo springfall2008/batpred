@@ -814,7 +814,7 @@ async def run_myenergi_cli(args):  # pragma: no cover
     """Run one myenergi poll, and optionally a boost command, against the live API."""
     mock_base = MockBase()
     arg_dict = {
-        "auth_method": "oauth" if args.token else "direct",
+        "auth_method": "oauth" if (args.token or args.token_hash) else "direct",
         "hub_serial": args.hub_serial,
         "api_key": args.api_key,
         "key": args.token,
@@ -824,10 +824,10 @@ async def run_myenergi_cli(args):  # pragma: no cover
     }
     component = MyEnergiAPI(mock_base, **arg_dict)
     if not component.transport:
-        print("No usable credentials - pass --hub-serial and --api-key, or --token")
+        print("No usable credentials - pass --hub-serial and --api-key, or --token/--token-hash")
         return
 
-    print("Connecting with the {} transport...".format(component.auth_method))
+    print("Connecting with the {} transport...".format(component.auth_method_config))
     devices = await component.transport.fetch_devices()
     if not devices:
         print("No Zappi or Eddi devices found")

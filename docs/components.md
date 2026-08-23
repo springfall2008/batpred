@@ -523,7 +523,7 @@ Predbat supports both of myenergi's APIs:
 
 #### Important notes (myenergi)
 
-- With `myenergi_automatic` on (the default), Predbat wires the sensors up for you: Zappi session energy is set as `car_charging_energy`, so charging is subtracted from your house load rather than being learnt as base load — turn on `switch.predbat_car_charging_hold` for that subtraction to take effect. The first Eddi's session energy is set as `iboost_energy_today`, feeding the iboost model
+- With `myenergi_automatic` on (the default), Predbat wires the sensors up for you: Zappi session energy is set as `car_charging_energy`, so charging is subtracted from your house load rather than being learnt as base load — ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect. The first Eddi's session energy is set as `iboost_energy_today`, feeding the iboost model
 - Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
 - Set `myenergi_enable_controls` to `false` for monitor-only operation — the boost switches are still published but stop responding
 
@@ -539,7 +539,11 @@ Predbat supports both of myenergi's APIs:
 | `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
 | `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the energy sensors into `car_charging_energy` and `iboost_energy_today` automatically |
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
-| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded up to the next whole multiple of 60 |
+| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 |
+
+The component only starts when `myenergi_api_key` or `myenergi_key` is set (whichever matches your
+`auth_method`) — with only `myenergi_token_hash` set and no `myenergi_key`, the component is never
+constructed, silently, with nothing logged to explain why it is missing.
 
 Example for the direct transport:
 
@@ -576,7 +580,7 @@ Turning a boost switch on sends a boost of the amount selected on the companion 
 
 myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks this first and logs a warning rather than issuing a call that would be rejected.
 
-Not implemented in this release: mode selection, priority, minimum green level, phase setting, and charging schedules — attempting any of these logs a warning rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+Not implemented in this release: mode selection, priority, minimum green level, phase setting, and charging schedules — attempting one of these logs a warning rather than failing silently, once per control for as long as the component keeps running (a restart resets it, and repeat attempts in between stay silent). Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
 
 #### Known limitation (myenergi)
 
