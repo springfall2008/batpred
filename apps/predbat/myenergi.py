@@ -25,6 +25,7 @@ can configure today, and a bearer-token transport for the official 3rd party API
 
 import argparse
 import asyncio
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
@@ -105,6 +106,12 @@ BOOST_MINUTES_MAX = 240
 # Boosting a Zappi is only accepted while it is in one of the green-energy modes.
 ZAPPI_BOOSTABLE_MODES = ("Eco", "Eco+")
 
+# aiohttp only grew DigestAuthMiddleware and ClientSession(middlewares=...) in 3.12, and
+# the direct transport cannot authenticate without them. requirements.txt pins the floor,
+# but a hand-managed install can still be older, so say what to do rather than failing
+# with a bare AttributeError from deep inside the first request.
+AIOHTTP_DIGEST_REQUIRED = "the direct myenergi transport needs aiohttp 3.12 or newer for digest authentication (installed: {}) - upgrade aiohttp, or set myenergi_auth_method to oauth"
+
 
 class MyEnergiError(Exception):
     """Base class for every myenergi transport failure."""
@@ -160,6 +167,19 @@ def _index_lookup(table, index, default="Unknown"):
     if 0 <= position < len(table):
         return table[position]
     return default
+
+
+def _boost_units(amount):
+    """Round a boost amount to the whole kWh or whole minutes both APIs expect.
+
+    int() alone truncates toward zero, so a 9.8 kWh selection would be sent as 9.
+    """
+    return max(0, int(round(_to_float(amount))))
+
+
+def digest_auth_available():
+    """Return True when the installed aiohttp provides the digest auth middleware."""
+    return hasattr(aiohttp, "DigestAuthMiddleware")
 
 
 def _optional_temp(value):
@@ -358,6 +378,8 @@ class MyEnergiDirectTransport(MyEnergiTransport):
 
     def _new_session(self):
         """Create an aiohttp session carrying the digest auth middleware."""
+        if not digest_auth_available():
+            raise MyEnergiApiError(AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
         digest = aiohttp.DigestAuthMiddleware(self.hub_serial, self.api_key)
         return aiohttp.ClientSession(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
 
@@ -414,7 +436,6 @@ class MyEnergiDirectTransport(MyEnergiTransport):
         try:
             async with self._new_session() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
-                    self._update_asn(response.headers)
                     if response.status == 401:
                         record_api_call("myenergi", success=False, reason="auth_error")
                         raise MyEnergiAuthError("myenergi rejected the credentials for {}".format(path))
@@ -423,6 +444,11 @@ class MyEnergiDirectTransport(MyEnergiTransport):
                         reason = "server_error" if response.status >= 500 else "client_error"
                         record_api_call("myenergi", success=False, reason=reason)
                         raise MyEnergiApiError("HTTP {} from {}".format(response.status, path))
+                    # The missing-header check runs only once the request itself succeeded,
+                    # for the same reason _resolve_asn() orders it this way: an outage or an
+                    # error page has no reason to carry the ASN header, and reporting that as
+                    # bad credentials sends the user off to regenerate a perfectly good key.
+                    self._update_asn(response.headers)
                     try:
                         payload = await response.json(content_type=None)
                     except (ValueError, TypeError) as exc:
@@ -465,27 +491,58 @@ class MyEnergiDirectTransport(MyEnergiTransport):
                         devices.append(normalise_direct_device(raw, kind))
         return devices
 
+    def _check_command_status(self, payload, path):
+        """Raise when a /cgi-* command response reports a failure status.
+
+        The command endpoints answer HTTP 200 whether or not they acted, carrying the
+        real outcome in a {"status": N} body - a non-zero N means myenergi refused the
+        command (an Eddi already at maximum temperature, a Zappi that will not accept
+        the mode, an unknown device). Without this the caller would log a success and
+        the switch would quietly flip back on the next poll. Only a numeric non-zero
+        status counts as a failure: some endpoints answer with no body at all, and an
+        unparseable body is left to the caller rather than invented into an error.
+        """
+        if not isinstance(payload, dict):
+            return
+        status = payload.get("status")
+        if status is None:
+            return
+        try:
+            code = int(status)
+        except (TypeError, ValueError):
+            return
+        if code != 0:
+            raise MyEnergiApiError("myenergi refused {} with status {}".format(path, code))
+
     async def send_boost(self, device, amount, target_time=None):
         """Start a boost, choosing the manual or smart command for a Zappi."""
         if device.kind == DEVICE_KIND_ZAPPI:
-            energy = int(amount)
+            energy = _boost_units(amount)
             if target_time:
-                when = str(target_time).replace(":", "")
-                await self._request("/cgi-zappi-mode-Z{}-0-11-{}-{}".format(device.serial, energy, when))
+                # The command wants HHMM, so "7:30" has to become "0730" and not "730",
+                # which myenergi would read as 07:30 shifted by a digit.
+                when = str(target_time).replace(":", "").zfill(4)
+                path = "/cgi-zappi-mode-Z{}-0-11-{}-{}".format(device.serial, energy, when)
             else:
-                await self._request("/cgi-zappi-mode-Z{}-0-10-{}-0000".format(device.serial, energy))
-        else:
+                path = "/cgi-zappi-mode-Z{}-0-10-{}-0000".format(device.serial, energy)
+        elif device.kind == DEVICE_KIND_EDDI:
             target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
-            await self._request("/cgi-eddi-boost-E{}-10-{}-{}".format(device.serial, target, int(amount)))
+            path = "/cgi-eddi-boost-E{}-10-{}-{}".format(device.serial, target, _boost_units(amount))
+        else:
+            raise MyEnergiApiError("cannot boost unsupported device kind '{}'".format(device.kind))
+        self._check_command_status(await self._request(path), path)
         return True
 
     async def cancel_boost(self, device):
         """Cancel an active boost."""
         if device.kind == DEVICE_KIND_ZAPPI:
-            await self._request("/cgi-zappi-mode-Z{}-0-2-0-0000".format(device.serial))
-        else:
+            path = "/cgi-zappi-mode-Z{}-0-2-0-0000".format(device.serial)
+        elif device.kind == DEVICE_KIND_EDDI:
             target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
-            await self._request("/cgi-eddi-boost-E{}-1-{}-0".format(device.serial, target))
+            path = "/cgi-eddi-boost-E{}-1-{}-0".format(device.serial, target)
+        else:
+            raise MyEnergiApiError("cannot cancel a boost on unsupported device kind '{}'".format(device.kind))
+        self._check_command_status(await self._request(path), path)
         return True
 
 
@@ -509,7 +566,10 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         super().__init__(log)
         self.access_token_getter = access_token_getter
         self.device_meta = {}
-        self.meta_age_seconds = CLOUD_DEVICE_LIST_MAX_AGE
+        # Wall-clock stamp of the last GET /devices. A counter was tried first and never
+        # advanced, so the cache never expired and a device added, removed or renamed in
+        # the myenergi app stayed invisible until Predbat restarted.
+        self.meta_fetched_at = 0.0
 
     def _headers(self):
         """Build the request headers, including the current bearer token."""
@@ -562,7 +622,7 @@ class MyEnergiCloudTransport(MyEnergiTransport):
                 if kind and device_id:
                     meta[device_id] = entry
         self.device_meta = meta
-        self.meta_age_seconds = 0
+        self.meta_fetched_at = time.time()
 
     async def connect(self):
         """Load the device list, which also validates the access token."""
@@ -571,23 +631,32 @@ class MyEnergiCloudTransport(MyEnergiTransport):
 
     async def fetch_devices(self):
         """Poll status for every cached Zappi and Eddi, refreshing the list when stale."""
-        if not self.device_meta or self.meta_age_seconds >= CLOUD_DEVICE_LIST_MAX_AGE:
+        if not self.device_meta or (time.time() - self.meta_fetched_at) >= CLOUD_DEVICE_LIST_MAX_AGE:
             await self._refresh_device_list()
         devices = []
         for device_id, meta in self.device_meta.items():
-            status = await self._request("GET", "/devices/{}/status".format(device_id))
-            if status:
-                devices.append(normalise_cloud_device(status, meta))
+            # One device failing its status call must not cost the whole poll: the
+            # remaining devices are still readable, and dropping them all would blank
+            # every published entity over a single device being briefly unreachable.
+            try:
+                status = await self._request("GET", "/devices/{}/status".format(device_id))
+            except MyEnergiApiError as exc:
+                self.log("Warn: myenergi: skipping {} this poll: {}".format(device_id, exc))
+                continue
+            if not status:
+                self.log("Warn: myenergi: no status returned for {}".format(device_id))
+                continue
+            devices.append(normalise_cloud_device(status, meta))
         return devices
 
     async def send_boost(self, device, amount, target_time=None):
         """Start a boost, selecting the request body shape by device class."""
         if device.kind == DEVICE_KIND_ZAPPI:
-            body = {"mode": "normal", "parameters": {"energy": int(amount)}}
+            body = {"mode": "normal", "parameters": {"energy": _boost_units(amount)}}
             if target_time:
-                body = {"mode": "smart", "parameters": {"energy": int(amount), "targetTime": target_time}}
+                body = {"mode": "smart", "parameters": {"energy": _boost_units(amount), "targetTime": target_time}}
         else:
-            body = {"durationMinutes": int(amount)}
+            body = {"durationMinutes": _boost_units(amount)}
         await self._request("POST", "/devices/{}/boost".format(device.device_id), body=body)
         return True
 
@@ -615,6 +684,13 @@ myenergi_attribute_table = {
 DEFAULT_ZAPPI_BOOST_KWH = 10
 DEFAULT_EDDI_BOOST_MINUTES = 60
 
+# components.py's is_alive() marks a component failed once its last successful update is
+# more than 60 minutes old, and the success timestamp is only stamped by a poll that ran.
+# Capping the interval at half that window keeps a slow poll from being reported as a
+# component error, while still being far slower than anyone realistically wants.
+MIN_POLL_SECONDS = 60
+MAX_POLL_SECONDS = 30 * 60
+
 
 class MyEnergiAPI(ComponentBase, OAuthMixin):
     """myenergi component providing Zappi and Eddi monitoring and boost control."""
@@ -628,7 +704,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         self.enable_controls = enable_controls
         # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
         # interval can only be a whole number of those intervals.
-        self.poll_seconds = max(60, int(round(_to_float(poll_seconds, 60) / 60.0)) * 60)
+        self.poll_seconds = min(MAX_POLL_SECONDS, max(MIN_POLL_SECONDS, int(round(_to_float(poll_seconds, MIN_POLL_SECONDS) / 60.0)) * 60))
 
         self.devices = {}
         self.boost_amounts = {}
@@ -654,6 +730,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             if not hub_serial or not api_key:
                 self.log("Error: myenergi: auth_method is 'direct' but myenergi_hub_serial and myenergi_api_key are not both set")
                 return
+            if not digest_auth_available():
+                self.log("Error: myenergi: " + AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
+                return
             self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key)
 
     def entity_prefix(self, device):
@@ -661,31 +740,43 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         return "{}_myenergi_{}_{}".format(self.prefix, device.kind, device.serial)
 
     def automatic_config(self):
-        """Wire the device energy sensors into Predbat's load inputs.
+        """Wire the device sensors into Predbat's load and car planning inputs.
 
         Zappi charging energy is subtracted from house load as car charging, so it
         goes to car_charging_energy - as a list, because minute_data_import_export
-        accepts one and sums the entities. Eddi diverted energy feeds the iboost
-        model instead.
+        accepts one and sums the entities. The matching plug status sensors go to
+        car_charging_planned, which is indexed per car, so entry N is the Nth Zappi;
+        without it Predbat falls back to the car_charging_threshold heuristic, because
+        the regex the apps.yaml templates ship targets the third-party ha-myenergi
+        integration's entity names rather than the ones this component publishes. Eddi
+        diverted energy feeds iboost_energy_today.
 
-        Note that these sensors are session-scoped and reset to zero when a session
-        ends. get_from_incrementing() clamps negative deltas to zero so the per-minute
-        subtraction is unaffected, but the iboost_today total derived in fetch.py from
-        the midnight-to-now difference will under-report after a mid-day Eddi reset.
-        This is a known limitation, documented in docs/components.md.
+        These sensors are session-scoped and reset to zero when a session ends. That is
+        handled: get_from_incrementing() clamps negative deltas to zero for the
+        per-minute subtraction, and the daily totals go through minute_data_load()'s
+        clean_incrementing_reverse(), which rebases the series on a reset. The residual
+        limitation is narrower - a drop only counts as a reset once a sample reads zero
+        or the fall exceeds 1 kWh, so a session that ends below roughly 1 kWh without a
+        zero sample is not rebased and is under-counted. That loss is in the shared
+        cumulative series, so it affects car_charging_energy and iboost_today alike.
+        Documented in docs/components.md.
         """
-        zappi_entities = []
+        zappi_energy_entities = []
+        zappi_plug_entities = []
         eddi_entity = None
         for device in sorted(self.devices.values(), key=lambda item: item.serial):
-            entity = "sensor.{}_session_energy".format(self.entity_prefix(device))
+            prefix = self.entity_prefix(device)
             if device.kind == DEVICE_KIND_ZAPPI:
-                zappi_entities.append(entity)
+                zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
+                zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
             elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
-                eddi_entity = entity
+                eddi_entity = "sensor.{}_session_energy".format(prefix)
 
-        if zappi_entities:
-            self.log("Info: myenergi: setting car_charging_energy to {}".format(zappi_entities))
-            self.set_arg_auto("car_charging_energy", zappi_entities)
+        if zappi_energy_entities:
+            self.log("Info: myenergi: setting car_charging_energy to {}".format(zappi_energy_entities))
+            self.set_arg_auto("car_charging_energy", zappi_energy_entities)
+            self.log("Info: myenergi: setting car_charging_planned to {}".format(zappi_plug_entities))
+            self.set_arg_auto("car_charging_planned", zappi_plug_entities)
         if eddi_entity:
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)
@@ -718,6 +809,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         if first or refresh or (seconds % self.poll_seconds) == 0:
             try:
                 devices = await self.transport.fetch_devices()
+            except MyEnergiAuthError as exc:
+                # The proactive refresh above only covers a token that has reached its
+                # stated expiry. A token revoked before then wedges the component until
+                # restart unless the 401 itself triggers a refresh, so retry the poll
+                # once behind one, as fox.py, deye.py and solis.py do.
+                devices = await self._retry_poll_after_refresh(exc)
+                if devices is None:
+                    return False
             except MyEnergiError as exc:
                 self.log("Warn: myenergi: poll failed: {}".format(exc))
                 return False
@@ -729,14 +828,31 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
                     self._auto_configured = True
             elif first:
                 self.log("Warn: myenergi: connected but no Zappi or Eddi devices were found")
-
-        self.update_success_timestamp()
+            # Stamped only by a cycle that actually polled, so the health check reflects
+            # real API contact. poll_seconds is capped at MAX_POLL_SECONDS for exactly
+            # this reason - see the comment there.
+            self.update_success_timestamp()
         return True
 
+    async def _retry_poll_after_refresh(self, exc):
+        """Refresh the OAuth token after a 401 and poll once more. Returns devices, or None on failure."""
+        if self.auth_method != "oauth" or not await self.handle_oauth_401():
+            self.log("Warn: myenergi: poll failed: {}".format(exc))
+            return None
+        try:
+            return await self.transport.fetch_devices()
+        except MyEnergiError as retry_exc:
+            self.log("Warn: myenergi: poll failed again after refreshing the token: {}".format(retry_exc))
+            return None
+
     def device_for_entity(self, entity_id):
-        """Find the device an entity belongs to, or None when it is not known."""
+        """Find the device an entity belongs to, or None when it is not known.
+
+        The trailing underscore anchors the match to a whole prefix, so a serial that
+        is a prefix of another device's serial cannot claim the other one's entities.
+        """
         for device in self.devices.values():
-            if self.entity_prefix(device) in entity_id:
+            if "{}_".format(self.entity_prefix(device)) in entity_id:
                 return device
         return None
 
@@ -753,7 +869,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         self.queued_events.append((self.number_event_handler, entity_id, value))
 
     async def number_event_handler(self, entity_id, value):
-        """Record a new boost amount for the device the entity belongs to."""
+        """Record a new boost amount for the device the entity belongs to.
+
+        Guarded on the entity suffix, symmetrically with switch_event_handler: without
+        it any future number.{prefix}_* entity would be read as a boost amount and
+        clamped into boost_amounts purely because it belongs to a known device.
+        """
+        if not entity_id.endswith(("_boost_energy", "_boost_minutes")):
+            return
         device = self.device_for_entity(entity_id)
         if not device:
             return
@@ -766,27 +889,33 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         self.boost_amounts[device.device_id] = amount
 
     async def switch_event_handler(self, entity_id, service):
-        """Send or cancel a boost in response to the boost switch."""
+        """Send or cancel a boost in response to the boost switch.
+
+        Returns whether the command was actually issued and accepted, so a rejection
+        surfaces as the run loop's "control failed" warning instead of being logged as
+        a success that the next poll silently contradicts.
+        """
         if not self.enable_controls:
-            return
+            return False
         if not entity_id.endswith("_boost"):
-            return
+            return False
         device = self.device_for_entity(entity_id)
         if not device:
             self.log("Warn: myenergi: no known device for {}".format(entity_id))
-            return
+            return False
 
         if service == "turn_on":
             # myenergi rejects a boost unless the Zappi is in one of the green modes
             if device.kind == DEVICE_KIND_ZAPPI and device.mode not in ZAPPI_BOOSTABLE_MODES:
                 self.log("Warn: myenergi: cannot boost {} while it is in {} mode - boost needs Eco or Eco+".format(device.name, device.mode))
-                return
+                return False
             amount = self.boost_amount_for(device)
             self.log("Info: myenergi: boosting {} by {}".format(device.name, amount))
-            await self.transport.send_boost(device, amount)
-        elif service == "turn_off":
+            return await self.transport.send_boost(device, amount)
+        if service == "turn_off":
             self.log("Info: myenergi: cancelling boost on {}".format(device.name))
-            await self.transport.cancel_boost(device)
+            return await self.transport.cancel_boost(device)
+        return False
 
     async def publish_data(self):
         """Publish every known device as Predbat entities."""
@@ -828,6 +957,7 @@ async def run_myenergi_cli(args):  # pragma: no cover
         return
 
     print("Connecting with the {} transport...".format(component.auth_method_config))
+    await component.transport.connect()
     devices = await component.transport.fetch_devices()
     if not devices:
         print("No Zappi or Eddi devices found")

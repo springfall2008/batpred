@@ -429,6 +429,7 @@ readbacks
 recp
 redownload
 Referer
+refetched
 refetches
 regionid
 regname
@@ -557,6 +558,7 @@ typecode
 typecodes
 tzfile
 tzpath
+unasserted
 unconfigured
 underivable
 undiscounted

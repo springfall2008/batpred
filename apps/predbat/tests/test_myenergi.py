@@ -23,13 +23,17 @@ from myenergi import (
     BOOST_ENERGY_MIN,
     BOOST_MINUTES_MAX,
     BOOST_MINUTES_MIN,
+    CLOUD_DEVICE_LIST_MAX_AGE,
     DEFAULT_EDDI_BOOST_MINUTES,
     DEVICE_KIND_EDDI,
     DEVICE_KIND_ZAPPI,
+    MAX_POLL_SECONDS,
+    ZAPPI_PLUG_STATES,
     MyEnergiAPI,
     MyEnergiApiError,
     MyEnergiAuthError,
     MyEnergiCloudTransport,
+    MyEnergiDevice,
     MyEnergiDirectTransport,
     MyEnergiTransport,
     normalise_cloud_device,
@@ -395,8 +399,32 @@ def test_direct_401_is_auth_error():
     print("  ✓ 401 from the active server raises MyEnergiAuthError")
 
 
-def test_direct_401_missing_header_precedence():
-    """A response that is both 401 and missing the ASN header raises via the header check, not the status check."""
+def test_direct_missing_header_on_200_is_auth_error():
+    """A 200 from the active server that carries no ASN header still fails the header check.
+
+    The header check is what proves the digest handshake actually succeeded, so it must
+    survive being moved below the status checks - it now applies to exactly the case it
+    was meant for, a request that the server answered normally.
+    """
+    session, _calls = _direct_session([_direct_response([]), _direct_response(MOCK_JSTATUS_ALL, asn=None)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiAuthError")
+        except MyEnergiAuthError as exc:
+            assert "X_MYENERGI-asn" in str(exc), exc
+    print("  ✓ A 200 without the ASN header raises MyEnergiAuthError")
+
+
+def test_direct_401_without_header_is_a_credential_error():
+    """A 401 that also lacks the ASN header is reported by the status check, naming the credentials.
+
+    Both checks would raise MyEnergiAuthError here, so the message is what distinguishes
+    them: the status check must win, because an error response has no reason to carry the
+    header and diagnosing it as a missing header hides the actual 401.
+    """
     session, _calls = _direct_session([_direct_response([]), _direct_response({}, asn=None, status=401)])
     transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
 
@@ -405,9 +433,30 @@ def test_direct_401_missing_header_precedence():
             run_async(transport.fetch_devices())
             raise AssertionError("Expected MyEnergiAuthError")
         except MyEnergiAuthError as exc:
-            # Proves the header check fired, not the 401 status check, which raises a different message
-            assert "X_MYENERGI-asn" in str(exc), exc
-    print("  ✓ Missing-header check runs ahead of the 401 status check")
+            assert "rejected the credentials" in str(exc), exc
+            assert "X_MYENERGI-asn" not in str(exc), exc
+    print("  ✓ A 401 without the ASN header is reported as a credential failure")
+
+
+def test_direct_503_without_header_is_api_error():
+    """A provider outage on the active server is an API error, never a credential error.
+
+    myenergi's own status page going down used to surface as "check the hub serial and
+    API key", sending a self-hosted user off to regenerate a perfectly good key. A 503
+    carries no ASN header, so this only passes while the status checks run first.
+    """
+    session, _calls = _direct_session([_direct_response([]), _direct_response({}, asn=None, status=503)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiAuthError as exc:
+            raise AssertionError("A 503 must not be reported as an auth error: {}".format(exc))
+        except MyEnergiApiError as exc:
+            assert "503" in str(exc), exc
+    print("  ✓ A 503 without the ASN header raises MyEnergiApiError, not an auth error")
 
 
 def test_direct_non_200_sets_needs_asn_refresh():
@@ -447,7 +496,10 @@ def test_direct_asn_migration_follows_new_host():
             _direct_response([]),  # director resolve -> s18
             _direct_response(MOCK_JSTATUS_ALL),  # first jstatus-* call, still on s18
             _direct_response(MOCK_JSTATUS_ALL, asn="s21.myenergi.net"),  # second call, server has migrated
-            _direct_response(MOCK_JSTATUS_ALL),  # third call, now targets s21
+            # The third call has to keep naming s21 explicitly: the default would migrate
+            # base_url back to s18 behind the assertion below, which is the opposite of
+            # what this test claims to be checking.
+            _direct_response(MOCK_JSTATUS_ALL, asn="s21.myenergi.net"),  # third call, now targets s21
         ]
     )
     transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
@@ -910,11 +962,19 @@ def test_component_empty_device_list_does_not_wipe_devices():
 
 
 def test_component_poll_seconds_rounding():
-    """poll_seconds is clamped to a whole number of base loop intervals."""
+    """poll_seconds is clamped to a whole number of base loop intervals, within the health window.
+
+    The ceiling matters because the success timestamp is only stamped by a cycle that
+    actually polled: components.py marks a component failed once its last success is over
+    60 minutes old, so an unbounded poll interval would report a perfectly healthy
+    component as broken.
+    """
     assert _make_component(poll_seconds=1).poll_seconds == 60
     assert _make_component(poll_seconds=90).poll_seconds == 120
     assert _make_component(poll_seconds=300).poll_seconds == 300
-    print("  ✓ poll_seconds rounds to a multiple of 60")
+    assert _make_component(poll_seconds=7200).poll_seconds == MAX_POLL_SECONDS
+    assert MAX_POLL_SECONDS < 60 * 60, "The poll interval must stay inside components.py's 60 minute health window"
+    print("  ✓ poll_seconds rounds to a multiple of 60 and stays inside the health window")
 
 
 def test_component_oauth_refresh_failure_stops_the_poll():
@@ -979,6 +1039,12 @@ def test_automatic_config():
         "sensor.predbat_myenergi_zappi_12345678_session_energy",
         "sensor.predbat_myenergi_zappi_22223333_session_energy",
     ], component.base.args["car_charging_energy"]
+    # car_charging_planned is indexed per car, so the list has to stay in the same
+    # serial order as car_charging_energy or car N would be paired with another Zappi
+    assert component.base.args["car_charging_planned"] == [
+        "sensor.predbat_myenergi_zappi_12345678_plug_status",
+        "sensor.predbat_myenergi_zappi_22223333_plug_status",
+    ], component.base.args["car_charging_planned"]
     # 11112222 sorts before 87654321, so it must be the one picked as "the first Eddi"
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_11112222_session_energy"
     print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")
@@ -990,6 +1056,7 @@ def test_automatic_config_single_zappi_is_still_a_list():
     component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
     component.automatic_config()
     assert component.base.args["car_charging_energy"] == ["sensor.predbat_myenergi_zappi_12345678_session_energy"]
+    assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"]
     assert "iboost_energy_today" not in component.base.args
     print("  ✓ Single Zappi auto-config")
 
@@ -1000,6 +1067,7 @@ def test_automatic_config_eddi_only():
     component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     component.automatic_config()
     assert "car_charging_energy" not in component.base.args
+    assert "car_charging_planned" not in component.base.args
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
     print("  ✓ Eddi-only site wires iboost_energy_today and skips car_charging_energy")
 
@@ -1123,10 +1191,16 @@ def test_controls_disabled():
 
 
 def test_control_for_unknown_entity_is_ignored():
-    """An event for a device that is not known does nothing and does not raise."""
+    """An event for a device that is not known does nothing and does not raise.
+
+    A known device is loaded first so device_for_entity() actually runs its comparison:
+    with devices empty the loop body never executes and this passes for any lookup
+    implementation at all, including a broken one.
+    """
     component = _make_component()
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
     component.transport.send_boost = AsyncMock(return_value=True)
-    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_99999999_boost", "turn_on"))
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_99999999_boost", "turn_on")) is False
     component.transport.send_boost.assert_not_called()
     print("  ✓ Unknown entity events are ignored")
 
@@ -1165,8 +1239,13 @@ def test_number_event_handler_clamps_amount():
 
 
 def test_number_event_handler_unknown_entity_is_ignored():
-    """A number event for an unknown device does nothing and does not raise."""
+    """A number event for an unknown device does nothing and does not raise.
+
+    As with the switch case, a known device has to be present or the lookup loop never
+    runs and the assertion holds regardless of how device_for_entity() is written.
+    """
     component = _make_component()
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     run_async(component.number_event_handler("number.predbat_myenergi_zappi_99999999_boost_energy", 25))
     assert component.boost_amounts == {}
     print("  ✓ Unknown entity number events are ignored")
@@ -1199,6 +1278,449 @@ def test_switch_event_handler_ignores_non_boost_and_unknown_service():
     print("  ✓ Non-boost entities and unrecognised services make no API call")
 
 
+def test_direct_record_api_call_reasons():
+    """record_api_call receives the documented reason vocabulary for every direct failure branch.
+
+    The cloud transport has had this table since review; the direct transport - which is
+    the default, and therefore the one nearly every user runs - only had one-off tests for
+    two of its six branches, leaving auth_error, server_error and client_error unasserted.
+    The first queued response resolves the ASN successfully and records no reason, so the
+    reasons collected here belong solely to the active-server request under test.
+    """
+    scenarios = [
+        (_direct_response({}, status=401), "auth_error"),
+        (_direct_response({}, status=500), "server_error"),
+        (_direct_response({}, status=403), "client_error"),
+        (asyncio.TimeoutError(), "connection_error"),
+        (aiohttp.ClientConnectionError(), "connection_error"),
+        (_direct_response(json_error=ValueError("bad json")), "decode_error"),
+    ]
+    for queued, expected_reason in scenarios:
+        session, _calls = _direct_session([_direct_response([]), queued])
+        transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+        with patch("aiohttp.ClientSession", return_value=session), patch("myenergi.record_api_call") as mock_record:
+            try:
+                run_async(transport.fetch_devices())
+                raise AssertionError("Expected a MyEnergiError for reason={}".format(expected_reason))
+            except (MyEnergiAuthError, MyEnergiApiError):
+                pass
+        reasons = [call.kwargs.get("reason") for call in mock_record.call_args_list if call.kwargs.get("reason")]
+        assert reasons == [expected_reason], (expected_reason, reasons)
+    print("  ✓ Direct transport records the documented reason for every failure branch")
+
+
+def test_direct_transport_requires_aiohttp_digest_support():
+    """An aiohttp too old for digest auth is reported as an actionable message, not an AttributeError.
+
+    requirements.txt floors aiohttp at 3.12 for DigestAuthMiddleware and
+    ClientSession(middlewares=...), but a hand-managed install can still be older, in
+    which case _new_session() used to die with a bare AttributeError escaping as a raw
+    traceback plus a startup stall, saying nothing about what to do.
+    """
+    with patch("myenergi.digest_auth_available", return_value=False):
+        transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+        try:
+            run_async(transport.connect())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError as exc:
+            assert "aiohttp 3.12" in str(exc), exc
+
+        # The component refuses to build the transport at all, so the message is logged
+        # once at startup rather than once per poll
+        component = _make_component()
+        assert component.transport is None
+    print("  ✓ An aiohttp without digest support is reported with an actionable message")
+
+
+def test_direct_boost_rejection_is_an_error():
+    """A /cgi-* command answering 200 with a non-zero status is a refusal, not a success.
+
+    The command endpoints always answer 200; the outcome is in the body. Without this the
+    component logged "boosting eddi-87654321 by 60" for a tank already at temperature, and
+    the switch quietly flipped back on the next poll with nothing to explain it.
+    """
+    eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, _calls = _direct_session([_direct_response({"status": -14})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.send_boost(eddi, 60))
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError as exc:
+            assert "-14" in str(exc), exc
+
+    session, _calls = _direct_session([_direct_response({"status": 1})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.cancel_boost(eddi))
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ A non-zero command status raises rather than reporting success")
+
+
+def test_direct_boost_without_a_status_body_is_success():
+    """A command endpoint that answers with no status at all is treated as success.
+
+    Not every /cgi-* endpoint returns a status field, so the check has to be conservative
+    or a working boost would be reported as a failure.
+    """
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    for body in (None, {}, {"status": 0}, {"status": "0"}, ["unexpected"]):
+        session, _calls = _direct_session([_direct_response(body)])
+        with patch("aiohttp.ClientSession", return_value=session):
+            assert run_async(transport.send_boost(zappi, 10)) is True, body
+    print("  ✓ A command response with no failure status is treated as success")
+
+
+def test_direct_boost_amount_and_time_formatting():
+    """Boost amounts round rather than truncate, and a target time is zero padded to HHMM."""
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({"status": 0}) for _ in range(3)])
+    with patch("aiohttp.ClientSession", return_value=session):
+        # 9.8 kWh must not be sent as 9
+        run_async(transport.send_boost(zappi, 9.8))
+        # "7:30" must not be sent as "730", which myenergi reads as a different time
+        run_async(transport.send_boost(zappi, 15, target_time="7:30"))
+        run_async(transport.send_boost(eddi, 44.6))
+
+    assert calls[0].endswith("/cgi-zappi-mode-Z12345678-0-10-10-0000"), calls[0]
+    assert calls[1].endswith("/cgi-zappi-mode-Z12345678-0-11-15-0730"), calls[1]
+    assert calls[2].endswith("/cgi-eddi-boost-E87654321-10-1-45"), calls[2]
+    print("  ✓ Boost amounts round and target times are zero padded")
+
+
+def test_direct_boost_rejects_unsupported_kinds():
+    """A device that is neither a Zappi nor an Eddi is refused rather than sent an Eddi command.
+
+    The kind check used to be an else, so any future kind reaching send_boost would have
+    been issued a /cgi-eddi-boost against a device that is not an Eddi.
+    """
+    harvi = _make_device(kind="harvi", serial="11112222")
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({"status": 0})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        for call in (transport.send_boost(harvi, 10), transport.cancel_boost(harvi)):
+            try:
+                run_async(call)
+                raise AssertionError("Expected MyEnergiApiError")
+            except MyEnergiApiError as exc:
+                assert "harvi" in str(exc), exc
+    assert calls == [], "No request may be made for an unsupported device kind"
+    print("  ✓ Boost and cancel refuse unsupported device kinds")
+
+
+def test_cloud_device_list_cache_expires_on_the_clock():
+    """The cached device list is refetched once it is older than CLOUD_DEVICE_LIST_MAX_AGE, and not before.
+
+    The cache age was tracked with a counter that nothing ever incremented, so GET /devices
+    ran exactly once per process and a device added, removed or renamed in the myenergi app
+    stayed invisible until Predbat restarted. Time is patched rather than slept on.
+    """
+    session, calls = _cloud_session(
+        [
+            _cloud_response(MOCK_CLOUD_DEVICES),
+            _cloud_response(MOCK_CLOUD_ZAPPI_STATUS),
+            _cloud_response(MOCK_CLOUD_EDDI_STATUS),
+            _cloud_response(MOCK_CLOUD_ZAPPI_STATUS),
+            _cloud_response(MOCK_CLOUD_EDDI_STATUS),
+            _cloud_response(MOCK_CLOUD_DEVICES),
+            _cloud_response(MOCK_CLOUD_ZAPPI_STATUS),
+            _cloud_response(MOCK_CLOUD_EDDI_STATUS),
+        ]
+    )
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+    clock = [1000.0]
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("myenergi.time.time", side_effect=lambda: clock[0]):
+        run_async(transport.fetch_devices())
+        clock[0] += CLOUD_DEVICE_LIST_MAX_AGE - 1
+        run_async(transport.fetch_devices())
+        list_calls = [call for call in calls if call[1].endswith("/devices")]
+        assert len(list_calls) == 1, "A fresh cache must not be refetched: {}".format(list_calls)
+
+        clock[0] += 2
+        run_async(transport.fetch_devices())
+
+    list_calls = [call for call in calls if call[1].endswith("/devices")]
+    assert len(list_calls) == 2, "A stale cache must be refetched: {}".format(list_calls)
+    print("  ✓ The cloud device list cache expires on the wall clock")
+
+
+def test_cloud_one_bad_device_does_not_lose_the_others():
+    """A status call failing for one device costs that device only, not the whole poll.
+
+    Aborting the poll would blank every published entity over a single device being
+    briefly unreachable, and a device answering with an empty body would vanish silently.
+    """
+    session, _calls = _cloud_session(
+        [
+            _cloud_response(MOCK_CLOUD_DEVICES),
+            _cloud_response({"message": "boom"}, status=500),
+            _cloud_response(MOCK_CLOUD_EDDI_STATUS),
+        ]
+    )
+    messages = []
+    transport = MyEnergiCloudTransport(messages.append, lambda: "jwt-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        devices = run_async(transport.fetch_devices())
+
+    assert [device.kind for device in devices] == [DEVICE_KIND_EDDI], devices
+    assert any("ZA12345678" in message for message in messages), messages
+
+    # An empty status body is reported too, rather than dropping the device silently
+    session, _calls = _cloud_session([_cloud_response(MOCK_CLOUD_ZAPPI_STATUS), _cloud_response({})])
+    messages = []
+    transport.log = messages.append
+    with patch("aiohttp.ClientSession", return_value=session):
+        devices = run_async(transport.fetch_devices())
+    assert len(devices) == 1, devices
+    assert any("no status returned" in message for message in messages), messages
+    print("  ✓ One failing device does not cost the whole cloud poll")
+
+
+def test_cloud_auth_error_still_aborts_the_poll():
+    """A 401 on a device status still propagates, so the reactive token refresh can see it.
+
+    The per-device tolerance above must catch MyEnergiApiError only: swallowing
+    MyEnergiAuthError would strand a revoked token, since run() would never be told.
+    """
+    session, _calls = _cloud_session([_cloud_response(MOCK_CLOUD_DEVICES), _cloud_response({}, status=401)])
+    transport = MyEnergiCloudTransport(print, lambda: "stale-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiAuthError")
+        except MyEnergiAuthError:
+            pass
+    print("  ✓ A 401 on a device status still aborts the cloud poll")
+
+
+def _make_device(kind="zappi", serial="12345678", **overrides):
+    """Build a MyEnergiDevice directly, for kinds no transport would ever normalise."""
+    fields = {
+        "device_id": "{}{}".format(kind[0].upper(), serial),
+        "kind": kind,
+        "serial": serial,
+        "name": "{}-{}".format(kind, serial),
+        "online": True,
+        "status": "Unknown",
+        "mode": "Normal",
+        "plug_status": "",
+        "power_w": 0.0,
+        "grid_power_w": 0.0,
+        "generation_w": 0.0,
+        "voltage": 0.0,
+        "session_energy_kwh": 0.0,
+        "boost_active": False,
+        "boost_remaining_mins": 0,
+        "temp_1": None,
+        "temp_2": None,
+    }
+    fields.update(overrides)
+    return MyEnergiDevice(**fields)
+
+
+def test_automatic_config_ignores_unsupported_kinds():
+    """A device that is neither a Zappi nor an Eddi is never wired into any Predbat input.
+
+    The Eddi branch is an explicit kind test rather than a bare else, so a Harvi (or any
+    kind a future release adds) cannot end up published as the house's hot water sensor.
+    Reverting that guard leaves every other auto-config test green, so it is pinned here.
+    """
+    component = _make_component()
+    component.devices = {"H11112222": _make_device(kind="harvi", serial="11112222")}
+    component.automatic_config()
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    assert "car_charging_energy" not in component.base.args, component.base.args
+    assert "car_charging_planned" not in component.base.args, component.base.args
+    print("  ✓ Unsupported device kinds are never auto-configured")
+
+
+def test_device_for_entity_requires_a_whole_prefix_match():
+    """The entity lookup anchors on a whole prefix, so one serial cannot claim another's entities.
+
+    An unanchored substring match let a device with serial 1234 answer for every entity
+    belonging to serial 12345678, silently boosting the wrong charger.
+    """
+    component = _make_component()
+    short = _make_device(serial="1234")
+    long_serial = _make_device(serial="12345678", device_id="Z12345678")
+    component.devices = {"Z1234": short, "Z12345678": long_serial}
+
+    assert component.device_for_entity("switch.predbat_myenergi_zappi_12345678_boost") is long_serial
+    assert component.device_for_entity("switch.predbat_myenergi_zappi_1234_boost") is short
+    assert component.device_for_entity("switch.predbat_myenergi_zappi_9999_boost") is None
+    print("  ✓ Entity lookup anchors on the whole device prefix")
+
+
+def test_number_event_handler_ignores_other_number_entities():
+    """A number entity that is not a boost amount is left alone even though its device is known.
+
+    number_event_handler branches on device.kind, so without a suffix guard any future
+    number.{prefix}_* entity would be clamped into boost_amounts as a boost amount.
+    """
+    component = _make_component()
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    run_async(component.number_event_handler("number.predbat_myenergi_zappi_12345678_charge_limit", 25))
+    assert component.boost_amounts == {}, component.boost_amounts
+    print("  ✓ Number events for non-boost entities are ignored")
+
+
+def test_component_poll_seconds_gate_skips_cycles():
+    """poll_seconds actually gates the poll, and a skipped cycle stamps no success timestamp.
+
+    Deleting the modulo gate left the whole suite green, which made myenergi_poll_seconds
+    a setting with no observable effect.
+    """
+    component = _make_component(poll_seconds=300)
+    devices = [normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)]
+    component.transport.fetch_devices = AsyncMock(return_value=devices)
+
+    assert run_async(component.run(0, True)) is True
+    component.transport.fetch_devices.assert_awaited_once()
+    first_stamp = component.last_success_timestamp
+    assert first_stamp is not None
+
+    component.transport.fetch_devices.reset_mock()
+    assert run_async(component.run(60, False)) is True
+    component.transport.fetch_devices.assert_not_awaited()
+    assert component.last_success_timestamp == first_stamp, "A skipped cycle must not stamp a poll it never made"
+
+    assert run_async(component.run(300, False)) is True
+    component.transport.fetch_devices.assert_awaited_once()
+    assert component.last_success_timestamp != first_stamp
+    print("  ✓ poll_seconds gates the poll and only a real poll stamps success")
+
+
+def test_component_reactive_oauth_refresh_retries_the_poll():
+    """A 401 mid-poll triggers one reactive token refresh and a single retry.
+
+    The proactive check only covers a token that has reached its stated expiry; a token
+    revoked before then wedged the component until Predbat restarted.
+    """
+    component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key="jwt-token")
+    component.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    component.handle_oauth_401 = AsyncMock(return_value=True)
+    devices = [normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)]
+    component.transport.fetch_devices = AsyncMock(side_effect=[MyEnergiAuthError("401"), devices])
+
+    assert run_async(component.run(0, True)) is True
+    component.handle_oauth_401.assert_awaited_once()
+    assert component.transport.fetch_devices.await_count == 2
+    assert "Z12345678" in component.devices
+    print("  ✓ A 401 mid-poll refreshes the token and retries once")
+
+
+def test_component_reactive_oauth_refresh_gives_up_after_one_retry():
+    """A refresh that fails, or a retry that fails again, ends the cycle instead of looping."""
+    component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key="jwt-token")
+    component.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    component.handle_oauth_401 = AsyncMock(return_value=False)
+    component.transport.fetch_devices = AsyncMock(side_effect=MyEnergiAuthError("401"))
+    assert run_async(component.run(0, True)) is False
+    assert component.transport.fetch_devices.await_count == 1
+
+    component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key="jwt-token")
+    component.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+    component.handle_oauth_401 = AsyncMock(return_value=True)
+    component.transport.fetch_devices = AsyncMock(side_effect=[MyEnergiAuthError("401"), MyEnergiAuthError("401 again")])
+    assert run_async(component.run(0, True)) is False
+    assert component.transport.fetch_devices.await_count == 2
+    print("  ✓ The reactive refresh retries exactly once and then gives up")
+
+
+def test_component_direct_auth_error_never_refreshes():
+    """A digest credential failure is not an OAuth problem and must not attempt a refresh."""
+    component = _make_component()
+    component.handle_oauth_401 = AsyncMock(return_value=True)
+    component.transport.fetch_devices = AsyncMock(side_effect=MyEnergiAuthError("bad key"))
+
+    assert run_async(component.run(0, True)) is False
+    component.handle_oauth_401.assert_not_awaited()
+    assert component.transport.fetch_devices.await_count == 1
+    print("  ✓ A direct-transport auth failure never attempts an OAuth refresh")
+
+
+def test_switch_event_handler_reports_the_transport_result():
+    """The handler returns whether the boost was issued and accepted, rather than always claiming success."""
+    component = _make_component()
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    fast = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=99999999, zmo=1), DEVICE_KIND_ZAPPI)
+    component.devices = {"Z12345678": zappi, "Z99999999": fast}
+    component.transport.send_boost = AsyncMock(return_value=True)
+    component.transport.cancel_boost = AsyncMock(return_value=True)
+
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "turn_on")) is True
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "turn_off")) is True
+    # Refused before the call, because the Zappi is in Fast mode
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_99999999_boost", "turn_on")) is False
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "toggle")) is False
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_something", "turn_on")) is False
+    print("  ✓ The boost switch handler reports what actually happened")
+
+
+def test_queued_boost_rejection_is_logged_as_a_failure():
+    """A boost myenergi refuses is logged as a control failure by the run loop, not as a success."""
+    component = _make_component()
+    messages = []
+    component.log = messages.append
+    device = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    component.devices = {"E87654321": device}
+    component.transport.send_boost = AsyncMock(side_effect=MyEnergiApiError("myenergi refused /cgi-eddi-boost-E87654321-10-1-60 with status -14"))
+    component.transport.fetch_devices = AsyncMock(return_value=[device])
+
+    run_async(component.switch_event("switch.predbat_myenergi_eddi_87654321_boost", "turn_on"))
+    assert run_async(component.run(60, False)) is True
+
+    assert any("control failed" in message and "status -14" in message for message in messages), messages
+    print("  ✓ A refused boost is logged as a control failure")
+
+
+def test_templates_accept_the_connected_zappi_plug_states():
+    """Every myenergi-aware apps.yaml template accepts the plug states that mean the car is connected.
+
+    automatic_config() wires the Zappi plug status sensor into car_charging_planned, so a
+    published state missing from car_charging_planned_response reads as "not planned to
+    charge" - which is exactly how "EV ready to charge" (pilot states C1 and D1) silently
+    disabled charge planning for a plugged-in car waiting to start.
+    """
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    templates_dir = os.path.join(repo_root, "templates")
+    connected_states = sorted({value.lower() for key, value in ZAPPI_PLUG_STATES.items() if key != "A" and key != "F"})
+    assert "ev ready to charge" in connected_states, connected_states
+
+    checked = 0
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".yaml"):
+            continue
+        text = open(os.path.join(templates_dir, name), encoding="utf-8").read()
+        if "car_charging_planned_response" not in text or "'ev connected'" not in text:
+            continue
+        checked += 1
+        for state in connected_states:
+            assert "'{}'".format(state) in text, "{} does not accept the '{}' plug state".format(name, state)
+    assert checked > 10, "Expected the templates to be found and checked, only saw {}".format(checked)
+    print("  ✓ {} templates accept every connected Zappi plug state".format(checked))
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -1220,10 +1742,12 @@ def test_myenergi(my_predbat=None):
     test_transport_stubs()
     test_direct_fetch_devices()
     test_direct_missing_asn_is_auth_error()
+    test_direct_missing_header_on_200_is_auth_error()
+    test_direct_401_without_header_is_a_credential_error()
+    test_direct_503_without_header_is_api_error()
     test_direct_boost_urls()
     test_direct_smart_boost_url()
     test_direct_401_is_auth_error()
-    test_direct_401_missing_header_precedence()
     test_direct_non_200_sets_needs_asn_refresh()
     test_direct_timeout_sets_needs_asn_refresh()
     test_direct_asn_migration_follows_new_host()
@@ -1240,12 +1764,25 @@ def test_myenergi(my_predbat=None):
     test_cloud_record_api_call_reasons()
     test_direct_client_error_reason_is_connection_error()
     test_direct_non_json_response_is_api_error()
+    test_direct_record_api_call_reasons()
+    test_direct_transport_requires_aiohttp_digest_support()
+    test_direct_boost_rejection_is_an_error()
+    test_direct_boost_without_a_status_body_is_success()
+    test_direct_boost_amount_and_time_formatting()
+    test_direct_boost_rejects_unsupported_kinds()
+    test_cloud_device_list_cache_expires_on_the_clock()
+    test_cloud_one_bad_device_does_not_lose_the_others()
+    test_cloud_auth_error_still_aborts_the_poll()
     test_component_selects_transport()
     test_component_publishes_entities()
     test_component_retains_last_good_reading()
     test_component_empty_device_list_does_not_wipe_devices()
     test_component_poll_seconds_rounding()
     test_component_oauth_refresh_failure_stops_the_poll()
+    test_component_poll_seconds_gate_skips_cycles()
+    test_component_reactive_oauth_refresh_retries_the_poll()
+    test_component_reactive_oauth_refresh_gives_up_after_one_retry()
+    test_component_direct_auth_error_never_refreshes()
     test_component_registration()
     test_automatic_config()
     test_automatic_config_single_zappi_is_still_a_list()
@@ -1253,6 +1790,8 @@ def test_myenergi(my_predbat=None):
     test_automatic_config_uses_set_arg_auto()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
+    test_automatic_config_ignores_unsupported_kinds()
+    test_templates_accept_the_connected_zappi_plug_states()
     test_controls_queue_rather_than_call()
     test_boost_uses_number_entity_value()
     test_boost_refused_in_fast_mode()
@@ -1264,6 +1803,10 @@ def test_myenergi(my_predbat=None):
     test_number_event_handler_unknown_entity_is_ignored()
     test_number_event_disabled()
     test_switch_event_handler_ignores_non_boost_and_unknown_service()
+    test_switch_event_handler_reports_the_transport_result()
+    test_queued_boost_rejection_is_logged_as_a_failure()
+    test_device_for_entity_requires_a_whole_prefix_match()
+    test_number_event_handler_ignores_other_number_entities()
 
     print("=" * 70)
     return False
