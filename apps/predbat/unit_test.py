@@ -188,6 +188,12 @@ from tests.test_control_ledger import run_control_ledger_tests
 from tests.test_sunsynk_publish import run_sunsynk_publish_tests
 from tests.test_sunsynk_storage import run_sunsynk_storage_tests
 from tests.test_sunsynk_config import run_sunsynk_config_tests
+from tests.test_alphaess_const import run_alphaess_const_tests
+from tests.test_alphaess_api import run_alphaess_api_tests
+from tests.test_alphaess_config import run_alphaess_config_tests
+from tests.test_alphaess_publish import run_alphaess_publish_tests
+from tests.test_alphaess_control import run_alphaess_control_tests
+from tests.test_alphaess_storage import run_alphaess_storage_tests
 from tests.test_enphase_api import run_enphase_api_tests
 from tests.test_solcast import run_solcast_tests
 from tests.test_open_meteo import run_open_meteo_tests
@@ -493,6 +499,12 @@ def main():
         ("sunsynk_publish", run_sunsynk_publish_tests, "Sunsynk publish tests", False),
         ("sunsynk_storage", run_sunsynk_storage_tests, "Sunsynk storage tests", False),
         ("sunsynk_config", run_sunsynk_config_tests, "Sunsynk config/INVERTER_DEF tests", False),
+        ("alphaess_const", run_alphaess_const_tests, "AlphaESS constants tests", False),
+        ("alphaess_api", run_alphaess_api_tests, "AlphaESS API tests", False),
+        ("alphaess_config", run_alphaess_config_tests, "AlphaESS config/INVERTER_DEF tests", False),
+        ("alphaess_publish", run_alphaess_publish_tests, "AlphaESS publish/config tests", False),
+        ("alphaess_control", run_alphaess_control_tests, "AlphaESS control-logic tests", False),
+        ("alphaess_storage", run_alphaess_storage_tests, "AlphaESS storage tests", False),
         ("enphase_api", run_enphase_api_tests, "Enphase API tests", False),
         ("solcast", run_solcast_tests, "Solcast API tests", False),
         ("open_meteo", run_open_meteo_tests, "Open-Meteo solar forecast provider tests", False),

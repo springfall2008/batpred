@@ -2225,6 +2225,44 @@ INVERTER_DEF = {
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
     },
+    "AlphaESSCloud": {
+        "name": "AlphaESSCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        # The periodic path carries a real chargePower setpoint. On the legacy path a
+        # non-zero rate just means "unrestricted"; a rate of ZERO is meaningful on both
+        # paths and is how Predbat signals freeze (see the component's payload builder).
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        # There is no pause endpoint, so Predbat expresses freeze via the rate entities.
+        "has_timed_pause": False,
+        # Anything other than HH:MM:SS makes inverter.py replace the published select
+        # entities with its own dummies and the window never reaches the component. The
+        # API wants HH:mm; the conversion happens at the payload boundary.
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "has_fox_inverter_mode": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        # Wrap-around behaviour is undocumented for timeChaf1/timeChae1, so Predbat splits
+        # the window and period 2 carries the remainder.
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
     "SolaxCloud": {
         "name": "SolaxCloud",
         "has_rest_api": False,
@@ -2540,6 +2578,15 @@ APPS_SCHEMA = {
     "sunsynk_automatic_ignore_pv": {"type": "boolean"},
     "sunsynk_control_enable": {"type": "boolean"},
     "sunsynk_battery_nominal_voltage": {"type": "float"},
+    "alphaess_app_id": {"type": "string", "empty": False},
+    "alphaess_app_secret": {"type": "string", "empty": False},
+    "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},
+    "alphaess_automatic": {"type": "boolean"},
+    "alphaess_automatic_ignore_pv": {"type": "boolean"},
+    "alphaess_control_enable": {"type": "boolean"},
+    "alphaess_battery_rate_max": {"type": "float"},
+    "alphaess_api_delay": {"type": "float"},
+    "alphaess_min_write_interval": {"type": "integer"},
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
