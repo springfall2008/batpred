@@ -1090,14 +1090,14 @@ class Prediction(PredictionBatch):
                     if battery_draw < 0:
                         pv_dc = min(abs(battery_draw), pv_now)
                         pv_ac = (pv_now - pv_dc) * inverter_loss_ac
-                elif diff > 0:
+                elif diff > 0 and inverter_freeze_export_discharge_rate <= 0:
                     # Freeze Export still allows the battery to discharge to cover a genuine load
                     # shortfall - only charging is disabled, per the documented behaviour
                     # (customisation.md "Freeze Export during Demand": "allows battery discharge,
                     # but not battery charging"). Previously this branch left battery_draw at 0 for
                     # any shortfall, silently modelling it the same as Freeze Charge (grid covers
                     # it instead) - see #4676.
-                    battery_draw = min(diff, discharge_rate_now_curve_step, inverter_limit, battery_to_min)
+                    battery_draw = min(diff * inverter_loss_recp, discharge_rate_now_curve_step, inverter_limit, battery_to_min)
 
                 # Some inverters (observed on AlphaESS) continue a small residual battery
                 # discharge during Freeze Export. Treat the configured value as battery-side
@@ -1106,7 +1106,7 @@ class Prediction(PredictionBatch):
                 # limit rather than capping the discharge at house demand. Only applies when
                 # nothing else has already decided a movement - a genuine shortfall discharge
                 # (above) already covers the real load more precisely than this residual estimate.
-                if inverter_freeze_export_discharge_rate > 0 and battery_draw == 0:
+                if inverter_freeze_export_discharge_rate > 0 and battery_draw >= 0:
                     freeze_draw = min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min)
                     freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
                     if freeze_diff < 0 and abs(freeze_diff) > export_limit:

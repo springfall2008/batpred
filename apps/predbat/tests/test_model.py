@@ -58,6 +58,48 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         battery_rate_max_charge=1.0,
         assert_battery_cycle=1.0,
     )
+    # battery_draw is DC but the shortfall from get_diff is AC, so it has to be grossed up
+    # through the inverter the same way the ECO branch does - otherwise the battery only
+    # covers inverter_loss of the load and the remainder is billed as a phantom import.
+    # Rates here are deliberately non-binding so the loss factor is the only thing in play:
+    # 1kWh of AC load over the hour needs 1/0.9 = 1.111kWh out of the battery.
+    failed |= simple_scenario(
+        "freeze_export_shortfall_grosses_up_inverter_loss",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=0.0,
+        assert_final_soc=8.89,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_limit=5.0,
+        inverter_loss=0.9,
+        inverter_freeze_export_discharge_rate=0.0,
+        battery_rate_max_charge=2.0,
+        assert_battery_cycle=1.1111,
+    )
+    # When inverter_freeze_export_discharge_rate is configured the user is telling Predbat
+    # their inverter does NOT cover house load during Freeze Export - it only leaks this fixed
+    # rate. So the configured rate wins over the shortfall discharge above. Same scenario as
+    # freeze_export_ac_flow_240w_one_hour but with a realistic (non-zero) battery discharge
+    # rate, which is what a real AlphaESS install has.
+    failed |= simple_scenario(
+        "freeze_export_residual_rate_overrides_shortfall_discharge",
+        my_predbat,
+        1.0,
+        0,
+        assert_final_metric=7.6,
+        assert_final_soc=9.76,
+        battery_size=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        inverter_freeze_export_discharge_rate=240.0,
+        battery_rate_max_charge=1.0,
+        assert_battery_cycle=0.24,
+    )
     failed |= simple_scenario(
         "freeze_export_ac_flow_240w_one_hour",
         my_predbat,
