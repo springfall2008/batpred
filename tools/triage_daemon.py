@@ -115,8 +115,12 @@ def triage(issue_number):
         "mcp__*",
         "--max-turns",
         "40",
+        # Client-side token-usage estimate, not a real spend cap under subscription
+        # auth (see agent-sdk/cost-tracking) - just a circuit-breaker against a
+        # runaway invocation, sized generously since one issue can need several
+        # file reads plus a test run.
         "--max-budget-usd",
-        "2.00",
+        "10.00",
     ]
     print(f"[triage] issue #{issue_number}: starting", flush=True)
     result = subprocess.run(cmd, cwd=str(CLONE_DIR))
