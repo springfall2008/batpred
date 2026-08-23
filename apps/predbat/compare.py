@@ -97,7 +97,7 @@ class Compare:
             else:
                 self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_import" in tariff:
-            pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import")
+            pb.rate_import = pb.basic_rates(tariff["rates_import"], "rates_import", include_manual_api=False)
         else:
             self.log("Using existing rate import data")
 
@@ -127,7 +127,7 @@ class Compare:
             else:
                 self.log("Warn: Compare tariff {} bad Strømligning entity ids".format(tariff.get("id", "")))
         elif "rates_export" in tariff:
-            pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export")
+            pb.rate_export = pb.basic_rates(tariff["rates_export"], "rates_export", include_manual_api=False)
         else:
             self.log("Using existing rate export data")
 
@@ -135,7 +135,7 @@ class Compare:
             pb.rate_scan(pb.rate_import, print=False)
             pb.rate_import, pb.rate_import_replicated = pb.rate_replicate(pb.rate_import, pb.io_adjusted, is_import=True)
             if "rates_import_override" in tariff:
-                pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated)
+                pb.rate_import = pb.basic_rates(tariff["rates_import_override"], "rates_import_override", pb.rate_import, pb.rate_import_replicated, include_manual_api=False)
             pb.rate_scan(pb.rate_import, print=True)
 
         # Replicate and scan export rates
@@ -143,7 +143,7 @@ class Compare:
             pb.rate_scan_export(pb.rate_export, print=False)
             pb.rate_export, pb.rate_export_replicated = pb.rate_replicate(pb.rate_export, is_import=False)
             if "rates_export_override" in tariff:
-                pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated)
+                pb.rate_export = pb.basic_rates(tariff["rates_export_override"], "rates_export_override", pb.rate_export, pb.rate_export_replicated, include_manual_api=False)
             pb.rate_scan_export(pb.rate_export, print=True)
 
         # Set rate thresholds
@@ -336,6 +336,7 @@ class Compare:
         my_predbat.manual_all_times = []
         my_predbat.octopus_intelligent_charging = False
 
+        self.recompute_iboost()
         self.recompute_car_charging(car_charging_slots)
 
         self.log("Running scenario for tariff: {}".format(name))
@@ -448,6 +449,17 @@ class Compare:
         self.select_best(compare_list, self.comparisons)
         self.publish_data()
 
+    def recompute_iboost(self):
+        """
+        Recompute iBoost plan
+        """
+        my_predbat = self.pb
+
+        if my_predbat.iboost_enable and (((not my_predbat.iboost_solar) and (not my_predbat.iboost_charging)) or my_predbat.iboost_smart):
+            my_predbat.iboost_plan = my_predbat.plan_iboost_smart()
+        else:
+            my_predbat.iboost_plan = []
+
     def recompute_car_charging(self, car_charging_slots):
         """
         Recompute car charging plan
@@ -506,6 +518,7 @@ class Compare:
         save_cost_today_sofar = my_predbat.cost_today_sofar
         save_carbon_today_sofar = my_predbat.carbon_today_sofar
         save_iboost_today = my_predbat.iboost_today
+        save_iboost_plan = my_predbat.iboost_plan
         save_import_today_now = my_predbat.import_today_now
         save_export_today_now = my_predbat.export_today_now
         save_octopus_intelligent_charging = my_predbat.octopus_intelligent_charging
@@ -607,6 +620,7 @@ class Compare:
         my_predbat.cost_today_sofar = save_cost_today_sofar
         my_predbat.carbon_today_sofar = save_carbon_today_sofar
         my_predbat.iboost_today = save_iboost_today
+        my_predbat.iboost_plan = save_iboost_plan
         my_predbat.import_today_now = save_import_today_now
         my_predbat.export_today_now = save_export_today_now
         my_predbat.octopus_intelligent_charging = save_octopus_intelligent_charging

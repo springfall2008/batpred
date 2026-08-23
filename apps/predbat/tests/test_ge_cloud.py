@@ -72,7 +72,7 @@ class MockGECloudDirect(GECloudDirect):
             def __init__(self):
                 self.external_states = {}
 
-            async def set_state_external(self, entity_id, state):
+            async def set_state_external(self, entity_id, state, attributes={}):
                 self.external_states[entity_id] = state
 
         class MockBase:
@@ -240,6 +240,10 @@ def test_ge_cloud(my_predbat=None):
         ("settings_restored_from_cache", _test_settings_restored_from_fresh_cache, "Settings restored from fresh storage cache"),
         ("inverter_status", _test_async_get_inverter_status, "Get inverter status"),
         ("inverter_meter", _test_async_get_inverter_meter, "Get inverter meter"),
+        ("status_null_leaves", _test_inverter_status_null_leaves_retained, "Null status leaves retain previous reading"),
+        ("status_null_first_poll", _test_inverter_status_null_leaves_first_poll, "Null status leaves dropped when no previous reading"),
+        ("meter_null_leaves", _test_inverter_meter_null_leaves_retained, "Null meter leaves retain previous totals"),
+        ("meter_null_section", _test_inverter_meter_null_section_first_poll, "Null meter section dropped when no previous data"),
         ("device_info", _test_async_get_device_info, "Get device info"),
         ("settings_success", _test_async_get_inverter_settings_success, "Get inverter settings success"),
         ("settings_partial", _test_async_get_inverter_settings_partial_failure, "Get inverter settings partial failure"),
@@ -2847,6 +2851,257 @@ def _test_async_get_inverter_meter(my_predbat):
         if result != mock_meter:
             print("ERROR: Expected meter dict, got {}".format(result))
             return 1
+        return 0
+
+    return run_async(test())
+
+
+def _test_inverter_status_null_leaves_retained(my_predbat):
+    """Test null leaves in a Gateway status response retain the previous good reading"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        previous = {
+            "time": "2026-08-22T18:21:41Z",
+            "status": "Normal",
+            "solar": {"power": 1310, "arrays": [{"array": 1, "voltage": 251.7, "current": 0.3, "power": 77}]},
+            "grid": {"voltage": 237.1, "current": 4.2, "power": 151, "frequency": 50.05},
+            "battery": {"percent": 41, "power": 902, "temperature": 12},
+            "inverter": {"temperature": 27.2, "power": 1029, "output_voltage": 237.8, "output_frequency": 50.06},
+            "consumption": 878,
+        }
+
+        # Gateway systems intermittently return HTTP 200 with every leaf explicitly null
+        null_payload = {
+            "time": "2026-08-22T18:26:41Z",
+            "status": "Unknown",
+            "solar": {"power": None, "arrays": []},
+            "grid": {"voltage": None, "current": None, "power": None, "frequency": None},
+            "battery": {"percent": None, "power": None, "temperature": None},
+            "inverter": {"temperature": None, "power": None, "output_voltage": None, "output_frequency": None},
+            "consumption": None,
+        }
+
+        async def mock_retry(*args, **kwargs):
+            return null_payload
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry
+        result = await ge_cloud.async_get_inverter_status("test123", previous=previous)
+
+        # The fresh timestamp and status must come through
+        if result.get("time") != "2026-08-22T18:26:41Z":
+            print("ERROR: Expected fresh time to be kept, got {}".format(result.get("time")))
+            return 1
+        if result.get("status") != "Unknown":
+            print("ERROR: Expected fresh status to be kept, got {}".format(result.get("status")))
+            return 1
+
+        # Every null leaf must fall back to the previous good reading, not None and not 0
+        checks = [
+            (["battery", "percent"], 41),
+            (["battery", "power"], 902),
+            (["battery", "temperature"], 12),
+            (["grid", "power"], 151),
+            (["grid", "voltage"], 237.1),
+            (["grid", "frequency"], 50.05),
+            (["solar", "power"], 1310),
+            (["inverter", "power"], 1029),
+            (["inverter", "temperature"], 27.2),
+            (["consumption"], 878),
+        ]
+        for path, expected in checks:
+            value = result
+            for part in path:
+                value = value.get(part) if isinstance(value, dict) else None
+            if value != expected:
+                print("ERROR: Expected {} to retain {}, got {}".format("/".join(path), expected, value))
+                return 1
+
+        # The previous dict must not be mutated in place
+        if previous["battery"]["percent"] != 41 or previous["status"] != "Normal":
+            print("ERROR: Previous status was mutated: {}".format(previous))
+            return 1
+
+        # A subsequent good poll must take the fresh values again
+        good_payload = {
+            "time": "2026-08-22T18:31:41Z",
+            "status": "Normal",
+            "battery": {"percent": 45, "power": 0, "temperature": 13},
+            "grid": {"power": -200, "voltage": 238.0, "current": 1.0, "frequency": 50.01},
+            "solar": {"power": 0, "arrays": []},
+            "inverter": {"temperature": 26.0, "power": 100, "output_voltage": 238.0, "output_frequency": 50.01},
+            "consumption": 300,
+        }
+
+        async def mock_retry_good(*args, **kwargs):
+            return good_payload
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry_good
+        result2 = await ge_cloud.async_get_inverter_status("test123", previous=result)
+
+        # Zero is a legitimate reading and must not be treated as missing
+        if result2["battery"]["power"] != 0 or result2["solar"]["power"] != 0:
+            print("ERROR: Expected zero readings to be kept, got {}".format(result2))
+            return 1
+        if result2["battery"]["percent"] != 45:
+            print("ERROR: Expected fresh percent 45, got {}".format(result2["battery"]["percent"]))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_inverter_status_null_leaves_first_poll(my_predbat):
+    """Test null leaves with no previous reading stay None rather than becoming a fabricated zero"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        null_payload = {
+            "time": "2026-08-22T18:26:41Z",
+            "status": "Unknown",
+            "grid": {"voltage": 242.3, "current": 0.7, "power": 0, "frequency": None},
+            "battery": {"percent": None, "power": None, "temperature": None},
+            "consumption": None,
+        }
+
+        async def mock_retry(*args, **kwargs):
+            return null_payload
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry
+        result = await ge_cloud.async_get_inverter_status("test123", previous={})
+
+        # A field that has never had a reading must still report "no value". Dropping the key would
+        # let the .get(field, 0) defaults in publish_status invent a reading that never happened.
+        for section, field in [("grid", "frequency"), ("battery", "percent"), ("battery", "power"), ("battery", "temperature")]:
+            if field not in result.get(section, {}):
+                print("ERROR: Expected {}/{} to be kept as None, but the key was dropped".format(section, field))
+                return 1
+            if result[section][field] is not None:
+                print("ERROR: Expected {}/{} to be None, got {}".format(section, field, result[section][field]))
+                return 1
+
+        if "consumption" not in result or result["consumption"] is not None:
+            print("ERROR: Expected consumption to be kept as None, got {}".format(result.get("consumption", "<missing>")))
+            return 1
+
+        # Readings that did arrive must be unaffected, including a legitimate zero
+        if result["grid"]["power"] != 0 or result["grid"]["voltage"] != 242.3:
+            print("ERROR: Expected good grid readings to be kept, got {}".format(result["grid"]))
+            return 1
+
+        # Once a good value arrives it is retained through a later null
+        good = {"grid": {"frequency": 50.01}, "battery": {"percent": 41}}
+
+        async def mock_retry_good(*args, **kwargs):
+            return good
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry_good
+        result = await ge_cloud.async_get_inverter_status("test123", previous=result)
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry
+        result = await ge_cloud.async_get_inverter_status("test123", previous=result)
+
+        if result["grid"]["frequency"] != 50.01 or result["battery"]["percent"] != 41:
+            print("ERROR: Expected previously good values to be retained, got {}".format(result))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_inverter_meter_null_leaves_retained(my_predbat):
+    """Test null leaves in a meter response retain the previous good totals"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        previous = {
+            "time": "2026-08-22T18:21:41Z",
+            "today": {"solar": 15.5, "grid": {"import": 5.2, "export": 10.3}, "battery": {"charge": 8.0, "discharge": 6.5}, "consumption": 12.7},
+            "total": {"solar": 6539.5, "grid": {"import": 19508.4, "export": 3230.3}, "battery": {"charge": 7290.95, "discharge": 7290.95}, "consumption": 21566.6},
+        }
+
+        null_payload = {
+            "time": "2026-08-22T18:26:41Z",
+            "today": {"solar": None, "grid": {"import": None, "export": None}, "battery": {"charge": None, "discharge": None}, "consumption": None},
+            "total": None,
+        }
+
+        async def mock_retry(*args, **kwargs):
+            return null_payload
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry
+        result = await ge_cloud.async_get_inverter_meter("test123", previous=previous)
+
+        if result["today"]["solar"] != 15.5:
+            print("ERROR: Expected today solar to retain 15.5, got {}".format(result["today"]["solar"]))
+            return 1
+        if result["today"]["grid"]["import"] != 5.2:
+            print("ERROR: Expected today grid import to retain 5.2, got {}".format(result["today"]["grid"]["import"]))
+            return 1
+        if result["today"]["consumption"] != 12.7:
+            print("ERROR: Expected today consumption to retain 12.7, got {}".format(result["today"]["consumption"]))
+            return 1
+        if result["total"]["solar"] != 6539.5:
+            print("ERROR: Expected total solar to retain 6539.5, got {}".format(result["total"]))
+            return 1
+        if result.get("time") != "2026-08-22T18:26:41Z":
+            print("ERROR: Expected fresh meter time, got {}".format(result.get("time")))
+            return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_inverter_meter_null_section_first_poll(my_predbat):
+    """Test a null today/total section with no previous data is dropped rather than crashing publish"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.config_args["prefix"] = "predbat"
+
+        # today/total are objects rather than readings - a null section left in place would leave
+        # publish_meter iterating None
+        null_payload = {"time": "2026-08-22T18:26:41Z", "today": {"solar": 15.5, "grid": {"import": 5.2, "export": 10.3}}, "total": None}
+
+        async def mock_retry(*args, **kwargs):
+            return null_payload
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry
+        result = await ge_cloud.async_get_inverter_meter("test123", previous={})
+
+        if "total" in result:
+            print("ERROR: Expected unusable total section to be dropped, got {}".format(result.get("total")))
+            return 1
+
+        # Publishing must not raise and the usable section must still come through
+        await ge_cloud.publish_meter("test123", result)
+
+        if ge_cloud.dashboard_items.get("sensor.predbat_gecloud_test123_solar_today", {}).get("state") != 15.5:
+            print("ERROR: Expected solar_today 15.5 to publish, got {}".format(ge_cloud.dashboard_items.get("sensor.predbat_gecloud_test123_solar_today")))
+            return 1
+
+        # Once a good total arrives it is retained through a later null section
+        good = {"time": "2026-08-22T18:31:41Z", "today": {"solar": 16.0}, "total": {"solar": 6539.5}}
+
+        async def mock_retry_good(*args, **kwargs):
+            return good
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry_good
+        result = await ge_cloud.async_get_inverter_meter("test123", previous=result)
+
+        ge_cloud.async_get_inverter_data_retry = mock_retry
+        result = await ge_cloud.async_get_inverter_meter("test123", previous=result)
+
+        if result.get("total", {}).get("solar") != 6539.5:
+            print("ERROR: Expected previous total to be retained, got {}".format(result.get("total")))
+            return 1
+
         return 0
 
     return run_async(test())

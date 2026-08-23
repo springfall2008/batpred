@@ -131,6 +131,13 @@ def get_metrics_dashboard_body(data_json):
   <div id="mdApiTable"></div>
   <div style="margin-top:1rem;" class="md-card-grid" id="mdSolarCards"></div>
 </section>
+
+<!-- Section 6: Control Conflicts -->
+<section>
+  <h2>Control Conflicts</h2>
+  <div class="md-card-grid" id="mdConflictCards"></div>
+  <div style="margin-top:1rem;" id="mdConflictTable"></div>
+</section>
 </div>
 
 <script>
@@ -321,6 +328,36 @@ function mdRenderSolar(d) {
   document.getElementById('mdSolarCards').innerHTML = h;
 }
 
+function mdRenderControlConflicts(d) {
+  var events = d.control_conflicts_events || [];
+  var sustained = d.control_conflicts_sustained_controls || [];
+  var count = d.control_conflicts_24h || 0;
+  var cards = [
+    {label:'Changes (24h)',      value: mdFmt(count, 0),              cls: count > 0 ? 'md-status-warn' : 'md-status-ok'},
+    {label:'Sustained Controls', value: mdFmt(d.control_conflicts_sustained_total || 0, 0), cls: sustained.length > 0 ? 'md-status-err' : 'md-status-ok', sub: sustained.length > 0 ? sustained.join(', ') : ''},
+  ];
+  var h = '';
+  cards.forEach(function (c) {
+    h += '<div class="md-card"><div class="md-label">' + c.label + '</div>'
+      + '<div class="md-value ' + c.cls + '">' + c.value + '</div>'
+      + (c.sub ? '<div class="md-sub">' + c.sub + '</div>' : '') + '</div>';
+  });
+  document.getElementById('mdConflictCards').innerHTML = h;
+
+  if (events.length === 0) {
+    document.getElementById('mdConflictTable').innerHTML = '<div class="md-card" style="text-align:center;">No settings changed outside Predbat in the last 24h</div>';
+    return;
+  }
+  var t = '<table><thead><tr><th>When</th><th>Control</th><th>Entity</th><th>Predbat Set</th><th>Now Reads</th></tr></thead><tbody>';
+  /* Newest first for reading, even though the source list is oldest-first for storage. */
+  events.slice().reverse().forEach(function (e) {
+    t += '<tr><td>' + mdAgo(e.at) + '</td><td>' + (e.control || '—') + '</td><td>' + (e.entity_id || '—') + '</td>'
+      + '<td>' + (e.we_set === undefined ? '—' : e.we_set) + '</td><td>' + (e.now_reads === undefined ? '—' : e.now_reads) + '</td></tr>';
+  });
+  t += '</tbody></table>';
+  document.getElementById('mdConflictTable').innerHTML = t;
+}
+
 function mdRebuildCharts(d) {
   if (mdSocChart)    { mdSocChart.destroy();    mdSocChart    = null; }
   if (mdPowerChart)  { mdPowerChart.destroy();  mdPowerChart  = null; }
@@ -333,6 +370,7 @@ function mdRenderAll(d) {
   mdRenderCost(d);
   mdRenderAPI(d);
   mdRenderSolar(d);
+  mdRenderControlConflicts(d);
   if (!mdSocChart) {
     mdInitSOCChart(d); mdInitPowerChart(d); mdInitEnergyChart(d);
   } else {

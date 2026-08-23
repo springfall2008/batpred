@@ -42,8 +42,8 @@
 // unconditionally, so loading one against this Python segfaults on the first prediction rather than
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
-#define PK_ABI_VERSION 4
-#define PK_PARITY_REVISION 7
+#define PK_ABI_VERSION 5
+#define PK_PARITY_REVISION 9
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -169,6 +169,7 @@ struct PkContext {
     double battery_loss;
     double battery_loss_discharge;
     double inverter_loss;
+    double inverter_freeze_export_discharge_rate; // per-minute rate (multiplied by step in the kernel), residual battery-side discharge entering the AC balance during Freeze Export
     double inverter_limit;    // per-minute rate (multiplied by step in the kernel)
     double export_limit;      // per-minute rate
     double pv_ac_limit;       // per-minute rate
@@ -714,6 +715,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const double battery_rate_max_discharge = c->battery_rate_max_discharge;
     const double battery_rate_max_export = c->battery_rate_max_export;
     const double battery_rate_min = c->battery_rate_min;
+    const double inverter_freeze_export_discharge_rate = c->inverter_freeze_export_discharge_rate;
     // PV10 de-rating of the charge rate - prediction.py:587-592. PV90 is the upside case, no de-rate.
     const double battery_rate_max_scaling = is_pv10 ? c->battery_rate_max_scaling10 : c->battery_rate_max_scaling;
     const double battery_rate_max_scaling_discharge = c->battery_rate_max_scaling_discharge;
@@ -1076,6 +1078,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     pv_dc = std::min(std::fabs(battery_draw), pv_now);
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
                 }
+            }
+
+            // Some inverters (observed on AlphaESS) continue a small residual battery
+            // discharge during Freeze Export. Feed the battery-side rate into the normal AC
+            // balance so load consumes it first and any surplus may export, while respecting
+            // the reserve and the physical grid export limit.
+            if (inverter_freeze_export_discharge_rate > 0 && battery_draw >= 0) {
+                double freeze_draw = std::min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min);
+                const double freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
+                if (freeze_diff < 0 && std::abs(freeze_diff) > export_limit) {
+                    freeze_draw = std::max(freeze_draw - (std::abs(freeze_diff) - export_limit) * inverter_loss_recp, 0.0);
+                }
+                battery_draw = freeze_draw;
             }
         } else {
             // ECO Mode - prediction.py:951-997

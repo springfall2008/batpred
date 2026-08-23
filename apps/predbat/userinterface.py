@@ -29,8 +29,8 @@ from const import (
     PREDBAT_MODE_OPTIONS,
     PREDBAT_MODE_MONITOR,
 )
-from config import CONFIG_API_OVERRIDE
-from predbat import THIS_VERSION
+from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
+from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
@@ -189,7 +189,13 @@ class UserInterface:
             overrides = self.get_manual_api(arg)
             if isinstance(default, list):
                 value = self.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=False)
+                is_dict_list = self.is_multi_instance_override(arg)
                 for override in overrides:
+                    # dict_list index only dedupes at write time, it has no output position (#4405)
+                    if is_dict_list:
+                        value.append(override.get("value", None))
+                        self.log("Note: API Overridden arg {} value {} appended".format(arg, value))
+                        continue
                     override_index = override.get("index", 0)
                     if override_index is None:
                         override_index = 0
@@ -254,20 +260,33 @@ class UserInterface:
 
         if isinstance(default, float):
             # Convert to float?
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # Nothing resolved - not configured, or an out-of-range index on a per-inverter list
+                # (resolve_arg has already logged "Out of range index ..."). That is exactly what the
+                # caller's default is for, so apply it quietly rather than reporting an error: flagging
+                # it pins the warning on the status sensor and ends every run as "Read-Only with Errors"
+                # for a gap the caller already handles. A value that is present but unparseable is a
+                # genuine fault and is still reported below.
                 value = default
+            else:
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, int) and not isinstance(default, bool):
             # Convert to int?
-            try:
-                value = int(float(value))
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # See the float case above - a missing value is what the default is for, not an error
                 value = default
+            else:
+                try:
+                    value = int(float(value))
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
             if value.lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
@@ -804,7 +823,7 @@ class UserInterface:
         """
 
         text = ""
-        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION)
+        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION_DISPLAY)
         text += "type: entities\n"
         text += "Title: Predbat\n"
         text += "entities:\n"
@@ -1177,6 +1196,22 @@ class UserInterface:
                 command_index = int(command_split[1])
         return command, command_index
 
+    def is_multi_instance_override(self, command):
+        """
+        True if the command is a dict_list override (e.g. rates_import_override)
+        """
+        return APPS_SCHEMA.get(command, {}).get("type") == "dict_list"
+
+    def strip_command_args(self, command):
+        """
+        Strip the ?args or =value suffix from a manual API command string
+        """
+        if "?" in command:
+            return command.split("?")[0]
+        elif "=" in command:
+            return command.split("=")[0]
+        return command
+
     def get_manual_api(self, command_type):
         """
         Get the manual API command
@@ -1370,21 +1405,20 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            for prev in time_overrides[:]:
-                if "=" in prev:
-                    prev_no_eq = prev.split("=")[0]
-                elif "?" in prev:
-                    prev_no_eq = prev.split("?")[0]
-                else:
-                    prev_no_eq = prev
-                if "=" in value:
-                    value_no_eq = value.split("=")[0]
-                elif "?" in value:
-                    value_no_eq = value.split("?")[0]
-                else:
-                    value_no_eq = value
-                if prev_no_eq == value_no_eq:
-                    time_overrides.remove(prev)
+            value_no_eq = self.strip_command_args(value)
+            has_index = "(" in value_no_eq
+            value_command = value_no_eq.split("(")[0] if has_index else value_no_eq
+
+            # No-index dict_list commands only dedupe against an exact repeat, not by name (#4405)
+            is_multi_instance = not has_index and self.is_multi_instance_override(value_command)
+
+            if is_multi_instance:
+                if value in time_overrides:
+                    time_overrides.remove(value)
+            else:
+                for prev in time_overrides[:]:
+                    if self.strip_command_args(prev) == value_no_eq:
+                        time_overrides.remove(prev)
             time_overrides.append(value)
 
         values = ",".join(time_overrides)

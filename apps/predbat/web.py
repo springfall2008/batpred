@@ -71,9 +71,10 @@ from web_helper import (
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
-from predbat import THIS_VERSION
+from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+import debug_history
 from web_annual import AnnualPage
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
@@ -456,6 +457,9 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_apps", self.html_debug_apps)
         app.router.add_get("/debug_apps_live", self.html_debug_apps_live)
         app.router.add_get("/debug_plan", self.html_debug_plan)
+        app.router.add_get("/debug_history_list", self.html_debug_history_list)
+        app.router.add_get("/debug_history_download", self.html_debug_history_download)
+        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
@@ -808,6 +812,11 @@ class WebInterface(ComponentBase):
 
         status_entity = self.prefix + ".status"
         last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        if last_updated:
+            try:
+                last_updated = str2time(last_updated).replace(tzinfo=None, microsecond=0)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_updated time {}: {}".format(last_updated, e))
         status = self.get_state_wrapper(status_entity, default="Unknown")
         detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
         debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
@@ -878,6 +887,7 @@ class WebInterface(ComponentBase):
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
@@ -1495,7 +1505,7 @@ class WebInterface(ComponentBase):
                     pass
 
                 # Set the entity state
-                await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
+                await self.set_state_external(entity_id, new_value, attributes=attributes)
                 self.log(f"Entity {entity_id} updated to {new_value} via web interface")
 
         except Exception as e:
@@ -1607,7 +1617,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -2653,7 +2663,7 @@ chart.render();
                 new_value = float(new_value)
 
             self.log("Web interface setting {} to {}".format(pitem, new_value))
-            await self.base.ha_interface.set_state_external(pitem, new_value)
+            await self.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
 
@@ -2782,6 +2792,56 @@ chart.render();
         yaml_debug = self.base.create_debug_yaml(write_file=False)
         return await self.html_file("predbat_debug.yaml.txt", yaml_debug)
 
+    def _storage(self):
+        """Return the Storage component, or None when it is unavailable."""
+        components = getattr(self.base, "components", None)
+        return components.get_component("storage") if components else None
+
+    async def html_debug_history_list(self, request):
+        """
+        Return the rolling debug-history snapshot index as JSON, newest-first with
+        steps_back annotated - consumed by the plan table's History/Yesterday view.
+        """
+        snapshots = await debug_history.list_snapshots(self._storage())
+        return web.json_response(debug_history.annotate_steps_back(snapshots))
+
+    async def html_debug_history_download(self, request):
+        """
+        Download one retained debug-history snapshot by id (?id=<snapshot_id>, or
+        ?id=latest / omitted for the newest one), for #4417.
+        """
+        storage = self._storage()
+        requested_id = request.query.get("id") or "latest"
+        # Resolve "latest" and load its data in one call - resolving it via load_snapshot()
+        # and then separately re-listing to find the id for the filename risks a capture
+        # landing in between, serving one snapshot's bytes under a different one's filename.
+        resolved_id, data = await debug_history.resolve_and_load_snapshot(storage, requested_id)
+        if data is None:
+            # requested_id is reflected back unescaped into an HTML response - a raw query
+            # param, so must be escaped rather than trusted.
+            return web.Response(content_type="text/html", text="Snapshot {} not found".format(html_module.escape(requested_id)), status=404)
+
+        filename = debug_history.snapshot_filename(resolved_id)
+        return await self.html_file(filename, data)
+
+    async def html_debug_history_download_all(self, request):
+        """
+        Download every retained debug-history snapshot as a single gzip tarball, so a
+        bug report can be gathered with one link instead of chasing a user through the
+        per-snapshot picker for the right moment, for #4417.
+        """
+        storage = self._storage()
+        named_snapshots = await debug_history.load_all_snapshots(storage)
+        if not named_snapshots:
+            return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
+
+        archive_bytes = debug_history.build_archive(named_snapshots)
+        return web.Response(
+            content_type="application/gzip",
+            body=archive_bytes,
+            headers={"Content-Disposition": "attachment; filename=predbat_debug_history.tgz"},
+        )
+
     async def html_file_load(self, filename, also_file=None, as_file=None):
         """
         Load a file and serve it up
@@ -2831,7 +2891,7 @@ chart.render();
         """
         Return just the dashboard body content for AJAX refresh (preserves scroll position)
         """
-        text = self.get_status_html(THIS_VERSION)
+        text = self.get_status_html(THIS_VERSION_DISPLAY)
         return web.Response(content_type="text/html", text=text)
 
     async def html_dash(self, request):
@@ -2880,7 +2940,7 @@ chart.render();
 """
         text += "<body>\n"
         text += '<div id="dash-content-container">\n'
-        text += self.get_status_html(THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION_DISPLAY)
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -2898,12 +2958,12 @@ chart.render();
                 if key == "mode":
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
-                    await self.base.ha_interface.set_state_external(entity_id, value)
+                    await self.set_state_external(entity_id, value)
                 elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
-                    await self.base.ha_interface.set_state_external(entity_id, bool_value)
+                    await self.set_state_external(entity_id, bool_value)
 
             # Log the update
             self.log(f"Dashboard status updated: {dict(data)}")
@@ -4287,7 +4347,7 @@ chart.render();
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
                 item = self.base.config_index.get("manual_import_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
                 manual_export_rates = self.base.manual_rates("manual_export_rates")
@@ -4296,11 +4356,11 @@ chart.render();
                 await self.base.async_manual_select("manual_export_rates", clear_option)
             elif action == "Set Export":
                 item = self.base.config_index.get("manual_export_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_export_rates", selection_option)
             elif action == "Set Load":
                 item = self.base.config_index.get("manual_load_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
                 manual_load_adjust = self.base.manual_rates("manual_load_adjust")
@@ -4309,7 +4369,7 @@ chart.render();
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
             elif action == "Set SOC":
                 item = self.base.config_index.get("manual_soc_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
                 manual_soc = self.base.manual_rates("manual_soc")

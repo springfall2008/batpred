@@ -7,6 +7,7 @@ Unit tests for Ohme EV charger integration
 import datetime
 import time
 import unittest.mock
+import pytz
 from unittest.mock import patch, MagicMock, AsyncMock
 from typing import Dict, Optional
 from tests.test_infra import run_async
@@ -19,6 +20,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ohme import (
+    ENERGY_TODAY_ENTITY,
+    MAX_ENERGY_GAP_SECONDS,
     OhmeAPI,
     OhmeApiClient,
     ChargerStatus,
@@ -260,6 +263,32 @@ def test_ohme(my_predbat=None):
         ("update_schedule_all", _test_ohme_client_async_update_schedule_all_params, "async_update_schedule all params"),
         ("update_schedule_partial", _test_ohme_client_async_update_schedule_partial_params, "async_update_schedule partial"),
         ("update_schedule_no_rule", _test_ohme_client_async_update_schedule_no_rule, "async_update_schedule no rule"),
+        ("energy_steady", _test_ohme_energy_today_steady_power, "energy_today integrates steady power"),
+        ("energy_left_sum", _test_ohme_energy_today_left_riemann, "energy_today uses a left Riemann sum"),
+        ("energy_gap", _test_ohme_energy_today_long_gap, "energy_today skips over-long gaps"),
+        ("energy_midnight", _test_ohme_energy_today_midnight_rollover, "energy_today resets at midnight"),
+        ("energy_gap_midnight", _test_ohme_energy_today_gap_across_midnight, "energy_today rolls the day over a long gap"),
+        ("energy_restore", _test_ohme_energy_today_restore, "energy_today restores across a restart"),
+        ("energy_restore_stale", _test_ohme_energy_today_restore_stale, "energy_today ignores a stale total"),
+        ("energy_published", _test_ohme_energy_today_published, "publish_data publishes energy_today"),
+        ("energy_timezone", _test_ohme_energy_today_uses_configured_timezone, "energy_today follows the configured timezone"),
+        ("auto_config_energy", _test_ohme_auto_config_wires_car_charging_energy, "auto config wires car_charging_energy"),
+        ("iog_flag_forces_on", _test_ohme_iog_flag_forces_on, "explicit flag forces Intelligent on"),
+        ("iog_flag_forces_off", _test_ohme_iog_flag_forces_off, "explicit flag forces Intelligent off"),
+        ("iog_autodetect", _test_ohme_iog_autodetected_from_octopus, "Intelligent auto-detected from Octopus"),
+        ("iog_autodetect_gated", _test_ohme_iog_autodetect_needs_ohme_automatic, "auto-detect needs ohme_automatic"),
+        ("iog_claims_slots", _test_ohme_iog_claims_car_slots, "Intelligent wiring claims the car slots"),
+        ("connected_sensor", _test_ohme_connected_sensor, "connected binary sensor tracks plug state"),
+        ("control_enable", _test_ohme_control_enable_rules, "ohme_control enable rules"),
+        ("control_windows", _test_ohme_control_window_parsing, "control window parsing"),
+        ("control_midnight", _test_ohme_control_window_year_rollover, "control windows across new year"),
+        ("control_startup", _test_ohme_control_waits_for_plan, "control waits for a published plan"),
+        ("control_edges", _test_ohme_control_edge_triggered, "control only acts on transitions"),
+        ("control_drift", _test_ohme_control_reapplies_on_drift, "control re-applies after app changes"),
+        ("control_read_only", _test_ohme_control_read_only_release, "read only releases the charger"),
+        ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
+        ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
+        ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
         ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
         ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
         ("run_first", _test_ohme_run_first_call, "OhmeAPI run first call"),
@@ -272,6 +301,7 @@ def test_ohme(my_predbat=None):
         ("select_target_time", _test_ohme_select_event_handler_target_time, "select_event_handler target_time"),
         ("select_invalid_time", _test_ohme_select_event_handler_invalid_time, "select_event_handler invalid time"),
         ("number_target_soc", _test_ohme_number_event_handler_target_soc, "number_event_handler target_soc"),
+        ("number_entities_wired", _test_ohme_number_event_handler_matches_published_entities, "published number entities are all handled"),
         ("number_target_soc_invalid", _test_ohme_number_event_handler_target_soc_invalid, "number_event_handler invalid SoC"),
         ("number_preconditioning", _test_ohme_number_event_handler_preconditioning, "number_event_handler preconditioning"),
         ("number_preconditioning_off", _test_ohme_number_event_handler_preconditioning_off, "number_event_handler preconditioning off"),
@@ -1502,6 +1532,47 @@ def _test_ohme_client_async_update_schedule_no_rule(my_predbat=None):
 # OhmeAPI Component Tests
 # ============================================================================
 
+class MockOctopusComponent:
+    """Stand-in for the OctopusAPI component, reporting a tariff code"""
+
+    def __init__(self, tariff_code=None):
+        """Initialize with the import tariff code to report"""
+        self.tariffs = {"import": {"tariffCode": tariff_code}} if tariff_code else {}
+
+    @staticmethod
+    def is_intelligent_go_tariff(tariff_code):
+        """Mirror of OctopusAPI.is_intelligent_go_tariff"""
+        if not tariff_code:
+            return False
+        return ("INTELLI-" in tariff_code) or ("IOG-" in tariff_code)
+
+
+class MockComponents:
+    """Stand-in for the component registry"""
+
+    def __init__(self):
+        """Initialize with no components registered"""
+        self.components = {}
+
+    def get_component(self, name):
+        """Return the registered stand-in component, if any"""
+        return self.components.get(name)
+
+
+class MockOhmeBase:
+    """Stand-in for the PredBat base object, serving previously published entity values"""
+
+    def __init__(self, api):
+        """Initialize with a back-reference to the owning mock API"""
+        self.api = api
+        self.car_slot_owner = None
+        self.components = MockComponents()
+
+    def load_previous_value_from_ha(self, entity, attribute=None):
+        """Return whatever the test staged for this entity/attribute"""
+        return self.api.previous_values.get((entity, attribute))
+
+
 class MockOhmeAPI(OhmeAPI):
     """Mock OhmeAPI for testing publish_data without ComponentBase dependencies"""
 
@@ -1513,10 +1584,51 @@ class MockOhmeAPI(OhmeAPI):
         self.log_messages = []
         self.dashboard_items = {}
         self.queued_events = []
-        self.ohme_automatic_octopus_intelligent = False
+        self.ohme_automatic = False
+        self.ohme_automatic_octopus_intelligent = None
+        self.ohme_control = False
+        self.control_active = False
+        self.control_windows = []
+        self.control_charging = None
+        self.control_read_only = None
+        self.control_saved_target = None
+        self.prefix = "predbat"
+        self.local_tz = pytz.timezone("Europe/London")
+        self.states = {}
+        self.energy_today = 0.0
+        self.energy_today_date = None
+        self.energy_last_time = None
+        self.energy_last_watts = 0.0
+        self.energy_restored = False
+
+        # Stand-in for the PredBat base object, so arg wiring and state read-back can be tested
+        self.args = {}
+        self.previous_values = {}
+        self.base = MockOhmeBase(self)
 
         # Create mock client
         self.client = MockOhmeApiClient()
+
+    def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
+        """Mock get_arg reading from the stub args"""
+        return self.args.get(arg, default)
+
+    def set_arg(self, arg, value):
+        """Mock set_arg writing to the stub args"""
+        self.args[arg] = value
+
+    def set_arg_auto(self, arg, value):
+        """Mock set_arg_auto - the real one logs then delegates to set_arg"""
+        self.set_arg(arg, value)
+
+    def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+        """Mock state read, serving whatever the test staged"""
+        return self.states.get((entity_id, attribute), default)
+
+    @property
+    def now_utc_exact(self):
+        """Current local time, overridable by tests via _now_override"""
+        return getattr(self, "_now_override", None) or datetime.datetime.now(self.local_tz)
 
     def log(self, message):
         """Mock log function"""
@@ -1529,6 +1641,671 @@ class MockOhmeAPI(OhmeAPI):
             "attributes": attributes,
             "app": app
         }
+
+
+def _ohme_control_api(windows=None, now=None, read_only=False):
+    """Build a MockOhmeAPI with control enabled and a staged car charging plan"""
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    api.ohme_control = True
+    api.control_active = True
+    api.base.set_read_only = read_only
+    api._now_override = now or datetime.datetime(2026, 8, 22, 23, 0, 0, tzinfo=datetime.timezone.utc).astimezone(api.local_tz)
+    if windows is not None:
+        api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = windows
+    # A plugged-in car so charger_mode() has something to read
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}}
+    return api
+
+
+def _ohme_plan_window(start, end):
+    """Build a planned window in the format Predbat publishes"""
+    return {"start": start.strftime("%m-%d %H:%M:%S"), "end": end.strftime("%m-%d %H:%M:%S"), "kwh": 7.0}
+
+
+def _test_ohme_control_enable_rules(my_predbat=None):
+    """Test when Predbat-led charge control is allowed to run"""
+    print("**** Running test_ohme_control_enable_rules ****")
+
+    # Off by default
+    api = MockOhmeAPI()
+    api.enable_control(False)
+    assert api.control_active is False, "Expected control off when ohme_control is not set"
+
+    # Needs the car registered, or there is no plan to enforce
+    api = MockOhmeAPI()
+    api.ohme_control = True
+    api.ohme_automatic = False
+    api.enable_control(False)
+    assert api.control_active is False, "Expected control to need ohme_automatic"
+    assert any("needs ohme_automatic" in msg for msg in api.log_messages), f"Expected a warning, got {api.log_messages}"
+
+    # Pointless alongside Intelligent - Octopus already schedules the charge
+    api = MockOhmeAPI()
+    api.ohme_control = True
+    api.ohme_automatic = True
+    api.enable_control(True)
+    assert api.control_active is False, "Expected control to stand down in Intelligent mode"
+    assert any("Octopus already schedules" in msg for msg in api.log_messages), f"Expected a warning, got {api.log_messages}"
+
+    # Enabled when both conditions hold
+    api = MockOhmeAPI()
+    api.ohme_control = True
+    api.ohme_automatic = True
+    api.enable_control(False)
+    assert api.control_active is True, "Expected control to enable"
+
+    print("PASS: control enable rules held")
+    return 0
+
+
+def _test_ohme_control_window_parsing(my_predbat=None):
+    """Test planned windows are parsed and matched against the clock"""
+    print("**** Running test_ohme_control_window_parsing ****")
+
+    tz = pytz.timezone("Europe/London")
+    now = tz.localize(datetime.datetime(2026, 8, 22, 23, 30, 0))
+    inside = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    api = _ohme_control_api(windows=[inside], now=now)
+
+    assert api.refresh_car_windows() is True, "Expected the plan to be read"
+    assert len(api.control_windows) == 1, f"Expected one window, got {api.control_windows}"
+    assert api.should_charge_now() is True, "Expected 23:30 to fall inside a 23:00-01:00 window"
+
+    # Just before the window starts, and exactly at the end, are both outside
+    api._now_override = tz.localize(datetime.datetime(2026, 8, 22, 22, 59, 0))
+    assert api.should_charge_now() is False, "Expected 22:59 to be outside the window"
+    api._now_override = tz.localize(datetime.datetime(2026, 8, 23, 1, 0, 0))
+    assert api.should_charge_now() is False, "Expected the window end to be exclusive"
+
+    # A malformed entry is skipped rather than killing the whole plan
+    api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = [{"start": "nonsense"}, inside]
+    assert api.refresh_car_windows() is True, "Expected a malformed entry to be tolerated"
+    assert len(api.control_windows) == 1, f"Expected the good window to survive, got {api.control_windows}"
+
+    print("PASS: control window parsing handled the plan")
+    return 0
+
+
+def _test_ohme_control_window_year_rollover(my_predbat=None):
+    """Test windows that straddle new year are rebuilt around now"""
+    print("**** Running test_ohme_control_window_year_rollover ****")
+
+    tz = pytz.timezone("Europe/London")
+    # 23:30 on new year's eve, charging into 01:30 on new year's day. The plan carries no year,
+    # so the end parses as January of the *current* year and must be pushed forward
+    now = tz.localize(datetime.datetime(2026, 12, 31, 23, 45, 0))
+    window = {"start": "12-31 23:30:00", "end": "01-01 01:30:00", "kwh": 7.0}
+    api = _ohme_control_api(windows=[window], now=now)
+
+    api.refresh_car_windows()
+    start, end = api.control_windows[0]
+    assert end > start, f"Expected the window end to follow its start, got {start} to {end}"
+    assert api.should_charge_now() is True, "Expected to be charging at 23:45 on new year's eve"
+
+    print("PASS: new year window handled")
+    return 0
+
+
+def _test_ohme_control_waits_for_plan(my_predbat=None):
+    """Test control sends nothing until a plan has actually been published"""
+    print("**** Running test_ohme_control_waits_for_plan ****")
+
+    # No plan sensor yet - pausing a car on no information would be the wrong default
+    api = _ohme_control_api(windows=None)
+    run_async(api.control_charge())
+
+    assert len(api.client.request_log) == 0, f"Expected no commands before a plan exists, got {api.client.request_log}"
+    assert api.control_charging is None, "Expected no tracked state before a plan exists"
+
+    # An empty plan is a real answer, not a missing one - the charger is held paused
+    api.states[("binary_sensor.predbat_car_charging_slot", "planned")] = []
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 1, f"Expected a pause once the plan is known, got {api.client.request_log}"
+    assert "stop" in api.client.request_log[0]["url"], f"Expected a pause command, got {api.client.request_log[0]['url']}"
+
+    print("PASS: control waited for a published plan")
+    return 0
+
+
+def _test_ohme_control_edge_triggered(my_predbat=None):
+    """Test control commands the charger only when the desired state changes"""
+    print("**** Running test_ohme_control_edge_triggered ****")
+
+    tz = pytz.timezone("Europe/London")
+    window = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    api = _ohme_control_api(windows=[window], now=tz.localize(datetime.datetime(2026, 8, 22, 23, 30)))
+
+    # Entering the window sets max charge once
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 1, f"Expected one command, got {api.client.request_log}"
+    assert "maxCharge=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
+
+    # Still inside it, and the charger already agrees - no repeat command
+    api.client._charge_session = {"mode": "MAX_CHARGE"}
+    run_async(api.control_charge())
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 1, f"Expected no repeat commands, got {api.client.request_log}"
+
+    # Leaving the window pauses once
+    api._now_override = tz.localize(datetime.datetime(2026, 8, 23, 1, 30))
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 2, f"Expected a pause command, got {api.client.request_log}"
+    assert "stop" in api.client.request_log[1]["url"], f"Expected a pause, got {api.client.request_log[1]['url']}"
+
+    api.client._charge_session = {"mode": "STOPPED"}
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 2, f"Expected no repeat pause, got {api.client.request_log}"
+
+    print("PASS: control was edge triggered")
+    return 0
+
+
+def _test_ohme_control_reapplies_on_drift(my_predbat=None):
+    """Test control corrects the charger after someone changes it in the Ohme app"""
+    print("**** Running test_ohme_control_reapplies_on_drift ****")
+
+    tz = pytz.timezone("Europe/London")
+    window = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    api = _ohme_control_api(windows=[window], now=tz.localize(datetime.datetime(2026, 8, 22, 23, 30)))
+
+    run_async(api.control_charge())
+    api.client._charge_session = {"mode": "MAX_CHARGE"}
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 1, "Expected a settled state before drifting"
+
+    # Someone pauses it in the Ohme app while Predbat still wants it charging
+    api.client._charge_session = {"mode": "STOPPED"}
+    run_async(api.control_charge())
+
+    assert len(api.client.request_log) == 2, f"Expected the change to be corrected, got {api.client.request_log}"
+    assert "maxCharge=true" in api.client.request_log[1]["url"], f"Expected max charge re-applied, got {api.client.request_log[1]['url']}"
+    assert any("changed away from what Predbat set" in msg for msg in api.log_messages), f"Expected a drift log, got {api.log_messages}"
+
+    # An unplugged charger has nothing to correct
+    api.client._charge_session = {"mode": "DISCONNECTED"}
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == 2, f"Expected no command for an unplugged charger, got {api.client.request_log}"
+
+    print("PASS: control re-applied after drift")
+    return 0
+
+
+def _test_ohme_control_read_only_release(my_predbat=None):
+    """Test read only mode hands the charger back and control resumes when it clears"""
+    print("**** Running test_ohme_control_read_only_release ****")
+
+    tz = pytz.timezone("Europe/London")
+    window = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    api = _ohme_control_api(windows=[window], now=tz.localize(datetime.datetime(2026, 8, 22, 23, 30)))
+
+    run_async(api.control_charge())
+    assert api.control_charging is True, "Expected Predbat to be holding the charger"
+
+    # Read only - hand it back to Ohme's own schedule
+    api.base.set_read_only = True
+    run_async(api.control_charge())
+    assert any("releasing the charger back to Ohme" in msg for msg in api.log_messages), f"Expected a release log, got {api.log_messages}"
+    assert "maxCharge=false" in api.client.request_log[-1]["url"], f"Expected max charge cleared, got {api.client.request_log[-1]['url']}"
+    assert api.control_charging is None, "Expected tracked state cleared after releasing"
+
+    # Staying in read only must not keep sending commands
+    count = len(api.client.request_log)
+    run_async(api.control_charge())
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == count, f"Expected no further commands while read only, got {api.client.request_log}"
+
+    # Clearing read only resumes control
+    api.base.set_read_only = False
+    run_async(api.control_charge())
+    assert len(api.client.request_log) == count + 1, f"Expected control to resume, got {api.client.request_log}"
+    assert "maxCharge=true" in api.client.request_log[-1]["url"], f"Expected max charge re-applied, got {api.client.request_log[-1]['url']}"
+    assert any("Read only mode cleared" in msg for msg in api.log_messages), f"Expected a resume log, got {api.log_messages}"
+
+    print("PASS: read only released and resumed the charger")
+    return 0
+
+
+def _test_ohme_control_restores_target(my_predbat=None):
+    """Test the user's charger target is put back when Predbat releases the charger"""
+    print("**** Running test_ohme_control_restores_target ****")
+
+    tz = pytz.timezone("Europe/London")
+    window = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    api = _ohme_control_api(windows=[window], now=tz.localize(datetime.datetime(2026, 8, 22, 23, 30)))
+    # The user's own target, which max charge overrides while Predbat is in control
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 70, "targetTime": 25200}}
+    api.client._last_rule = {"targetPercent": 70}
+
+    run_async(api.control_charge())
+    assert api.control_saved_target == 70, f"Expected the target to be snapshotted before max charge, got {api.control_saved_target}"
+
+    # Snapshot must be taken before the max charge command, not after it
+    assert "maxCharge=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
+
+    # Releasing puts the user's target back so Ohme's own schedule is left correct
+    api.base.set_read_only = True
+    run_async(api.control_charge())
+
+    urls = [request["url"] for request in api.client.request_log]
+    assert any("toPercent=70" in url for url in urls), f"Expected the target to be restored, got {urls}"
+    assert api.control_saved_target is None, "Expected the saved target to be cleared after restoring"
+    assert any("Restored the charger target to 70%" in msg for msg in api.log_messages), f"Expected a restore log, got {api.log_messages}"
+
+    # Taking control again snapshots afresh rather than reusing the old value
+    api.base.set_read_only = False
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 90, "targetTime": 25200}}
+    run_async(api.control_charge())
+    assert api.control_saved_target == 90, f"Expected a fresh snapshot, got {api.control_saved_target}"
+
+    print("PASS: the charger target was restored on release")
+    return 0
+
+
+def _test_ohme_control_read_only_effective(my_predbat=None):
+    """Test read only follows the effective state, not just the config switch"""
+    print("**** Running test_ohme_control_read_only_effective ****")
+
+    # axle_control forces read only via the attribute without touching the arg
+    api = MockOhmeAPI()
+    api.base.set_read_only = True
+    api.args["set_read_only"] = False
+    assert api.control_read_only_now() is True, "Expected the attribute to win over the arg"
+
+    # Before the attribute is first set, fall back to the configured value
+    api = MockOhmeAPI()
+    api.base.set_read_only = None
+    api.args["set_read_only"] = True
+    assert api.control_read_only_now() is True, "Expected the arg to be used as a fallback"
+
+    api.args["set_read_only"] = False
+    assert api.control_read_only_now() is False, "Expected control to run when not read only"
+
+    print("PASS: read only used the effective state")
+    return 0
+
+
+def _ohme_energy_api(start_watts=0.0):
+    """Build a MockOhmeAPI with the energy accumulator primed at a known time"""
+    api = MockOhmeAPI()
+    now = datetime.datetime(2026, 8, 22, 23, 0, 0).astimezone()
+    api.update_energy_today(start_watts, now)
+    return api, now
+
+
+def _test_ohme_energy_today_steady_power(my_predbat=None):
+    """Test energy_today integrates a steady power reading into kWh"""
+    print("**** Running test_ohme_energy_today_steady_power ****")
+
+    # 7200W held across six 120s polls is 7200 * (720/3600) = 1.44 kWh
+    api, now = _ohme_energy_api(start_watts=7200)
+    for step in range(1, 7):
+        energy = api.update_energy_today(7200, now + datetime.timedelta(seconds=120 * step))
+
+    assert abs(energy - 1.44) < 1e-6, f"Expected 1.44 kWh, got {energy}"
+    assert api.energy_today_date == now.date(), f"Expected date {now.date()}, got {api.energy_today_date}"
+
+    print(f"PASS: energy_today integrated steady power to {energy} kWh")
+    return 0
+
+
+def _test_ohme_energy_today_left_riemann(my_predbat=None):
+    """Test energy_today charges each interval at the power seen at its start"""
+    print("**** Running test_ohme_energy_today_left_riemann ****")
+
+    # Charger idle, then 7200W for one interval, then idle again. A left sum credits the
+    # interval that *followed* the 7200W reading, so exactly one interval is counted
+    api, now = _ohme_energy_api(start_watts=0)
+    api.update_energy_today(7200, now + datetime.timedelta(seconds=120))  # idle interval -> 0
+    energy = api.update_energy_today(0, now + datetime.timedelta(seconds=240))  # 7200W interval
+
+    expected = 7200 * (120 / 3600.0) / 1000.0
+    assert abs(energy - expected) < 1e-6, f"Expected {expected} kWh, got {energy}"
+
+    # A further idle poll must not add anything
+    energy = api.update_energy_today(0, now + datetime.timedelta(seconds=360))
+    assert abs(energy - expected) < 1e-6, f"Expected {expected} kWh after idle poll, got {energy}"
+
+    print(f"PASS: left Riemann sum counted one interval as {energy} kWh")
+    return 0
+
+
+def _test_ohme_energy_today_long_gap(my_predbat=None):
+    """Test energy_today does not invent energy across an over-long polling gap"""
+    print("**** Running test_ohme_energy_today_long_gap ****")
+
+    # Predbat stalled - we have no evidence the charger ran, so the gap must not be counted
+    api, now = _ohme_energy_api(start_watts=7200)
+    energy = api.update_energy_today(7200, now + datetime.timedelta(seconds=MAX_ENERGY_GAP_SECONDS + 60))
+
+    assert energy == 0.0, f"Expected 0 kWh across the gap, got {energy}"
+    assert any("not counting that gap" in msg for msg in api.log_messages), f"Expected a gap warning, got {api.log_messages}"
+
+    # Polling resumes normally afterwards
+    energy = api.update_energy_today(7200, now + datetime.timedelta(seconds=MAX_ENERGY_GAP_SECONDS + 180))
+    assert abs(energy - 7200 * (120 / 3600.0) / 1000.0) < 1e-6, f"Expected counting to resume, got {energy}"
+
+    print("PASS: energy_today skipped the gap and resumed afterwards")
+    return 0
+
+
+def _test_ohme_energy_today_midnight_rollover(my_predbat=None):
+    """Test energy_today resets at midnight and counts only the new day's share"""
+    print("**** Running test_ohme_energy_today_midnight_rollover ****")
+
+    # Charging at 7200W from 23:58, polled again at 00:02 - only the 120s after midnight counts
+    api = MockOhmeAPI()
+    before = datetime.datetime(2026, 8, 22, 23, 58, 0).astimezone()
+    api.update_energy_today(7200, before)
+    api.update_energy_today(7200, datetime.datetime(2026, 8, 22, 23, 59, 0).astimezone())
+    assert api.energy_today > 0, "Expected energy to accumulate before midnight"
+
+    after = datetime.datetime(2026, 8, 23, 0, 2, 0).astimezone()
+    energy = api.update_energy_today(7200, after)
+
+    expected = 7200 * (120 / 3600.0) / 1000.0
+    assert abs(energy - expected) < 1e-6, f"Expected only the post-midnight {expected} kWh, got {energy}"
+    assert api.energy_today_date == after.date(), f"Expected date to roll to {after.date()}, got {api.energy_today_date}"
+
+    print(f"PASS: energy_today reset at midnight and counted {energy} kWh into the new day")
+    return 0
+
+
+def _test_ohme_energy_today_gap_across_midnight(my_predbat=None):
+    """Test a stall spanning midnight still rolls the day over"""
+    print("**** Running test_ohme_energy_today_gap_across_midnight ****")
+
+    # Charging yesterday evening, then Predbat stalls until after midnight. The gap is too long to
+    # integrate, but the day must still roll - otherwise the first publish of the new day reports
+    # yesterday's total against yesterday's date
+    api = MockOhmeAPI()
+    before = datetime.datetime(2026, 8, 22, 23, 0, 0).astimezone()
+    api.update_energy_today(7200, before)
+    api.update_energy_today(7200, datetime.datetime(2026, 8, 22, 23, 2, 0).astimezone())
+    assert api.energy_today > 0, "Expected energy to accumulate before the stall"
+
+    after = datetime.datetime(2026, 8, 23, 0, 30, 0).astimezone()
+    energy = api.update_energy_today(7200, after)
+
+    assert energy == 0.0, f"Expected the new day to start at zero, got {energy}"
+    assert api.energy_today_date == after.date(), f"Expected the date to roll to {after.date()}, got {api.energy_today_date}"
+    assert any("not counting that gap" in msg for msg in api.log_messages), f"Expected the gap to still be skipped, got {api.log_messages}"
+
+    # The stalled interval itself is not counted - we have no evidence the charger ran through it
+    energy = api.update_energy_today(7200, after + datetime.timedelta(seconds=120))
+    assert abs(energy - 7200 * (120 / 3600.0) / 1000.0) < 1e-6, f"Expected only the post-stall interval, got {energy}"
+
+    print("PASS: the day rolled over across a long gap")
+    return 0
+
+
+def _test_ohme_energy_today_restore(my_predbat=None):
+    """Test energy_today picks up today's total again after a restart"""
+    print("**** Running test_ohme_energy_today_restore ****")
+
+    api = MockOhmeAPI()
+    now = datetime.datetime(2026, 8, 22, 18, 0, 0).astimezone()
+    api.previous_values[(ENERGY_TODAY_ENTITY, "energy_date")] = now.date().isoformat()
+    api.previous_values[(ENERGY_TODAY_ENTITY, None)] = "12.5"
+
+    api.update_energy_today(7200, now)
+    assert abs(api.energy_today - 12.5) < 1e-6, f"Expected 12.5 kWh restored, got {api.energy_today}"
+
+    # And carries on from there
+    energy = api.update_energy_today(7200, now + datetime.timedelta(seconds=120))
+    assert abs(energy - (12.5 + 0.24)) < 1e-6, f"Expected 12.74 kWh, got {energy}"
+
+    print(f"PASS: energy_today restored 12.5 kWh and continued to {energy} kWh")
+    return 0
+
+
+def _test_ohme_energy_today_restore_stale(my_predbat=None):
+    """Test energy_today ignores a total published on an earlier day"""
+    print("**** Running test_ohme_energy_today_restore_stale ****")
+
+    api = MockOhmeAPI()
+    now = datetime.datetime(2026, 8, 22, 6, 0, 0).astimezone()
+    api.previous_values[(ENERGY_TODAY_ENTITY, "energy_date")] = "2026-08-21"
+    api.previous_values[(ENERGY_TODAY_ENTITY, None)] = "30.0"
+
+    api.update_energy_today(0, now)
+    assert api.energy_today == 0.0, f"Expected yesterday's total to be ignored, got {api.energy_today}"
+
+    print("PASS: energy_today ignored a stale total from an earlier day")
+    return 0
+
+
+def _test_ohme_energy_today_published(my_predbat=None):
+    """Test publish_data publishes energy_today with the attributes Home Assistant needs"""
+    print("**** Running test_ohme_energy_today_published ****")
+
+    api = MockOhmeAPI()
+    api.client._charge_session = {
+        "mode": "SMART_CHARGE",
+        "power": {"watt": 7200, "amp": 32, "volt": 230},
+        "appliedRule": {"targetPercent": 80, "targetTime": 25200},
+        "batterySoc": {"wh": 15000, "percent": 75},
+        "allSessionSlots": [],
+    }
+    api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
+    api.client._last_rule = {"targetPercent": 80}
+    api.client._cars = [{"name": "Tesla Model 3"}]
+
+    run_async(api.publish_data())
+
+    assert ENERGY_TODAY_ENTITY in api.dashboard_items, f"Expected {ENERGY_TODAY_ENTITY} to be published, got {list(api.dashboard_items)}"
+    item = api.dashboard_items[ENERGY_TODAY_ENTITY]
+    assert item["attributes"]["unit_of_measurement"] == "kWh", f"Expected kWh, got {item['attributes']}"
+    assert item["attributes"]["device_class"] == "energy", f"Expected device_class energy, got {item['attributes']}"
+    # Compared against the accumulator's own date rather than a fresh now(), which would make the
+    # test straddle midnight and fail on a correct publish. The date itself is covered by the
+    # rollover tests
+    assert item["attributes"]["energy_date"] == api.energy_today_date.isoformat(), f"Expected the published date to match the accumulator, got {item['attributes']}"
+
+    # First publish has no prior reading to integrate over, so it starts at zero
+    assert item["state"] == 0.0, f"Expected 0.0 kWh on the first publish, got {item['state']}"
+
+    print("PASS: publish_data published energy_today correctly")
+    return 0
+
+
+def _ohme_api_with_octopus(tariff_code=None):
+    """Build a MockOhmeAPI with an Octopus component reporting the given tariff code"""
+    api = MockOhmeAPI()
+    if tariff_code is not None:
+        api.base.components.components["octopus"] = MockOctopusComponent(tariff_code)
+    return api
+
+
+def _test_ohme_iog_flag_forces_on(my_predbat=None):
+    """Test an explicit flag turns Intelligent on even with no Octopus component"""
+    print("**** Running test_ohme_iog_flag_forces_on ****")
+
+    # The case that matters: no Predbat Octopus component to detect from, so the user says so
+    api = MockOhmeAPI()
+    api.ohme_automatic_octopus_intelligent = True
+    assert api.octopus_intelligent_wanted() is True, "Expected the explicit flag to force Intelligent on"
+
+    # And it still wins when ohme_automatic is off, preserving existing configurations
+    api = MockOhmeAPI()
+    api.ohme_automatic = False
+    api.ohme_automatic_octopus_intelligent = True
+    assert api.octopus_intelligent_wanted() is True, "Expected the flag to work without ohme_automatic"
+
+    print("PASS: explicit flag forced Intelligent on")
+    return 0
+
+
+def _test_ohme_iog_flag_forces_off(my_predbat=None):
+    """Test an explicit False beats auto-detection"""
+    print("**** Running test_ohme_iog_flag_forces_off ****")
+
+    # Detection would say yes, but the user wants the slots straight from Octopus
+    api = _ohme_api_with_octopus("E-1R-INTELLI-VAR-22-10-14-A")
+    api.ohme_automatic = True
+    api.ohme_automatic_octopus_intelligent = False
+    assert api.octopus_intelligent_wanted() is False, "Expected an explicit False to beat detection"
+
+    print("PASS: explicit False beat auto-detection")
+    return 0
+
+
+def _test_ohme_iog_autodetected_from_octopus(my_predbat=None):
+    """Test Intelligent is auto-detected from the Octopus component's tariff code"""
+    print("**** Running test_ohme_iog_autodetected_from_octopus ****")
+
+    api = _ohme_api_with_octopus("E-1R-INTELLI-VAR-22-10-14-A")
+    api.ohme_automatic = True
+    assert api.octopus_intelligent_wanted() is True, "Expected an INTELLI tariff to be detected"
+
+    # A non-Intelligent tariff must not trigger it
+    api = _ohme_api_with_octopus("E-1R-AGILE-24-10-01-A")
+    api.ohme_automatic = True
+    assert api.octopus_intelligent_wanted() is False, "Expected Agile not to be detected as Intelligent"
+
+    # Neither must a missing Octopus component
+    api = MockOhmeAPI()
+    api.ohme_automatic = True
+    assert api.octopus_intelligent_wanted() is False, "Expected no detection without an Octopus component"
+
+    print("PASS: Intelligent auto-detected from the Octopus tariff code")
+    return 0
+
+
+def _test_ohme_iog_autodetect_needs_ohme_automatic(my_predbat=None):
+    """Test auto-detection stays off for users who asked Predbat for nothing"""
+    print("**** Running test_ohme_iog_autodetect_needs_ohme_automatic ****")
+
+    # An existing user with neither flag set must keep getting no automatic wiring at all,
+    # even though the tariff is Intelligent and we could detect it
+    api = _ohme_api_with_octopus("E-1R-INTELLI-VAR-22-10-14-A")
+    api.ohme_automatic = False
+    assert api.octopus_intelligent_wanted() is False, "Expected no auto-detection without ohme_automatic"
+
+    print("PASS: auto-detection stayed off without ohme_automatic")
+    return 0
+
+
+def _test_ohme_iog_claims_car_slots(my_predbat=None):
+    """Test the Intelligent wiring claims the car slots so Octopus stops re-wiring them"""
+    print("**** Running test_ohme_iog_claims_car_slots ****")
+
+    api = MockOhmeAPI()
+    assert api.base.car_slot_owner is None, "Expected no owner before configuring"
+
+    run_async(api.automatic_config_octopus_intelligent())
+
+    assert api.base.car_slot_owner == "ohme", f"Expected ohme to own the car slots, got {api.base.car_slot_owner}"
+    assert api.args.get("octopus_intelligent_slot") == "binary_sensor.predbat_ohme_slot_active", f"Expected slot entity, got {api.args.get('octopus_intelligent_slot')}"
+    assert api.args.get("octopus_ready_time") == "select.predbat_ohme_target_time", f"Expected ready time entity, got {api.args.get('octopus_ready_time')}"
+    assert api.args.get("octopus_charge_limit") == "number.predbat_ohme_target_percent", f"Expected charge limit entity, got {api.args.get('octopus_charge_limit')}"
+
+    # Car registration is a separate concern and must not have happened here
+    assert api.args.get("car_charging_energy") is None, f"Expected no car registration, got {api.args.get('car_charging_energy')}"
+
+    print("PASS: Intelligent wiring claimed the car slots")
+    return 0
+
+
+def _test_ohme_connected_sensor(my_predbat=None):
+    """Test the connected binary sensor reflects whether a car wants charge"""
+    print("**** Running test_ohme_connected_sensor ****")
+
+    # Statuses that mean a car is plugged in and still wants charge
+    for mode, session, expected in [
+        ("SMART_CHARGE", {"mode": "SMART_CHARGE", "power": {"watt": 7200}}, "on"),  # charging
+        ("SMART_CHARGE", {"mode": "SMART_CHARGE", "power": {"watt": 0}}, "on"),  # plugged in
+        ("PENDING_APPROVAL", {"mode": "PENDING_APPROVAL"}, "on"),
+        ("STOPPED", {"mode": "STOPPED"}, "on"),  # paused
+        ("DISCONNECTED", {"mode": "DISCONNECTED"}, "off"),  # unplugged
+        ("FINISHED_CHARGE", {"mode": "FINISHED_CHARGE"}, "off"),  # nothing left to take
+    ]:
+        api = MockOhmeAPI()
+        # publish_data reads the applied rule for any session that is in progress
+        api.client._charge_session = dict(session, appliedRule={"targetPercent": 80, "targetTime": 25200})
+        api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
+        api.client._last_rule = {"targetPercent": 80}
+        api.client._cars = []
+        run_async(api.publish_data())
+
+        state = api.dashboard_items["binary_sensor.predbat_ohme_connected"]["state"]
+        assert state == expected, f"Expected {mode} to publish connected={expected}, got {state}"
+
+    print("PASS: connected binary sensor tracked the plug state")
+    return 0
+
+
+def _test_ohme_energy_today_uses_configured_timezone(my_predbat=None):
+    """Test the daily total follows Predbat's configured timezone, not the host clock"""
+    print("**** Running test_ohme_energy_today_uses_configured_timezone ****")
+
+    # A container running UTC with timezone: Europe/London configured must still reset at the
+    # user's local midnight, so publish_data has to take its clock from Predbat rather than now()
+    api = MockOhmeAPI()
+    api._now_override = api.local_tz.localize(datetime.datetime(2026, 1, 2, 3, 4, 5))
+    api.client._charge_session = {
+        "mode": "SMART_CHARGE",
+        "power": {"watt": 7200, "amp": 32, "volt": 230},
+        "appliedRule": {"targetPercent": 80, "targetTime": 25200},
+        "allSessionSlots": [],
+    }
+    api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
+    api.client._last_rule = {"targetPercent": 80}
+    api.client._cars = []
+
+    run_async(api.publish_data())
+
+    published = api.dashboard_items[ENERGY_TODAY_ENTITY]["attributes"]["energy_date"]
+    assert published == "2026-01-02", f"Expected the configured clock's date, got {published}"
+    assert api.energy_today_date == datetime.date(2026, 1, 2), f"Expected the accumulator to follow it too, got {api.energy_today_date}"
+
+    print("PASS: energy_today followed the configured timezone")
+    return 0
+
+
+def _test_ohme_auto_config_wires_car_charging_energy(my_predbat=None):
+    """Test car registration points car_charging_energy at the delivered-energy sensor"""
+    print("**** Running test_ohme_auto_config_wires_car_charging_energy ****")
+
+    # Nothing configured at all
+    api = MockOhmeAPI()
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_energy") == ENERGY_TODAY_ENTITY, f"Expected {ENERGY_TODAY_ENTITY}, got {api.args.get('car_charging_energy')}"
+
+    # The apps.yaml default regex, still unresolved because no Zappi or Wallbox matched it.
+    # auto_config(final=True) has not run yet at this point in startup, so it is still present
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = "re:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)"
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_energy") == ENERGY_TODAY_ENTITY, f"Expected unmatched regex to be replaced, got {api.args.get('car_charging_energy')}"
+
+    # The rest of the car registration happens too
+    assert api.args.get("num_cars") == 1, f"Expected num_cars 1, got {api.args.get('num_cars')}"
+    assert api.args.get("car_charging_planned") == ["binary_sensor.predbat_ohme_connected"], f"Expected connected sensor, got {api.args.get('car_charging_planned')}"
+    assert api.args.get("car_charging_soc") == ["sensor.predbat_ohme_battery_percent"], f"Expected battery percent sensor, got {api.args.get('car_charging_soc')}"
+
+    # ...but the Octopus Intelligent args are left to the separate method
+    assert api.args.get("octopus_intelligent_slot") is None, f"Expected no slot wiring from car registration, got {api.args.get('octopus_intelligent_slot')}"
+
+    print("PASS: auto config wired car_charging_energy")
+    return 0
+
+
+def _test_ohme_auto_config_keeps_existing_car_charging_energy(my_predbat=None):
+    """Test auto config leaves a real charger's energy sensor alone"""
+    print("**** Running test_ohme_auto_config_keeps_existing_car_charging_energy ****")
+
+    # A resolved Zappi sensor means the user has another charger measuring car energy - taking
+    # that over with an Ohme-only figure would lose the car charging it is already reporting
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = "sensor.myenergi_zappi_1234_charge_added_session"
+    run_async(api.automatic_config())
+
+    assert api.args.get("car_charging_energy") == "sensor.myenergi_zappi_1234_charge_added_session", f"Expected the Zappi sensor to be kept, got {api.args.get('car_charging_energy')}"
+    assert any("Leaving car_charging_energy" in msg for msg in api.log_messages), f"Expected a note about keeping it, got {api.log_messages}"
+
+    print("PASS: auto config kept the existing car_charging_energy sensor")
+    return 0
 
 
 def _test_ohme_publish_data(my_predbat=None):
@@ -2063,7 +2840,7 @@ def _test_ohme_number_event_handler_target_soc(my_predbat=None):
     api.client._last_rule = {"targetPercent": 80}
 
     # Call number_event_handler with valid target SoC
-    run_async(api.number_event_handler("number.predbat_ohme_target_soc", 90))
+    run_async(api.number_event_handler("number.predbat_ohme_target_percent", 90))
 
     # Verify request was made
     assert len(api.client.request_log) == 1, f"Expected 1 request, got {len(api.client.request_log)}"
@@ -2072,6 +2849,45 @@ def _test_ohme_number_event_handler_target_soc(my_predbat=None):
     assert "toPercent=90" in request["url"], f"Expected toPercent=90 in URL, got {request['url']}"
 
     print("PASS: number_event_handler correctly handles target_soc")
+    return 0
+
+
+def _test_ohme_number_event_handler_matches_published_entities(my_predbat=None):
+    """Test every number entity published by publish_data is accepted by number_event_handler"""
+    print("**** Running test_ohme_number_event_handler_matches_published_entities ****")
+
+    # Publish the full entity set so we test against the real entity names rather than
+    # hand-written ones - a mismatch between publish_data and the handler silently drops
+    # the user's change, which is how number.predbat_ohme_target_percent was left inert
+    api = MockOhmeAPI()
+    api.client._charge_session = {
+        "mode": "SMART_CHARGE",
+        "power": {"watt": 7200, "amp": 32, "volt": 230},
+        "appliedRule": {"targetPercent": 80, "targetTime": 25200},
+        "batterySoc": {"wh": 15000, "percent": 75},
+        "allSessionSlots": [],
+    }
+    api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
+    api.client._last_rule = {"targetPercent": 80, "preconditioningEnabled": True, "preconditionLengthMins": 30}
+    api.client._cars = [{"name": "Tesla Model 3"}]
+    run_async(api.publish_data())
+
+    published = [entity_id for entity_id in api.dashboard_items if entity_id.startswith("number.")]
+    assert published, "Expected publish_data to publish at least one number entity"
+    assert "number.predbat_ohme_target_percent" in published, f"Expected target percent entity to be published, got {published}"
+
+    # Every published number entity must reach the API when changed
+    for entity_id in published:
+        api.client.request_log = []
+        run_async(api.number_event_handler(entity_id, 50))
+        assert len(api.client.request_log) == 1, f"Entity {entity_id} is published but number_event_handler made {len(api.client.request_log)} requests - it is not wired up"
+
+    # Specifically check the target percent value reaches the rule
+    api.client.request_log = []
+    run_async(api.number_event_handler("number.predbat_ohme_target_percent", 65))
+    assert "toPercent=65" in api.client.request_log[0]["url"], f"Expected toPercent=65, got {api.client.request_log[0]['url']}"
+
+    print(f"PASS: all {len(published)} published number entities are handled")
     return 0
 
 
@@ -2087,7 +2903,7 @@ def _test_ohme_number_event_handler_target_soc_invalid(my_predbat=None):
     api.client._last_rule = {"targetPercent": 80}
 
     # Test with value > 100
-    run_async(api.number_event_handler("number.predbat_ohme_target_soc", 150))
+    run_async(api.number_event_handler("number.predbat_ohme_target_percent", 150))
 
     # Verify no request was made
     assert len(api.client.request_log) == 0, f"Expected 0 requests, got {len(api.client.request_log)}"
