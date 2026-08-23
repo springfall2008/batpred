@@ -908,6 +908,182 @@ def test_alphaess_write_button_is_not_forced():
     assert not failed, "test_alphaess_write_button_is_not_forced"
 
 
+def test_alphaess_periodic_6017_is_cached_and_never_retried():
+    """The API docs are explicit that 6017 is an ENTITLEMENT verdict, not a transient
+    error. Retrying it every config tier would burn calls forever on a system that will
+    never answer differently."""
+    failed = False
+    client = _client()
+    refused = create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(refused)):
+        verdict = run_async_local(client.probe_periodic("AL70"))
+    if verdict is not False:
+        print(f"ERROR: 6017 verdict {verdict} should be False")
+        failed = True
+    if client._periodic_ok.get("AL70") is not False:
+        print(f"ERROR: verdict not cached: {client._periodic_ok}")
+        failed = True
+    # A second probe must not call the API at all.
+    with patch("alphaess.aiohttp.ClientSession", side_effect=AssertionError("probe_periodic must not re-call after 6017")):
+        again = run_async_local(client.probe_periodic("AL70"))
+    if again is not False:
+        print(f"ERROR: cached verdict not reused, got {again}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_6017_is_cached_and_never_retried"
+
+
+def test_alphaess_periodic_other_failures_leave_the_verdict_unknown():
+    """Only 6017 is an entitlement verdict; a transient failure must be re-probed."""
+    failed = False
+    client = _client()
+    busy = create_aiohttp_mock_response(status=200, json_data=_envelope(6053, None, msg="too fast"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(busy)):
+        verdict = run_async_local(client.probe_periodic("AL70"))
+    if verdict is not None:
+        print(f"ERROR: transient failure verdict {verdict} should be None")
+        failed = True
+    if "AL70" in client._periodic_ok:
+        print(f"ERROR: transient failure cached a verdict: {client._periodic_ok}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_other_failures_leave_the_verdict_unknown"
+
+
+def test_alphaess_periodic_payload_shape():
+    """Six windows and a per-window chargePower, with the constraints the API enforces."""
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(
+        reserve=10,
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"},
+        export={"enable": True, "soc": 20, "power": 4000, "start": "17:00:00", "end": "19:00:00"},
+    )
+    payload = client.build_periodic_payload("AL70", schedule)
+    if payload.get("executeCycleType") != 0:
+        print(f"ERROR: executeCycleType {payload.get('executeCycleType')} should be 0 (daily)")
+        failed = True
+    charge_list = payload.get("chargeTimeList") or []
+    discharge_list = payload.get("dischargeTimeList") or []
+    # BOTH lists need at least one element: [] is rejected with 6001 "time list is null",
+    # and omitting the key gets 10001.
+    if not charge_list or not discharge_list:
+        print(f"ERROR: empty list in payload: {payload}")
+        failed = True
+    first = charge_list[0]
+    if first.get("beginTime") != "01:00" or first.get("endTime") != "05:00":
+        print(f"ERROR: charge period {first}")
+        failed = True
+    # chargeLimit range is [10,100] - 6001 otherwise.
+    if not 10 <= first.get("chargeLimit", 0) <= 100:
+        print(f"ERROR: chargeLimit {first.get('chargeLimit')} out of the [10,100] range")
+        failed = True
+    if first.get("chargePower") != 3000:
+        print(f"ERROR: chargePower {first.get('chargePower')} should carry Predbat's rate")
+        failed = True
+    if discharge_list[0].get("chargePower") != 4000:
+        print(f"ERROR: discharge chargePower {discharge_list[0].get('chargePower')}")
+        failed = True
+    if payload.get("gridChargeCycle") != 1 or payload.get("ctrDisCycle") != 1:
+        print(f"ERROR: cycle flags {payload.get('gridChargeCycle')}/{payload.get('ctrDisCycle')}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_payload_shape"
+
+
+def test_alphaess_periodic_disabled_direction_uses_the_cycle_flag():
+    """Both lists must be non-empty, so a disabled direction is expressed by its FLAG and
+    a filler period rather than by an empty list the API rejects."""
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    payload = client.build_periodic_payload("AL70", schedule)
+    if not payload.get("dischargeTimeList"):
+        print("ERROR: dischargeTimeList must not be empty - [] gets 6001 'time list is null'")
+        failed = True
+    if payload.get("ctrDisCycle") != 0:
+        print(f"ERROR: ctrDisCycle {payload.get('ctrDisCycle')} should be 0 when no export is planned")
+        failed = True
+    if payload.get("gridChargeCycle") != 1:
+        print(f"ERROR: gridChargeCycle {payload.get('gridChargeCycle')}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_disabled_direction_uses_the_cycle_flag"
+
+
+def test_alphaess_periodic_windows_do_not_overlap():
+    """Charge and discharge periods must not overlap - 6008 otherwise."""
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "06:00:00"},
+        export={"enable": True, "soc": 20, "power": 3000, "start": "05:00:00", "end": "08:00:00"},
+    )
+    payload = client.build_periodic_payload("AL70", schedule)
+    charge_end = payload["chargeTimeList"][0]["endTime"]
+    discharge_start = payload["dischargeTimeList"][0]["beginTime"]
+    if charge_end > discharge_start:
+        print(f"ERROR: overlapping periods {charge_end} > {discharge_start}")
+        failed = True
+    if not any("overlap" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no overlap-trim log, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_windows_do_not_overlap"
+
+
+def test_alphaess_periodic_charge_limit_floor_is_clamped():
+    """chargeLimit is documented as [10,100] and Predbat's own idle soc is 0 - passing that
+    straight through gets 6001. Added beyond the brief: mutation-testing
+    test_alphaess_periodic_payload_shape showed soc=90/20 stays in-range even with the
+    low-10 floor removed from _periodic_entry, so that test alone does not prove the floor
+    exists. This test exercises soc=0 on both directions, which only passes if the floor is
+    actually applied."""
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(
+        charge={"enable": True, "soc": 0, "power": 3000, "start": "01:00:00", "end": "05:00:00"},
+        export={"enable": True, "soc": 0, "power": 4000, "start": "17:00:00", "end": "19:00:00"},
+    )
+    payload = client.build_periodic_payload("AL70", schedule)
+    charge_limit = payload["chargeTimeList"][0].get("chargeLimit")
+    discharge_limit = payload["dischargeTimeList"][0].get("chargeLimit")
+    if charge_limit != 10:
+        print(f"ERROR: charge chargeLimit {charge_limit} should be floored to 10, not passed through as 0")
+        failed = True
+    if discharge_limit != 10:
+        print(f"ERROR: discharge chargeLimit {discharge_limit} should be floored to 10, not passed through as 0")
+        failed = True
+    assert not failed, "test_alphaess_periodic_charge_limit_floor_is_clamped"
+
+
+def test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint():
+    """Added beyond the brief: none of the five prescribed tests call apply_settings with
+    _periodic_ok True, so the routing glue between build_periodic_payload and
+    _write_payload - the actual reason apply_settings changed in this task - was otherwise
+    exercised by nothing. Checks the periodic endpoint is used, and the legacy pair is not,
+    for an entitled system."""
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    client.min_write_interval = 0
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)) as session:
+        run_async_local(client.apply_settings("AL70", schedule))
+    calls = session.return_value.post.call_args_list
+    urls = [call.args[0] if call.args else call.kwargs.get("url", "") for call in calls]
+    if not any("setTimeChargeBySn" in url for url in urls):
+        print(f"ERROR: periodic endpoint not called for an entitled system, got {urls}")
+        failed = True
+    if any("updateChargeConfigInfo" in url or "updateDisChargeConfigInfo" in url for url in urls):
+        print(f"ERROR: legacy endpoint called for an entitled system, got {urls}")
+        failed = True
+    if len(calls) != 1:
+        print(f"ERROR: expected exactly 1 POST for the periodic path, got {len(calls)}")
+        failed = True
+    assert not failed, "test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint"
+
+
 def run_alphaess_control_tests(my_predbat):
     """Run all AlphaESS control-logic tests."""
     failed = False
@@ -947,6 +1123,13 @@ def run_alphaess_control_tests(my_predbat):
         ("6053_paces_the_retry", test_alphaess_6053_backs_off_the_retry_via_min_write_interval),
         ("held_write_not_applied", test_alphaess_held_write_is_not_reported_as_applied),
         ("write_button_not_forced", test_alphaess_write_button_is_not_forced),
+        ("periodic_6017_cached", test_alphaess_periodic_6017_is_cached_and_never_retried),
+        ("periodic_transient_unknown", test_alphaess_periodic_other_failures_leave_the_verdict_unknown),
+        ("periodic_payload", test_alphaess_periodic_payload_shape),
+        ("periodic_disabled_flag", test_alphaess_periodic_disabled_direction_uses_the_cycle_flag),
+        ("periodic_no_overlap", test_alphaess_periodic_windows_do_not_overlap),
+        ("periodic_charge_limit_floor", test_alphaess_periodic_charge_limit_floor_is_clamped),
+        ("apply_settings_routes_periodic", test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint),
     ]:
         try:
             if fn():

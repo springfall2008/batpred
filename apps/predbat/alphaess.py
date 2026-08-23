@@ -33,6 +33,7 @@ from alphaess_const import (
     ALPHAESS_CODE_OK,
     ALPHAESS_CODE_TIMESTAMP,
     ALPHAESS_CODE_TOO_FAST,
+    ALPHAESS_CODE_NO_PERMISSION,
     ALPHAESS_DEBUG_REDACT_KEYS,
     ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE,
     ALPHAESS_RETRIES,
@@ -1128,6 +1129,11 @@ class AlphaESSAPI(ComponentBase):
                     got_any = True
             except Exception as error:
                 self.log("Warn: AlphaESS config read failed for {}: {}".format(sn, error))
+            if sn not in self._periodic_ok:
+                try:
+                    await self.probe_periodic(sn)
+                except Exception as error:
+                    self.log("Warn: AlphaESS periodic probe failed for {}: {}".format(sn, error))
             if self._live_ok.get(sn) is False:
                 try:
                     await self.reprobe_live(sn)
@@ -1192,21 +1198,95 @@ class AlphaESSAPI(ComponentBase):
         self.log("Info: AlphaESS wrote {} settings for {}".format(direction, sn))
         return True
 
+    async def probe_periodic(self, sn):
+        """Return True/False/None for whether this system may use the periodic API.
+
+        6017 is an ENTITLEMENT verdict, not a transient error - the API docs are explicit
+        that the endpoint is live and the SN binding check passes, and what fails is a
+        check on the account tier or hardware. So it is cached and never retried. Any other
+        failure leaves the verdict unknown so the next config tier re-probes.
+        """
+        if sn in self._periodic_ok:
+            return self._periodic_ok[sn]
+        code, _ = await self._get("time_charge", params={"sysSn": sn})
+        if code == ALPHAESS_CODE_OK:
+            self._periodic_ok[sn] = True
+            self.log("Info: AlphaESS {} is entitled to the periodic schedule API; up to six windows and a power setpoint are available".format(sn))
+            return True
+        if code == ALPHAESS_CODE_NO_PERMISSION:
+            self._periodic_ok[sn] = False
+            self.log("Info: AlphaESS {} is not entitled to the periodic schedule API ({}), using the two-window legacy endpoints. This is a permanent verdict and is not retried.".format(sn, self.describe_code(code)))
+            return False
+        return None
+
+    def _periodic_entry(self, start, end, soc, power):
+        """Build one chargeTimeList/dischargeTimeList element.
+
+        chargeLimit is documented as [10,100] and anything outside gets 6001, so it is
+        clamped to 10 at the bottom rather than passed through as Predbat's 0.
+        """
+        entry = {"beginTime": start, "endTime": end, "chargeLimit": self._clamp_percent(soc, low=10, high=100)}
+        if power > 0:
+            entry["chargePower"] = int(power)
+        return entry
+
+    def build_periodic_payload(self, sn, schedule):
+        """Build the setTimeChargeBySn body for one inverter.
+
+        executeCycleType 0 (daily) only: Predbat replans continuously, so a weekday-aware
+        schedule has nothing to express.
+
+        Both lists must carry at least one element - an empty list is rejected with 6001
+        "time list is null", and omitting the key gets 10001 - so a direction with no plan
+        gets a filler period and is disabled via its cycle flag instead.
+        """
+        charge = schedule.get("charge", {}) or {}
+        export = schedule.get("export", {}) or {}
+        charge_rate = self._as_float(charge.get("power"), 0.0)
+        export_rate = self._as_float(export.get("power"), 0.0)
+        charge_on = bool(charge.get("enable")) and charge_rate > 0
+        export_on = bool(export.get("enable")) and export_rate > 0
+
+        (charge_start, charge_end), _ = self._snapped_periods(sn, "charge", charge.get("start"), charge.get("end"), charge_on)
+        (export_start, export_end), _ = self._snapped_periods(sn, "export", export.get("start"), export.get("end"), export_on)
+        if window_is_empty(charge_start, charge_end):
+            charge_on = False
+        if window_is_empty(export_start, export_end):
+            export_on = False
+
+        # Charge and discharge periods must not overlap or the write is rejected with 6008.
+        # Trim the export start rather than dropping either window - Predbat's charge
+        # window is the one with a hard SOC target to hit.
+        if charge_on and export_on and hm_to_minutes(export_start) < hm_to_minutes(charge_end):
+            self.log("Info: AlphaESS {} charge window ends {} and export starts {}, which the periodic API rejects as overlapping; trimming the export start to {}".format(sn, charge_end, export_start, charge_end))
+            export_start = charge_end
+            if window_is_empty(export_start, export_end):
+                export_on = False
+
+        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
+        discharge_list = [self._periodic_entry(export_start, export_end, export.get("soc", schedule.get("reserve", 10)), export_rate)] if export_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
+        return {
+            "sysSn": sn,
+            "executeCycleType": 0,
+            "chargeTimeList": charge_list,
+            "dischargeTimeList": discharge_list,
+            "gridChargeCycle": 1 if charge_on else 0,
+            "ctrDisCycle": 1 if export_on else 0,
+        }
+
     async def apply_settings(self, sn, schedule, force=False):
-        """Build and send both payloads for one inverter, gated independently.
+        """Build and send the settings for one inverter, gated independently per direction.
 
-        Charge and discharge are gated separately so a charge-only change does not consume
-        a discharge write - both endpoints are documented as writable once per 24 hours.
-
-        Returns True only when the inverter is now KNOWN TO MATCH the built schedule for
-        BOTH directions (each was just sent and confirmed, or already matched). False means
-        at least one direction does not yet match - either it was HELD by the pacing gate
-        (a real change is pending, this cycle deliberately did nothing about it) or it was
-        rejected. A caller must not read False's absence, i.e. a bare True, as proof a write
-        actually went out this cycle - only that the inverter is caught up either way.
+        Entitled systems use the periodic API, which carries up to six windows and a real
+        power setpoint in one call. Everyone else uses the legacy pair, where charge and
+        discharge are gated separately so a charge-only change does not consume a discharge
+        write - both endpoints are documented as writable once per 24 hours.
         """
         if not self.control_enable:
             return False
+        if self._periodic_ok.get(sn) is True:
+            payload = self.build_periodic_payload(sn, schedule)
+            return await self._write_payload(sn, "periodic", "set_time_charge", payload, force=force)
         charge_payload = self.build_charge_payload(sn, schedule)
         discharge_payload = self.build_discharge_payload(sn, schedule)
         charge_ok = await self._write_payload(sn, "charge", "update_charge_config", charge_payload, force=force)
