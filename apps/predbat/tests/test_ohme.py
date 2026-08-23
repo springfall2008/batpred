@@ -285,6 +285,7 @@ def test_ohme(my_predbat=None):
         ("control_drift", _test_ohme_control_reapplies_on_drift, "control re-applies after app changes"),
         ("control_read_only", _test_ohme_control_read_only_release, "read only releases the charger"),
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
+        ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
         ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
         ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
@@ -1588,6 +1589,7 @@ class MockOhmeAPI(OhmeAPI):
         self.control_windows = []
         self.control_charging = None
         self.control_read_only = None
+        self.control_saved_target = None
         self.prefix = "predbat"
         self.local_tz = pytz.timezone("Europe/London")
         self.states = {}
@@ -1859,6 +1861,42 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     assert any("Read only mode cleared" in msg for msg in api.log_messages), f"Expected a resume log, got {api.log_messages}"
 
     print("PASS: read only released and resumed the charger")
+    return 0
+
+
+def _test_ohme_control_restores_target(my_predbat=None):
+    """Test the user's charger target is put back when Predbat releases the charger"""
+    print("**** Running test_ohme_control_restores_target ****")
+
+    tz = pytz.timezone("Europe/London")
+    window = _ohme_plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    api = _ohme_control_api(windows=[window], now=tz.localize(datetime.datetime(2026, 8, 22, 23, 30)))
+    # The user's own target, which max charge overrides while Predbat is in control
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 70, "targetTime": 25200}}
+    api.client._last_rule = {"targetPercent": 70}
+
+    run_async(api.control_charge())
+    assert api.control_saved_target == 70, f"Expected the target to be snapshotted before max charge, got {api.control_saved_target}"
+
+    # Snapshot must be taken before the max charge command, not after it
+    assert "maxCharge=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
+
+    # Releasing puts the user's target back so Ohme's own schedule is left correct
+    api.base.set_read_only = True
+    run_async(api.control_charge())
+
+    urls = [request["url"] for request in api.client.request_log]
+    assert any("toPercent=70" in url for url in urls), f"Expected the target to be restored, got {urls}"
+    assert api.control_saved_target is None, "Expected the saved target to be cleared after restoring"
+    assert any("Restored the charger target to 70%" in msg for msg in api.log_messages), f"Expected a restore log, got {api.log_messages}"
+
+    # Taking control again snapshots afresh rather than reusing the old value
+    api.base.set_read_only = False
+    api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 90, "targetTime": 25200}}
+    run_async(api.control_charge())
+    assert api.control_saved_target == 90, f"Expected a fresh snapshot, got {api.control_saved_target}"
+
+    print("PASS: the charger target was restored on release")
     return 0
 
 

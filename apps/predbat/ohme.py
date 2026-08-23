@@ -213,6 +213,8 @@ class OhmeAPI(ComponentBase):
         self.control_charging = None
         # Last read-only state acted on, None until the control loop has run once
         self.control_read_only = None
+        # The charger's own target percent as it was before Predbat took control, restored on release
+        self.control_saved_target = None
         self.energy_today = 0.0
         self.energy_today_date = None
         self.energy_last_time = None
@@ -305,6 +307,15 @@ class OhmeAPI(ComponentBase):
         except (KeyError, TypeError):
             return None
 
+    def charger_target(self):
+        """
+        The charger's own target percent, or None when there is no rule to read it from.
+        """
+        try:
+            return self.client.target_soc
+        except (KeyError, TypeError):
+            return None
+
     def refresh_car_windows(self):
         """
         Read Predbat's planned car charging windows into control_windows.
@@ -372,6 +383,13 @@ class OhmeAPI(ComponentBase):
         if not self.control_charging:
             await self.client.async_resume_charge()
         await self.client.async_max_charge(False)
+        # Max charge overrides the charger's own target percent, so put back what the user had
+        # before Predbat took over - otherwise Ohme's smart schedule is left charging to the wrong
+        # level once we hand it back
+        if self.control_saved_target is not None:
+            await self.client.async_set_target(target_percent=self.control_saved_target)
+            self.log("Info: Ohme API: Restored the charger target to {}%".format(self.control_saved_target))
+            self.control_saved_target = None
         self.control_charging = None
 
     async def control_charge(self):
@@ -403,6 +421,9 @@ class OhmeAPI(ComponentBase):
         if drifted:
             self.log("Info: Ohme API: Charger was changed away from what Predbat set, re-applying")
         if should_charge:
+            # Snapshot the user's target before max charge overrides it, so release can put it back
+            if self.control_saved_target is None:
+                self.control_saved_target = self.charger_target()
             self.log("Info: Ohme API: Charge window active, setting max charge")
             await self.client.async_max_charge(True)
         else:

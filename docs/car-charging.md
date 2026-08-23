@@ -352,7 +352,10 @@ Setting only **ohme_automatic_octopus_intelligent** (with no `ohme_automatic`) s
 
 It requires `ohme_automatic` (there is no plan to enforce until the car is registered) and is ignored when the Intelligent slots come from Ohme, as Octopus already schedules the charge in that case.
 
-You must still set `car_charging_battery_size` and `car_charging_limit` yourself - Ohme cannot report either, and Predbat needs them to work out how much charge to add.
+You must still set `car_charging_battery_size` and `car_charging_limit` yourself - Ohme cannot report either, and Predbat needs them to work out how much charge to add. Getting these
+right matters more than usual here: setting the charger to max charge overrides its own target percentage, so **the length of Predbat's planned window is the only thing limiting the
+charge** - the target you have set in the Ohme app will not stop it. Predbat restores that target when it releases the charger, so your normal Ohme charging is unaffected once Predbat
+is no longer in control.
 
 Predbat sets the charger to max charge while a planned window is running, and pauses it the rest of the time. It re-reads the plan every minute rather than following the
 `binary_sensor.predbat_car_charging_slot` state directly, so window boundaries are acted on promptly instead of waiting for Predbat's next full update. If you change the charger in the
