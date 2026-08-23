@@ -523,7 +523,13 @@ Predbat supports both of myenergi's APIs:
 
 #### Important notes (myenergi)
 
-- With `myenergi_automatic` on (the default), Predbat wires the sensors up for you: Zappi session energy is set as `car_charging_energy`, so charging is subtracted from your house load rather than being learnt as base load — ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect. The first Eddi's session energy is set as `iboost_energy_today`, feeding the iboost model
+- With `myenergi_automatic` on (the default), Predbat sets three `apps.yaml` values for you:
+    - `car_charging_energy` — every Zappi's session energy, so charging is subtracted from your house load rather than being learnt as base load. Ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect
+    - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
+    - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
+- Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
+- If you set `car_charging_planned` yourself in `apps.yaml`, Predbat logs a note and auto-discovery still wins — remove your entry to silence it
+- Predbat's shipped `car_charging_planned_response` list covers the plug states a Zappi reports when the car is connected, including `ev ready to charge`. If you maintain your own list, add that value or Predbat will treat a car that is plugged in and waiting as not planned to charge
 - Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
 - Set `myenergi_enable_controls` to `false` for monitor-only operation — the boost switches are still published but stop responding
 
@@ -537,13 +543,13 @@ Predbat supports both of myenergi's APIs:
 | `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
 | `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
 | `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
-| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the energy sensors into `car_charging_energy` and `iboost_energy_today` automatically |
+| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned` and `iboost_energy_today` automatically |
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
-| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 |
+| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
 
-The component only starts when `myenergi_api_key` or `myenergi_key` is set (whichever matches your
-`auth_method`) — with only `myenergi_token_hash` set and no `myenergi_key`, the component is never
-constructed, silently, with nothing logged to explain why it is missing.
+The component only starts when `myenergi_api_key` or `myenergi_key` is set. That test is a plain either/or
+and does not look at `myenergi_auth_method`, so with only `myenergi_token_hash` set and no `myenergi_key`,
+the component is never constructed, silently, with nothing logged to explain why it is missing.
 
 Example for the direct transport:
 
@@ -578,13 +584,15 @@ The Eddi temperature sensors are only published when a probe is connected.
 
 Turning a boost switch on sends a boost of the amount selected on the companion number entity — kWh for a Zappi, minutes for an Eddi. Turning it off cancels the boost. The switch state is read back from the device, so a boost started or stopped in the myenergi app is reflected here too.
 
-myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks this first and logs a warning rather than issuing a call that would be rejected.
+myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks that one condition before calling, and logs a warning instead. Every other reason a boost can be refused — an Eddi already at its maximum tank temperature, for instance — is only discovered from myenergi's reply, so Predbat issues the call and logs `myenergi: control failed` when it comes back refused. The switch reverts to the device's real state on the next poll either way.
 
-Not implemented in this release: mode selection, priority, minimum green level, phase setting, and charging schedules — attempting one of these logs a warning rather than failing silently, once per control for as long as the component keeps running (a restart resets it, and repeat attempts in between stay silent). Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+Not implemented in this release: mode selection, priority, minimum green level, phase setting, and charging schedules. These exist on the transport interface as reserved methods, ready for a later release, and nothing in Predbat calls them — there is no entity or service that can reach them, so there is nothing for you to try. If a future release wires one up before it is implemented, it warns once per control rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
 
 #### Known limitation (myenergi)
 
-The session energy sensors reset to zero when a charging or heating session ends. Predbat's per-minute load subtraction handles that correctly, so `car_charging_energy` is unaffected. However, `iboost_today` is derived from the difference between the midnight and current readings, so it will under-report if an Eddi session resets part-way through the day. The planner's behaviour is unaffected; only the reported daily iboost total is.
+The session energy sensors reset to zero when a charging or heating session ends. Predbat expects that: it treats these sensors as incrementing counters and rebases the series whenever it sees one reset, so both the per-minute load subtraction and the daily `iboost_today` total come out right across any number of sessions in a day.
+
+The one case it cannot see is a small session. A reset is only recognised when a reading lands on zero or the drop is more than 1 kWh, so a session that finishes below roughly 1 kWh — a short top-up, or a brief Eddi diversion — can be missed and its energy left out of the day's figures. That applies equally to `car_charging_energy` and to `iboost_today`. In practice it is a fraction of a kWh, and the planner mostly cares about the larger sessions, but the daily totals can read slightly low if your Zappi or Eddi does a lot of very short sessions.
 
 #### Testing your configuration (myenergi)
 

@@ -162,7 +162,10 @@ present, and logs an actionable error naming the missing keys otherwise.
 The cloud transport reuses `oauth_mixin.py` exactly as `fox.py`, `deye.py` and `solis.py`
 do: the access token arrives via `myenergi_key`, refresh is delegated to the
 oauth-refresh edge function keyed by `myenergi_token_hash`, and Predbat never holds a
-`client_secret`. `provider_name` is `"myenergi"`.
+`client_secret`. `provider_name` is `"myenergi"`. Both refresh paths are wired -
+`check_and_refresh_oauth_token()` proactively before each poll for a token that has
+reached its stated expiry, and `handle_oauth_401()` reactively when a poll comes back
+401, with the poll retried once behind it, for a token revoked before then.
 
 ## 4. Configuration
 
@@ -267,9 +270,16 @@ Gated on `myenergi_automatic` (default true), run once after the first successfu
 
 - Zappi session energy sensors → `car_charging_energy`, as a list when more than one
   Zappi is present. `minute_data_import_export` accepts a list and sums the entities.
+- Zappi plug status sensors → `car_charging_planned`, as a list, which is indexed per
+  car so entry N is the Nth Zappi by serial. The regex the apps.yaml templates ship for
+  this key targets the third-party `ha-myenergi` integration's entity names, which do
+  not match the ones this component publishes, so without this the key fails to resolve
+  and Predbat silently falls back to the `car_charging_threshold` heuristic. The Zappi
+  pilot states `C1`/`D1` normalise to `EV ready to charge`, which the templates'
+  `car_charging_planned_response` lists did not carry and now do.
 - Eddi session energy sensor → `iboost_energy_today`, first Eddi only.
 
-Both use `set_arg_auto()` so that an explicit apps.yaml value is reported rather than
+All use `set_arg_auto()` so that an explicit apps.yaml value is reported rather than
 silently overwritten.
 
 Predbat reads these back from Home Assistant history as incrementing counters. Session
@@ -278,15 +288,24 @@ by clamping negative deltas to zero (`fetch.py:574`).
 
 ### 6.1 Known limitation
 
-`iboost_energy_today` is additionally read at `fetch.py:782` as
-`abs(value[0] - value[minutes_now])` to derive `iboost_today`. Because the Eddi sensor is
-session-scoped rather than midnight-anchored, `iboost_today` will under-report after a
-mid-day session reset. This is accepted for this release: the per-minute load subtraction
-that actually feeds the planner is unaffected, and only the reported daily total is
-affected. The fix, if it is wanted later, is to derive the sensor from the day-history
-endpoint (`/cgi-jdayhour-E{sn}-...` or `GET /devices/{id}/history`), which both transports
-already reach. This is recorded in the documentation so the behaviour is not mistaken for
-a bug.
+Session resets themselves are handled correctly. `iboost_energy_today` is read at
+`fetch.py:782` as `abs(value[0] - value[minutes_now])`, but the series it reads has
+already been through `minute_data_load(..., clean_increment=True)` →
+`clean_incrementing_reverse()` (`utils.py:716-744`), which rebases the counter whenever
+it detects a reset. A day of several Eddi sessions therefore totals correctly, and the
+same holds for `car_charging_energy`.
+
+The residual limitation is narrower, and applies to both keys equally because the loss is
+in the shared cumulative series. `clean_incrementing_reverse()` only recognises a drop as
+a reset when a sample reads `<= 0` or the fall is at least 1.0 kWh (`utils.py:740`), so a
+session that ends below roughly 1 kWh without a sample landing on zero is not rebased and
+its energy is left out. Measured against Predbat's own `minute_data`, two 0.6 kWh sessions
+in a day total 0.600 kWh rather than 1.20 kWh, while two sessions of 2.0 and 1.5 kWh total
+correctly. This is accepted for this release: it is a fraction of a kWh, and the planner
+is driven by the larger sessions. The fix, if it is wanted later, is to derive the sensor
+from the day-history endpoint (`/cgi-jdayhour-E{sn}-...` or `GET /devices/{id}/history`),
+which both transports already reach. This is recorded in the documentation so the
+behaviour is not mistaken for a bug.
 
 ## 7. Controls
 
@@ -392,8 +411,8 @@ full Predbat instance is not required.
 
 - `docs/components.md` — a `### myenergi (myenergi)` section matching the existing
   layout: what it does, when to enable, configuration options, how to get an API key
-  from myaccount.myenergi.com, the published entities, the stubbed controls, and the
-  `iboost_today` limitation from section 6.1.
+  from myaccount.myenergi.com, the published entities, the reserved controls, and the
+  small-session limitation from section 6.1.
 - `docs/apps-yaml.md` — the new `myenergi_*` keys.
 - `.cspell/custom-dictionary-workspace.txt` — `libbi`, `jstatus`, `jdayhour`, `harvi`
   and `asn`. `Eddi`, `myenergi` and `zappi` are already present.
