@@ -473,3 +473,103 @@ class MyEnergiDirectTransport(MyEnergiTransport):
             target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
             await self._request("/cgi-eddi-boost-E{}-1-{}-0".format(device.serial, target))
         return True
+
+
+# The cloud device list changes rarely, so it is cached between polls.
+CLOUD_DEVICE_LIST_MAX_AGE = 30 * 60
+
+# Model names in GET /devices that map onto the kinds this release supports.
+CLOUD_MODEL_TO_KIND = {"zappi": DEVICE_KIND_ZAPPI, "eddi": DEVICE_KIND_EDDI}
+
+
+class MyEnergiCloudTransport(MyEnergiTransport):
+    """Transport for the official myenergi 3rd party API.
+
+    Authenticates with a bearer JWT obtained through the OAuth2 authorization code
+    flow. The token is read through a callable on every request so that a refresh
+    performed by OAuthMixin on the component takes effect immediately.
+    """
+
+    def __init__(self, log, access_token_getter):
+        """Store the token accessor and initialise the device list cache."""
+        super().__init__(log)
+        self.access_token_getter = access_token_getter
+        self.device_meta = {}
+        self.meta_age_seconds = CLOUD_DEVICE_LIST_MAX_AGE
+
+    def _headers(self):
+        """Build the request headers, including the current bearer token."""
+        return {
+            "Authorization": "Bearer {}".format(self.access_token_getter() or ""),
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }
+
+    async def _request(self, method, path, body=None):
+        """Perform one cloud API request and return the decoded JSON body."""
+        url = MYENERGI_CLOUD_URL + path
+        try:
+            async with aiohttp.ClientSession(headers=self._headers()) as session:
+                async with session.request(method, url, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                    if response.status == 401:
+                        record_api_call("myenergi", success=False, reason="auth_error")
+                        raise MyEnergiAuthError("myenergi rejected the access token for {}".format(path))
+                    if response.status not in (200, 201, 202, 204):
+                        reason = "server_error" if response.status >= 500 else "client_error"
+                        record_api_call("myenergi", success=False, reason=reason)
+                        raise MyEnergiApiError("HTTP {} from {} {}".format(response.status, method, path))
+                    record_api_call("myenergi", success=True)
+                    if response.status == 204:
+                        return {}
+                    return await response.json(content_type=None)
+        except asyncio.TimeoutError as exc:
+            record_api_call("myenergi", success=False, reason="connection_error")
+            raise MyEnergiApiError("timed out calling {} {}".format(method, path)) from exc
+        except aiohttp.ClientError as exc:
+            record_api_call("myenergi", success=False, reason="connection_error")
+            raise MyEnergiApiError("request to {} {} failed: {}".format(method, path, exc)) from exc
+
+    async def _refresh_device_list(self):
+        """Reload GET /devices, keeping only the Zappi and Eddi entries."""
+        payload = await self._request("GET", "/devices")
+        meta = {}
+        for site in payload.get("sites", []) or []:
+            for entry in site.get("devices", []) or []:
+                kind = CLOUD_MODEL_TO_KIND.get(str(entry.get("model", "")).lower())
+                device_id = entry.get("deviceId")
+                if kind and device_id:
+                    meta[device_id] = entry
+        self.device_meta = meta
+        self.meta_age_seconds = 0
+
+    async def connect(self):
+        """Load the device list, which also validates the access token."""
+        await self._refresh_device_list()
+        return True
+
+    async def fetch_devices(self):
+        """Poll status for every cached Zappi and Eddi, refreshing the list when stale."""
+        if not self.device_meta or self.meta_age_seconds >= CLOUD_DEVICE_LIST_MAX_AGE:
+            await self._refresh_device_list()
+        devices = []
+        for device_id, meta in self.device_meta.items():
+            status = await self._request("GET", "/devices/{}/status".format(device_id))
+            if status:
+                devices.append(normalise_cloud_device(status, meta))
+        return devices
+
+    async def send_boost(self, device, amount, target_time=None):
+        """Start a boost, selecting the request body shape by device class."""
+        if device.kind == DEVICE_KIND_ZAPPI:
+            body = {"mode": "normal", "parameters": {"energy": int(amount)}}
+            if target_time:
+                body = {"mode": "smart", "parameters": {"energy": int(amount), "targetTime": target_time}}
+        else:
+            body = {"durationMinutes": int(amount)}
+        await self._request("POST", "/devices/{}/boost".format(device.device_id), body=body)
+        return True
+
+    async def cancel_boost(self, device):
+        """Cancel an active boost."""
+        await self._request("DELETE", "/devices/{}/boost".format(device.device_id))
+        return True

@@ -19,6 +19,7 @@ from myenergi import (
     DEVICE_KIND_ZAPPI,
     MyEnergiApiError,
     MyEnergiAuthError,
+    MyEnergiCloudTransport,
     MyEnergiDirectTransport,
     MyEnergiTransport,
     normalise_cloud_device,
@@ -471,6 +472,167 @@ def test_direct_resolve_asn_timeout_is_api_error():
     print("  ✓ Timeout while resolving the ASN raises MyEnergiApiError")
 
 
+MOCK_CLOUD_DEVICES = {
+    "sites": [
+        {
+            "siteId": "site-1",
+            "name": "Home",
+            "gridLimit": 15,
+            "devices": [
+                MOCK_CLOUD_ZAPPI_META,
+                MOCK_CLOUD_EDDI_META,
+                {"deviceId": "HA11112222", "model": "harvi", "alias": "CT", "serialNumber": 11112222, "online": True},
+            ],
+        }
+    ]
+}
+
+
+def _cloud_response(json_data, status=200):
+    """Build a mock aiohttp response for the cloud API."""
+    response = MagicMock()
+    response.status = status
+    response.json = AsyncMock(return_value=json_data)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+    return response
+
+
+def _cloud_session(responses):
+    """Patch aiohttp.ClientSession recording (method, url, json) for each request.
+
+    Each queued item is either a mock response (from `_cloud_response`) or an
+    exception instance, which is raised instead - used to simulate a timeout or
+    connection failure, mirroring `_direct_session` above.
+    """
+    calls = []
+    queue = list(responses)
+
+    def _request(method, url, **kwargs):
+        """Record the request, then return or raise the next queued item."""
+        calls.append((method, url, kwargs.get("json")))
+        item = queue.pop(0) if queue else _cloud_response({})
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    session = MagicMock()
+    session.request = _request
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session, calls
+
+
+def test_cloud_fetch_devices():
+    """The cloud transport lists devices then polls status for supported ones only."""
+    session, calls = _cloud_session(
+        [
+            _cloud_response(MOCK_CLOUD_DEVICES),
+            _cloud_response(MOCK_CLOUD_ZAPPI_STATUS),
+            _cloud_response(MOCK_CLOUD_EDDI_STATUS),
+        ]
+    )
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        devices = run_async(transport.fetch_devices())
+
+    assert calls[0] == ("GET", "https://api.s18.myenergi.net/devices", None), calls[0]
+    assert calls[1][1] == "https://api.s18.myenergi.net/devices/ZA12345678/status", calls[1]
+    assert calls[2][1] == "https://api.s18.myenergi.net/devices/ED87654321/status", calls[2]
+    # harvi is unsupported and must never be polled
+    assert len(calls) == 3, calls
+    assert len(devices) == 2
+    assert devices[0].name == "Driveway"
+    print("  ✓ Cloud transport lists and polls supported devices")
+
+
+def test_cloud_boost_bodies():
+    """Boost bodies are shaped per device class, never mixing the two forms."""
+    zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    eddi = normalise_cloud_device(MOCK_CLOUD_EDDI_STATUS, MOCK_CLOUD_EDDI_META)
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    session, calls = _cloud_session([_cloud_response({"commandId": "c1"}) for _ in range(4)])
+    with patch("aiohttp.ClientSession", return_value=session):
+        run_async(transport.send_boost(zappi, 10))
+        run_async(transport.send_boost(eddi, 60))
+        run_async(transport.cancel_boost(zappi))
+        run_async(transport.cancel_boost(eddi))
+
+    assert calls[0] == ("POST", "https://api.s18.myenergi.net/devices/ZA12345678/boost", {"mode": "normal", "parameters": {"energy": 10}}), calls[0]
+    assert calls[1] == ("POST", "https://api.s18.myenergi.net/devices/ED87654321/boost", {"durationMinutes": 60}), calls[1]
+    assert calls[2][0] == "DELETE" and calls[2][1].endswith("/devices/ZA12345678/boost"), calls[2]
+    assert calls[3][0] == "DELETE" and calls[3][1].endswith("/devices/ED87654321/boost"), calls[3]
+
+    # A Zappi body must never carry durationMinutes, an Eddi body never mode/parameters
+    assert "durationMinutes" not in calls[0][2]
+    assert "mode" not in calls[1][2] and "parameters" not in calls[1][2]
+    print("  ✓ Cloud transport boost bodies")
+
+
+def test_cloud_sets_bearer_header():
+    """Requests carry the current bearer token from the supplied callable."""
+    tokens = ["first-token"]
+    session, _calls = _cloud_session([_cloud_response(MOCK_CLOUD_DEVICES)])
+    transport = MyEnergiCloudTransport(print, lambda: tokens[0])
+
+    captured = {}
+
+    def _client_session(**kwargs):
+        """Capture the headers passed to aiohttp.ClientSession and return the mock session."""
+        captured.update(kwargs.get("headers") or {})
+        return session
+
+    with patch("aiohttp.ClientSession", side_effect=_client_session):
+        run_async(transport._request("GET", "/devices"))
+
+    assert captured.get("Authorization") == "Bearer first-token", captured
+    print("  ✓ Cloud transport sends the bearer token")
+
+
+def test_cloud_unauthorised_raises_auth_error():
+    """An HTTP 401 from the cloud API surfaces as MyEnergiAuthError."""
+    session, _calls = _cloud_session([_cloud_response({"message": "nope", "code": "UNAUTHORISED"}, status=401)])
+    transport = MyEnergiCloudTransport(print, lambda: "stale-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiAuthError")
+        except MyEnergiAuthError:
+            pass
+    print("  ✓ Cloud transport 401 raises MyEnergiAuthError")
+
+
+def test_cloud_non_200_is_api_error():
+    """A non-401, non-2xx response from the cloud API raises MyEnergiApiError."""
+    session, _calls = _cloud_session([_cloud_response({"message": "boom"}, status=500)])
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ Cloud transport non-200 raises MyEnergiApiError")
+
+
+def test_cloud_timeout_is_api_error():
+    """A timeout calling the cloud API raises MyEnergiApiError."""
+    session, _calls = _cloud_session([asyncio.TimeoutError()])
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+    print("  ✓ Cloud transport timeout raises MyEnergiApiError")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -501,6 +663,12 @@ def test_myenergi(my_predbat=None):
     test_direct_asn_migration_follows_new_host()
     test_direct_resolve_asn_non_200_is_api_error()
     test_direct_resolve_asn_timeout_is_api_error()
+    test_cloud_fetch_devices()
+    test_cloud_boost_bodies()
+    test_cloud_sets_bearer_header()
+    test_cloud_unauthorised_raises_auth_error()
+    test_cloud_non_200_is_api_error()
+    test_cloud_timeout_is_api_error()
 
     print("=" * 70)
     return False
