@@ -414,8 +414,13 @@ class MyEnergiDirectTransport(MyEnergiTransport):
                         reason = "server_error" if response.status >= 500 else "client_error"
                         record_api_call("myenergi", success=False, reason=reason)
                         raise MyEnergiApiError("HTTP {} from {}".format(response.status, path))
+                    try:
+                        payload = await response.json(content_type=None)
+                    except (ValueError, TypeError) as exc:
+                        record_api_call("myenergi", success=False, reason="decode_error")
+                        raise MyEnergiApiError("could not decode the response from {}".format(path)) from exc
                     record_api_call("myenergi", success=True)
-                    return await response.json(content_type=None)
+                    return payload
         except asyncio.TimeoutError as exc:
             self.needs_asn_refresh = True
             record_api_call("myenergi", success=False, reason="connection_error")

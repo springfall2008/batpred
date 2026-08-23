@@ -247,12 +247,23 @@ def test_transport_stubs():
     print("  ✓ Stubbed controls warn once and return False")
 
 
-def _direct_response(json_data, asn="s18.myenergi.net", status=200):
-    """Build a mock aiohttp response carrying an X_MYENERGI-asn header."""
+def _direct_response(json_data=None, asn="s18.myenergi.net", status=200, json_error=None):
+    """Build a mock aiohttp response carrying an X_MYENERGI-asn header.
+
+    Args:
+        json_data: The value `.json()` resolves to. Ignored when `json_error` is set.
+        asn: The X_MYENERGI-asn header value, or falsy to omit the header.
+        status: The HTTP status code to report.
+        json_error: When set, `.json()` raises this instead of returning `json_data`,
+                    simulating an undecodable body such as a captive portal page.
+    """
     response = MagicMock()
     response.status = status
     response.headers = {"X_MYENERGI-asn": asn} if asn else {}
-    response.json = AsyncMock(return_value=json_data)
+    if json_error is not None:
+        response.json = AsyncMock(side_effect=json_error)
+    else:
+        response.json = AsyncMock(return_value=json_data)
     response.__aenter__ = AsyncMock(return_value=response)
     response.__aexit__ = AsyncMock(return_value=False)
     return response
@@ -742,6 +753,31 @@ def test_direct_client_error_reason_is_connection_error():
     print("  ✓ Direct transport ClientError records reason=connection_error")
 
 
+def test_direct_non_json_response_is_api_error():
+    """A 200 body that cannot be decoded as JSON raises MyEnergiApiError with reason=decode_error.
+
+    Mirrors test_cloud_non_json_response_is_api_error: MyEnergiDirectTransport._request
+    also calls response.json(content_type=None), which disables aiohttp's content-type
+    guard, so a captive portal or misconfigured proxy in front of the resolved ASN host
+    can return a 200 whose body is not valid JSON. It must not escape as a raw
+    json.JSONDecodeError (a ValueError subclass) - only MyEnergiError subclasses may
+    leave a transport, since Task 5's component catches only that base class.
+    """
+    session, _calls = _direct_session([_direct_response([]), _direct_response(json_error=json.JSONDecodeError("Expecting value", "", 0))])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session), patch("myenergi.record_api_call") as mock_record:
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError")
+        except MyEnergiApiError:
+            pass
+
+    reasons = [call.kwargs.get("reason") for call in mock_record.call_args_list if call.kwargs.get("reason")]
+    assert reasons == ["decode_error"], reasons
+    print("  ✓ Direct transport non-JSON body raises MyEnergiApiError with reason=decode_error")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -782,6 +818,7 @@ def test_myenergi(my_predbat=None):
     test_cloud_non_dict_payload_is_api_error()
     test_cloud_record_api_call_reasons()
     test_direct_client_error_reason_is_connection_error()
+    test_direct_non_json_response_is_api_error()
 
     print("=" * 70)
     return False
