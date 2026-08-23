@@ -23,9 +23,14 @@ two myenergi APIs: a direct digest-authenticated transport that any myenergi own
 can configure today, and a bearer-token transport for the official 3rd party API.
 """
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
+
+import aiohttp
+
+from predbat_metrics import record_api_call
 
 MYENERGI_DIRECTOR_URL = "https://director.myenergi.net"
 MYENERGI_CLOUD_URL = "https://api.s18.myenergi.net"
@@ -323,3 +328,119 @@ class MyEnergiTransport(ABC):
     async def set_schedule(self, device, schedule):
         """Write the device charging schedule. Not implemented in this release."""
         return self._not_implemented("set_schedule")
+
+
+class MyEnergiDirectTransport(MyEnergiTransport):
+    """Transport for the direct myenergi API used by pymyenergi and ha-myenergi.
+
+    Authenticates with HTTP digest, using the hub serial as the username and the
+    API key generated at myaccount.myenergi.com as the password. myenergi shards
+    accounts across servers, so the first request goes to director.myenergi.net,
+    whose X_MYENERGI-asn response header names the host to use from then on.
+    """
+
+    def __init__(self, log, hub_serial, api_key):
+        """Store credentials and start with an unresolved active server."""
+        super().__init__(log)
+        self.hub_serial = str(hub_serial)
+        self.api_key = api_key
+        self.base_url = None
+        self.needs_asn_refresh = True
+
+    def _new_session(self):
+        """Create an aiohttp session carrying the digest auth middleware."""
+        digest = aiohttp.DigestAuthMiddleware(self.hub_serial, self.api_key)
+        return aiohttp.ClientSession(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
+
+    def _update_asn(self, headers):
+        """Follow the active server named by the X_MYENERGI-asn response header."""
+        asn = headers.get("X_MYENERGI-asn")
+        if not asn:
+            raise MyEnergiAuthError("no X_MYENERGI-asn header returned - check the hub serial and API key")
+        new_url = "https://" + asn
+        if new_url != self.base_url:
+            self.log("Info: myenergi: active server is {}".format(new_url))
+            self.base_url = new_url
+
+    async def _resolve_asn(self):
+        """Ask director.myenergi.net which server this account lives on."""
+        async with self._new_session() as session:
+            async with session.get(MYENERGI_DIRECTOR_URL + "/cgi-jstatus-E", timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                self._update_asn(response.headers)
+        self.needs_asn_refresh = False
+
+    async def _request(self, path):
+        """Perform one GET against the active server, resolving the ASN if needed."""
+        if self.base_url is None or self.needs_asn_refresh:
+            await self._resolve_asn()
+        url = self.base_url + path
+        try:
+            async with self._new_session() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
+                    self._update_asn(response.headers)
+                    if response.status == 401:
+                        record_api_call("myenergi", success=False, reason="unauthorised")
+                        raise MyEnergiAuthError("myenergi rejected the credentials for {}".format(path))
+                    if response.status != 200:
+                        self.needs_asn_refresh = True
+                        record_api_call("myenergi", success=False, reason="http_{}".format(response.status))
+                        raise MyEnergiApiError("HTTP {} from {}".format(response.status, path))
+                    record_api_call("myenergi", success=True)
+                    return await response.json(content_type=None)
+        except asyncio.TimeoutError as exc:
+            self.needs_asn_refresh = True
+            record_api_call("myenergi", success=False, reason="timeout")
+            raise MyEnergiApiError("timed out calling {}".format(path)) from exc
+        except aiohttp.ClientError as exc:
+            self.needs_asn_refresh = True
+            record_api_call("myenergi", success=False, reason="client_error")
+            raise MyEnergiApiError("request to {} failed: {}".format(path, exc)) from exc
+
+    async def connect(self):
+        """Resolve the active server, which also validates the credentials."""
+        await self._resolve_asn()
+        return True
+
+    async def fetch_devices(self):
+        """Fetch every device in one /cgi-jstatus-* call and normalise the supported ones.
+
+        The response is a list of single-key dicts, one per device family, plus
+        housekeeping entries such as {"asn": ...} and {"fwv": ...} that are skipped.
+        """
+        payload = await self._request("/cgi-jstatus-*")
+        devices = []
+        if not isinstance(payload, list):
+            return devices
+        for group in payload:
+            if not isinstance(group, dict):
+                continue
+            for kind, records in group.items():
+                if kind not in SUPPORTED_KINDS or not isinstance(records, list):
+                    continue
+                for raw in records:
+                    if isinstance(raw, dict):
+                        devices.append(normalise_direct_device(raw, kind))
+        return devices
+
+    async def send_boost(self, device, amount, target_time=None):
+        """Start a boost, choosing the manual or smart command for a Zappi."""
+        if device.kind == DEVICE_KIND_ZAPPI:
+            energy = int(amount)
+            if target_time:
+                when = str(target_time).replace(":", "")
+                await self._request("/cgi-zappi-mode-Z{}-0-11-{}-{}".format(device.serial, energy, when))
+            else:
+                await self._request("/cgi-zappi-mode-Z{}-0-10-{}-0000".format(device.serial, energy))
+        else:
+            target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
+            await self._request("/cgi-eddi-boost-E{}-10-{}-{}".format(device.serial, target, int(amount)))
+        return True
+
+    async def cancel_boost(self, device):
+        """Cancel an active boost."""
+        if device.kind == DEVICE_KIND_ZAPPI:
+            await self._request("/cgi-zappi-mode-Z{}-0-2-0-0000".format(device.serial))
+        else:
+            target = EDDI_BOOST_TARGETS[EDDI_DEFAULT_BOOST_TARGET]
+            await self._request("/cgi-eddi-boost-E{}-1-{}-0".format(device.serial, target))
+        return True

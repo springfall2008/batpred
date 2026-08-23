@@ -6,6 +6,7 @@ Unit tests for the myenergi Zappi and Eddi integration
 
 import os
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,6 +16,8 @@ from tests.test_infra import run_async
 from myenergi import (
     DEVICE_KIND_EDDI,
     DEVICE_KIND_ZAPPI,
+    MyEnergiAuthError,
+    MyEnergiDirectTransport,
     MyEnergiTransport,
     normalise_cloud_device,
     normalise_direct_device,
@@ -144,6 +147,15 @@ def test_normalise_direct_eddi_boosting():
     print("  ✓ Direct Eddi boost state")
 
 
+def test_normalise_direct_zappi_boosting():
+    """A Zappi mid-boost reports status Boosting and boost_active True."""
+    raw = dict(MOCK_DIRECT_ZAPPI, sta=4)
+    device = normalise_direct_device(raw, DEVICE_KIND_ZAPPI)
+    assert device.status == "Boosting"
+    assert device.boost_active is True
+    print("  ✓ Direct Zappi boost state")
+
+
 def test_normalise_cloud_matches_direct():
     """Cloud and direct payloads for the same device produce equal values."""
     direct_zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
@@ -229,6 +241,115 @@ def test_transport_stubs():
     print("  ✓ Stubbed controls warn once and return False")
 
 
+def _direct_response(json_data, asn="s18.myenergi.net", status=200):
+    """Build a mock aiohttp response carrying an X_MYENERGI-asn header."""
+    response = MagicMock()
+    response.status = status
+    response.headers = {"X_MYENERGI-asn": asn} if asn else {}
+    response.json = AsyncMock(return_value=json_data)
+    response.__aenter__ = AsyncMock(return_value=response)
+    response.__aexit__ = AsyncMock(return_value=False)
+    return response
+
+
+def _direct_session(responses):
+    """Build a mock aiohttp session whose get() returns the next queued response.
+
+    Returns (session, calls), where calls records every requested URL in order.
+    """
+    calls = []
+    queue = list(responses)
+
+    def _get(url, **kwargs):
+        calls.append(url)
+        return queue.pop(0) if queue else _direct_response({})
+
+    session = MagicMock()
+    session.get = _get
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    return session, calls
+
+
+MOCK_JSTATUS_ALL = [
+    {"eddi": [MOCK_DIRECT_EDDI]},
+    {"zappi": [MOCK_DIRECT_ZAPPI]},
+    {"harvi": [{"sno": 11112222}]},
+    {"asn": "s18.myenergi.net"},
+    {"fwv": "3560S5.036"},
+]
+
+
+def test_direct_fetch_devices():
+    """The direct transport resolves the ASN then parses the jstatus device groups."""
+    session, calls = _direct_session([_direct_response([]), _direct_response(MOCK_JSTATUS_ALL)])
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        devices = run_async(transport.fetch_devices())
+
+    assert calls[0].startswith("https://director.myenergi.net/cgi-jstatus-E"), calls
+    assert calls[1] == "https://s18.myenergi.net/cgi-jstatus-*", calls
+    assert transport.base_url == "https://s18.myenergi.net"
+    # harvi is not a supported kind and must be skipped
+    assert len(devices) == 2, [device.kind for device in devices]
+    kinds = sorted(device.kind for device in devices)
+    assert kinds == [DEVICE_KIND_EDDI, DEVICE_KIND_ZAPPI]
+    print("  ✓ Direct transport resolves ASN and parses devices")
+
+
+def test_direct_missing_asn_is_auth_error():
+    """A response without the ASN header means bad credentials."""
+    session, _calls = _direct_session([_direct_response([], asn=None)])
+    transport = MyEnergiDirectTransport(print, "12345678", "wrong-key")
+
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiAuthError")
+        except MyEnergiAuthError:
+            pass
+    print("  ✓ Missing ASN header raises MyEnergiAuthError")
+
+
+def test_direct_boost_urls():
+    """Boost and cancel produce the exact documented URLs for both device kinds."""
+    zappi = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, zmo=2), DEVICE_KIND_ZAPPI)
+    eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    # Pre-resolve the active server so the requests under test are the only ones made
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({"status": 0}) for _ in range(4)])
+    with patch("aiohttp.ClientSession", return_value=session):
+        run_async(transport.send_boost(zappi, 10))
+        run_async(transport.cancel_boost(zappi))
+        run_async(transport.send_boost(eddi, 60))
+        run_async(transport.cancel_boost(eddi))
+
+    assert calls[0] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-10-10-0000", calls[0]
+    assert calls[1] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-2-0-0000", calls[1]
+    assert calls[2] == "https://s18.myenergi.net/cgi-eddi-boost-E87654321-10-1-60", calls[2]
+    assert calls[3] == "https://s18.myenergi.net/cgi-eddi-boost-E87654321-1-1-0", calls[3]
+    print("  ✓ Direct transport boost URLs")
+
+
+def test_direct_smart_boost_url():
+    """A Zappi boost with a target time uses the smart boost command."""
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({"status": 0})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        run_async(transport.send_boost(zappi, 15, target_time="07:30"))
+
+    assert calls[0] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-11-15-0730", calls[0]
+    print("  ✓ Direct transport smart boost URL")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -244,9 +365,14 @@ def test_myenergi(my_predbat=None):
     test_normalise_direct_zappi()
     test_normalise_direct_eddi()
     test_normalise_direct_eddi_boosting()
+    test_normalise_direct_zappi_boosting()
     test_normalise_cloud_matches_direct()
     test_normalise_handles_bad_values()
     test_transport_stubs()
+    test_direct_fetch_devices()
+    test_direct_missing_asn_is_auth_error()
+    test_direct_boost_urls()
+    test_direct_smart_boost_url()
 
     print("=" * 70)
     return False
