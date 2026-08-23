@@ -304,7 +304,9 @@ def validate_config(config, today=None):
     raw_battery = raw.get("battery")
     legacy_export_limit_kw = raw_battery.get("export_limit_kw") if isinstance(raw_battery, dict) else None
     export_limit_default = legacy_export_limit_kw if legacy_export_limit_kw is not None else DEFAULT_EXPORT_LIMIT_KW
-    export_limit_kw = _require_number(raw.get("export_limit_kw", export_limit_default), "annual.export_limit_kw", minimum=0, exclusive_minimum=True)
+    # minimum=0 inclusive, not exclusive: a G99 zero-export limitation (see the docs) is a
+    # real, supported scenario, and battery.export_limit_kw allowed 0 before this moved.
+    export_limit_kw = _require_number(raw.get("export_limit_kw", export_limit_default), "annual.export_limit_kw", minimum=0)
 
     samples_per_month = _require_number(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH), "annual.samples_per_month", minimum=1, integer=True)
 

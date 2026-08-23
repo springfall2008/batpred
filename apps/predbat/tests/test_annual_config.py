@@ -521,10 +521,13 @@ def test_annual_config(my_predbat):
         print("  ERROR: export_limit_kw should apply on a battery-less run, got {}".format(result["export_limit_kw"]))
         failed = True
 
-    print("Test: a zero export_limit_kw is rejected")
+    print("Test: a zero export_limit_kw is accepted, modelling a G99 zero-export limitation")
     config = base_config()
     config["annual"]["export_limit_kw"] = 0
-    failed = expect_error("zero export_limit_kw", config, "export_limit_kw", failed)
+    result = validate_config(config)
+    if result["export_limit_kw"] != 0:
+        print("  ERROR: a zero export_limit_kw should survive validation as 0, got {}".format(result["export_limit_kw"]))
+        failed = True
 
     print("Test: a negative export_limit_kw is rejected")
     config = base_config()
