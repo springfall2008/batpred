@@ -2946,15 +2946,6 @@ class Fetch:
             # If car energy is not reported as load then we should not attempt to remove car energy from the load data.
             self.car_charging_hold = False
 
-        # The car energy is left in the historical load exactly when it is inside the CT clamp and has not been
-        # stripped back out again, so this follows from the two switches above rather than being one of its own.
-        # In that state the historical load - and any ML model trained on it - already carries the car demand, so
-        # the planned car slots must not add it a second time in the prediction.
-        car_charging_in_load_history = self.car_energy_reported_load and not self.car_charging_hold
-        if car_charging_in_load_history != self.car_charging_in_load_history:
-            self.log("Note: car charging energy is {} the load history (car_charging_hold {}, car_energy_reported_load {})".format("left in" if car_charging_in_load_history else "removed from", self.car_charging_hold, self.car_energy_reported_load))
-        self.car_charging_in_load_history = car_charging_in_load_history
-
         self.car_charging_manual_soc = [False for c in range(max(self.num_cars, 1))]
         for car_n in range(self.num_cars):
             car_postfix = "" if car_n == 0 else "_" + str(car_n)

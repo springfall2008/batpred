@@ -44,8 +44,11 @@
 // point of the check.
 // ABI 5: PkContext carries the car solar diversion fields, so a binary built before them has a
 // different context layout and must not be loaded against this Python.
-#define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 8
+// ABI 6: car_charging_in_load_history is gone from PkContext - planned car slots always add their load
+// when the car's energy is reported as load, as they did before it was introduced - so the layout
+// differs again and an ABI 5 binary must not be loaded against this Python.
+#define PK_ABI_VERSION 6
+#define PK_PARITY_REVISION 9
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 
@@ -221,7 +224,6 @@ struct PkContext {
     int32_t inverter_can_charge_during_export;
     int32_t num_cars;
     int32_t car_energy_reported_load;
-    int32_t car_charging_in_load_history;
     int32_t car_charging_from_battery;
     int32_t car_charging_solar[PK_MAX_CARS];
     int32_t car_charging_plugged[PK_MAX_CARS];
@@ -883,10 +885,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     if (c->car_energy_reported_load) {
                         // Note: mirrors the Python engine exactly - the cumulative premium amount is added per car
                         car_amount_premium += car_load_scale / c->car_charging_loss;
-                        // Already present in the historical load means adding the planned slot would double count
-                        if (!c->car_charging_in_load_history) {
-                            load_yesterday += car_amount_premium;
-                        }
+                        load_yesterday += car_amount_premium;
                     } else {
                         car_load_energy_bypass += car_load_scale / c->car_charging_loss;
                     }

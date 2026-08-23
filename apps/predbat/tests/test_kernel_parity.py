@@ -111,7 +111,6 @@ SCENARIO_STATE_ATTRS = [
     "num_cars",
     "car_charging_loss",
     "car_energy_reported_load",
-    "car_charging_in_load_history",
     "car_charging_from_battery",
     "car_charging_soc",
     "car_charging_limit",
@@ -279,7 +278,6 @@ def apply_random_scenario(my_predbat, rng):
     my_predbat.num_cars = rng.choice([0, 0, 0, 1, 1, 2])
     my_predbat.car_charging_loss = round(rng.uniform(0.85, 1.0), 3)
     my_predbat.car_energy_reported_load = rng.choice([True, False])
-    my_predbat.car_charging_in_load_history = my_predbat.car_energy_reported_load and rng.choice([True, False])
     my_predbat.car_charging_from_battery = rng.choice([True, False])
     # Opportunistic solar diversion state - sized to KERNEL_MAX_CARS so the per-car loops are always in range
     my_predbat.car_charging_solar = [False, False, False, False]
@@ -540,7 +538,6 @@ def run_edge_case_tests(my_predbat):
             {
                 "num_cars": 1,
                 "car_energy_reported_load": True,
-                "car_charging_in_load_history": True,
                 "car_charging_slots": [[{"start": minutes_now, "end": minutes_now + 300, "kwh": 15.0, "average": 0, "octopus": False}], [], [], []],
                 "car_charging_soc": [0, 0, 0, 0],
                 "soc_kw": 50.0,

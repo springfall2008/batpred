@@ -3235,7 +3235,6 @@ class Output:
         carbon_today_sofar = self.carbon_today_sofar
         soc_kw = self.soc_kw
         car_charging_hold = self.car_charging_hold
-        car_charging_in_load_history = self.car_charging_in_load_history
         iboost_energy_subtract = self.iboost_energy_subtract
         load_minutes_now = self.load_minutes_now
         soc_max = self.soc_max
@@ -3260,9 +3259,6 @@ class Output:
         self.forecast_minutes = end_record
         self.pv_today_now = 0
         self.car_charging_hold = False
-        # yesterday_reconstruct_car_slots subtracts the reconstructed slot energy from yesterday_load_step and
-        # relies on the prediction adding it back, so the double-count guard must be off for the replay.
-        self.car_charging_in_load_history = False
         self.iboost_energy_subtract = False
         self.load_minutes_now = 0
         self.rate_import = past_rates
@@ -3571,7 +3567,6 @@ class Output:
         self.carbon_today_sofar = carbon_today_sofar
         self.pv_today_now = pv_today_now
         self.car_charging_hold = car_charging_hold
-        self.car_charging_in_load_history = car_charging_in_load_history
         self.iboost_energy_subtract = iboost_energy_subtract
         self.load_minutes_now = load_minutes_now
         self.soc_max = soc_max

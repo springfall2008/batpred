@@ -91,7 +91,6 @@ class Prediction(PredictionBatch):
             self.car_charging_soc_next = base.car_charging_soc_next
             self.car_charging_loss = base.car_charging_loss
             self.car_energy_reported_load = base.car_energy_reported_load
-            self.car_charging_in_load_history = base.car_charging_in_load_history
             self.reserve = base.reserve
             self.metric_standing_charge = base.metric_standing_charge
             self.set_charge_freeze = base.set_charge_freeze
@@ -879,10 +878,7 @@ class Prediction(PredictionBatch):
                             # car_amount_premium must accumulate either way - it is consumed by the IOG beyond-cap
                             # premium below, and the grid import still contains the car when it comes from history.
                             car_amount_premium += car_load_scale / self.car_charging_loss
-                            # When the car energy is already present in the historical load, adding the planned
-                            # slot on top of it would double count the same kWh, so only add it when it is not.
-                            if not self.car_charging_in_load_history:
-                                load_yesterday += car_amount_premium
+                            load_yesterday += car_amount_premium
                         else:
                             car_load_energy_bypass += car_load_scale / self.car_charging_loss
 

@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from prediction import Prediction
+from prediction import Prediction
 from tests.test_infra import reset_rates2, reset_inverter
 from const import CAR_SOLAR_EXPORT_ALWAYS
 
@@ -28,80 +29,61 @@ def build_prediction(my_predbat, pv_amount=0.0, load_amount=1.0):
     return Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step), pv_step, load_step
 
 
-def run_one(my_predbat, in_load_history, reported_load=True, octopus=False, average=0.0):
-    """
-    Run a single prediction with one car slot, returning (import_kwh_house, metric, car_soc_next)
-    """
-    my_predbat.num_cars = 1
-    my_predbat.car_energy_reported_load = reported_load
-    my_predbat.car_charging_in_load_history = in_load_history
-    my_predbat.car_charging_loss = 1.0
-    my_predbat.car_charging_soc = [0, 0, 0, 0]
-    my_predbat.car_charging_limit = [50, 100, 100, 100]
-    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 300, "kwh": 10.0, "average": average, "octopus": octopus}]
+def run_car_slot_adds_load_tests(my_predbat):
+    """A planned car slot must add its load to the forecast whenever the car is inside the CT clamp.
 
-    prediction, _, _ = build_prediction(my_predbat)
-    result = prediction.run_prediction([], [], [], [], False, end_record=my_predbat.end_record, save=None)
-    metric = result[0]
-    import_kwh_house = result[2]
-    car_charging_soc_next = result[12]
-    return import_kwh_house, metric, car_charging_soc_next[0]
-
-
-def run_car_charging_in_load_history_tests(my_predbat):
-    """
-    Test that planned car slots stop adding load when the car energy is already in the load history
+    Regression guard: a car_charging_in_load_history flag once suppressed this whenever car_charging_hold
+    was off, on the grounds that the historical load already carried the car. It does - but smeared across
+    the times the car happened to charge before, not at the slot the plan has actually booked, so the plan
+    stopped seeing an upcoming charge as demand at all and would sell the battery out from under it.
     """
     failed = False
-    print("**** Running Car charging in load history tests ****")
-
-    reset_inverter(my_predbat)
-    reset_rates2(my_predbat, 10.0, 5.0)
+    print("**** Running Car slot adds load tests ****")
 
     saved = {
-        name: getattr(my_predbat, name)
-        for name in ["num_cars", "car_energy_reported_load", "car_charging_in_load_history", "car_charging_loss", "car_charging_soc", "car_charging_limit", "car_charging_slots", "car_charging_from_battery", "soc_kw", "soc_max", "prediction_kernel_enable"]
+        name: getattr(my_predbat, name) for name in ["num_cars", "car_charging_hold", "car_energy_reported_load", "car_charging_slots", "car_charging_limit", "car_charging_soc", "car_charging_loss", "car_charging_from_battery", "prediction_kernel_enable"]
     }
-    # Run against the Python engine - the kernel mirror of this guard is covered by test_kernel_parity
-    my_predbat.prediction_kernel_enable = False
+    reset_inverter(my_predbat)
+    reset_rates2(my_predbat, 10.0, 5.0)
+    my_predbat.num_cars = 1
+    my_predbat.car_charging_limit = [10.0]
+    my_predbat.car_charging_soc = [0.0]
+    my_predbat.car_charging_loss = 1.0
     my_predbat.car_charging_from_battery = True
-    my_predbat.soc_kw = 0
-    my_predbat.soc_max = 10.0
-    my_predbat.car_charging_slots = [[], [], [], []]
+    my_predbat.car_energy_reported_load = True
 
-    # Test 1: the planned slot's energy is not added a second time when it is already in the load history.
-    # The car draws 10kWh over 5 hours, so the whole difference must be exactly that 10kWh.
-    import_off, _, soc_off = run_one(my_predbat, in_load_history=False)
-    import_on, _, soc_on = run_one(my_predbat, in_load_history=True)
-    difference = import_off - import_on
-    if abs(difference - 10.0) >= 0.01:
-        print("ERROR: House import should drop by the full car slot (10.0 kWh) when it is already in the load history, got {}".format(difference))
-        failed = True
+    start = my_predbat.minutes_now
+    slot = [{"start": start, "end": start + 60, "kwh": 3.0, "average": 10.0, "octopus": False}]
 
-    # Test 2: the car is still modelled - its SoC must advance identically, the guard only stops the load being
-    # double counted. A naive fix that skipped the whole car block would break this.
-    if abs(soc_off - soc_on) >= 0.001:
-        print("ERROR: Car SoC should be unaffected by car_charging_in_load_history, got {} vs {}".format(soc_off, soc_on))
-        failed = True
-
-    # Test 3: with the car outside the CT clamp the bypass branch runs instead, so the switch changes nothing.
-    # (fetch_config_options forces the switch Off in this configuration, this pins the prediction side.)
-    import_bypass_off, metric_bypass_off, _ = run_one(my_predbat, in_load_history=False, reported_load=False)
-    import_bypass_on, metric_bypass_on, _ = run_one(my_predbat, in_load_history=True, reported_load=False)
-    if abs(import_bypass_off - import_bypass_on) >= 0.001 or abs(metric_bypass_off - metric_bypass_on) >= 0.001:
-        print("ERROR: With car_energy_reported_load Off the guard must have no effect, got import {} vs {}, metric {} vs {}".format(import_bypass_off, import_bypass_on, metric_bypass_off, metric_bypass_on))
-        failed = True
-
-    # Test 4: the IOG beyond-cap premium is still charged. car_amount_premium must keep accumulating even when
-    # the load is not added, because the grid import still contains the car when it comes from history.
-    _, metric_premium_on, _ = run_one(my_predbat, in_load_history=True, octopus=True, average=40.0)
-    _, metric_no_premium, _ = run_one(my_predbat, in_load_history=True, octopus=True, average=0.0)
-    if metric_premium_on <= metric_no_premium:
-        print("ERROR: IOG beyond-cap premium should still be charged with the guard on, got {} vs {}".format(metric_premium_on, metric_no_premium))
-        failed = True
+    # Both engines have their own copy of this, so pin both rather than whichever happens to be enabled
+    for use_kernel in (True, False):
+        my_predbat.prediction_kernel_enable = use_kernel
+        failed |= check_slot_adds_load(my_predbat, start, slot, use_kernel)
 
     for name, value in saved.items():
         setattr(my_predbat, name, value)
+
+    return failed
+
+
+def check_slot_adds_load(my_predbat, start, slot, use_kernel):
+    """Assert a planned slot raises house import on one engine, with car_charging_hold either way round."""
+    failed = False
+    # The slot's energy must reach the prediction's load either way round - hold only decides whether the
+    # car was already taken out of the history, not whether the plan knows about the charge it has booked
+    for hold in (True, False):
+        my_predbat.car_charging_hold = hold
+        my_predbat.car_charging_slots = [[]]
+        pred_without, _, _ = build_prediction(my_predbat, pv_amount=0.0, load_amount=0.5)
+        without = pred_without.run_prediction([], [], [], [], False, my_predbat.forecast_minutes)[2]
+
+        my_predbat.car_charging_slots = [slot]
+        pred_with, _, _ = build_prediction(my_predbat, pv_amount=0.0, load_amount=0.5)
+        with_slot = pred_with.run_prediction([], [], [], [], False, my_predbat.forecast_minutes)[2]
+
+        if with_slot <= without:
+            print("ERROR: kernel {} car_charging_hold {} - a planned slot added no house import ({} vs {})".format(use_kernel, hold, with_slot, without))
+            failed = True
 
     return failed
 

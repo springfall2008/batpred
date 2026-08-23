@@ -595,7 +595,6 @@ def simple_scenario(
     charge_car=0,
     car_charging_from_battery=True,
     car_energy_reported_load=True,
-    car_charging_in_load_history=False,
     car_charging_solar=False,
     car_solar_max_power=7.4,
     car_solar_min_power=0.0,
@@ -715,7 +714,6 @@ def simple_scenario(
     my_predbat.battery_rate_max_export = battery_rate_max_charge / 60.0
     my_predbat.car_charging_from_battery = car_charging_from_battery
     my_predbat.car_energy_reported_load = car_energy_reported_load
-    my_predbat.car_charging_in_load_history = car_charging_in_load_history
     my_predbat.set_charge_low_power = set_charge_low_power
     my_predbat.set_charge_window = set_charge_window
     my_predbat.set_charge_freeze = set_charge_freeze

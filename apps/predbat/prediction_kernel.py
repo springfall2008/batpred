@@ -31,8 +31,8 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 8
+KERNEL_ABI_VERSION = 6
+KERNEL_PARITY_REVISION = 9
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -127,7 +127,6 @@ class PkContext(ctypes.Structure):
         ("inverter_can_charge_during_export", ctypes.c_int32),
         ("num_cars", ctypes.c_int32),
         ("car_energy_reported_load", ctypes.c_int32),
-        ("car_charging_in_load_history", ctypes.c_int32),
         ("car_charging_from_battery", ctypes.c_int32),
         ("car_charging_solar", ctypes.c_int32 * KERNEL_MAX_CARS),
         ("car_charging_plugged", ctypes.c_int32 * KERNEL_MAX_CARS),
@@ -720,7 +719,6 @@ def create_kernel_context(pred, static_cache=None):
         ctx.inverter_can_charge_during_export = 1 if pred.inverter_can_charge_during_export else 0
         ctx.num_cars = num_cars
         ctx.car_energy_reported_load = 1 if pred.car_energy_reported_load else 0
-        ctx.car_charging_in_load_history = 1 if pred.car_charging_in_load_history else 0
         ctx.car_charging_from_battery = 1 if pred.car_charging_from_battery else 0
         ctx.carbon_enable = 1 if pred.carbon_enable else 0
         ctx.iboost_enable = 1 if pred.iboost_enable else 0
