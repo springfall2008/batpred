@@ -10,9 +10,12 @@ import sys
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from tests.test_infra import run_async
+
 from myenergi import (
     DEVICE_KIND_EDDI,
     DEVICE_KIND_ZAPPI,
+    MyEnergiTransport,
     normalise_cloud_device,
     normalise_direct_device,
 )
@@ -185,6 +188,47 @@ def test_normalise_handles_bad_values():
     print("  ✓ Malformed payloads degrade safely")
 
 
+class _StubTransport(MyEnergiTransport):
+    """Minimal concrete transport used to exercise the abstract base's stubs."""
+
+    async def connect(self):
+        """Pretend to connect."""
+        return True
+
+    async def fetch_devices(self):
+        """Return no devices."""
+        return []
+
+    async def send_boost(self, device, amount, target_time=None):
+        """Pretend to send a boost."""
+        return True
+
+    async def cancel_boost(self, device):
+        """Pretend to cancel a boost."""
+        return True
+
+
+def test_transport_stubs():
+    """Every unimplemented control returns False and warns exactly once."""
+    messages = []
+    transport = _StubTransport(messages.append)
+
+    assert run_async(transport.set_mode(None, "Eco")) is False
+    assert run_async(transport.set_priority(None, 1)) is False
+    assert run_async(transport.set_min_green_level(None, 50)) is False
+    assert run_async(transport.set_phase_setting(None, "1")) is False
+    assert run_async(transport.get_schedule(None)) is False
+    assert run_async(transport.set_schedule(None, [])) is False
+
+    assert len(messages) == 6, "Each stub should warn once, got {}".format(messages)
+    assert all("not implemented" in message for message in messages)
+
+    # A second call must not warn again
+    assert run_async(transport.set_mode(None, "Eco")) is False
+    assert len(messages) == 6, "Repeat calls must not warn again"
+    print("  ✓ Stubbed controls warn once and return False")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -202,6 +246,7 @@ def test_myenergi(my_predbat=None):
     test_normalise_direct_eddi_boosting()
     test_normalise_cloud_matches_direct()
     test_normalise_handles_bad_values()
+    test_transport_stubs()
 
     print("=" * 70)
     return False

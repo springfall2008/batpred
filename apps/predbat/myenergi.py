@@ -23,6 +23,7 @@ two myenergi APIs: a direct digest-authenticated transport that any myenergi own
 can configure today, and a bearer-token transport for the official 3rd party API.
 """
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
@@ -255,3 +256,70 @@ def normalise_cloud_device(raw, meta):
         temp_1=None,
         temp_2=None,
     )
+
+
+class MyEnergiTransport(ABC):
+    """Wire-format adapter for one of the two myenergi APIs.
+
+    This is the only layer that knows how a myenergi request is shaped. Everything
+    above it works in terms of MyEnergiDevice, so adding or changing a transport
+    never touches publishing, auto-configuration or the controls.
+    """
+
+    def __init__(self, log):
+        """Store the logging function and initialise the one-shot warning set."""
+        self.log = log
+        self._warned_stubs = set()
+
+    @abstractmethod
+    async def connect(self):
+        """Establish and validate the connection. Returns True on success."""
+
+    @abstractmethod
+    async def fetch_devices(self):
+        """Return a list of MyEnergiDevice for every supported device found."""
+
+    @abstractmethod
+    async def send_boost(self, device, amount, target_time=None):
+        """Start a boost on a device.
+
+        Args:
+            device: The MyEnergiDevice to boost.
+            amount: kWh for a Zappi, minutes for an Eddi.
+            target_time: Optional "HH:MM" completion time, Zappi smart boost only.
+        """
+
+    @abstractmethod
+    async def cancel_boost(self, device):
+        """Cancel an active boost on a device."""
+
+    def _not_implemented(self, what):
+        """Warn once that a control is not implemented in this release, and return False."""
+        if what not in self._warned_stubs:
+            self._warned_stubs.add(what)
+            self.log("Warn: myenergi: {} is not implemented in this release".format(what))
+        return False
+
+    async def set_mode(self, device, mode):
+        """Set the device supply mode. Not implemented in this release."""
+        return self._not_implemented("set_mode")
+
+    async def set_priority(self, device, priority):
+        """Set the device diversion priority. Not implemented in this release."""
+        return self._not_implemented("set_priority")
+
+    async def set_min_green_level(self, device, level):
+        """Set the Zappi minimum green level. Not implemented in this release."""
+        return self._not_implemented("set_min_green_level")
+
+    async def set_phase_setting(self, device, phase):
+        """Set the Zappi phase setting. Not implemented in this release."""
+        return self._not_implemented("set_phase_setting")
+
+    async def get_schedule(self, device):
+        """Read the device charging schedule. Not implemented in this release."""
+        return self._not_implemented("get_schedule")
+
+    async def set_schedule(self, device, schedule):
+        """Write the device charging schedule. Not implemented in this release."""
+        return self._not_implemented("set_schedule")
