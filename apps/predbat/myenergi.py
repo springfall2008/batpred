@@ -1253,6 +1253,25 @@ async def run_myenergi_cli(args):  # pragma: no cover
         for device in devices:
             print("{:<12} {:<10} {:<16} {:<10} {:>10.0f} {:>12.2f}".format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
 
+    # The three supply modes Predbat-led charge control drives a Zappi between, so the
+    # same commands the component issues can be exercised by hand against a live charger.
+    mode = None
+    if args.start_charge:
+        mode = ZAPPI_MODE_CHARGING
+    elif args.stop_charge:
+        mode = ZAPPI_MODE_STOPPED
+    elif args.release:
+        mode = ZAPPI_MODE_RELEASE
+    if mode:
+        zappi = next((item for item in devices if item.kind == DEVICE_KIND_ZAPPI), None)
+        if not zappi:
+            print("No Zappi found to control")
+            return
+        print("Setting {} to {}...".format(zappi.name, mode))
+        await component.transport.set_mode(zappi, mode)
+        print("Done - run again with no action to see the new mode")
+        return
+
     target_kind = args.boost or args.cancel_boost
     if target_kind:
         device = next((item for item in devices if item.kind == target_kind), None)
@@ -1278,6 +1297,12 @@ def main():  # pragma: no cover
     parser.add_argument("--boost", choices=SUPPORTED_KINDS, default=None, help="Send a boost to the first matching device")
     parser.add_argument("--cancel-boost", choices=SUPPORTED_KINDS, default=None, help="Cancel a boost on the first matching device")
     parser.add_argument("--amount", type=int, default=DEFAULT_ZAPPI_BOOST_KWH, help="Boost amount: kWh for a Zappi, minutes for an Eddi")
+    # The mode actions are mutually exclusive, and are the same three commands Predbat-led
+    # charge control issues - --release is what a hand-back does, and is how to undo --stop-charge
+    charge_group = parser.add_mutually_exclusive_group()
+    charge_group.add_argument("--start-charge", action="store_true", help="Put the first Zappi in {} to charge now, as a planned window does".format(ZAPPI_MODE_CHARGING))
+    charge_group.add_argument("--stop-charge", action="store_true", help="Put the first Zappi in {}, as being outside a planned window does".format(ZAPPI_MODE_STOPPED))
+    charge_group.add_argument("--release", action="store_true", help="Put the first Zappi back in {}, as releasing it does".format(ZAPPI_MODE_RELEASE))
     parser.add_argument("--raw", action="store_true", help="Print the full normalised device records")
 
     args = parser.parse_args()
