@@ -205,6 +205,11 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ohme_automatic",
             },
+            "ohme_control": {
+                "required": False,
+                "default": False,
+                "config": "ohme_control",
+            },
             # Deliberately has no default: unset means "auto-detect from the Octopus component",
             # which is distinct from an explicit False meaning "never use Ohme for the car slots"
             "ohme_automatic_octopus_intelligent": {
