@@ -24,6 +24,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
     - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
     - [Sunsynk Cloud API (sunsynk)](#sunsynk-cloud-api-sunsynk)
+    - [AlphaESS Cloud API (alphaess)](#alphaess-cloud-api-alphaess)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -848,6 +849,53 @@ Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect c
 | `battery_nominal_voltage` | Float | No | - | `sunsynk_battery_nominal_voltage` | Override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target |
 
 See [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI.
+
+---
+
+### AlphaESS Cloud API (alphaess)
+
+**Can be restarted:** Yes
+
+#### What it does (alphaess)
+
+Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open API, providing cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required. Predbat discovers every battery system bound to the developer AppID, publishes monitoring sensors and derived ratings (including EV charger power and energy where one is fitted), and writes schedule control entities that map directly onto the AlphaESS charge and discharge schedule fields.
+
+#### When to enable (alphaess)
+
+- You have an AlphaESS hybrid inverter with battery storage registered on the AlphaESS cloud
+- You want cloud-based monitoring, with optional battery control, and no local hardware access
+- You have registered a developer account at <https://open.alphaess.com/> and have an AppID and AppSecret
+
+#### Important notes (alphaess)
+
+- **EXPERIMENTAL:** nobody on the Predbat project has AlphaESS hardware, so behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report. Run the [diagnostics CLI](inverter-setup.md#alphaess-cloud) against your own system before trusting Predbat with control
+- **Control is on by default**, the same as `sunsynk_control_enable`. Set `alphaess_control_enable: false` for monitoring only. `switch.predbat_set_read_only` additionally holds back Predbat's own automatic writes, including its periodic re-apply
+- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`
+- Predbat's controls map straight onto the schedule fields and the inverter does the timing. `batUseCap` carries the export target while an export window is programmed and the reserve otherwise, because the API has only one field for the discharge floor. A **zero** charge or discharge rate is how Predbat signals a freeze, since AlphaESS has no pause endpoint
+- Times sit on a **15-minute grid** (`00:00` to `23:45`). Off-grid values are accepted by the API and then silently ignored by the inverter, so Predbat snaps windows inward and disables any window that snapping collapses
+- Newer systems may be entitled to the periodic scheduling API (six windows a day, with a power setpoint per window). Predbat probes this once per system; a `6017` response means the account or hardware is not entitled and Predbat falls back to the universally available two-window endpoints. On that legacy path a non-zero charge rate is not honoured by the hardware
+- **The API does not report a grid export limit.** On a G98/G99-capped site you must set `export_limit` in `apps.yaml` yourself, or Predbat will plan exports the connection clips. `battery_rate_max` is likewise not reported and is estimated from the inverter's nominal power - correct it with `battery_rate_max_scaling` or `alphaess_battery_rate_max`
+- **An AlphaESS-connected EV charger is detected automatically.** `getLastPowerData` reports its per-charger power as `null` when no charger is fitted, which is the one documented signal that one physically exists. For a system that has one, Predbat publishes `ev_power` (W) and `ev_energy_today` (kWh) and, when `automatic` is enabled, points `car_charging_energy` at the charger energy of every system that has one. That mapping is inert on its own - Predbat only subtracts car energy from house load once `car_charging_hold` is enabled. Systems with no charger are left out, because their EV energy reads a permanent zero that is indistinguishable from a charger nobody uses. Controlling the charger is not supported
+- Systems reporting no battery capacity (plug-in solar, such as the VT1000 family) are skipped by design - there is nothing for Predbat to control
+- A system that does not serve live power data automatically falls back to five-minute history data and re-probes itself back to live if it recovers
+- Using the AlphaESS phone app while Predbat is running can overwrite Predbat's settings, and vice versa - the charge and discharge endpoints are whole-object replacements, so the last writer wins. Predbat logs when a field it owns has changed since its last write
+- A write reaching the cloud does not mean the inverter has applied it: it collects new settings on its next poll, typically one to five minutes later
+
+#### Configuration Options (alphaess)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_id` | String | Yes | - | `alphaess_app_id` | Your AlphaESS developer AppID from <https://open.alphaess.com/> |
+| `app_secret` | String | Yes | - | `alphaess_app_secret` | Your AlphaESS developer AppSecret |
+| `inverter_sn` | String/List | No | All found | `alphaess_inverter_sn` | Restrict Predbat to specific system serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `alphaess_automatic` | Set to `true` to automatically configure Predbat to use the discovered AlphaESS system(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `alphaess_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent AlphaESS Cloud from overwriting the `pv_power` config |
+| `control_enable` | Boolean | No | true | `alphaess_control_enable` | Allow Predbat to write charge/export schedules to the inverter. Set to `false` for monitoring only |
+| `battery_rate_max` | Float | No | - | `alphaess_battery_rate_max` | Override, in Watts, for the battery's maximum charge/discharge rate. The API does not report one, so Predbat otherwise estimates it from the inverter's nominal power |
+| `api_delay` | Float | No | 2 | `alphaess_api_delay` | Seconds to wait between API calls. AlphaESS advise a minimum 10-second polling interval |
+| `min_write_interval` | Integer | No | 300 | `alphaess_min_write_interval` | Minimum spacing, in seconds, between writes to the same inverter and direction |
+
+See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI and how to bind or unbind a system.
 
 ---
 

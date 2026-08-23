@@ -1004,6 +1004,7 @@ class Execute:
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]
         self.publish_charge_limit(self.charge_limit, self.charge_window, best=False)
         self.publish_inverter_data()
+        self.publish_inverter_config()
         return True
 
     def quick_inverter_data_update(self):
@@ -1063,6 +1064,42 @@ class Execute:
                 "unit_of_measurement": "kW",
                 "device_class": "power",
                 "icon": "mdi:battery",
+            },
+        )
+
+    def publish_inverter_config(self):
+        """
+        Publish the static configuration the prediction runs from, aggregated over all the inverters
+
+        These come from apps.yaml or are read back off the inverters, so unlike the settings in
+        CONFIG_ITEMS they have no entity of their own. Power values are held internally in kW per
+        minute and are converted to kW here to match the other power sensors.
+        """
+        self.dashboard_item(
+            "sensor." + self.prefix + "_inverter_config",
+            state=dp3(self.inverter_limit * MINUTE_WATT / 1000.0),
+            attributes={
+                "friendly_name": "Predbat Inverter Config",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "device_class": "power",
+                "icon": "mdi:transmission-tower",
+                "inverter_limit": dp3(self.inverter_limit * MINUTE_WATT / 1000.0),
+                "export_limit": dp3(self.export_limit * MINUTE_WATT / 1000.0),
+                "pv_ac_limit": dp3(self.pv_ac_limit * MINUTE_WATT / 1000.0),
+                "battery_rate_max_charge": dp3(self.battery_rate_max_charge * MINUTE_WATT / 1000.0),
+                "battery_rate_max_charge_dc": dp3(self.battery_rate_max_charge_dc * MINUTE_WATT / 1000.0),
+                "battery_rate_max_discharge": dp3(self.battery_rate_max_discharge * MINUTE_WATT / 1000.0),
+                "battery_rate_max_export": dp3(self.battery_rate_max_export * MINUTE_WATT / 1000.0),
+                "battery_rate_min": dp3(self.battery_rate_min * MINUTE_WATT / 1000.0),
+                "soc_max": dp3(self.soc_max),
+                "reserve": dp3(self.reserve),
+                "num_inverters": self.num_inverters,
+                "num_cars": self.num_cars,
+                "inverter_can_charge_during_export": self.inverter_can_charge_during_export,
+                "metric_standing_charge": dp2(self.metric_standing_charge),
+                "forecast_minutes": self.forecast_minutes,
+                "plan_interval_minutes": self.plan_interval_minutes,
             },
         )
 

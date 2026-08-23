@@ -19,8 +19,8 @@ schedules, rate window sensors, and financial metric summaries.
 import math
 import copy
 from html import escape as escape_html
-from datetime import datetime, timedelta
-from config import THIS_VERSION
+from datetime import timedelta
+from predbat import THIS_VERSION_DISPLAY
 from const import TIME_FORMAT, PREDICT_STEP, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, MINUTE_WATT
 from utils import dp0, dp1, dp2, dp3, calc_percent_limit, minute_data, minute_data_state, find_charge_rate
 from prediction import Prediction
@@ -2588,9 +2588,9 @@ class Output:
                 "friendly_name": "Status",
                 "detail": extra,
                 "icon": "mdi:information",
-                "last_updated": str(datetime.now()),
+                "last_updated": self.now_utc_real.strftime(TIME_FORMAT),
                 "debug": debug,
-                "version": THIS_VERSION,
+                "version": THIS_VERSION_DISPLAY,
                 "error": (had_errors or self.had_errors),
                 "error_count": error_count,
             },

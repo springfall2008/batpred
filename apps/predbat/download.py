@@ -145,6 +145,40 @@ def remove_file_quietly(filepath):
         print("Warn: Failed to remove {}: {}".format(filepath, e))
 
 
+def read_deploy_git_version(this_path):
+    """
+    Read the git_version.txt marker, if present, written by a dev deploy
+    (coverage/deploy) or a standalone launch (hass.py) from a git checkout, so the
+    running code can show which commit is actually installed instead of just the
+    release tag baked into THIS_VERSION.
+
+    Args:
+        this_path (str): Directory to look for git_version.txt in, alongside predbat.py.
+    Returns:
+        str or None: The marker contents, or None if the file is absent or unreadable.
+    """
+    filepath = os.path.join(this_path, "git_version.txt")
+    try:
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f:
+                return f.read().strip() or None
+    except Exception as e:
+        print("Warn: Failed to read git_version.txt: {}".format(e))
+    return None
+
+
+def clear_deploy_git_version(this_path):
+    """
+    Remove the git_version.txt dev marker after a real update has installed official
+    release files, so a stale commit marker from an earlier dev deploy doesn't linger
+    and get shown as the running version once it's no longer accurate.
+
+    Args:
+        this_path (str): Directory the marker lives in, alongside predbat.py.
+    """
+    remove_file_quietly(os.path.join(this_path, "git_version.txt"))
+
+
 def remove_staged_files(this_path, files, tag):
     """
     Remove staged files, used to clean up after an aborted update.
@@ -566,7 +600,9 @@ def predbat_update_move(version, files):
         for file in files:
             cmd += "mv -f {} {} && ".format(os.path.join(this_path, file + "." + tag), os.path.join(this_path, file))
         cmd += "echo 'Update complete'"
+        clear_deploy_git_version(this_path)
         os.system(cmd)
+
         return True
     return False
 
