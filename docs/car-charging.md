@@ -555,7 +555,7 @@ sensor and get identical behaviour.
 | `solar` | `solar` | Take the surplus, it is worth less exported than the charge it displaces (evcc: `pv`, or `minpv` with `evcc_use_minpv`) |
 | `solar` | `idle` | Nothing planned and the car is not plugged in - keep following the sun (evcc: `pv`) |
 | `off` | `export_better` | Sell the surplus instead; the car is charged from the planned cheap slots |
-| `off` | `home_battery_low` | The home battery is below **car_charging_solar_min_soc**, which the forecast already assumes stops the diversion |
+| `off` | `home_battery_low` | The home battery is below **car_charging_solar_min_soc** and nothing else is enforcing it, so Predbat does |
 | `off` | `solar_disabled` | This car does not do solar charging (`car_charging_solar` is off) |
 
 Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - so it is
@@ -569,9 +569,12 @@ way: off stops it acting on the plan, it does not delete it.
 home battery is above **car_charging_solar_min_soc**, so below it the charger must not be told to follow the sun either -
 otherwise it charges out of a battery the house still needs, from energy the plan has already spent elsewhere. Unlike
 `export_better` this needs no departure plan behind it: below the priority level the surplus belongs in the home battery,
-which is what the setting means, and the diversion resumes on its own once the battery climbs back above it. With evcc
-this doubles up with evcc's own `prioritySoc`, which enforces the same thing at its end; for any other charger, or a Home
-Assistant automation reading the sensor, Predbat's decision is the only thing enforcing it.
+which is what the setting means, and the diversion resumes on its own once the battery climbs back above it.
+
+It is only published where Predbat is what enforces the number. With evcc the value comes from evcc's own `prioritySoc`,
+which evcc applies itself, so the charger has already stopped diverting and repeating the decision here would win nothing
+while costing a needless loadpoint shutdown - Predbat leaves it alone. Set the number by hand for a plain charger, or a
+Home Assistant automation reading the sensor, and Predbat enforces it.
 
 Safeguards, so the switch can never leave the car short:
 

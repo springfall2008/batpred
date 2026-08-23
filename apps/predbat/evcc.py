@@ -616,6 +616,10 @@ class EvccAPI(ComponentBase):
         which is exactly what input_number.predbat_car_charging_solar_min_soc means to the diversion
         model - so with automatic configuration on, evcc owns it rather than the user keeping two
         numbers in step by hand. Written only when it changes, so it does not fight the UI every poll.
+
+        evcc also enforces it, which Predbat's own home_battery_low decision then does not need to -
+        see Output.publish_car_solar_slot. Flagged here rather than inferred from the component being
+        loaded, because a second car on a plain charger still needs Predbat to enforce it.
         """
         priority = self.state.get("prioritySoc")
         try:
@@ -641,6 +645,7 @@ class EvccAPI(ComponentBase):
 
         self.log("EvccAPI: home battery priority SoC {}% from evcc".format(dp2(priority)))
         self.base.expose_config("car_charging_solar_min_soc", priority)
+        self.base.car_charging_solar_min_soc_external = True
         self.written_priority_soc = priority
         return priority
 

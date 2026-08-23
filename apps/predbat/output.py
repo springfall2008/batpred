@@ -85,6 +85,14 @@ class Output:
         needs. Unlike export_better that needs no fallback plan behind it: below the priority level the
         surplus belongs in the home battery, which is what the setting means, and the diversion resumes on
         its own as soon as the battery climbs back above it.
+
+        Only where Predbat is what enforces the number, though. When it came from a charger that applies it
+        itself - evcc's prioritySoc, see EvccAPI.publish_priority_soc - the charger has already stopped
+        diverting, so repeating the decision here wins nothing and costs a needless loadpoint shutdown.
+
+        publish_car_plan runs from fetch_sensor_data, before fetch_inverter_data, so soc_kw is always the
+        previous cycle's - fine in the steady state, but zero on the first run after a restart, which would
+        read as an empty battery and turn a perfectly well charged one off.
         """
         if not self.car_charging_solar[car_n]:
             return False, "solar_disabled"
@@ -92,7 +100,8 @@ class Output:
         threshold = self.car_charging_solar_export_threshold[car_n]
         export_rate = self.rate_export.get(self.minutes_now, 0)
         battery_percent = calc_percent_limit(self.soc_kw, self.soc_max)
-        battery_low = (self.soc_max > 0) and (battery_percent < self.car_charging_solar_min_soc)
+        battery_known = (self.soc_max > 0) and (self.soc_kw > 0)
+        battery_low = battery_known and not self.car_charging_solar_min_soc_external and (battery_percent < self.car_charging_solar_min_soc)
         allowed = self.car_charging_plugged[car_n] and (export_rate <= threshold) and not battery_low
 
         # Why it is off matters to the caller: "export_better" and "home_battery_low" are decisions to stop

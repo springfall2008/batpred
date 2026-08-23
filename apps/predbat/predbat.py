@@ -460,6 +460,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_solar_power_step = [0.0] * KERNEL_MAX_CARS
         self.car_charging_solar_limit = [100.0] * KERNEL_MAX_CARS
         self.car_charging_solar_min_soc = 0.0
+        # True once a charger that applies the home battery priority itself has supplied the number
+        self.car_charging_solar_min_soc_external = False
         self.car_charging_solar_export_smart = False
         # Export rate at or below which solar may be diverted to the car; CAR_SOLAR_EXPORT_ALWAYS = no limit
         self.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS] * KERNEL_MAX_CARS

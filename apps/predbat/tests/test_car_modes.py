@@ -265,11 +265,12 @@ def run_car_charging_mode_tests(my_predbat):
 
     # The home battery priority the forecast applies has to reach the published decision too, or the
     # charger diverts out of a battery the plan has already assumed it will leave alone
-    saved_soc = {name: getattr(my_predbat, name) for name in ["soc_kw", "soc_max", "car_charging_solar_min_soc", "car_charging_planned", "car_charging_now"]}
+    saved_soc = {name: getattr(my_predbat, name) for name in ["soc_kw", "soc_max", "car_charging_solar_min_soc", "car_charging_solar_min_soc_external", "car_charging_planned", "car_charging_now"]}
     my_predbat.car_charging_solar = [True]
     my_predbat.car_charging_plugged = [True]
     my_predbat.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS]
     my_predbat.car_charging_solar_min_soc = 15.0
+    my_predbat.car_charging_solar_min_soc_external = False
     my_predbat.soc_max = 100.0
     my_predbat.car_charging_now = [False]
 
@@ -289,6 +290,24 @@ def run_car_charging_mode_tests(my_predbat):
         if (mode, reason) != (expect_mode, expect_reason):
             print("ERROR: battery {}kWh planned {} gave ({}, {}), expected ({}, {})".format(soc_kw, planned, mode, reason, expect_mode, expect_reason))
             failed = True
+
+    # publish_car_plan runs before the inverter is read, so soc_kw is zero on the first cycle after a
+    # restart. That is "not measured yet", not "empty", and must not turn a well charged battery off
+    my_predbat.soc_kw = 0.0
+    my_predbat.car_charging_planned = [True]
+    _, reason = my_predbat.publish_car_solar_slot(0, "")
+    if reason == "home_battery_low":
+        print("ERROR: an unread battery (soc_kw 0) was treated as below the priority level")
+        failed = True
+
+    # A charger that applies the priority itself has already stopped diverting, so Predbat does not repeat it
+    my_predbat.soc_kw = 5.0
+    my_predbat.car_charging_solar_min_soc_external = True
+    mode, reason = my_predbat.publish_car_charging_mode(0, "", False, *my_predbat.publish_car_solar_slot(0, ""))
+    if (mode, reason) != ("solar", "solar"):
+        print("ERROR: with the priority owned by the charger, expected (solar, solar), got ({}, {})".format(mode, reason))
+        failed = True
+    my_predbat.car_charging_solar_min_soc_external = False
 
     # A worse export rate still reads as export_better, so the battery reason only shows when it is the cause
     my_predbat.soc_kw = 5.0
