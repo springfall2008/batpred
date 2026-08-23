@@ -1121,6 +1121,68 @@ class AlphaESSAPI(ComponentBase):
             return ("gridChargeCycle", "ctrDisCycle", "chargeTimeList", "dischargeTimeList")
         return ("ctrDis", "timeDisf1", "timeDise1", "timeDisf2", "timeDise2", "batUseCap")
 
+    # chargeTimeList/dischargeTimeList entries carry fields Predbat never writes (the API
+    # may echo more than it was sent), so only these are compared - see
+    # _normalize_periodic_entry.
+    _PERIODIC_LIST_FIELDS = ("chargeTimeList", "dischargeTimeList")
+
+    @staticmethod
+    def _normalize_periodic_entry(entry):
+        """Reduce one chargeTimeList/dischargeTimeList element to Predbat's own sub-fields,
+        normalised so a semantically-identical server echo cannot read as interference.
+
+        chargeLimit is compared as a float, because a server may legitimately answer 100.0
+        where Predbat wrote the int 100 - the value is unchanged. chargePower is treated as
+        ABSENT whenever it is zero, missing or unparseable, because _periodic_entry only
+        ever adds the key when Predbat's own rate is > 0; a server that echoes back
+        chargePower: 0 on the idle (disabled) entry - near-certain for any implementation
+        that stores a power per period - must not be mistaken for someone setting a real
+        power Predbat never asked for. Any other field the server happens to add (or key
+        order, which a plain dict already ignores) is not looked at, because Predbat did
+        not write it and cannot know what it should be.
+        """
+        if not isinstance(entry, dict):
+            return None
+        try:
+            limit = float(entry.get("chargeLimit"))
+        except (TypeError, ValueError):
+            limit = None
+        try:
+            power = float(entry.get("chargePower"))
+        except (TypeError, ValueError):
+            power = 0.0
+        return {
+            "beginTime": entry.get("beginTime"),
+            "endTime": entry.get("endTime"),
+            "chargeLimit": limit,
+            "chargePower": power if power > 0 else None,
+        }
+
+    def _periodic_list_differs(self, observed_value, applied_value):
+        """Return True when a chargeTimeList/dischargeTimeList genuinely changed.
+
+        Structural, not byte-for-byte: compares the normalised entries (see
+        _normalize_periodic_entry) rather than str()-ing the raw lists, which would flag a
+        semantically-identical server echo as interference over nothing but key order, an
+        extra chargePower: 0, or an int-vs-float chargeLimit.
+        """
+        observed_list = observed_value if isinstance(observed_value, list) else []
+        applied_list = applied_value if isinstance(applied_value, list) else []
+        return [self._normalize_periodic_entry(entry) for entry in observed_list] != [self._normalize_periodic_entry(entry) for entry in applied_list]
+
+    def _field_differs(self, direction, field, observed_value, applied_value):
+        """Return True when one owned field's observed value differs from what Predbat wrote.
+
+        Every field except the periodic time lists is a scalar (an HH:mm string, a 0/1
+        flag, or a plain integer) and is compared as a string - that already catches every
+        real change without needing type-aware handling. The two periodic list fields carry
+        nested dicts the server is free to reformat or extend, so they get the structural
+        comparison instead - see _periodic_list_differs.
+        """
+        if direction == "periodic" and field in self._PERIODIC_LIST_FIELDS:
+            return self._periodic_list_differs(observed_value, applied_value)
+        return str(observed_value) != str(applied_value)
+
     def note_external_change(self, sn, direction, observed):
         """Report when a Predbat-owned field no longer matches what Predbat last wrote.
 
@@ -1141,7 +1203,7 @@ class AlphaESSAPI(ComponentBase):
         self.settle_count[key] = polls
         if polls <= ALPHAESS_SETTLE_POLLS:
             return
-        differing = [field for field in self._owned_fields(direction) if field in observed and str(observed.get(field)) != str(applied.get(field))]
+        differing = [field for field in self._owned_fields(direction) if field in observed and self._field_differs(direction, field, observed.get(field), applied.get(field))]
         if not differing:
             return
         detail = ", ".join("{}={} (Predbat wrote {})".format(field, observed.get(field), applied.get(field)) for field in differing)
@@ -1163,14 +1225,18 @@ class AlphaESSAPI(ComponentBase):
         current settings for external-change detection and, once a serial is entitled to
         the periodic API, for reconciling that schedule too.
 
-        Returns True only when every applicable read succeeds: both legacy reads always,
-        plus the periodic schedule read for an entitled serial. refresh_config uses that
-        to decide whether to start the 30-minute config tier clock, and starting it on a
-        half-successful read would leave the failed half stale for a full TTL - the same
-        class of bug a premature refresh_static success would have (marking a tier fresh
-        on an unsuccessful poll). Whatever data DID come back is kept regardless of the
-        overall result, so a transient failure on one endpoint does not blank out the
-        others' last-known values - it is logged instead.
+        Returns True when both legacy reads succeed. The periodic schedule read (entitled
+        serials only) is SUPPLEMENTARY and deliberately does NOT gate this return: it is
+        one extra call layered on top of the two that already govern every serial, so a
+        transient failure on it alone must not make refresh_config decide the whole tier
+        failed - that would stall the 30-minute config tier clock and repeat all three GETs
+        on every 60-second poll until it recovers, for a read that is not on the write path
+        at all. A half-successful LEGACY read still fails the overall result - starting the
+        tier clock on that would leave the failed half stale for a full TTL, the same class
+        of bug a premature refresh_static success would have (marking a tier fresh on an
+        unsuccessful poll). Whatever data DID come back is kept regardless of the overall
+        result, so a transient failure on any one endpoint does not blank out the others'
+        last-known values - it is logged instead.
         """
         entry = self.device_config.setdefault(sn, {})
         code, charge = await self._get("charge_config", params={"sysSn": sn})
@@ -1190,7 +1256,6 @@ class AlphaESSAPI(ComponentBase):
         if not discharge_ok:
             self.log("Warn: AlphaESS {} discharge config read failed; keeping the previous cycle's value".format(sn))
 
-        periodic_ok = True
         if self._periodic_ok.get(sn) is True:
             # An entitled system writes via setTimeChargeBySn, so applied_payload[sn] only
             # ever carries a "periodic" key - note_external_change("charge"/"discharge", ...)
@@ -1199,7 +1264,8 @@ class AlphaESSAPI(ComponentBase):
             # undetected forever. Read the periodic schedule back and compare like-for-like
             # against what Predbat actually wrote, rather than trying to translate the
             # legacy fields onto the periodic intent - the two endpoints are not guaranteed
-            # to describe the same state the same way.
+            # to describe the same state the same way. Its own success/failure is NOT
+            # folded into the return value below - see the docstring.
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
             code, periodic = await self._get("time_charge", params={"sysSn": sn})
@@ -1209,7 +1275,7 @@ class AlphaESSAPI(ComponentBase):
                 entry["periodic"] = periodic
             else:
                 self.log("Warn: AlphaESS {} periodic schedule read failed; keeping the previous cycle's value".format(sn))
-        return charge_ok and discharge_ok and periodic_ok
+        return charge_ok and discharge_ok
 
     async def refresh_config(self):
         """Refresh the config baseline for every inverter, and re-probe demoted telemetry.

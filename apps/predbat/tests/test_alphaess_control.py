@@ -1331,6 +1331,76 @@ def test_alphaess_periodic_direction_detects_interference():
     assert not failed, "test_alphaess_periodic_direction_detects_interference"
 
 
+def _semantically_identical_periodic_echo():
+    """Build (applied, echoed) periodic payloads that mean the same thing but differ in
+    ways a naive str()-of-the-list comparison would wrongly flag: key order inside each
+    entry, chargeLimit returned as a float, and a server-added chargePower: 0 on the idle
+    discharge entry Predbat never sent (it only ever writes chargePower when rate > 0)."""
+    applied = {
+        "sysSn": "AL70",
+        "gridChargeCycle": 1,
+        "ctrDisCycle": 0,
+        "chargeTimeList": [{"beginTime": "01:00", "endTime": "05:00", "chargeLimit": 90, "chargePower": 3000}],
+        "dischargeTimeList": [{"beginTime": "00:00", "endTime": "00:00", "chargeLimit": 10}],
+    }
+    echoed = {
+        "sysSn": "AL70",
+        "gridChargeCycle": 1,
+        "ctrDisCycle": 0,
+        # Same charge entry, keys reordered and chargeLimit as a float.
+        "chargeTimeList": [{"chargePower": 3000, "endTime": "05:00", "chargeLimit": 90.0, "beginTime": "01:00"}],
+        # Same idle discharge entry, plus a server-added chargePower: 0 Predbat never sent.
+        "dischargeTimeList": [{"chargeLimit": 10.0, "chargePower": 0, "endTime": "00:00", "beginTime": "00:00"}],
+    }
+    return applied, echoed
+
+
+def test_alphaess_periodic_interference_ignores_key_order_float_limit_and_echoed_zero_power():
+    """A semantically-identical server echo must NOT be read as interference, or the next
+    _reconcile_control pops the recorded intent and sends a redundant setTimeChargeBySn -
+    to an endpoint documented as writable once per 24 hours. This is exactly the write-
+    budget burn the whole component exists to prevent, just triggered by the interference
+    detector itself rather than by a real external change."""
+    failed = False
+    client = _writable()
+    client._periodic_ok["AL70"] = True
+    applied, echoed = _semantically_identical_periodic_echo()
+    client.applied_payload["AL70"] = {"periodic": applied}
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "periodic", echoed)
+    if any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: a semantically-identical echo was reported as interference: {client.log_messages}")
+        failed = True
+    if "periodic" not in client.applied_payload.get("AL70", {}):
+        print(f"ERROR: recorded intent was popped for a semantically-identical echo: {client.applied_payload.get('AL70')}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_interference_ignores_key_order_float_limit_and_echoed_zero_power"
+
+
+def test_alphaess_periodic_interference_still_detects_a_genuine_window_change():
+    """The structural comparison must not be a blunt "never detect anything" - a genuinely
+    different window has to be caught. Deliberately leaves gridChargeCycle/ctrDisCycle
+    untouched and changes ONLY chargeTimeList's begin/end times, so this cannot pass via
+    the (already-tested, str()-compared) scalar fields riding along - it isolates the list
+    comparison itself.
+    """
+    failed = False
+    client = _writable()
+    client._periodic_ok["AL70"] = True
+    applied, echoed = _semantically_identical_periodic_echo()
+    client.applied_payload["AL70"] = {"periodic": applied}
+    genuinely_changed = dict(echoed, chargeTimeList=[{"beginTime": "02:00", "endTime": "06:00", "chargeLimit": 90, "chargePower": 3000}])
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "periodic", genuinely_changed)
+    if not any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: a genuine window change was not detected: {client.log_messages}")
+        failed = True
+    if "periodic" in client.applied_payload.get("AL70", {}):
+        print(f"ERROR: periodic intent not cleared after a genuine change: {client.applied_payload['AL70']}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_interference_still_detects_a_genuine_window_change"
+
+
 def test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint():
     """Added beyond the brief: none of the five prescribed tests call apply_settings with
     _periodic_ok True, so the routing glue between build_periodic_payload and
@@ -1564,6 +1634,8 @@ def run_alphaess_control_tests(my_predbat):
         ("periodic_no_overlap_survives", test_alphaess_periodic_non_overlapping_windows_survive_intact),
         ("periodic_before_overlap_trims_end", test_alphaess_periodic_export_before_charge_overlap_trims_the_export_end),
         ("periodic_direction_interference", test_alphaess_periodic_direction_detects_interference),
+        ("periodic_interference_ignores_cosmetic_diffs", test_alphaess_periodic_interference_ignores_key_order_float_limit_and_echoed_zero_power),
+        ("periodic_interference_detects_genuine_change", test_alphaess_periodic_interference_still_detects_a_genuine_window_change),
         ("apply_settings_routes_periodic", test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint),
         ("unbind_switch_published", test_alphaess_unbind_switch_is_published_for_every_serial),
         ("unbind_switch_reflects_latch", test_alphaess_unbind_switch_reflects_an_already_latched_serial),

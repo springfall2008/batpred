@@ -960,6 +960,60 @@ def test_alphaess_fetch_config_skips_the_periodic_read_when_not_entitled():
     assert not failed, "test_alphaess_fetch_config_skips_the_periodic_read_when_not_entitled"
 
 
+def test_alphaess_fetch_config_periodic_read_failure_does_not_stall_the_tier():
+    """The periodic schedule read is supplementary, layered on top of the two legacy reads
+    that already govern every serial. A transient failure on it alone must not make
+    fetch_config report overall failure - it is not on the write path at all, and gating on
+    it would stall the 30-minute config tier clock and repeat all three GETs on every
+    60-second poll until it recovers."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    client._periodic_ok["AL70"] = True
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.fetch_config("AL70"))
+    if not ok:
+        print("ERROR: fetch_config returned False for a transient periodic-only failure")
+        failed = True
+    if "periodic" in client.device_config.get("AL70", {}):
+        print(f"ERROR: a failed periodic read should not have stored anything: {client.device_config.get('AL70')}")
+        failed = True
+    if not any("periodic" in message.lower() and "AL70" in message for message in client.log_messages):
+        print(f"ERROR: no warning naming the failed periodic read, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_fetch_config_periodic_read_failure_does_not_stall_the_tier"
+
+
+def test_alphaess_refresh_config_tier_advances_despite_a_periodic_read_failure():
+    """got_any (and therefore the 30-minute config tier clock) must depend only on the two
+    legacy reads that govern every serial - not on the periodic read, which is entitled-
+    serials-only and supplementary."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    client.device_list = ["AL70"]
+    client._periodic_ok["AL70"] = True
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        got_any = run_async_local(client.refresh_config())
+    if not got_any:
+        print("ERROR: refresh_config reported failure despite both legacy reads succeeding")
+        failed = True
+    if client._tier_refreshed.get("config") is None:
+        print("ERROR: the config tier clock was not started despite both legacy reads succeeding")
+        failed = True
+    assert not failed, "test_alphaess_refresh_config_tier_advances_despite_a_periodic_read_failure"
+
+
 def test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds():
     """A half-successful (or fully failed) read must not start the 30-minute config tier
     clock, or the stale half is left unrefreshed for a full TTL - the same class of bug
@@ -1338,6 +1392,8 @@ def run_alphaess_api_tests(my_predbat):
         ("fetch_config_both_fail", test_alphaess_fetch_config_both_fail_returns_false),
         ("fetch_config_reads_periodic_when_entitled", test_alphaess_fetch_config_reads_the_periodic_schedule_for_an_entitled_system),
         ("fetch_config_skips_periodic_when_not_entitled", test_alphaess_fetch_config_skips_the_periodic_read_when_not_entitled),
+        ("fetch_config_periodic_failure_not_stalling", test_alphaess_fetch_config_periodic_read_failure_does_not_stall_the_tier),
+        ("refresh_config_advances_despite_periodic_failure", test_alphaess_refresh_config_tier_advances_despite_a_periodic_read_failure),
         ("refresh_config_not_marked_on_partial", test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds),
         ("refresh_config_marked_on_one_full_success", test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds),
         ("bind_already_bound_ok", test_alphaess_bind_treats_already_bound_as_success),
