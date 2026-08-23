@@ -22,10 +22,15 @@ class FakeStorage:
         self.fail = fail
 
     async def load(self, module, name):
-        """Return a previously saved entry, or {} when absent."""
+        """Return a previously saved entry, or None when absent.
+
+        This matches the real Storage component contract - the absence of a cached value
+        is represented as None, not {}, so that load_cache can distinguish between
+        "nothing was ever saved" and "something was saved but it was an empty dict".
+        """
         if self.fail:
             raise IOError("storage unavailable")
-        return self.data.get((module, name), {})
+        return self.data.get((module, name))
 
     async def save(self, module, name, payload):
         """Record an entry."""
@@ -68,6 +73,36 @@ def test_alphaess_cache_round_trip():
 
     restored = StoredAlphaESS(store=store)
     run_async_local(restored.restore_state())
+    # Type assertions: these attributes are used as specific types elsewhere and must
+    # round-trip with correct types, not just correct values.
+    if not isinstance(restored.device_list, list):
+        print(f"ERROR: device_list type {type(restored.device_list)}, expected list")
+        failed = True
+    if not isinstance(restored.device_detail, dict):
+        print(f"ERROR: device_detail type {type(restored.device_detail)}, expected dict")
+        failed = True
+    if not isinstance(restored.device_config, dict):
+        print(f"ERROR: device_config type {type(restored.device_config)}, expected dict")
+        failed = True
+    if not isinstance(restored._periodic_ok, dict):
+        print(f"ERROR: _periodic_ok type {type(restored._periodic_ok)}, expected dict")
+        failed = True
+    if not isinstance(restored._live_ok, dict):
+        print(f"ERROR: _live_ok type {type(restored._live_ok)}, expected dict")
+        failed = True
+    if not isinstance(restored.control_active, set):
+        print(f"ERROR: control_active type {type(restored.control_active)}, expected set")
+        failed = True
+    if not isinstance(restored._unbind_done, set):
+        print(f"ERROR: _unbind_done type {type(restored._unbind_done)}, expected set")
+        failed = True
+    if not isinstance(restored.local_schedule, dict):
+        print(f"ERROR: local_schedule type {type(restored.local_schedule)}, expected dict")
+        failed = True
+    if not isinstance(restored.applied_payload, dict):
+        print(f"ERROR: applied_payload type {type(restored.applied_payload)}, expected dict")
+        failed = True
+    # Value assertions
     if restored.device_list != ["AL70"]:
         print(f"ERROR: device_list {restored.device_list}")
         failed = True
@@ -149,6 +184,67 @@ def test_alphaess_empty_discovery_is_not_persisted():
     assert not failed, "test_alphaess_empty_discovery_is_not_persisted"
 
 
+def test_alphaess_corrupted_cache_data_coerced_safely():
+    """Non-dict values in the cache are safely coerced to {}, not propagated.
+
+    If the store is corrupted or returns a string, list, or other non-dict value,
+    load_cache must coerce it to {} rather than passing it through, so restore_state
+    uses the default initialization rather than crashing on attribute access.
+    """
+    failed = False
+
+    class CorruptedStorage:
+        """Storage that returns non-dict values instead of dicts."""
+
+        async def load(self, module, name):
+            """Return various non-dict types to test coercion."""
+            if name == "static":
+                return "corrupted_string"
+            elif name == "config":
+                return ["corrupted", "list"]
+            elif name == "ratings":
+                return 42
+            elif name == "control":
+                return ("corrupted", "tuple")
+            return None
+
+    client = StoredAlphaESS(store=CorruptedStorage())
+    run_async_local(client.restore_state())
+    # All caches were corrupted but coerced safely to {}, so defaults apply.
+    if client.device_list != []:
+        print(f"ERROR: device_list should be empty default: {client.device_list}")
+        failed = True
+    if client.device_detail != {}:
+        print(f"ERROR: device_detail should be empty default: {client.device_detail}")
+        failed = True
+    if client.device_config != {}:
+        print(f"ERROR: device_config should be empty default: {client.device_config}")
+        failed = True
+    if client._periodic_ok != {}:
+        print(f"ERROR: _periodic_ok should be empty default: {client._periodic_ok}")
+        failed = True
+    if client._live_ok != {}:
+        print(f"ERROR: _live_ok should be empty default: {client._live_ok}")
+        failed = True
+    if client.control_active != set():
+        print(f"ERROR: control_active should be empty default: {client.control_active}")
+        failed = True
+    if client._unbind_done != set():
+        print(f"ERROR: _unbind_done should be empty default: {client._unbind_done}")
+        failed = True
+    if client.local_schedule != {}:
+        print(f"ERROR: local_schedule should be empty default: {client.local_schedule}")
+        failed = True
+    if client.applied_payload != {}:
+        print(f"ERROR: applied_payload should be empty default: {client.applied_payload}")
+        failed = True
+    # No storage failure should have been logged because coercion is silent.
+    if any("Warn" in message for message in client.log_messages):
+        print(f"ERROR: corrupted cache data should not warn: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_corrupted_cache_data_coerced_safely"
+
+
 def run_alphaess_storage_tests(my_predbat):
     """Run all AlphaESS storage tests."""
     failed = False
@@ -157,6 +253,7 @@ def run_alphaess_storage_tests(my_predbat):
         ("no_storage_silent", test_alphaess_no_storage_component_is_silent),
         ("real_failure_flagged", test_alphaess_real_storage_failure_is_flagged_for_retry),
         ("empty_discovery_not_persisted", test_alphaess_empty_discovery_is_not_persisted),
+        ("corrupted_data_coerced_safely", test_alphaess_corrupted_cache_data_coerced_safely),
     ]:
         try:
             if fn():
