@@ -24,6 +24,7 @@ argname
 armhf
 armv
 ASHP
+asn
 asyncio
 atfork
 atleast
@@ -48,6 +49,7 @@ batteri
 batteryb
 beforeunload
 bierner
+boostable
 brickatius
 byok
 cadata
@@ -214,6 +216,7 @@ hanchu
 hanchuess
 hanres
 HAOS
+harvi
 hasattr
 hass
 hassapi
@@ -251,7 +254,9 @@ isort
 itemsize
 itemtype
 ivtime
+jdayhour
 jedlix
+jstatus
 jsyaml
 kaiming
 keepalive
@@ -270,6 +275,7 @@ kwhb
 labelcolor
 labelnames
 larr
+libbi
 libc
 LIFEPO
 linebreak
@@ -409,6 +415,7 @@ pvwatts
 pwindow
 pyjwt
 pylint
+pymyenergi
 pypi
 pyproject
 pytest
