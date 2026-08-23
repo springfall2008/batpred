@@ -952,13 +952,21 @@ def test_component_registration():
 
 
 def test_automatic_config():
-    """Zappis wire into car_charging_energy and the Eddi into iboost_energy_today."""
+    """Zappis wire into car_charging_energy and the first-by-serial Eddi into iboost_energy_today.
+
+    Devices are inserted in deliberately reversed/shuffled order and a second Eddi is
+    added, so this only passes if automatic_config() actually sorts by serial rather
+    than relying on dict insertion order - which happened to match serial order in an
+    earlier version of this test and let a missing sort go undetected.
+    """
     component = _make_component()
     second_zappi = dict(MOCK_DIRECT_ZAPPI, sno=22223333)
+    second_eddi = dict(MOCK_DIRECT_EDDI, sno=11112222)
     component.devices = {
-        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
-        "Z22223333": normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
         "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+        "Z22223333": normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
+        "E11112222": normalise_direct_device(second_eddi, DEVICE_KIND_EDDI),
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
     }
     component.automatic_config()
 
@@ -966,8 +974,9 @@ def test_automatic_config():
         "sensor.predbat_myenergi_zappi_12345678_session_energy",
         "sensor.predbat_myenergi_zappi_22223333_session_energy",
     ], component.base.args["car_charging_energy"]
-    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
-    print("  ✓ Automatic configuration wires both energy inputs")
+    # 11112222 sorts before 87654321, so it must be the one picked as "the first Eddi"
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_11112222_session_energy"
+    print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")
 
 
 def test_automatic_config_single_zappi_is_still_a_list():
@@ -980,11 +989,43 @@ def test_automatic_config_single_zappi_is_still_a_list():
     print("  ✓ Single Zappi auto-config")
 
 
+def test_automatic_config_eddi_only():
+    """A site with only an Eddi wires iboost_energy_today and leaves car_charging_energy untouched."""
+    component = _make_component()
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
+    component.automatic_config()
+    assert "car_charging_energy" not in component.base.args
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
+    print("  ✓ Eddi-only site wires iboost_energy_today and skips car_charging_energy")
+
+
+def test_automatic_config_uses_set_arg_auto():
+    """An explicit apps.yaml value is reported via apps_yaml_override_warned, proving set_arg_auto (not set_arg) is used.
+
+    MockBase has neither args_from_apps_yaml nor apps_yaml_override_warned, so
+    set_arg_auto() silently degrades to plain set_arg() unless the test supplies
+    them - meaning swapping set_arg_auto() for set_arg() in automatic_config()
+    would leave every other auto-config test green. This test pins the call to
+    set_arg_auto specifically.
+    """
+    component = _make_component()
+    component.base.args_from_apps_yaml = {"car_charging_energy": ["sensor.explicit"]}
+    component.base.apps_yaml_override_warned = set()
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.automatic_config()
+    assert "car_charging_energy" in component.base.apps_yaml_override_warned, component.base.apps_yaml_override_warned
+    print("  ✓ Automatic configuration uses set_arg_auto, not set_arg")
+
+
 def test_automatic_config_disabled():
-    """With automatic off, nothing is wired even after a successful poll."""
+    """With automatic off, nothing is wired even after a successful poll that reached the publish block."""
     component = _make_component(automatic=False)
     component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
     run_async(component.run(0, True))
+    # Proves the poll actually reached the block that would have called automatic_config(),
+    # rather than an early return making the "nothing wired" assertion trivially true.
+    assert component.devices, "poll must have reached the publish block"
+    assert component._auto_configured is False
     assert "car_charging_energy" not in component.base.args
     print("  ✓ Automatic configuration respects the off switch")
 
@@ -995,6 +1036,8 @@ def test_automatic_config_runs_once():
     component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
     run_async(component.run(0, True))
     assert component._auto_configured is True
+    # Proves the first run actually wired the value, not just set the flag
+    assert component.base.args["car_charging_energy"] == ["sensor.predbat_myenergi_zappi_12345678_session_energy"]
     component.base.args["car_charging_energy"] = ["sensor.user_override"]
     run_async(component.run(60, False))
     assert component.base.args["car_charging_energy"] == ["sensor.user_override"], "Auto-config must not run twice"
@@ -1051,6 +1094,8 @@ def test_myenergi(my_predbat=None):
     test_component_registration()
     test_automatic_config()
     test_automatic_config_single_zappi_is_still_a_list()
+    test_automatic_config_eddi_only()
+    test_automatic_config_uses_set_arg_auto()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
 

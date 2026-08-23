@@ -678,7 +678,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             entity = "sensor.{}_session_energy".format(self.entity_prefix(device))
             if device.kind == DEVICE_KIND_ZAPPI:
                 zappi_entities.append(entity)
-            elif eddi_entity is None:
+            elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
                 eddi_entity = entity
 
         if zappi_entities:
