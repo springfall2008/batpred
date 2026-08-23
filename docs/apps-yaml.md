@@ -1814,7 +1814,7 @@ whether you are within an Octopus Energy "smart charge" slot
 - **car_charging_battery_size** - Car battery size in kWh
 - **car_charging_limit** - Percentage limit the car is set to charge to
 - **car_charging_soc** - Car's current charge level expressed as a percentage
-- **car_charging_solar** - Per-car flag to model opportunistic (sun-following) charging done by any external charger that follows the PV surplus itself (Zappi ECO+, Wallbox Eco-Smart, evcc, ...); modelling only, no grid charging is planned. Independent of the [evcc component](components.md#evcc-ev-charger-evcc), which only fills these keys in for you. See [Opportunistic solar charging](car-charging.md#opportunistic-solar-sun-following-charging)
+- **car_charging_solar** has moved to Home Assistant - it is **switch.predbat_car_charging_solar** (one per car, see [customisation](customisation.md)), not an apps.yaml key. The remaining `car_charging_solar_*` keys below describe the charger itself and stay here
 - **car_charging_plugged** - Optional per-car sensor indicating the car is plugged in over the forecast horizon (falls back to car_charging_now)
 - **car_charging_solar_max_power** - Maximum solar diversion power in kW (defaults to the configured car charging rate, uncapped for 3-phase chargers)
 - **car_charging_solar_min_power** - Minimum power in kW before the charger will start diverting solar (e.g. 3-phase 6A)
