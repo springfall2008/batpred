@@ -1723,14 +1723,16 @@ class LoadPredictor:
         # Seed previous value from the most recent historical chunk for the step-to-step cap
         prev_energy_value = lookback_buffer[0] if lookback_buffer else baseline_floor
 
-        # Last known exogenous values, carried forward when a forward forecast runs out.
-        # Rates and temperature are 3 of the 5 input channels (864 of 1446 features), and
-        # a 48-hour rollout outruns both forecasts. Filling the gap with 0.0 puts 0 p/kWh
-        # and 0 degrees into the network, far outside anything training saw. Measured on a
-        # real model: with no forward rate data the 48-hour rollout peaks at 1.9 kW against
-        # a 10.5 kW true peak; carrying the last known value forward restores it to 9.9 kW.
-        # The damage is concentrated in the first few hours of missing data - a forecast
-        # that reaches 12h ahead is unaffected at any horizon.
+        # Last known exogenous values, carried forward when a forward forecast is missing.
+        # Normally it is not: rate_replicate() extends rates past the forecast horizon and
+        # publish_rates() emits them to minutes_now + forecast_minutes + 24h, so a healthy
+        # system supplies the whole rollout. This guards the case where the source entity
+        # is unavailable - before the first plan cycle publishes it, or after a failed rate
+        # fetch. Rates and temperature are 3 of the 5 input channels (864 of 1446 features),
+        # so filling the gap with 0.0 puts 0 p/kWh and 0 degrees into the network, far
+        # outside anything training saw: measured on a real model, the 48-hour rollout then
+        # peaks at 1.9 kW against a 10.5 kW true peak. Carrying the last value forward
+        # restores it to 9.9 kW, and changes nothing when the forecast is present.
         # PV is left at 0.0: past the solar forecast there is no generation to assume, and
         # holding a daytime value overnight would be worse than zero.
         last_temp_value = temp_lookback_buffer[0] if temp_lookback_buffer else 0.0

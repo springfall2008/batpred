@@ -14,14 +14,12 @@ and 06:00. Replaying the reporter's saved model and history surfaced two defects
 Whether either one caused their report is unconfirmed - that needs their logs.
 
 1. Missing forward exogenous data was silently zero-filled. Rates and temperature are
-   3 of the 5 input channels (864 of 1446 features), and a 48-hour rollout outruns
-   both forecasts; predict() substituted 0.0, putting 0 p/kWh and 0 degrees into a
+   3 of the 5 input channels (864 of 1446 features), and predict() substituted 0.0
+   wherever the forward forecast was absent, putting 0 p/kWh and 0 degrees into a
    network trained on 33.6 p/kWh and 7 degrees. Measured on the reporter's own model,
-   removing forward rate data moved the +8h forecast from 0.28 kWh MAE to 2.6-2.8 kWh,
-   with errors of -10 kWh (daily event erased) or +11 kWh (load invented) depending on
-   which rate channel was missing. Note the effect needs the forecast to be missing
-   within the first few hours: one that reaches 12h ahead is unaffected, so a rate plan
-   merely ending at the 48h horizon does not reproduce the reported chart.
+   removing forward rate data moved the +8h forecast from 0.28 kWh MAE to 2.6-2.8 kWh.
+   A healthy system does not hit this - rate_replicate() and publish_rates() cover the
+   whole rollout - so it guards startup and failed-fetch cases rather than steady state.
 
 2. No visibility of multi-step accuracy. The published mae_kwh is teacher-forced and
    stays small however badly the rollout behaves, so there was nothing to diagnose

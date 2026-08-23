@@ -104,9 +104,9 @@ The model leads at the start of the rollout and its weight decays linearly to 50
 
 ### Forward Rate and Temperature Data
 
-Rates and temperature make up 3 of the 5 input channels (864 of the 1446 features). The forward rate plan only reaches the end of tomorrow and the temperature forecast is usually shorter, so a 48-hour rollout always runs past the end of both. Where that happens the last known value is carried forward, keeping those inputs in the range the model was trained on. Filling them with zero instead would feed 0 p/kWh and 0 °C into the network and badly distort the forecast. PV is the exception and is left at zero past the end of the solar forecast, since there is no generation to assume.
+Rates and temperature make up 3 of the 5 input channels (864 of the 1446 features). Normally both are supplied across the whole rollout: rates are extended by `rate_replicate()` and published out past the forecast horizon, and the temperature forecast comes from the Temperature component. Where a forward value is missing anyway - before the first plan cycle has published the rates entity, or after a failed rate fetch - the last known value is carried forward, keeping those inputs in the range the model was trained on. Filling them with zero would feed 0 p/kWh and 0 °C into the network and badly distort the forecast. PV is the exception and is left at zero past the end of the solar forecast, since there is no generation to assume.
 
-If you see `Forward temperature/rate forecast ran out for N of 576 rollout steps` in the log, that is this fallback engaging - normal for the tail of a 48-hour forecast, but a large N early in the day can mean your rate data is not being published as far ahead as it should be.
+If you see `Forward temperature/rate forecast ran out for N of 576 rollout steps` in the log, that is this fallback engaging. A small N at the tail is unremarkable; a large N means your rate or temperature data is not reaching the model, which is worth investigating in its own right.
 
 ### Training Process
 
