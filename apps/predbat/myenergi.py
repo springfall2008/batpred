@@ -658,6 +658,36 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         """Return the entity name prefix for a device, e.g. predbat_myenergi_zappi_12345678."""
         return "{}_myenergi_{}_{}".format(self.prefix, device.kind, device.serial)
 
+    def automatic_config(self):
+        """Wire the device energy sensors into Predbat's load inputs.
+
+        Zappi charging energy is subtracted from house load as car charging, so it
+        goes to car_charging_energy - as a list, because minute_data_import_export
+        accepts one and sums the entities. Eddi diverted energy feeds the iboost
+        model instead.
+
+        Note that these sensors are session-scoped and reset to zero when a session
+        ends. get_from_incrementing() clamps negative deltas to zero so the per-minute
+        subtraction is unaffected, but the iboost_today total derived in fetch.py from
+        the midnight-to-now difference will under-report after a mid-day Eddi reset.
+        This is a known limitation, documented in docs/components.md.
+        """
+        zappi_entities = []
+        eddi_entity = None
+        for device in sorted(self.devices.values(), key=lambda item: item.serial):
+            entity = "sensor.{}_session_energy".format(self.entity_prefix(device))
+            if device.kind == DEVICE_KIND_ZAPPI:
+                zappi_entities.append(entity)
+            elif eddi_entity is None:
+                eddi_entity = entity
+
+        if zappi_entities:
+            self.log("Info: myenergi: setting car_charging_energy to {}".format(zappi_entities))
+            self.set_arg_auto("car_charging_energy", zappi_entities)
+        if eddi_entity:
+            self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
+            self.set_arg_auto("iboost_energy_today", eddi_entity)
+
     def boost_amount_for(self, device):
         """Return the currently selected boost amount for a device."""
         default = DEFAULT_ZAPPI_BOOST_KWH if device.kind == DEVICE_KIND_ZAPPI else DEFAULT_EDDI_BOOST_MINUTES
@@ -692,6 +722,9 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             if devices:
                 self.devices = {device.device_id: device for device in devices}
                 await self.publish_data()
+                if self.automatic and not self._auto_configured:
+                    self.automatic_config()
+                    self._auto_configured = True
             elif first:
                 self.log("Warn: myenergi: connected but no Zappi or Eddi devices were found")
 

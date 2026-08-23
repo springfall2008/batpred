@@ -951,6 +951,56 @@ def test_component_registration():
     print("  ✓ Component registration and schema keys")
 
 
+def test_automatic_config():
+    """Zappis wire into car_charging_energy and the Eddi into iboost_energy_today."""
+    component = _make_component()
+    second_zappi = dict(MOCK_DIRECT_ZAPPI, sno=22223333)
+    component.devices = {
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        "Z22223333": normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
+    component.automatic_config()
+
+    assert component.base.args["car_charging_energy"] == [
+        "sensor.predbat_myenergi_zappi_12345678_session_energy",
+        "sensor.predbat_myenergi_zappi_22223333_session_energy",
+    ], component.base.args["car_charging_energy"]
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy"
+    print("  ✓ Automatic configuration wires both energy inputs")
+
+
+def test_automatic_config_single_zappi_is_still_a_list():
+    """A single Zappi still produces a list, so adding a second changes nothing else."""
+    component = _make_component()
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.automatic_config()
+    assert component.base.args["car_charging_energy"] == ["sensor.predbat_myenergi_zappi_12345678_session_energy"]
+    assert "iboost_energy_today" not in component.base.args
+    print("  ✓ Single Zappi auto-config")
+
+
+def test_automatic_config_disabled():
+    """With automatic off, nothing is wired even after a successful poll."""
+    component = _make_component(automatic=False)
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    run_async(component.run(0, True))
+    assert "car_charging_energy" not in component.base.args
+    print("  ✓ Automatic configuration respects the off switch")
+
+
+def test_automatic_config_runs_once():
+    """Auto-config runs after the first poll and is not repeated."""
+    component = _make_component()
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    run_async(component.run(0, True))
+    assert component._auto_configured is True
+    component.base.args["car_charging_energy"] = ["sensor.user_override"]
+    run_async(component.run(60, False))
+    assert component.base.args["car_charging_energy"] == ["sensor.user_override"], "Auto-config must not run twice"
+    print("  ✓ Automatic configuration runs exactly once")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -999,6 +1049,10 @@ def test_myenergi(my_predbat=None):
     test_component_poll_seconds_rounding()
     test_component_oauth_refresh_failure_stops_the_poll()
     test_component_registration()
+    test_automatic_config()
+    test_automatic_config_single_zappi_is_still_a_list()
+    test_automatic_config_disabled()
+    test_automatic_config_runs_once()
 
     print("=" * 70)
     return False
