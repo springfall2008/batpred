@@ -73,8 +73,10 @@ from const import (
     CONFIG_ROOTS,
     CONFIG_REFRESH_PERIOD,
     INVERTER_QUICK_UPDATE_SECONDS,
+    DEBUG_ENABLE_MAX_HOURS,
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
+import debug_history
 from utils import minutes_since_yesterday, dp1, dp2, dp3
 from predheat import PredHeat
 from octopus import Octopus
@@ -433,6 +435,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.set_soc_minutes = 5
         self.set_window_minutes = 5
         self.debug_enable = False
+        self.debug_enable_started = None
+        self.debug_history_last_capture = None
+        self.debug_history_storage_warned = None
         self.import_today = {}
         self.import_today_now = 0
         self.export_today = {}
@@ -766,6 +771,113 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.plan_last_updated_minutes = plan_data.get("plan_last_updated_minutes", 0)
         self.plan_valid = True
         self.log("Restored saved plan from {:.0f} minutes ago: {} charge windows, {} export windows".format(age_minutes, len(self.charge_window_best), len(self.export_window_best)))
+
+    def _debug_enable_auto_scope(self):
+        """Write a raw debug.yaml this cycle if switch.predbat_debug_enable is on, and
+        auto-disable the switch after DEBUG_ENABLE_MAX_HOURS rather than let it run forever.
+
+        debug_enable also gates verbose logging and the C++ kernel bypass (a more accurate but far
+        slower prediction path, see #4453) - both genuinely useful while actively watching a live
+        issue develop cycle to cycle, at a finer grain than the rotating debug-history buffer's
+        (#4417) coarsest interval of 1 hour. So this does not remove the raw per-cycle write, only
+        bounds how long it - and the slow-path logging it's normally turned on alongside - can run
+        unattended, since leaving it on by accident causes both unbounded predbat_debug_*.yaml disk
+        growth and a standing performance cost, not just the former.
+        """
+        if not self.debug_enable:
+            self.debug_enable_started = None
+            return
+
+        if self.debug_enable_started is None:
+            self.debug_enable_started = self.now_utc
+
+        if (self.now_utc - self.debug_enable_started) >= timedelta(hours=DEBUG_ENABLE_MAX_HOURS):
+            self.log("Warn: debug_enable has been on for over {} hours - auto-disabling to bound disk writes and the slower debug prediction path. Re-enable if you need more time.".format(DEBUG_ENABLE_MAX_HOURS))
+            self.expose_config("debug_enable", False)
+            self.debug_enable = False
+            self.debug_enable_started = None
+            return
+
+        self.create_debug_yaml()
+
+    def _capture_debug_history(self):
+        """Capture a rolling debug-history snapshot if due, for #4417.
+
+        Independent of switch.predbat_debug_enable - runs on a coarse interval so
+        there is always some recent history to replay a bug report against, rather
+        than only when the switch happened to already be on before the problem
+        occurred. switch.predbat_debug_history_enable disables the routine capture
+        entirely (default on), but debug_history_force_capture still works even
+        then - an explicit "give me one right now" request (e.g. from an automation
+        that just noticed something worth investigating) is a different intent to
+        "keep a rolling background history" and must not be silently skipped by
+        that switch. debug_history_count has a config-schema minimum of 1 (not 0)
+        precisely so it can't also mean "off" - the switch is the only off-switch,
+        avoiding two independent, potentially-conflicting ways to disable this.
+
+        debug_history_last_capture and the force-capture switch are both only
+        updated on a genuine successful capture, per @springfall2008's #4438 review
+        (items 1-3): previously both reset unconditionally, so a failed attempt
+        (an exception, or storage simply being unavailable) was silently treated
+        as if it had succeeded - deferring the next *routine* retry a full
+        debug_history_interval for no reason, and (for a forced request) resetting
+        the switch before the snapshot the docs promise it waits for was actually
+        taken. A failed forced capture now leaves the switch on, so it retries
+        every cycle until it succeeds or the switch is turned off - a routine
+        capture retries at its normal interval either way, since a failure simply
+        leaves last_capture at its previous (possibly-None) value rather than
+        artificially advancing it.
+
+        The "storage unavailable" warning is throttled separately
+        (debug_history_storage_warned), on the same interval, so a persistent
+        outage logs once per interval instead of every ~5-minute cycle - this is
+        deliberately independent of the capture throttle above, so a later
+        genuine capture attempt is never skipped just because the warning was
+        recently logged.
+        """
+        count = int(self.get_arg("debug_history_count", 15))
+        interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
+        enabled = self.get_arg("debug_history_enable", True)
+        forced = self.get_arg("debug_history_force_capture", False)
+        if not enabled and not forced:
+            return
+        if not forced:
+            if self.debug_history_last_capture is not None and (self.now_utc - self.debug_history_last_capture) < timedelta(hours=interval_hours):
+                return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            if self.debug_history_storage_warned is None or (self.now_utc - self.debug_history_storage_warned) >= timedelta(hours=interval_hours):
+                self.log("Warning: Storage component unavailable, cannot capture debug history")
+                self.debug_history_storage_warned = self.now_utc
+            return
+        try:
+            yaml_text = self.create_debug_yaml(write_file=False)
+            # Label the snapshot with the plan slot it falls in, not the arbitrary moment the
+            # ~5-minute cycle happened to trigger the capture - so it lines up exactly with one
+            # plan row's own timestamp (both are minute_relative offsets from self.midnight_utc
+            # in steps of self.plan_interval_minutes, see output.py's raw_plan builder) instead of
+            # needing a fuzzy nearest-match window in the plan's History view.
+            slot_minutes = max(1, self.plan_interval_minutes)
+            minutes_since_midnight = int((self.now_utc - self.midnight_utc).total_seconds() // 60)
+            capture_time = self.midnight_utc + timedelta(minutes=(minutes_since_midnight // slot_minutes) * slot_minutes)
+            # The window this buffer is meant to cover, e.g. 15 x 3h = 45h - a snapshot older
+            # than that gets pruned even if max_count hasn't been reached yet, so a burst of
+            # close-together captures (several force-captures, or a shortened interval) can't
+            # leave something far older than the intended window lingering just because the
+            # count cap alone hasn't caught up to it. count's config-schema minimum is 1, but
+            # clamp defensively anyway in case a stale persisted value predates that minimum.
+            count = max(count, 1)
+            max_age = timedelta(hours=interval_hours * count)
+            run_async(debug_history.capture_snapshot(storage, yaml_text, capture_time, count, max_age=max_age))
+        except Exception as e:
+            self.log("Warning: Failed to capture debug history snapshot: {}".format(e))
+            return
+        self.debug_history_last_capture = self.now_utc
+        if forced:
+            # Only reset once the snapshot has genuinely been taken, matching docs/customisation.md -
+            # an automation should never have to remember to turn it back off, but a failed attempt
+            # should retry rather than being silently swallowed by an early reset.
+            self.expose_config("debug_history_force_capture", False)
 
     def record_final_run_status(self, status, status_extra):
         """
@@ -1151,8 +1263,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.expose_config("holiday_days_left", self.holiday_days_left)
             self.log("Holiday days left is now {}".format(self.holiday_days_left))
 
-        if self.debug_enable:
-            self.create_debug_yaml()
+        self._debug_enable_auto_scope()
+        self._capture_debug_history()
 
         self.record_final_run_status(status, status_extra)
 
