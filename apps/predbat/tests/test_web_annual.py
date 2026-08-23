@@ -110,7 +110,7 @@ def valid_postdata():
         "solar_efficiency_0": "0.95",
         "battery_size_kwh": "9.5",
         "battery_inverter_kw": "5.0",
-        "battery_export_limit_kw": "5.0",
+        "export_limit_kw": "5.0",
         "battery_hybrid": "on",
         "load_source": "manual",
         "load_annual_kwh": "3800",
@@ -155,6 +155,9 @@ def test_web_annual(my_predbat):
         if not config["solar"]:
             print("  ERROR: solar should fall back to the default array")
             failed = True
+        if config["export_limit_kw"] != DEFAULT_CONFIG["export_limit_kw"]:
+            print("  ERROR: export_limit_kw should fall back to the default, got {}".format(config["export_limit_kw"]))
+            failed = True
 
         print("Test: prefill_config() never reads apps.yaml (or anything else) from disk")
         # The unconfigured case above is exactly where this matters: apps.yaml may not
@@ -195,8 +198,8 @@ def test_web_annual(my_predbat):
         if config["battery"]["inverter_kw"] != 3.6:
             print("  ERROR: a [3600] inverter_limit should read as 3.6 kW, got {}".format(config["battery"]["inverter_kw"]))
             failed = True
-        if config["battery"]["export_limit_kw"] != 3.6:
-            print("  ERROR: a [3600] export_limit should read as 3.6 kW, got {}".format(config["battery"]["export_limit_kw"]))
+        if config["export_limit_kw"] != 3.6:
+            print("  ERROR: a [3600] export_limit should read as a top-level 3.6 kW, got {}".format(config["export_limit_kw"]))
             failed = True
 
         print("Test: an AC-coupled system is not prefilled as hybrid")
@@ -988,7 +991,7 @@ def test_web_annual_form(my_predbat):
             "solar_efficiency_0": "0.95",
             "battery_size_kwh": "9.5",
             "battery_inverter_kw": "5.0",
-            "battery_export_limit_kw": "5.0",
+            "export_limit_kw": "5.0",
             "battery_hybrid": "on",
             "load_source": "manual",
             "load_annual_kwh": "3800",
@@ -1330,7 +1333,7 @@ def test_web_annual_error_isolation(my_predbat):
     page = make_page(my_predbat)
 
     print("Test: an invalid POST (no location) renders its own validation error")
-    bad_postdata = {"battery_size_kwh": "9.5", "battery_inverter_kw": "5.0", "battery_export_limit_kw": "5.0"}
+    bad_postdata = {"battery_size_kwh": "9.5", "battery_inverter_kw": "5.0", "export_limit_kw": "5.0"}
     response = asyncio.run(page.html_annual_post(FakeRequest(bad_postdata)))
     if "Could not run" not in response.text:
         print("  ERROR: an invalid POST should render its own validation error, got no banner in the response")
@@ -1496,7 +1499,8 @@ def sample_run_results():
         # must describe, rather than whatever the live form happens to hold.
         "config": {
             "solar": [{"kwp": 5.6, "declination": 35, "azimuth": 180}],
-            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
+            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "hybrid": True},
+            "export_limit_kw": 5.0,
             "load": {"annual_kwh": 3800, "shape": "night", "car_charging_kwh": 3000, "car_rate_kw": 7.4},
             # Templated, with dno_region beside them: results["config"] is the RAW config
             # (annual.py stores self.config["raw"]), and AnnualTariff substitutes the
@@ -1578,7 +1582,7 @@ def test_web_annual_results(my_predbat):
 
     print("Test: a run states the key settings it actually used")
     details = page._render_run_details(results)
-    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "Octopus Outgoing Prime", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "Octopus Outgoing Prime", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day", "Grid export limit", "5 kW"]:
         if expected not in details:
             print("  ERROR: the run details should state {}, got {}".format(expected, details))
             failed = True
@@ -2407,7 +2411,7 @@ def test_web_annual_post_numeric_coercion(my_predbat):
         "solar_efficiency_0": "0.9",
         "battery_size_kwh": "9.5",
         "battery_inverter_kw": "5.0",
-        "battery_export_limit_kw": "5.0",
+        "export_limit_kw": "5.0",
         "battery_hybrid": "on",
         "load_source": "manual",
         "load_annual_kwh": "3800",
