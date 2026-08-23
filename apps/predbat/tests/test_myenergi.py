@@ -19,6 +19,11 @@ from tests.test_infra import run_async
 from mock_base import MockBase
 
 from myenergi import (
+    BOOST_ENERGY_MAX,
+    BOOST_ENERGY_MIN,
+    BOOST_MINUTES_MAX,
+    BOOST_MINUTES_MIN,
+    DEFAULT_EDDI_BOOST_MINUTES,
     DEVICE_KIND_EDDI,
     DEVICE_KIND_ZAPPI,
     MyEnergiAPI,
@@ -1044,6 +1049,156 @@ def test_automatic_config_runs_once():
     print("  ✓ Automatic configuration runs exactly once")
 
 
+def test_controls_queue_rather_than_call():
+    """Switch and number events queue for the run loop instead of calling inline."""
+    component = _make_component()
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event("switch.predbat_myenergi_zappi_12345678_boost", "turn_on"))
+    assert len(component.queued_events) == 1
+    component.transport.send_boost.assert_not_called()
+
+    component.transport.fetch_devices = AsyncMock(return_value=list(component.devices.values()))
+    run_async(component.run(60, False))
+    component.transport.send_boost.assert_called_once()
+    assert component.queued_events == []
+    print("  ✓ Control events queue for the run loop")
+
+
+def test_boost_uses_number_entity_value():
+    """The boost amount comes from the companion number entity."""
+    component = _make_component()
+    device = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    component.devices = {"Z12345678": device}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    # number_event only queues, so drain the queue the way run() would
+    run_async(component.number_event("number.predbat_myenergi_zappi_12345678_boost_energy", 25))
+    handler, *event_args = component.queued_events.pop(0)
+    run_async(handler(*event_args))
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "turn_on"))
+
+    component.transport.send_boost.assert_called_once_with(device, 25)
+    print("  ✓ Boost uses the number entity value")
+
+
+def test_boost_refused_in_fast_mode():
+    """A Zappi outside Eco or Eco+ is not boosted, and no API call is made."""
+    component = _make_component()
+    fast = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, zmo=1), DEVICE_KIND_ZAPPI)
+    assert fast.mode == "Fast"
+    component.devices = {"Z12345678": fast}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "turn_on"))
+    component.transport.send_boost.assert_not_called()
+    print("  ✓ Boost refused outside Eco and Eco+")
+
+
+def test_cancel_boost():
+    """Turning the switch off cancels the boost."""
+    component = _make_component()
+    device = normalise_direct_device(dict(MOCK_DIRECT_EDDI, bsm=1, sta=4), DEVICE_KIND_EDDI)
+    component.devices = {"E87654321": device}
+    component.transport.cancel_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_eddi_87654321_boost", "turn_off"))
+    component.transport.cancel_boost.assert_called_once_with(device)
+    print("  ✓ Cancel boost")
+
+
+def test_controls_disabled():
+    """With enable_controls off, events are ignored entirely."""
+    component = _make_component(enable_controls=False)
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event("switch.predbat_myenergi_zappi_12345678_boost", "turn_on"))
+    assert component.queued_events == []
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "turn_on"))
+    component.transport.send_boost.assert_not_called()
+    print("  ✓ Controls respect enable_controls")
+
+
+def test_control_for_unknown_entity_is_ignored():
+    """An event for a device that is not known does nothing and does not raise."""
+    component = _make_component()
+    component.transport.send_boost = AsyncMock(return_value=True)
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_99999999_boost", "turn_on"))
+    component.transport.send_boost.assert_not_called()
+    print("  ✓ Unknown entity events are ignored")
+
+
+def test_boost_eddi_skips_mode_check():
+    """An Eddi boost is not subject to the Zappi-only Eco/Eco+ mode check and uses its own boost amount."""
+    component = _make_component()
+    device = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    component.devices = {"E87654321": device}
+    component.transport.send_boost = AsyncMock(return_value=True)
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_eddi_87654321_boost", "turn_on"))
+    component.transport.send_boost.assert_called_once_with(device, DEFAULT_EDDI_BOOST_MINUTES)
+    print("  ✓ Eddi boost skips the Eco/Eco+ check and uses the default minutes")
+
+
+def test_number_event_handler_clamps_amount():
+    """The stored boost amount is clamped to the documented range for each device kind."""
+    component = _make_component()
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    component.devices = {"Z12345678": zappi, "E87654321": eddi}
+
+    run_async(component.number_event_handler("number.predbat_myenergi_zappi_12345678_boost_energy", 500))
+    assert component.boost_amounts[zappi.device_id] == BOOST_ENERGY_MAX
+
+    run_async(component.number_event_handler("number.predbat_myenergi_zappi_12345678_boost_energy", -5))
+    assert component.boost_amounts[zappi.device_id] == BOOST_ENERGY_MIN
+
+    run_async(component.number_event_handler("number.predbat_myenergi_eddi_87654321_boost_minutes", 999))
+    assert component.boost_amounts[eddi.device_id] == BOOST_MINUTES_MAX
+
+    run_async(component.number_event_handler("number.predbat_myenergi_eddi_87654321_boost_minutes", -10))
+    assert component.boost_amounts[eddi.device_id] == BOOST_MINUTES_MIN
+    print("  ✓ number_event_handler clamps to the documented range for both device kinds")
+
+
+def test_number_event_handler_unknown_entity_is_ignored():
+    """A number event for an unknown device does nothing and does not raise."""
+    component = _make_component()
+    run_async(component.number_event_handler("number.predbat_myenergi_zappi_99999999_boost_energy", 25))
+    assert component.boost_amounts == {}
+    print("  ✓ Unknown entity number events are ignored")
+
+
+def test_number_event_disabled():
+    """With enable_controls off, number_event does not queue."""
+    component = _make_component(enable_controls=False)
+    run_async(component.number_event("number.predbat_myenergi_zappi_12345678_boost_energy", 25))
+    assert component.queued_events == []
+    print("  ✓ number_event respects enable_controls")
+
+
+def test_switch_event_handler_ignores_non_boost_and_unknown_service():
+    """A non-boost switch entity, or an unrecognised service on the boost switch, makes no API call."""
+    component = _make_component()
+    device = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    component.devices = {"Z12345678": device}
+    component.transport.send_boost = AsyncMock(return_value=True)
+    component.transport.cancel_boost = AsyncMock(return_value=True)
+
+    # Not a boost entity at all
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_something_else", "turn_on"))
+    component.transport.send_boost.assert_not_called()
+
+    # The boost switch, but a service that is neither turn_on nor turn_off
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_12345678_boost", "toggle"))
+    component.transport.send_boost.assert_not_called()
+    component.transport.cancel_boost.assert_not_called()
+    print("  ✓ Non-boost entities and unrecognised services make no API call")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -1098,6 +1253,17 @@ def test_myenergi(my_predbat=None):
     test_automatic_config_uses_set_arg_auto()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
+    test_controls_queue_rather_than_call()
+    test_boost_uses_number_entity_value()
+    test_boost_refused_in_fast_mode()
+    test_cancel_boost()
+    test_controls_disabled()
+    test_control_for_unknown_entity_is_ignored()
+    test_boost_eddi_skips_mode_check()
+    test_number_event_handler_clamps_amount()
+    test_number_event_handler_unknown_entity_is_ignored()
+    test_number_event_disabled()
+    test_switch_event_handler_ignores_non_boost_and_unknown_service()
 
     print("=" * 70)
     return False

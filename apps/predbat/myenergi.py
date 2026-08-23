@@ -731,6 +731,61 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         self.update_success_timestamp()
         return True
 
+    def device_for_entity(self, entity_id):
+        """Find the device an entity belongs to, or None when it is not known."""
+        for device in self.devices.values():
+            if self.entity_prefix(device) in entity_id:
+                return device
+        return None
+
+    async def switch_event(self, entity_id, service):
+        """Queue a switch service call for the run loop."""
+        if not self.enable_controls:
+            return
+        self.queued_events.append((self.switch_event_handler, entity_id, service))
+
+    async def number_event(self, entity_id, value):
+        """Queue a number change for the run loop."""
+        if not self.enable_controls:
+            return
+        self.queued_events.append((self.number_event_handler, entity_id, value))
+
+    async def number_event_handler(self, entity_id, value):
+        """Record a new boost amount for the device the entity belongs to."""
+        device = self.device_for_entity(entity_id)
+        if not device:
+            return
+        if device.kind == DEVICE_KIND_ZAPPI:
+            amount = int(_to_float(value, DEFAULT_ZAPPI_BOOST_KWH))
+            amount = max(BOOST_ENERGY_MIN, min(BOOST_ENERGY_MAX, amount))
+        else:
+            amount = int(_to_float(value, DEFAULT_EDDI_BOOST_MINUTES))
+            amount = max(BOOST_MINUTES_MIN, min(BOOST_MINUTES_MAX, amount))
+        self.boost_amounts[device.device_id] = amount
+
+    async def switch_event_handler(self, entity_id, service):
+        """Send or cancel a boost in response to the boost switch."""
+        if not self.enable_controls:
+            return
+        if not entity_id.endswith("_boost"):
+            return
+        device = self.device_for_entity(entity_id)
+        if not device:
+            self.log("Warn: myenergi: no known device for {}".format(entity_id))
+            return
+
+        if service == "turn_on":
+            # myenergi rejects a boost unless the Zappi is in one of the green modes
+            if device.kind == DEVICE_KIND_ZAPPI and device.mode not in ZAPPI_BOOSTABLE_MODES:
+                self.log("Warn: myenergi: cannot boost {} while it is in {} mode - boost needs Eco or Eco+".format(device.name, device.mode))
+                return
+            amount = self.boost_amount_for(device)
+            self.log("Info: myenergi: boosting {} by {}".format(device.name, amount))
+            await self.transport.send_boost(device, amount)
+        elif service == "turn_off":
+            self.log("Info: myenergi: cancelling boost on {}".format(device.name))
+            await self.transport.cancel_boost(device)
+
     async def publish_data(self):
         """Publish every known device as Predbat entities."""
         for device in self.devices.values():
