@@ -1518,6 +1518,55 @@ def test_cloud_one_bad_device_does_not_lose_the_others():
     print("  ✓ One failing device does not cost the whole cloud poll")
 
 
+def test_cloud_every_device_failing_is_a_failed_poll():
+    """Reading none of the known devices raises, rather than passing as an empty site.
+
+    Returning [] would let run() keep the previous readings and still stamp success, so a
+    site whose every device was erroring would report healthy for as long as it kept
+    failing. An account with genuinely no Zappi or Eddi is still not an error.
+    """
+    session, _calls = _cloud_session(
+        [
+            _cloud_response(MOCK_CLOUD_DEVICES),
+            _cloud_response({"message": "boom"}, status=500),
+            _cloud_response({"message": "boom"}, status=500),
+        ]
+    )
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+    with patch("aiohttp.ClientSession", return_value=session):
+        try:
+            run_async(transport.fetch_devices())
+            raise AssertionError("Expected MyEnergiApiError when every device fails")
+        except MyEnergiApiError as exc:
+            assert "2 skipped" in str(exc), exc
+
+    # A site with no supported devices at all reports no devices, not a failure
+    session, _calls = _cloud_session([_cloud_response({"sites": [{"siteId": "s1", "devices": []}]})])
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+    with patch("aiohttp.ClientSession", return_value=session):
+        assert run_async(transport.fetch_devices()) == []
+    print("  ✓ A poll that reads no device at all is a failed poll, an empty site is not")
+
+
+def test_failed_poll_does_not_stamp_success():
+    """A failed poll leaves last_success_timestamp alone so repeated failures go unhealthy.
+
+    components.py fails a component after 60 minutes without a success, which is the
+    mechanism that surfaces a persistently broken account to the user - stamping on a
+    cycle that read nothing would keep it looking healthy indefinitely.
+    """
+    component = _make_component()
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    assert run_async(component.run(0, True)) is True
+    stamped = component.last_success_timestamp
+    assert stamped is not None
+
+    component.transport.fetch_devices = AsyncMock(side_effect=MyEnergiApiError("no myenergi device could be read this poll, 2 skipped"))
+    assert run_async(component.run(60, False)) is False
+    assert component.last_success_timestamp == stamped, "A failed poll must not advance the success timestamp"
+    print("  ✓ A failed poll leaves the success timestamp alone")
+
+
 def test_cloud_auth_error_still_aborts_the_poll():
     """A 401 on a device status still propagates, so the reactive token refresh can see it.
 
@@ -1795,6 +1844,8 @@ def test_myenergi(my_predbat=None):
     test_direct_boost_amount_and_time_formatting()
     test_direct_boost_rejects_unsupported_kinds()
     test_cloud_boost_rejects_unsupported_kinds()
+    test_cloud_every_device_failing_is_a_failed_poll()
+    test_failed_poll_does_not_stamp_success()
     test_cloud_device_list_cache_expires_on_the_clock()
     test_cloud_one_bad_device_does_not_lose_the_others()
     test_cloud_auth_error_still_aborts_the_poll()

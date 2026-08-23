@@ -630,10 +630,18 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         return True
 
     async def fetch_devices(self):
-        """Poll status for every cached Zappi and Eddi, refreshing the list when stale."""
+        """Poll status for every cached Zappi and Eddi, refreshing the list when stale.
+
+        One device failing is tolerated so the rest stay visible, but a poll that reads
+        none of the devices it knows about is a failed poll rather than an empty site,
+        and raises. Returning [] there would let run() keep the previous readings and
+        still stamp success, so a site whose every device was erroring would report
+        healthy for as long as it kept failing.
+        """
         if not self.device_meta or (time.time() - self.meta_fetched_at) >= CLOUD_DEVICE_LIST_MAX_AGE:
             await self._refresh_device_list()
         devices = []
+        skipped = 0
         for device_id, meta in self.device_meta.items():
             # One device failing its status call must not cost the whole poll: the
             # remaining devices are still readable, and dropping them all would blank
@@ -642,11 +650,17 @@ class MyEnergiCloudTransport(MyEnergiTransport):
                 status = await self._request("GET", "/devices/{}/status".format(device_id))
             except MyEnergiApiError as exc:
                 self.log("Warn: myenergi: skipping {} this poll: {}".format(device_id, exc))
+                skipped += 1
                 continue
             if not status:
                 self.log("Warn: myenergi: no status returned for {}".format(device_id))
+                skipped += 1
                 continue
             devices.append(normalise_cloud_device(status, meta))
+        # An account with no Zappi or Eddi at all leaves both counts at zero and is not
+        # an error - only having devices and reading none of them is.
+        if skipped and not devices:
+            raise MyEnergiApiError("no myenergi device could be read this poll, {} skipped".format(skipped))
         return devices
 
     async def send_boost(self, device, amount, target_time=None):
