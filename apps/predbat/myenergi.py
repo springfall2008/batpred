@@ -48,9 +48,14 @@ SUPPORTED_KINDS = (DEVICE_KIND_ZAPPI, DEVICE_KIND_EDDI)
 DIRECT_PREFIX = {DEVICE_KIND_ZAPPI: "Z", DEVICE_KIND_EDDI: "E"}
 CLOUD_PREFIX = {DEVICE_KIND_ZAPPI: "ZA", DEVICE_KIND_EDDI: "ED"}
 
+# The "Charging" label appears in three unrelated tables below (a Zappi's numeric
+# status, its plug status, and the cloud status translation) plus the component's
+# charging binary sensor, all of which must agree on the exact string.
+STATUS_CHARGING = "Charging"
+
 # Index tables used by the direct API's numeric status fields.
 ZAPPI_CHARGE_MODES = ["None", "Fast", "Eco", "Eco+", "Stopped"]
-ZAPPI_STATES = ["Unknown", "Paused", "Unknown", "Charging", "Boosting", "Completed"]
+ZAPPI_STATES = ["Unknown", "Paused", "Unknown", STATUS_CHARGING, "Boosting", "Completed"]
 EDDI_STATES = ["Unknown", "Paused", "Unknown", "Diverting", "Boosting", "Max temp reached", "Stopped"]
 
 ZAPPI_PLUG_STATES = {
@@ -58,9 +63,9 @@ ZAPPI_PLUG_STATES = {
     "B1": "EV Connected",
     "B2": "Waiting for EV",
     "C1": "EV ready to charge",
-    "C2": "Charging",
+    "C2": STATUS_CHARGING,
     "D1": "EV ready to charge",
-    "D2": "Charging",
+    "D2": STATUS_CHARGING,
     "F": "Fault",
 }
 
@@ -79,7 +84,7 @@ CLOUD_STATUS_TO_NAME = {
     "charge_delayed": "Paused",
     "smart_charge_delay": "Paused",
     "charge_complete": "Completed",
-    "charging": "Charging",
+    "charging": STATUS_CHARGING,
     "boosting": "Boosting",
     "stopped": "Stopped",
     "diverting": "Diverting",
@@ -614,7 +619,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
     def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60):
         """Select a transport from the configured credentials and set up component state."""
-        self.auth_method = (auth_method or "direct").lower()
+        configured_auth_method = (auth_method or "direct").lower()
         self.hub_serial = hub_serial
         self.api_key = api_key
         self.automatic = automatic
@@ -629,8 +634,13 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         self._auto_configured = False
         self.transport = None
 
-        if self.auth_method == "oauth":
+        if configured_auth_method == "oauth":
             self._init_oauth("oauth", key, token_expires_at, "myenergi")
+            # _init_oauth() sets self.auth_method to its own "oauth"/"api_key" vocabulary,
+            # overwriting whatever was assigned above - keep the user-facing "direct"/"oauth"
+            # value (used for logging and for tests asserting the selection) in its own
+            # attribute so it never depends on a name oauth_mixin.py owns.
+            self.auth_method_config = configured_auth_method
             self.token_hash = token_hash or ""
             if not key and not token_hash:
                 self.log("Error: myenergi: auth_method is 'oauth' but neither myenergi_key nor myenergi_token_hash is set")
@@ -638,6 +648,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token)
         else:
             self._init_oauth("api_key", None, None, "myenergi")
+            self.auth_method_config = configured_auth_method
             if not hub_serial or not api_key:
                 self.log("Error: myenergi: auth_method is 'direct' but myenergi_hub_serial and myenergi_api_key are not both set")
                 return
@@ -655,12 +666,13 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
     async def run(self, seconds, first):
         """Process queued control events, then poll and publish."""
         if first:
-            self.log("Info: myenergi: starting with the {} transport".format(self.auth_method))
+            self.log("Info: myenergi: starting with the {} transport".format(self.auth_method_config))
         if not self.transport:
             return False
 
         if self.auth_method == "oauth":
-            await self.check_and_refresh_oauth_token()
+            if not await self.check_and_refresh_oauth_token():
+                return False
 
         refresh = False
         while self.queued_events:
@@ -698,7 +710,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             if device.kind == DEVICE_KIND_ZAPPI:
                 self.dashboard_item("sensor.{}_mode".format(prefix), state=device.mode, attributes=myenergi_attribute_table["mode"], app="myenergi")
                 self.dashboard_item("sensor.{}_plug_status".format(prefix), state=device.plug_status, attributes=myenergi_attribute_table["plug_status"], app="myenergi")
-                self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if device.status == "Charging" else "off", attributes=myenergi_attribute_table["charging"], app="myenergi")
+                self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if device.status == STATUS_CHARGING else "off", attributes=myenergi_attribute_table["charging"], app="myenergi")
                 self.dashboard_item("number.{}_boost_energy".format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table["boost_energy"], app="myenergi")
             else:
                 self.dashboard_item("number.{}_boost_minutes".format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table["boost_minutes"], app="myenergi")

@@ -802,9 +802,13 @@ def test_component_selects_transport():
     """auth_method picks the transport, and missing credentials refuse to start."""
     component = _make_component()
     assert isinstance(component.transport, MyEnergiDirectTransport)
+    # _init_oauth() overwrites self.auth_method with its own "oauth"/"api_key" vocabulary,
+    # so the user-facing configured value must survive under its own attribute name.
+    assert component.auth_method_config == "direct"
 
     component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key="jwt-token")
     assert isinstance(component.transport, MyEnergiCloudTransport)
+    assert component.auth_method_config == "oauth"
 
     # No credentials at all - no transport, and the reason is logged
     component = _make_component(hub_serial=None, api_key=None)
@@ -819,9 +823,13 @@ def test_component_selects_transport():
 def test_component_publishes_entities():
     """A poll publishes the documented entity set for each device."""
     component = _make_component()
+    # A second, boosting Zappi so the boost switch's "on" case is actually exercised -
+    # MOCK_DIRECT_ZAPPI alone only ever proves the switch can report "off".
+    boosting_zappi = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=99999999, sta=4), DEVICE_KIND_ZAPPI)
     component.devices = {
         "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
         "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+        "Z99999999": boosting_zappi,
     }
     run_async(component.publish_data())
 
@@ -847,6 +855,12 @@ def test_component_publishes_entities():
 
     # The boost switch reflects the device, not a locally held value
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_12345678_boost") == "off"
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_99999999_boost") == "on"
+
+    # The charging binary sensor reflects device.status, not just whether it exists
+    assert component.base.get_state_wrapper("binary_sensor.predbat_myenergi_zappi_12345678_charging") == "on"
+    # The boosting device is not "Charging" (it is "Boosting"), so its charging sensor is off
+    assert component.base.get_state_wrapper("binary_sensor.predbat_myenergi_zappi_99999999_charging") == "off"
 
     # Units come from the attribute table
     power = component.base.entities["sensor.predbat_myenergi_zappi_12345678_power"]
@@ -872,12 +886,41 @@ def test_component_retains_last_good_reading():
     print("  ✓ Failed polls retain the last good reading")
 
 
+def test_component_empty_device_list_does_not_wipe_devices():
+    """A successful poll returning no devices warns on the first run and never clears devices already known."""
+    component = _make_component()
+    messages = []
+    component.log = messages.append
+
+    component.transport.fetch_devices = AsyncMock(return_value=[])
+    assert run_async(component.run(0, True)) is True
+    assert component.devices == {}
+    assert any("no Zappi or Eddi devices were found" in message for message in messages), messages
+
+    component.devices = {"Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)}
+    component.transport.fetch_devices = AsyncMock(return_value=[])
+    assert run_async(component.run(60, False)) is True
+    assert "Z12345678" in component.devices, "An empty poll result must not wipe previously known devices"
+    print("  ✓ An empty poll result warns once and never wipes previously known devices")
+
+
 def test_component_poll_seconds_rounding():
     """poll_seconds is clamped to a whole number of base loop intervals."""
     assert _make_component(poll_seconds=1).poll_seconds == 60
     assert _make_component(poll_seconds=90).poll_seconds == 120
     assert _make_component(poll_seconds=300).poll_seconds == 300
     print("  ✓ poll_seconds rounds to a multiple of 60")
+
+
+def test_component_oauth_refresh_failure_stops_the_poll():
+    """A hard OAuth refresh failure (e.g. needs_reauth) stops run() before it ever calls the API with a dead token."""
+    component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key="jwt-token")
+    component.check_and_refresh_oauth_token = AsyncMock(return_value=False)
+    component.transport.fetch_devices = AsyncMock(return_value=[])
+
+    assert run_async(component.run(0, True)) is False
+    component.transport.fetch_devices.assert_not_awaited()
+    print("  ✓ A failed OAuth refresh stops the poll before fetch_devices is ever called")
 
 
 def test_myenergi(my_predbat=None):
@@ -924,7 +967,9 @@ def test_myenergi(my_predbat=None):
     test_component_selects_transport()
     test_component_publishes_entities()
     test_component_retains_last_good_reading()
+    test_component_empty_device_list_does_not_wipe_devices()
     test_component_poll_seconds_rounding()
+    test_component_oauth_refresh_failure_stops_the_poll()
 
     print("=" * 70)
     return False
