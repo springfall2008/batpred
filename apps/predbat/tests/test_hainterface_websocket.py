@@ -940,6 +940,90 @@ def test_hainterface_socketloop_service_register(my_predbat=None):
     return failed
 
 
+def test_hainterface_socketloop_call_service_target_field(my_predbat=None):
+    """Regression test for #4662: a queued call_service command whose service_data carries a
+    'target' key (the apps.yaml 'target: entity_id: ...' config style used for input_boolean
+    bridges) must be sent with target as a sibling of service_data in the outgoing websocket
+    frame, not left nested inside service_data. HA rejects a nested target with
+    invalid_format: extra keys not allowed @ data['target'], which silently blocked every
+    charge/discharge input_boolean service call.
+    """
+    print("\n=== Testing #4662: call_service queued command with target field ===")
+    failed = 0
+
+    import threading
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+
+    queued_event = threading.Event()
+    queued_result = {"response": None, "success": None, "error": None}
+    queued_service_data = {"target": {"entity_id": "input_boolean.predbat_charge_start"}}
+    queued_cmd = ("input_boolean", "turn_on", queued_service_data, False, queued_event, queued_result)
+
+    call_count = [0]
+
+    async def mock_receive():
+        call_count[0] += 1
+        if call_count[0] == 1:
+            with ha_interface.ws_pending_lock:
+                ha_interface.ws_command_queue.append(queued_cmd)
+            return create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"})
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+
+    async def mock_sleep(delay):
+        ha_interface.api_stop = True
+
+    with patch("ha.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock()
+        mock_session.ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_session.ws_connect.return_value.__aexit__ = AsyncMock()
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep):
+            run_async(ha_interface.socketLoop())
+
+    sent_frame = None
+    for call in mock_ws.send_json.call_args_list:
+        payload = call.args[0]
+        if payload.get("type") == "call_service" and payload.get("domain") == "input_boolean":
+            sent_frame = payload
+            break
+
+    if sent_frame is None:
+        print("ERROR: input_boolean/turn_on call_service was never sent by socketLoop - test setup is wrong")
+        failed += 1
+    elif "target" in sent_frame.get("service_data", {}):
+        print(f"ERROR: target should not be nested inside service_data, got {sent_frame.get('service_data')}")
+        failed += 1
+    elif sent_frame.get("target") != {"entity_id": "input_boolean.predbat_charge_start"}:
+        print(f"ERROR: Expected top-level target with entity_id, got {sent_frame.get('target')}")
+        failed += 1
+    else:
+        print("✓ target sent as a top-level sibling field, not nested inside service_data")
+
+    # The queued service_data dict is the same object async_call_service_websocket_command() logs
+    # on failure (ha.py's "Warn: Service call ... data ... failed" line) - socketLoop() must not
+    # mutate it when building the outbound frame, or that failure log silently loses the target
+    # that was actually part of the service definition.
+    if "target" not in queued_service_data:
+        print(f"ERROR: socketLoop() mutated the original queued service_data (target missing): {queued_service_data}")
+        failed += 1
+    else:
+        print("✓ original queued service_data left unchanged (target still present)")
+
+    return failed
+
+
 def run_hainterface_websocket_tests(my_predbat):
     """Run all HAInterface websocket tests"""
     print("\n" + "=" * 80)
@@ -961,6 +1045,7 @@ def run_hainterface_websocket_tests(my_predbat):
     failed += test_hainterface_socketloop_service_register(my_predbat)
     failed += test_hainterface_socketloop_connection_drop_unblocks_queued_command(my_predbat)
     failed += test_hainterface_socketloop_result_null_success(my_predbat)
+    failed += test_hainterface_socketloop_call_service_target_field(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:

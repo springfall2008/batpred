@@ -3532,6 +3532,20 @@ You can also call more than one service e.g:
       entity_id: switch.tsunami_charger
 ```
 
+If you need to address the entity using Home Assistant's `target` syntax (e.g. copying an example from an
+automation) rather than a flat `entity_id`, that's supported too:
+
+```yaml
+  charge_start_service:
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.predbat_charge_start
+```
+
+`target` is the only key handled specially: it is pulled out and sent to Home Assistant as its own top-level
+field. Every other key (`entity_id`, `device_id`, `option`, etc.) continues to be sent as part of the service
+data, as before.
+
 Note: By default the service will only be called once until things change, e.g. **charge_start_service** will be called once and then won't be called again until **charge_stop_service** stops the charge.
 If however, you want the service to be called on each Predbat run then you should set **repeat** to True for the given service e.g:
 

@@ -695,7 +695,22 @@ class HAInterface(ComponentBase):
                                     if domain == "fire_event":
                                         await websocket.send_json({"id": sid, "type": domain, "event_type": service, "event_data": {"service": service_data["event_service"], "domain": service_data["event_domain"]}})
                                     else:
-                                        await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                        # HA's call_service command expects 'target' (entity_id/device_id/area_id
+                                        # addressing) as a sibling of service_data, not nested inside it - a
+                                        # nested target is rejected with invalid_format: extra keys not allowed
+                                        # @ data['target'] (#4662). Callers commonly configure services with a
+                                        # target: entity_id: ... block (the standard HA action syntax), which
+                                        # lands as a "target" key inside service_data, so it must be pulled out
+                                        # here. Pop from a copy, not service_data itself - the original dict is
+                                        # the same object async_call_service_websocket_command() logs on failure
+                                        # ("Warn: Service call ... data ... failed"), so mutating it in place
+                                        # would silently drop target from that diagnostic.
+                                        outgoing_data = dict(service_data) if isinstance(service_data, dict) else service_data
+                                        target = outgoing_data.pop("target", None) if isinstance(outgoing_data, dict) else None
+                                        call_frame = {"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": outgoing_data, "return_response": return_response}
+                                        if target:
+                                            call_frame["target"] = target
+                                        await websocket.send_json(call_frame)
 
                                     # Track pending request (only if send succeeded)
                                     with self.ws_pending_lock:
