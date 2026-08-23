@@ -16,10 +16,12 @@ import aiohttp
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests.test_infra import run_async
+from mock_base import MockBase
 
 from myenergi import (
     DEVICE_KIND_EDDI,
     DEVICE_KIND_ZAPPI,
+    MyEnergiAPI,
     MyEnergiApiError,
     MyEnergiAuthError,
     MyEnergiCloudTransport,
@@ -778,6 +780,102 @@ def test_direct_non_json_response_is_api_error():
     print("  ✓ Direct transport non-JSON body raises MyEnergiApiError with reason=decode_error")
 
 
+def _make_component(**overrides):
+    """Build a MyEnergiAPI against MockBase with a stub transport already attached."""
+    base = MockBase()
+    args = {
+        "auth_method": "direct",
+        "hub_serial": "12345678",
+        "api_key": "secret-key",
+        "key": None,
+        "token_expires_at": None,
+        "token_hash": None,
+        "automatic": True,
+        "enable_controls": True,
+        "poll_seconds": 60,
+    }
+    args.update(overrides)
+    return MyEnergiAPI(base, **args)
+
+
+def test_component_selects_transport():
+    """auth_method picks the transport, and missing credentials refuse to start."""
+    component = _make_component()
+    assert isinstance(component.transport, MyEnergiDirectTransport)
+
+    component = _make_component(auth_method="oauth", hub_serial=None, api_key=None, key="jwt-token")
+    assert isinstance(component.transport, MyEnergiCloudTransport)
+
+    # No credentials at all - no transport, and the reason is logged
+    component = _make_component(hub_serial=None, api_key=None)
+    assert component.transport is None
+    print("  ✓ Transport selection and credential validation")
+
+
+def test_component_publishes_entities():
+    """A poll publishes the documented entity set for each device."""
+    component = _make_component()
+    component.devices = {
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+    }
+    run_async(component.publish_data())
+
+    entities = component.base.entities
+    assert "sensor.predbat_myenergi_zappi_12345678_status" in entities
+    assert "sensor.predbat_myenergi_zappi_12345678_mode" in entities
+    assert "sensor.predbat_myenergi_zappi_12345678_plug_status" in entities
+    assert "sensor.predbat_myenergi_zappi_12345678_power" in entities
+    assert "sensor.predbat_myenergi_zappi_12345678_session_energy" in entities
+    assert "binary_sensor.predbat_myenergi_zappi_12345678_charging" in entities
+    assert "switch.predbat_myenergi_zappi_12345678_boost" in entities
+    assert "number.predbat_myenergi_zappi_12345678_boost_energy" in entities
+
+    assert "sensor.predbat_myenergi_eddi_87654321_status" in entities
+    assert "sensor.predbat_myenergi_eddi_87654321_power" in entities
+    assert "sensor.predbat_myenergi_eddi_87654321_session_energy" in entities
+    assert "sensor.predbat_myenergi_eddi_87654321_temp_1" in entities
+    assert "switch.predbat_myenergi_eddi_87654321_boost" in entities
+    assert "number.predbat_myenergi_eddi_87654321_boost_minutes" in entities
+
+    # tp2 was the 127 sentinel, so no entity should exist for it
+    assert "sensor.predbat_myenergi_eddi_87654321_temp_2" not in entities
+
+    # The boost switch reflects the device, not a locally held value
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_12345678_boost") == "off"
+
+    # Units come from the attribute table
+    power = component.base.entities["sensor.predbat_myenergi_zappi_12345678_power"]
+    assert power["attributes"]["unit_of_measurement"] == "W"
+    assert power["attributes"]["device_class"] == "power"
+    energy = component.base.entities["sensor.predbat_myenergi_zappi_12345678_session_energy"]
+    assert energy["attributes"]["unit_of_measurement"] == "kWh"
+    print("  ✓ Component publishes the expected entities")
+
+
+def test_component_retains_last_good_reading():
+    """A failed poll leaves the previously published values alone."""
+    component = _make_component()
+    component.transport.fetch_devices = AsyncMock(return_value=[normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)])
+    assert run_async(component.run(0, True)) is True
+    good = component.base.get_state_wrapper("sensor.predbat_myenergi_zappi_12345678_session_energy")
+    assert good == 4.25
+
+    component.transport.fetch_devices = AsyncMock(side_effect=MyEnergiApiError("boom"))
+    assert run_async(component.run(60, False)) is False
+    still_good = component.base.get_state_wrapper("sensor.predbat_myenergi_zappi_12345678_session_energy")
+    assert still_good == 4.25, "A failed poll must not overwrite the last good reading"
+    print("  ✓ Failed polls retain the last good reading")
+
+
+def test_component_poll_seconds_rounding():
+    """poll_seconds is clamped to a whole number of base loop intervals."""
+    assert _make_component(poll_seconds=1).poll_seconds == 60
+    assert _make_component(poll_seconds=90).poll_seconds == 120
+    assert _make_component(poll_seconds=300).poll_seconds == 300
+    print("  ✓ poll_seconds rounds to a multiple of 60")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -819,6 +917,10 @@ def test_myenergi(my_predbat=None):
     test_cloud_record_api_call_reasons()
     test_direct_client_error_reason_is_connection_error()
     test_direct_non_json_response_is_api_error()
+    test_component_selects_transport()
+    test_component_publishes_entities()
+    test_component_retains_last_good_reading()
+    test_component_poll_seconds_rounding()
 
     print("=" * 70)
     return False

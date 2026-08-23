@@ -30,6 +30,8 @@ from typing import Optional
 
 import aiohttp
 
+from component_base import ComponentBase
+from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
 
 MYENERGI_DIRECTOR_URL = "https://director.myenergi.net"
@@ -586,3 +588,121 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         """Cancel an active boost."""
         await self._request("DELETE", "/devices/{}/boost".format(device.device_id))
         return True
+
+
+# Attribute table for the published Home Assistant entities, in the style of ohme.py
+myenergi_attribute_table = {
+    "status": {"friendly_name": "myenergi Status", "icon": "mdi:information-outline"},
+    "mode": {"friendly_name": "myenergi Mode", "icon": "mdi:ev-station"},
+    "plug_status": {"friendly_name": "myenergi Plug Status", "icon": "mdi:ev-plug-type2"},
+    "power": {"friendly_name": "myenergi Power", "icon": "mdi:lightning-bolt", "unit_of_measurement": "W", "device_class": "power", "state_class": "measurement"},
+    "session_energy": {"friendly_name": "myenergi Session Energy", "icon": "mdi:lightning-bolt", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing"},
+    "charging": {"friendly_name": "myenergi Charging", "icon": "mdi:battery-charging"},
+    "boost": {"friendly_name": "myenergi Boost", "icon": "mdi:rocket-launch"},
+    "boost_energy": {"friendly_name": "myenergi Boost Energy", "icon": "mdi:rocket-launch", "unit_of_measurement": "kWh", "min": BOOST_ENERGY_MIN, "max": BOOST_ENERGY_MAX, "step": 1},
+    "boost_minutes": {"friendly_name": "myenergi Boost Minutes", "icon": "mdi:rocket-launch", "unit_of_measurement": "minutes", "min": BOOST_MINUTES_MIN, "max": BOOST_MINUTES_MAX, "step": 5},
+    "temp_1": {"friendly_name": "myenergi Temperature 1", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+    "temp_2": {"friendly_name": "myenergi Temperature 2", "icon": "mdi:thermometer", "unit_of_measurement": "°C", "device_class": "temperature", "state_class": "measurement"},
+}
+
+DEFAULT_ZAPPI_BOOST_KWH = 10
+DEFAULT_EDDI_BOOST_MINUTES = 60
+
+
+class MyEnergiAPI(ComponentBase, OAuthMixin):
+    """myenergi component providing Zappi and Eddi monitoring and boost control."""
+
+    def initialize(self, auth_method=None, hub_serial=None, api_key=None, key=None, token_expires_at=None, token_hash=None, automatic=True, enable_controls=True, poll_seconds=60):
+        """Select a transport from the configured credentials and set up component state."""
+        self.auth_method = (auth_method or "direct").lower()
+        self.hub_serial = hub_serial
+        self.api_key = api_key
+        self.automatic = automatic
+        self.enable_controls = enable_controls
+        # ComponentBase.start() calls run() on a fixed 60 second cadence, so the poll
+        # interval can only be a whole number of those intervals.
+        self.poll_seconds = max(60, int(round(_to_float(poll_seconds, 60) / 60.0)) * 60)
+
+        self.devices = {}
+        self.boost_amounts = {}
+        self.queued_events = []
+        self._auto_configured = False
+        self.transport = None
+
+        if self.auth_method == "oauth":
+            self._init_oauth("oauth", key, token_expires_at, "myenergi")
+            self.token_hash = token_hash or ""
+            if not key and not token_hash:
+                self.log("Error: myenergi: auth_method is 'oauth' but neither myenergi_key nor myenergi_token_hash is set")
+                return
+            self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token)
+        else:
+            self._init_oauth("api_key", None, None, "myenergi")
+            if not hub_serial or not api_key:
+                self.log("Error: myenergi: auth_method is 'direct' but myenergi_hub_serial and myenergi_api_key are not both set")
+                return
+            self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key)
+
+    def entity_prefix(self, device):
+        """Return the entity name prefix for a device, e.g. predbat_myenergi_zappi_12345678."""
+        return "{}_myenergi_{}_{}".format(self.prefix, device.kind, device.serial)
+
+    def boost_amount_for(self, device):
+        """Return the currently selected boost amount for a device."""
+        default = DEFAULT_ZAPPI_BOOST_KWH if device.kind == DEVICE_KIND_ZAPPI else DEFAULT_EDDI_BOOST_MINUTES
+        return self.boost_amounts.get(device.device_id, default)
+
+    async def run(self, seconds, first):
+        """Process queued control events, then poll and publish."""
+        if first:
+            self.log("Info: myenergi: starting with the {} transport".format(self.auth_method))
+        if not self.transport:
+            return False
+
+        if self.auth_method == "oauth":
+            await self.check_and_refresh_oauth_token()
+
+        refresh = False
+        while self.queued_events:
+            handler, *event_args = self.queued_events.pop(0)
+            try:
+                await handler(*event_args)
+            except MyEnergiError as exc:
+                self.log("Warn: myenergi: control failed: {}".format(exc))
+            refresh = True
+
+        if first or refresh or (seconds % self.poll_seconds) == 0:
+            try:
+                devices = await self.transport.fetch_devices()
+            except MyEnergiError as exc:
+                self.log("Warn: myenergi: poll failed: {}".format(exc))
+                return False
+            if devices:
+                self.devices = {device.device_id: device for device in devices}
+                await self.publish_data()
+            elif first:
+                self.log("Warn: myenergi: connected but no Zappi or Eddi devices were found")
+
+        self.update_success_timestamp()
+        return True
+
+    async def publish_data(self):
+        """Publish every known device as Predbat entities."""
+        for device in self.devices.values():
+            prefix = self.entity_prefix(device)
+            self.dashboard_item("sensor.{}_status".format(prefix), state=device.status, attributes=myenergi_attribute_table["status"], app="myenergi")
+            self.dashboard_item("sensor.{}_power".format(prefix), state=device.power_w, attributes=myenergi_attribute_table["power"], app="myenergi")
+            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=device.session_energy_kwh, attributes=myenergi_attribute_table["session_energy"], app="myenergi")
+            self.dashboard_item("switch.{}_boost".format(prefix), state="on" if device.boost_active else "off", attributes=myenergi_attribute_table["boost"], app="myenergi")
+
+            if device.kind == DEVICE_KIND_ZAPPI:
+                self.dashboard_item("sensor.{}_mode".format(prefix), state=device.mode, attributes=myenergi_attribute_table["mode"], app="myenergi")
+                self.dashboard_item("sensor.{}_plug_status".format(prefix), state=device.plug_status, attributes=myenergi_attribute_table["plug_status"], app="myenergi")
+                self.dashboard_item("binary_sensor.{}_charging".format(prefix), state="on" if device.status == "Charging" else "off", attributes=myenergi_attribute_table["charging"], app="myenergi")
+                self.dashboard_item("number.{}_boost_energy".format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table["boost_energy"], app="myenergi")
+            else:
+                self.dashboard_item("number.{}_boost_minutes".format(prefix), state=self.boost_amount_for(device), attributes=myenergi_attribute_table["boost_minutes"], app="myenergi")
+                if device.temp_1 is not None:
+                    self.dashboard_item("sensor.{}_temp_1".format(prefix), state=device.temp_1, attributes=myenergi_attribute_table["temp_1"], app="myenergi")
+                if device.temp_2 is not None:
+                    self.dashboard_item("sensor.{}_temp_2".format(prefix), state=device.temp_2, attributes=myenergi_attribute_table["temp_2"], app="myenergi")
