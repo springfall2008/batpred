@@ -466,7 +466,7 @@ When enabled for a car:
 
 Configuration (all per-car, set in `apps.yaml` unless noted):
 
-- **car_charging_solar** - boolean per car (default off). Turns on the solar diversion model and suppresses grid scheduling for that car.
+- **switch.predbat_car_charging_solar** - one switch per car in Home Assistant (`_1`, `_2`, … for further cars), default off. Turns on the solar diversion model and suppresses grid scheduling for that car. It is a switch rather than an apps.yaml key so the model can be turned off without editing YAML and restarting.
 - **car_charging_plugged** - optional sensor per car indicating the car is plugged in across the forecast horizon. If not supplied it falls back to **car_charging_now**.
   This is needed because "charging now" says nothing about future daylight slots.
 - **car_charging_solar_max_power** - maximum diversion power in kW. Defaults to the configured **car_charging_rate** and is uncapped (3-phase chargers can exceed the rate slider limit).
@@ -477,7 +477,8 @@ Configuration (all per-car, set in `apps.yaml` unless noted):
 - **car_charging_solar_limit** - the SoC (%) the opportunistic solar charging fills the car to, **independent of the grid plan target** (`car_charging_limit`).
   Defaults to `car_charging_limit` when not set. With EVCC this is the loadpoint's limit SoC (its PV cap), while `car_charging_limit` is the departure plan target.
 - **input_number.predbat_car_charging_solar_min_soc** - home battery SoC threshold (%) in Home Assistant. The car only takes solar once the home battery is above this level,
-  so the home battery is charged first. Default 0%. This is yours to set for any charger - with the [evcc component](components.md#evcc-ev-charger-evcc) and
+  so the home battery is charged first. Default 0%. It applies to both the forecast and the decision Predbat publishes, so a charger following
+  **sensor.predbat_car_charging_mode** stops diverting below it as well - see the `home_battery_low` reason above. This is yours to set for any charger - with the [evcc component](components.md#evcc-ev-charger-evcc) and
   `evcc_automatic` on it is taken from evcc's own `prioritySoc` instead, which means the same thing, so the two cannot drift apart. Even then it is only written when
   the value in evcc changes, so adjusting it in Home Assistant is not undone on the next poll.
 
@@ -485,9 +486,9 @@ Configuration (all per-car, set in `apps.yaml` unless noted):
 
 A worked example for a 3-phase 6-16A charger that diverts surplus on its own, charging one car to 80% from the sun while a plan still guarantees the departure target:
 
+Turn on **switch.predbat_car_charging_solar** in Home Assistant first, then describe the charger in apps.yaml:
+
 ```yaml
-  car_charging_solar:
-    - True
   # Needed to know about future daylight hours - "charging now" says nothing about this afternoon
   car_charging_plugged:
     - 're:binary_sensor.myenergi_zappi_[0-9a-z]+_plug_status'
@@ -554,12 +555,23 @@ sensor and get identical behaviour.
 | `solar` | `solar` | Take the surplus, it is worth less exported than the charge it displaces (evcc: `pv`, or `minpv` with `evcc_use_minpv`) |
 | `solar` | `idle` | Nothing planned and the car is not plugged in - keep following the sun (evcc: `pv`) |
 | `off` | `export_better` | Sell the surplus instead; the car is charged from the planned cheap slots |
+| `off` | `home_battery_low` | The home battery is below **car_charging_solar_min_soc**, which the forecast already assumes stops the diversion |
 | `off` | `solar_disabled` | This car does not do solar charging (`car_charging_solar` is off) |
 
-Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - and for a charger
-that keeps its own departure plan, evcc included, off takes that plan down with it. So off is published only when it is
-meant: the export pays better, or the car does no solar charging at all. Not being plugged in is an absence, not a
-decision, and leaves the charger following the sun.
+Solar is the **resting** state rather than off. Off is a decision - "do not charge from the surplus" - so it is
+published only when it is meant: the export pays better, the home battery is below the priority level, or the car does no
+solar charging at all. Not being plugged in is an absence, not a decision, and leaves the charger following the sun. The
+reason to rest in solar is what happens when Predbat is *not* publishing - a charger left following the sun still
+charges, where one left off would sit idle. A charger that keeps its own departure plan, evcc included, keeps it either
+way: off stops it acting on the plan, it does not delete it.
+
+`home_battery_low` keeps the published decision and the forecast in step. The forecast only diverts to the car once the
+home battery is above **car_charging_solar_min_soc**, so below it the charger must not be told to follow the sun either -
+otherwise it charges out of a battery the house still needs, from energy the plan has already spent elsewhere. Unlike
+`export_better` this needs no departure plan behind it: below the priority level the surplus belongs in the home battery,
+which is what the setting means, and the diversion resumes on its own once the battery climbs back above it. With evcc
+this doubles up with evcc's own `prioritySoc`, which enforces the same thing at its end; for any other charger, or a Home
+Assistant automation reading the sensor, Predbat's decision is the only thing enforcing it.
 
 Safeguards, so the switch can never leave the car short:
 

@@ -528,7 +528,7 @@ becomes a 1.38kW minimum, 3.68kW maximum and a 0.23kW step - instead of you work
 
 #### Important notes (evcc)
 
-- **`evcc_solar` defaults to `true`**, which sets `car_charging_solar` for every evcc car. With that on, and
+- **`evcc_solar` defaults to `true`**, which turns **switch.predbat_car_charging_solar** on for every car evcc drives a loadpoint for. Like the priority SoC it is only written when evcc's own answer changes, so turning the switch off in Home Assistant is not undone on the next poll. With that on, and
   with no departure plan and no expected arrival time, Predbat plans **no** grid charging slots for the car -
   the PV diversion is modelled instead. That is correct for evcc, but if you previously had grid slots for
   that car you will see them disappear. Set `evcc_solar: False` to keep the old behaviour.
@@ -550,7 +550,7 @@ becomes a 1.38kW minimum, 3.68kW maximum and a 0.23kW step - instead of you work
 | `automatic` | Boolean | No | `False` | `evcc_automatic` | Point Predbat's `car_charging_*` keys at the entities this component publishes |
 | `control` | Boolean | No | `False` | `evcc_control` | Allow Predbat to write the loadpoint charging mode back to evcc |
 | `loadpoints` | List | No | - | `evcc_loadpoints` | One entry per Predbat car: an evcc loadpoint id (1-based) or title, or `off` to skip that car. Defaults to a one-to-one mapping |
-| `solar` | Boolean | No | `True` | `evcc_solar` | Model evcc's PV diversion by setting `car_charging_solar` - see the note above |
+| `solar` | Boolean | No | `True` | `evcc_solar` | Model evcc's PV diversion by turning **switch.predbat_car_charging_solar** on - see the note above |
 | `use_minpv` | Boolean | No | `False` | `evcc_use_minpv` | Use evcc's `minpv` mode instead of `pv` when Predbat wants solar charging |
 | `poll_seconds` | Integer | No | `60` | `evcc_poll_seconds` | How often to read the evcc state |
 | `mode_refresh_minutes` | Integer | No | `15` | `evcc_mode_refresh_minutes` | Re-assert the mode this often even when unchanged, so an evcc restart does not leave it wrong |
@@ -594,8 +594,9 @@ With `evcc_control: True`, Predbat maps its own decision onto evcc's modes:
 The decision is not made here: it is Predbat's own `sensor.predbat_car_charging_mode`, described under
 [the charging mode](car-charging.md#the-charging-mode), so evcc and a plain Home Assistant automation
 driving some other charger act on identical logic. Note that `solar` is the resting state - evcc is left
-in `pv` rather than `off` when nothing is planned, because `off` disables the loadpoint and takes evcc's
-own departure plan down with it, which is the plan this component exists to read.
+in `pv` rather than `off` when nothing is planned, so the car still charges from the sun if Predbat stops
+publishing. The loadpoint's own departure plan survives either mode: `off` stops evcc acting on the plan
+itself, but the plan is kept, stays editable, and is still reported to Predbat.
 
 Writes only happen when the plan is valid and fresh, `switch.predbat_set_read_only` is off, and the runtime
 switch is on; every refusal is published as the `reason` attribute on `sensor.predbat_evcc_target_mode`, so

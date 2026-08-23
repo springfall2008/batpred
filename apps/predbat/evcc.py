@@ -723,9 +723,11 @@ class EvccAPI(ComponentBase):
         automation act on identical logic. This only maps those three states onto evcc's own modes.
         A missing sensor means Predbat has not planned yet, which must never be read as "off".
 
-        Solar maps to pv (or minpv), and it is the resting state rather than off because off disables
-        the loadpoint in evcc and takes its own departure plan down with it - the plan this component
-        exists to read.
+        Solar maps to pv (or minpv), and it is the resting state rather than off. off is safe for the
+        loadpoint's own departure plan - evcc keeps it, still reports it here, and it stays editable;
+        it only stops evcc acting on it itself, which Predbat is doing anyway through now. The reason
+        to rest in pv is what happens when Predbat is not publishing at all: a loadpoint left in pv
+        still charges from the sun, where one left off would sit idle until Predbat came back.
         """
         postfix = self.car_postfix(car_n)
         entity_id = "sensor.{}_car_charging_mode{}".format(self.prefix, postfix)

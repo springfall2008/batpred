@@ -165,9 +165,9 @@ def run_car_charging_mode_tests(my_predbat):
     """
     Test the charging decision Predbat publishes for an external charger, with or without evcc
 
-    Solar is the resting state so a sun-following charger keeps following the sun (and keeps its own
-    departure plan alive); off is only published when it is a decision - the surplus is worth more
-    exported, or this car does no solar charging at all.
+    Solar is the resting state so a sun-following charger keeps charging even if Predbat stops
+    publishing; off is only published when it is a decision - the surplus is worth more exported, the
+    home battery is below its priority level, or this car does no solar charging at all.
     """
     failed = False
     print("**** Running Car charging mode tests ****")
@@ -200,6 +200,45 @@ def run_car_charging_mode_tests(my_predbat):
             print("ERROR: solar {} plugged {} threshold {} slot {} gave ({}, {}), expected ({}, {})".format(solar, plugged, threshold, slot, mode, reason, expect_mode, expect_reason))
             failed = True
 
+    # The home battery priority the forecast applies has to reach the published decision too, or the
+    # charger diverts out of a battery the plan has already assumed it will leave alone
+    saved_soc = {name: getattr(my_predbat, name) for name in ["soc_kw", "soc_max", "car_charging_solar_min_soc", "car_charging_planned", "car_charging_now"]}
+    my_predbat.car_charging_solar = [True]
+    my_predbat.car_charging_plugged = [True]
+    my_predbat.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS]
+    my_predbat.car_charging_solar_min_soc = 15.0
+    my_predbat.soc_max = 100.0
+    my_predbat.car_charging_now = [False]
+
+    # (battery kWh, has a grid plan to fall back on, expected mode, expected reason)
+    battery_cases = [
+        (50.0, True, "solar", "solar"),
+        # Below the priority with a plan behind it - stop diverting, the plan still charges the car
+        (5.0, True, "off", "home_battery_low"),
+        # Below the priority the surplus belongs in the home battery whether or not anything is planned
+        (5.0, False, "off", "home_battery_low"),
+    ]
+    for soc_kw, planned, expect_mode, expect_reason in battery_cases:
+        my_predbat.soc_kw = soc_kw
+        my_predbat.car_charging_planned = [planned]
+        solar_allowed, solar_reason = my_predbat.publish_car_solar_slot(0, "")
+        mode, reason = my_predbat.publish_car_charging_mode(0, "", False, solar_allowed, solar_reason)
+        if (mode, reason) != (expect_mode, expect_reason):
+            print("ERROR: battery {}kWh planned {} gave ({}, {}), expected ({}, {})".format(soc_kw, planned, mode, reason, expect_mode, expect_reason))
+            failed = True
+
+    # A worse export rate still reads as export_better, so the battery reason only shows when it is the cause
+    my_predbat.soc_kw = 5.0
+    my_predbat.car_charging_planned = [True]
+    my_predbat.car_charging_solar_export_threshold = [5.0]
+    solar_allowed, solar_reason = my_predbat.publish_car_solar_slot(0, "")
+    mode, reason = my_predbat.publish_car_charging_mode(0, "", False, solar_allowed, solar_reason)
+    if (mode, reason) != ("off", "export_better"):
+        print("ERROR: low battery and a better export gave ({}, {}), expected (off, export_better)".format(mode, reason))
+        failed = True
+
+    for name, value in saved_soc.items():
+        setattr(my_predbat, name, value)
     for name, value in saved.items():
         setattr(my_predbat, name, value)
 
