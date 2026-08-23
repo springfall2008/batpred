@@ -1011,6 +1011,16 @@ def test_hainterface_socketloop_call_service_target_field(my_predbat=None):
     else:
         print("✓ target sent as a top-level sibling field, not nested inside service_data")
 
+    # The queued service_data dict is the same object async_call_service_websocket_command() logs
+    # on failure (ha.py's "Warn: Service call ... data ... failed" line) - socketLoop() must not
+    # mutate it when building the outbound frame, or that failure log silently loses the target
+    # that was actually part of the service definition.
+    if "target" not in queued_service_data:
+        print(f"ERROR: socketLoop() mutated the original queued service_data (target missing): {queued_service_data}")
+        failed += 1
+    else:
+        print("✓ original queued service_data left unchanged (target still present)")
+
     return failed
 
 
