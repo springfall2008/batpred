@@ -1610,3 +1610,139 @@ class AlphaESSAPI(ComponentBase):
         await self.save_config()
         await self.save_ratings()
         await self.save_control()
+
+
+def _build_alphaess(mock_base, args):  # pragma: no cover
+    """Construct an AlphaESSAPI around a MockBase for standalone command-line use.
+
+    Passed into the constructor in a single call: ComponentBase.__init__ already calls
+    initialize(**kwargs), so a separate follow-up call to initialize() would re-run it a
+    second time and print a duplicate banner before the CLI has reported anything.
+    """
+    return AlphaESSAPI(
+        mock_base,
+        app_id=args.app_id,
+        app_secret=args.app_secret,
+        inverter_sn=args.serial,
+        automatic=False,
+        control_enable=False,
+        api_delay=args.api_delay,
+    )
+
+
+def _confirm(prompt):  # pragma: no cover
+    """Ask for confirmation, treating a closed stdin and Ctrl-C as 'no'.
+
+    This is the only verification tool a remote tester has, so a closed or redirected
+    stdin (SSH, CI, a container with no TTY) must not crash it with a raw traceback -
+    EOFError and Ctrl-C both mean "no", cleanly.
+    """
+    try:
+        answer = input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        print("\nNo input available, nothing sent.")
+        return False
+    return answer.strip().lower() == "y"
+
+
+async def test_alphaess_api(args):  # pragma: no cover
+    """Run one AlphaESS diagnostic pass, or a single bind/unbind action."""
+    from mock_base import MockBase
+
+    client = _build_alphaess(MockBase(), args)
+
+    if args.verify:
+        print(f"This asks AlphaESS to EMAIL a verification code to the registered owner of {args.serial}.")
+        if not _confirm("Send that request? [y/N] "):
+            return
+        ok, message = await client.request_verification_code(args.serial, args.check_code)
+        print(("OK: " if ok else "FAILED: ") + message)
+        return
+
+    if args.bind:
+        print(f"This binds {args.serial} to AppID {args.app_id}.")
+        if not _confirm("Send the bind request? [y/N] "):
+            return
+        ok, message = await client.bind_system(args.serial, args.code)
+        print(("OK: " if ok else "FAILED: ") + message)
+        return
+
+    if args.unbind:
+        print(f"This UNBINDS {args.serial} from AppID {args.app_id}.")
+        print("Predbat will no longer be able to read or control it, and re-binding needs a code emailed to the system owner.")
+        if not _confirm("Send the unbind request? [y/N] "):
+            return
+        ok, message = await client.unbind_system(args.serial)
+        print(("OK: " if ok else "FAILED: ") + message)
+        return
+
+    print("Calling run() once (read-only: discover, poll config/telemetry, publish)...")
+    ok = await client.run(seconds=0, first=True)
+    if not ok:
+        if client.discovery_ok is False:
+            print("\nDISCOVERY FAILED - the getEssList call itself was rejected.")
+            if client.last_api_error:
+                print(f"  AlphaESS said: {client.last_api_error}")
+            print("  Check --app-id and --app-secret, and check this host's clock: the signature is")
+            print("  only valid within 300 seconds of AlphaESS server time.")
+        elif not client.device_list:
+            print("\nCREDENTIALS OK, but no battery systems were found on this account.")
+            if args.serial:
+                print(f"  --serial {args.serial!r} was set - a filter matching nothing looks identical to an empty")
+                print("  account; retry without --serial to check.")
+            print("  Systems reporting no battery capacity (plug-in solar) are skipped by design.")
+        else:
+            print(f"\nDISCOVERY OK ({len(client.device_list)} system(s): {client.device_list}), but the first telemetry poll came back empty.")
+            print("  Check the Warn: lines above for which endpoint failed.")
+        await client.final()
+        return
+
+    print(f"Systems: {client.device_list}")
+    for sn in client.device_list:
+        print(f"\n--- {sn} detail ---")
+        print(json.dumps(client.device_detail.get(sn, {}), indent=2, default=str))
+        print(f"\n--- {sn} telemetry ---")
+        print(json.dumps(client.device_values.get(sn, {}), indent=2, default=str))
+        print(f"\n--- {sn} energy ---")
+        print(json.dumps(client.device_energy.get(sn, {}), indent=2, default=str))
+        if args.dump_settings:
+            print(f"\n--- {sn} charge/discharge config ---")
+            print(json.dumps(client.device_config.get(sn, {}), indent=2, default=str))
+        live = "live (getLastPowerData)" if client._live_ok.get(sn) is not False else "history (getOneDayPowerBySn, 5 minute)"
+        periodic = {True: "yes", False: "no (6017)", None: "unknown"}[client._periodic_ok.get(sn)]
+        print(f"\nDerived: capacity={client.battery_capacity(sn):.2f} kWh, inverter_limit={client.inverter_limit(sn):.0f} W, battery_rate_max={client.battery_rate_max(sn):.0f} W")
+        print(f"Telemetry source: {live}; periodic schedule API entitled: {periodic}")
+
+    await client.final()
+    print("Done")
+
+
+def main():  # pragma: no cover
+    """Command-line entry point for AlphaESS diagnostics and system binding."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="AlphaESS Open API diagnostics")
+    parser.add_argument("--app-id", required=True, help="AlphaESS developer AppID from https://open.alphaess.com/")
+    parser.add_argument("--app-secret", required=True, help="AlphaESS developer AppSecret")
+    parser.add_argument("--serial", default=None, help="Restrict to one system serial (sysSn)")
+    parser.add_argument("--api-delay", type=float, default=2, help="Seconds to wait between API calls")
+    parser.add_argument("--dump-settings", action="store_true", help="Print the full charge/discharge config objects")
+    parser.add_argument("--verify", action="store_true", help="Ask AlphaESS to email a verification code to the system owner (needs --serial and --check-code)")
+    parser.add_argument("--check-code", default=None, help="The system's CheckCode, from the device label or the installer")
+    parser.add_argument("--bind", action="store_true", help="Bind --serial to this AppID (needs --code from the verification email)")
+    parser.add_argument("--code", default=None, help="Verification code from the email triggered by --verify")
+    parser.add_argument("--unbind", action="store_true", help="Unbind --serial from this AppID")
+    args = parser.parse_args()
+
+    if (args.verify or args.bind or args.unbind) and not args.serial:
+        parser.error("--serial is required with --verify, --bind or --unbind")
+    if args.verify and not args.check_code:
+        parser.error("--check-code is required with --verify")
+    if args.bind and not args.code:
+        parser.error("--code is required with --bind (run --verify first to have one emailed)")
+
+    asyncio.run(test_alphaess_api(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
