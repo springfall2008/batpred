@@ -1487,6 +1487,7 @@ def test_charge_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     restore()
     return failed
 
+
 def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     """
     Test discharge window handling when time is illegal (e.g., 'unknown')
