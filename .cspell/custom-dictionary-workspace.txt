@@ -19,8 +19,10 @@ Anson
 apexcharts
 apikey
 appdaemon
+appid
 appkey
 Apprent
+appsecret
 appsyaml
 argname
 armhf
@@ -44,6 +46,7 @@ backpropagation
 backsteps
 backtest
 Basepath
+bathighcap
 Batpred
 battemperature
 batteri
@@ -69,6 +72,8 @@ chargeenergytotal
 chargefreeze
 chargehold
 chargelater
+chargelimit
+chargepower
 CHECKCODE
 Chrg
 citem
@@ -89,6 +94,7 @@ corruptplans
 cprofile
 creds
 crosscharge
+ctrdis
 ctypes
 customauthorizer
 customisation
@@ -214,6 +220,7 @@ GivEnergy
 givtcp
 gnueabihf
 GOELEC
+gridcharge
 gridcode
 gridconsumption
 gridconsumptionpower
@@ -382,6 +389,7 @@ oncharge
 oninput
 onmouseout
 onmouseover
+openapi
 openweathermap
 overfitting
 overvoltage
@@ -535,6 +543,8 @@ sunsynk
 supabase
 synkctl
 syscmd
+sysdn
+syssn
 tabindex
 tasmota
 TCWORLD
@@ -548,8 +558,12 @@ threadpool
 timea
 timeb
 timec
+timechae
+timechaf
 timeday
 timedelta
+timedise
+timedisf
 timekey
 timelapse
 timenow
@@ -586,6 +600,7 @@ unsmoothed
 unstaged
 urandom
 urlsafe
+uscapacity
 useid
 userinterface
 Vallery
