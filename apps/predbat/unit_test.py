@@ -56,7 +56,7 @@ from tests.test_nordpool import run_nordpool_test
 from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_evcc import test_evcc
-from tests.test_car_modes import run_car_slot_adds_load_tests, run_car_plugged_state_tests, run_car_charging_mode_tests, run_car_solar_possible_tests
+from tests.test_car_modes import run_car_charger_power_cap_tests, run_car_slot_adds_load_tests, run_car_plugged_state_tests, run_car_charging_mode_tests, run_car_solar_possible_tests
 from tests.test_plugin_startup import test_plugin_startup_order
 from tests.test_active_flag import test_active_flag
 from tests.test_component_health_status import test_component_health_status
@@ -496,6 +496,7 @@ def main():
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
         ("car_charging_smart", run_car_charging_smart_tests, "Car charging smart tests", False),
+        ("car_charger_power_cap", run_car_charger_power_cap_tests, "Car charger combined power cap tests", False),
         ("car_slot_adds_load", run_car_slot_adds_load_tests, "Planned car slot adds load tests", False),
         ("car_plugged_state", run_car_plugged_state_tests, "Car plugged-in sensor state tests", False),
         ("car_charging_mode", run_car_charging_mode_tests, "Car charging mode decision tests", False),

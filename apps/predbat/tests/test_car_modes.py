@@ -88,6 +88,87 @@ def check_slot_adds_load(my_predbat, start, slot, use_kernel):
     return failed
 
 
+def run_car_charger_power_cap_tests(my_predbat):
+    """The car cannot take more than the charger's maximum, whatever mix of sun and grid it runs on.
+
+    Regression guard: the grid top-up was only capped by the slot's rate and the room left to
+    car_charging_limit, so with a planned slot and a sunny step the model would put the sun's diversion
+    and the full grid slot into the car at once - on a live system 2.93kWh into a 30 minute slot through
+    a 3.68kW charger.
+
+    This measures the Python engine only: reading the car's SoC needs debug_enable, and kernel_supported
+    refuses the kernel whenever that is set. The kernel has its own copy of the cap and is covered by
+    test_kernel_parity, which compares the two engines over randomised car solar configurations.
+    """
+    failed = False
+    print("**** Running Car charger power cap tests ****")
+
+    names = [
+        "num_cars",
+        "car_charging_hold",
+        "car_energy_reported_load",
+        "car_charging_slots",
+        "car_charging_limit",
+        "car_charging_soc",
+        "car_charging_loss",
+        "car_charging_solar",
+        "car_charging_plugged",
+        "car_charging_solar_limit",
+        "car_charging_solar_max_power",
+        "car_charging_solar_min_power",
+        "car_charging_solar_power_step",
+        "car_charging_solar_min_soc",
+        "car_charging_solar_export_threshold",
+        "car_charging_rate",
+        "prediction_kernel_enable",
+        "forecast_minutes",
+        "end_record",
+    ]
+    saved = {name: getattr(my_predbat, name) for name in names}
+
+    reset_inverter(my_predbat)
+    reset_rates2(my_predbat, 10.0, 5.0)
+    my_predbat.num_cars = 1
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_hold = True
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_limit = [50.0]
+    my_predbat.car_charging_soc = [0.0]
+    my_predbat.car_charging_rate = [7.0]
+    my_predbat.car_charging_solar = [True]
+    my_predbat.car_charging_plugged = [True]
+    my_predbat.car_charging_solar_limit = [50.0]
+    my_predbat.car_charging_solar_min_power = [0.0]
+    my_predbat.car_charging_solar_power_step = [0.0]
+    my_predbat.car_charging_solar_min_soc = 0.0
+    my_predbat.car_charging_solar_export_threshold = [CAR_SOLAR_EXPORT_ALWAYS]
+
+    # A 3.68kW charger with a 7kW grid slot booked and more than 3.68kW of surplus to divert. The horizon
+    # is the slot itself, so what lands in the car is what the charger delivered over exactly that hour.
+    max_power = 3.68
+    my_predbat.car_charging_solar_max_power = [max_power]
+    start = my_predbat.minutes_now
+    hours = 1.0
+    my_predbat.forecast_minutes = int(hours * 60)
+    my_predbat.end_record = my_predbat.forecast_minutes
+    my_predbat.car_charging_slots = [[{"start": start, "end": start + int(hours * 60), "kwh": 7.0 * hours, "average": 10.0, "octopus": False}]]
+
+    pred, _, _ = build_prediction(my_predbat, pv_amount=10.0, load_amount=0.1)
+    # final_car_soc is only filled in when the run is saved or debugging, so ask for the debug fields
+    pred.debug_enable = True
+    pred.run_prediction([], [], [], [], False, my_predbat.forecast_minutes)
+    delivered = pred.final_car_soc[0]
+    ceiling = max_power * hours + 0.001
+    if delivered > ceiling:
+        print("ERROR: car took {}kWh in {}h through a {}kW charger, ceiling {}kWh".format(round(delivered, 3), hours, max_power, round(ceiling, 3)))
+        failed = True
+
+    for name, value in saved.items():
+        setattr(my_predbat, name, value)
+
+    return failed
+
+
 def run_one_plugged(my_predbat, sensor_state, now_response):
     """Read car_charging_plugged for one sensor state and car_charging_now_response list."""
     my_predbat.ha_interface.dummy_items["binary_sensor.predbat_evcc_connected"] = sensor_state

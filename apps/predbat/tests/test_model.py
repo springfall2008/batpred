@@ -2138,6 +2138,8 @@ def run_model_tests(my_predbat, prediction_kernel=False):
     )
     # Solar-first ordering: with a planned grid slot AND solar, the surplus is taken before the grid load is added,
     # so solar gets the full 0.6kW surplus (=> 14.4 kWh). Grid-first would subtract the 0.3kW car load first (=> 7.2).
+    # max_power is 1.0 so the charger can carry the 0.6kW of sun and the 0.3kW top-up at once - at 0.7 the
+    # combined power cap would trim the top-up and this would measure that instead of the ordering.
     failed |= simple_scenario(
         "car_solar_first_order",
         my_predbat,
@@ -2148,7 +2150,7 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         with_battery=False,
         charge_car=0.3,
         car_charging_solar=True,
-        car_solar_max_power=0.7,
+        car_solar_max_power=1.0,
         car_limit=1000,
         car_solar_limit=1000,
         assert_final_car_solar=14.4,
