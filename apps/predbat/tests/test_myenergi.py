@@ -5,12 +5,14 @@ Unit tests for the myenergi Zappi and Eddi integration
 """
 
 import asyncio
+import datetime
 import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
+import pytz
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -236,25 +238,28 @@ class _StubTransport(MyEnergiTransport):
         """Pretend to cancel a boost."""
         return True
 
+    async def set_mode(self, device, mode):
+        """Pretend to set a supply mode."""
+        return True
+
 
 def test_transport_stubs():
     """Every unimplemented control returns False and warns exactly once."""
     messages = []
     transport = _StubTransport(messages.append)
 
-    assert run_async(transport.set_mode(None, "Eco")) is False
     assert run_async(transport.set_priority(None, 1)) is False
     assert run_async(transport.set_min_green_level(None, 50)) is False
     assert run_async(transport.set_phase_setting(None, "1")) is False
     assert run_async(transport.get_schedule(None)) is False
     assert run_async(transport.set_schedule(None, [])) is False
 
-    assert len(messages) == 6, "Each stub should warn once, got {}".format(messages)
+    assert len(messages) == 5, "Each stub should warn once, got {}".format(messages)
     assert all("not implemented" in message for message in messages)
 
     # A second call must not warn again
-    assert run_async(transport.set_mode(None, "Eco")) is False
-    assert len(messages) == 6, "Repeat calls must not warn again"
+    assert run_async(transport.set_priority(None, 1)) is False
+    assert len(messages) == 5, "Repeat calls must not warn again"
     print("  ✓ Stubbed controls warn once and return False")
 
 
@@ -383,6 +388,53 @@ def test_direct_smart_boost_url():
 
     assert calls[0] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-0-11-15-0730", calls[0]
     print("  ✓ Direct transport smart boost URL")
+
+
+def test_direct_set_mode():
+    """Setting a Zappi supply mode issues the documented mode command.
+
+    The mode index comes from ZAPPI_CHARGE_MODES, so Fast is 1 and Stopped is 4 - the
+    two Predbat-led charge control drives the charger with.
+    """
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({"status": 0}) for _ in range(3)])
+    with patch("aiohttp.ClientSession", return_value=session):
+        assert run_async(transport.set_mode(zappi, "Fast")) is True
+        assert run_async(transport.set_mode(zappi, "Stopped")) is True
+        assert run_async(transport.set_mode(zappi, "Eco+")) is True
+
+    assert calls[0] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-1-0-0-0000", calls[0]
+    assert calls[1] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-4-0-0-0000", calls[1]
+    assert calls[2] == "https://s18.myenergi.net/cgi-zappi-mode-Z12345678-3-0-0-0000", calls[2]
+    print("  ✓ Direct transport sets the Zappi supply mode")
+
+
+def test_direct_set_mode_rejects_bad_input():
+    """An unknown mode, or a non-Zappi device, is refused without issuing a request.
+
+    The Eddi mode command is a different endpoint with a different vocabulary, so
+    falling through to the Zappi one would silently address the wrong device.
+    """
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+    transport = MyEnergiDirectTransport(print, "12345678", "secret-key")
+    transport.base_url = "https://s18.myenergi.net"
+    transport.needs_asn_refresh = False
+
+    session, calls = _direct_session([_direct_response({"status": 0})])
+    with patch("aiohttp.ClientSession", return_value=session):
+        for device, mode in ((zappi, "Turbo"), (eddi, "Fast")):
+            try:
+                run_async(transport.set_mode(device, mode))
+                raise AssertionError("Expected MyEnergiApiError for {} {}".format(device.kind, mode))
+            except MyEnergiApiError:
+                pass
+    assert calls == [], "No request may be made for an unsupported mode or device kind"
+    print("  ✓ Direct transport refuses an unknown mode or a non-Zappi device")
 
 
 def test_direct_401_is_auth_error():
@@ -654,6 +706,30 @@ def test_cloud_boost_bodies():
     print("  ✓ Cloud transport boost bodies")
 
 
+def test_cloud_set_mode():
+    """The cloud transport posts the mode in the API's own lowercase vocabulary."""
+    zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    eddi = normalise_cloud_device(MOCK_CLOUD_EDDI_STATUS, MOCK_CLOUD_EDDI_META)
+    transport = MyEnergiCloudTransport(print, lambda: "jwt-token")
+
+    session, calls = _cloud_session([_cloud_response({"commandId": "c1"}) for _ in range(2)])
+    with patch("aiohttp.ClientSession", return_value=session):
+        assert run_async(transport.set_mode(zappi, "Fast")) is True
+        assert run_async(transport.set_mode(zappi, "Stopped")) is True
+        for device, mode in ((zappi, "Turbo"), (eddi, "Fast")):
+            try:
+                run_async(transport.set_mode(device, mode))
+                raise AssertionError("Expected MyEnergiApiError for {} {}".format(device.kind, mode))
+            except MyEnergiApiError:
+                pass
+
+    assert calls[0] == ("POST", "https://api.s18.myenergi.net/devices/ZA12345678/mode", {"supplyMode": "fast"}), calls[0]
+    # "Stopped" is the reported state, "stop" is what the API accepts - the two differ
+    assert calls[1] == ("POST", "https://api.s18.myenergi.net/devices/ZA12345678/mode", {"supplyMode": "stop"}), calls[1]
+    assert len(calls) == 2, "A bad mode or device kind must not reach the API: {}".format(calls)
+    print("  ✓ Cloud transport sets the Zappi supply mode")
+
+
 def test_cloud_sets_bearer_header():
     """Requests carry the current bearer token from the supplied callable, re-read on every call.
 
@@ -853,6 +929,427 @@ def _make_component(**overrides):
     }
     args.update(overrides)
     return MyEnergiAPI(base, **args)
+
+
+CONTROL_TZ = pytz.timezone("Europe/London")
+
+
+def _plan_window(start, end):
+    """Build one planned-window dict in the shape output.py publishes."""
+    return {"start": start.strftime("%m-%d %H:%M:%S"), "end": end.strftime("%m-%d %H:%M:%S")}
+
+
+def _control_component(plans=None, **overrides):
+    """Build a component on a pytz clock, with car charging plans already published.
+
+    plans maps car number to a list of _plan_window() dicts; car 0's slot sensor has no
+    postfix and later cars carry _1, _2 ... exactly as output.py names them.
+    """
+    component = _make_component(**overrides)
+    component.local_tz = CONTROL_TZ
+    component.base.local_tz = CONTROL_TZ
+    # A Zappi is controlled from its own car's plan, so there must be that many cars
+    component.base.num_cars = max([car_n + 1 for car_n in (plans or {})] or [1])
+    for car_n, windows in (plans or {}).items():
+        postfix = "" if car_n == 0 else "_{}".format(car_n)
+        component.base.set_state_wrapper("binary_sensor.predbat_car_charging_slot" + postfix, "off", {"planned": windows})
+    return component
+
+
+def test_control_window_parsing():
+    """Planned windows are read per car and matched against the clock.
+
+    The slot sensor's own on/off state only refreshes on Predbat's five minute cycle, so
+    the planned attribute is evaluated against the live clock here instead - otherwise
+    every window boundary would be acted on up to five minutes late.
+    """
+    inside = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    component = _control_component(plans={0: [inside]})
+
+    assert component.refresh_car_windows(CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
+    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
+    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 22, 59))) is False
+    # The window end is exclusive, so the boundary minute is already outside
+    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 1, 0))) is False
+    print("  ✓ Planned car charging windows are parsed and matched against the clock")
+
+
+def test_control_windows_are_per_car():
+    """Each car's own slot sensor drives its own Zappi, so car 1 does not follow car 0."""
+    car0 = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    car1 = _plan_window(datetime.datetime(2026, 8, 23, 4, 0), datetime.datetime(2026, 8, 23, 5, 0))
+    component = _control_component(plans={0: [car0], 1: [car1]})
+
+    now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
+    assert component.refresh_car_windows(now) is True
+    assert component.should_charge_now(0, now) is True
+    assert component.should_charge_now(1, now) is False, "Car 1's window has not started yet"
+
+    later = CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 4, 30))
+    assert component.should_charge_now(0, later) is False
+    assert component.should_charge_now(1, later) is True
+    print("  ✓ Each car's plan drives its own Zappi")
+
+
+def test_control_windows_tolerate_a_bad_entry_and_a_missing_plan():
+    """A malformed window is skipped, and an unpublished plan reports nothing to act on.
+
+    Returning False for a plan that has never been published is what stops the loop
+    stopping a car on startup, before Predbat has decided anything.
+    """
+    good = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+    now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
+
+    component = _control_component(plans={0: [{"start": "nonsense"}, good]})
+    assert component.refresh_car_windows(now) is True
+    assert component.should_charge_now(0, now) is True, "The good window must survive a bad neighbour"
+
+    never_published = _control_component()
+    assert never_published.refresh_car_windows(now) is False
+    assert never_published.should_charge_now(0, now) is False
+    print("  ✓ A malformed window is skipped and a missing plan is not acted on")
+
+
+def test_control_windows_cross_the_year_boundary():
+    """A plan carries no year, so a window rebuilt around now must not land in the past."""
+    # Published on 31 December for a window running into 1 January
+    window = _plan_window(datetime.datetime(2026, 12, 31, 23, 30), datetime.datetime(2027, 1, 1, 1, 30))
+    component = _control_component(plans={0: [window]})
+
+    now = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 45))
+    assert component.refresh_car_windows(now) is True
+    assert component.should_charge_now(0, now) is True, "A window straddling New Year must still match"
+    print("  ✓ Windows crossing the year boundary are rebuilt around now")
+
+
+def _zappi(serial, mode_index=3):
+    """Build a direct-API Zappi with a chosen supply mode (3 is Eco+)."""
+    return normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=serial, zmo=mode_index), DEVICE_KIND_ZAPPI)
+
+
+IN_WINDOW = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
+OUT_OF_WINDOW = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 20, 0))
+NIGHT_WINDOW = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
+
+
+def test_control_charge_sets_fast_inside_and_stopped_outside():
+    """Predbat holds the Zappi in Fast for a planned window and Stopped the rest of the time.
+
+    Fast is the only mode that draws what the plan assumed - the window was chosen because
+    the rate is cheap, not because there is sun, so Eco+ would leave the car uncharged.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    run_async(component.control_charge(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Fast", component.transport.set_mode.await_args
+
+    run_async(component.control_charge(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
+    print("  ✓ Fast inside a planned window, Stopped outside it")
+
+
+def test_control_charge_maps_each_zappi_to_its_own_car():
+    """Zappis are matched to cars in serial order, the same order auto-config wires them.
+
+    Car 0 is charging and car 1 is not, so the two Zappis must be driven differently in
+    the same pass - a single shared decision would charge or stop both.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW], 1: []})
+    component.devices = {"Z12345678": _zappi(12345678), "Z22223333": _zappi(22223333)}
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    run_async(component.control_charge(IN_WINDOW))
+    by_serial = {call.args[0].serial: call.args[1] for call in component.transport.set_mode.await_args_list}
+    assert by_serial == {"12345678": "Fast", "22223333": "Stopped"}, by_serial
+    print("  ✓ Each Zappi follows its own car's plan")
+
+
+def test_control_charge_is_edge_triggered_but_corrects_drift():
+    """A settled Zappi is left alone, but one changed in the myenergi app is put back.
+
+    Purely edge-triggered control diverges silently the moment anything else touches the
+    charger, so the mode already polled is compared against what was asked for.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    run_async(component.control_charge(IN_WINDOW))
+    assert component.transport.set_mode.await_count == 1
+    # The poll now reports Fast, matching what was set, so nothing more is sent
+    component.devices["Z12345678"] = _zappi(12345678, mode_index=1)
+    run_async(component.control_charge(IN_WINDOW))
+    assert component.transport.set_mode.await_count == 1, "A settled charger must not be re-commanded"
+
+    # Someone switches it to Eco+ in the myenergi app - Predbat puts it back
+    component.devices["Z12345678"] = _zappi(12345678, mode_index=3)
+    run_async(component.control_charge(IN_WINDOW))
+    assert component.transport.set_mode.await_count == 2, "Drift away from the set mode must be corrected"
+    assert component.transport.set_mode.await_args.args[1] == "Fast"
+    print("  ✓ Control is edge triggered but corrects drift")
+
+
+def test_control_charge_ignores_eddis():
+    """Only Zappis are driven - an Eddi has no car plan and a different mode vocabulary."""
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    run_async(component.control_charge(IN_WINDOW))
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ Eddis are never driven by car charge control")
+
+
+def test_control_charge_does_nothing_before_a_plan_exists():
+    """With no slot sensor published yet, nothing is commanded.
+
+    Otherwise the first cycle after a restart would stop a car that Predbat has not yet
+    decided anything about.
+    """
+    component = _control_component()
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    run_async(component.control_charge(IN_WINDOW))
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ Nothing is commanded before Predbat has published a plan")
+
+
+def _controlling_component(plans=None, **overrides):
+    """Build a component with Zappi control fully enabled and one Zappi already held."""
+    args = {"zappi_control": True}
+    args.update(overrides)
+    component = _control_component(plans=plans, **args)
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.transport.set_mode = AsyncMock(return_value=True)
+    # Capture the component's own log so the gating reasons can be asserted on
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.enable_control()
+    return component
+
+
+def test_control_gating_refuses_with_a_reason():
+    """Control only runs when it is asked for and can work, and says why when it will not."""
+    assert _controlling_component().control_active is True
+
+    for overrides, expected in (
+        ({"zappi_control": False}, None),
+        ({"automatic": False}, "myenergi_automatic"),
+        ({"enable_controls": False}, "myenergi_enable_controls"),
+    ):
+        component = _controlling_component(**overrides)
+        assert component.control_active is False, overrides
+        if expected:
+            assert any(expected in message for message in component.log_messages), (overrides, component.log_messages)
+    print("  ✓ Zappi control refuses to run without its prerequisites, and says which")
+
+
+def test_control_releases_to_the_saved_mode():
+    """Releasing puts the Zappi back where it was before Predbat first moved it."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Fast"
+
+    # The switch going off is a release, not just a pause in commanding
+    component.control_enabled = False
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", "The Zappi was in Eco+ before Predbat took over"
+    assert component.control_modes == {}, "A released Zappi is no longer held"
+    print("  ✓ Releasing restores the mode the Zappi had before Predbat took over")
+
+
+def test_control_releases_to_eco_plus_when_nothing_was_saved():
+    """With no saved mode - a restart, or a mode that cannot be set - release falls back to Eco+."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.control_modes = {"Z12345678": "Fast"}
+    component.control_saved_modes = {}
+    component.control_enabled = False
+
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
+    print("  ✓ Release falls back to Eco+ when there is nothing saved")
+
+
+def test_control_stops_and_resumes_on_read_only():
+    """Read only mode releases the Zappis, and clearing it resumes control."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_count == 1
+
+    component.base.args["set_read_only"] = True
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", "Read only must release, not just stop commanding"
+
+    # Still read only - nothing more is sent, there is nothing left to release
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_count == 2
+
+    component.base.args["set_read_only"] = False
+    run_async(component.control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Fast", "Clearing read only must resume control"
+    print("  ✓ Read only releases the Zappis and clearing it resumes control")
+
+
+def test_control_switch_is_published_and_toggles_control():
+    """The control switch is published on, and turning it off hands the Zappis back."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_off"))
+    assert component.control_enabled is False
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_on"))
+    assert component.control_enabled is True
+    print("  ✓ The zappi control switch is published and toggles control")
+
+
+def test_control_switch_is_not_published_when_control_cannot_run():
+    """No switch appears when control could never act on it, rather than one that lies.
+
+    With myenergi_enable_controls off the component is monitor only and enable_control()
+    refuses, so a published switch would sit there reading "on" for a feature that cannot
+    run. Toggling it would only make it responsive, not honest - so it is not published.
+    """
+    component = _controlling_component(enable_controls=False)
+    assert component.control_active is False
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") is None
+
+    # It reappears, with its remembered state, once controls are allowed again
+    allowed = _controlling_component()
+    assert allowed.control_active is True
+    run_async(allowed.publish_data())
+    assert allowed.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
+    print("  ✓ No control switch appears when control could not act on it")
+
+
+def test_control_switch_publishes_its_restored_state_on_the_first_cycle():
+    """A restart with control switched off must not show the switch on, even briefly.
+
+    The saved state has to be restored before the first publish, or the switch reads "on"
+    for a cycle and then flips - which looks like Predbat taking control back.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]}, zappi_control=True)
+    component.transport.fetch_devices = AsyncMock(return_value=[_zappi(12345678)])
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    async def _load_off():
+        """Stand in for storage returning a switched-off control state."""
+        component.control_enabled = False
+
+    component.load_control_enabled = _load_off
+
+    run_async(component.run(0, True))
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ The control switch publishes its restored state on the first cycle")
+
+
+def test_control_switch_is_not_published_without_the_feature():
+    """With myenergi_zappi_control unset there is no switch, so no dead control appears."""
+    component = _control_component()
+    component.devices = {"Z12345678": _zappi(12345678)}
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") is None
+    print("  ✓ No control switch appears when the feature is off")
+
+
+def test_run_enables_control_and_drives_the_zappi():
+    """The run loop turns control on once, restores the switch, and drives the plan."""
+    component = _control_component(plans={0: [NIGHT_WINDOW]}, zappi_control=True)
+    zappi = _zappi(12345678)
+    component.transport.fetch_devices = AsyncMock(return_value=[zappi])
+    component.transport.set_mode = AsyncMock(return_value=True)
+    component.load_control_enabled = AsyncMock()
+
+    assert run_async(component.run(0, True)) is True
+    assert component.control_active is True
+    component.load_control_enabled.assert_awaited_once()
+    # A real poll drove the Zappi from the plan without waiting for a second cycle
+    assert component.transport.set_mode.await_count == 1, component.transport.set_mode.await_args_list
+    print("  ✓ The run loop enables control and drives the Zappi from the plan")
+
+
+def test_run_does_not_control_when_the_feature_is_off():
+    """With myenergi_zappi_control unset the run loop never touches a Zappi's mode."""
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.transport.fetch_devices = AsyncMock(return_value=[_zappi(12345678)])
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    assert run_async(component.run(0, True)) is True
+    assert component.control_active is False
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ The run loop leaves the Zappi alone when control is off")
+
+
+def test_control_switch_state_survives_a_restart():
+    """Turning control off is persisted, so a restart does not silently resume control."""
+    saved = {}
+
+    class _Storage:
+        """Minimal in-memory stand-in for the Storage component."""
+
+        async def save(self, module, filename, data, format="yaml", expiry=None):
+            """Record the saved payload."""
+            saved[(module, filename)] = data
+
+        async def load(self, module, filename):
+            """Return a previously saved payload, or None."""
+            return saved.get((module, filename))
+
+    class _Components:
+        """Stand-in for the component registry, serving only the storage component."""
+
+        def __init__(self, storage):
+            """Hold the storage stand-in to serve."""
+            self.storage = storage
+
+        def get_component(self, name):
+            """Return the storage stand-in, and nothing else."""
+            return self.storage if name == "storage" else None
+
+    storage = _Storage()
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    # ComponentBase.storage is a read-only property resolving through base.components.
+    # Each test builds its own MockBase, so this cannot leak into any other test.
+    component.base.components = _Components(storage)
+
+    run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_off"))
+    assert saved, "Turning the switch off must be persisted"
+
+    restarted = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    restarted.base.components = _Components(storage)
+    assert restarted.control_enabled is True, "A fresh component starts with control on"
+    run_async(restarted.load_control_enabled())
+    assert restarted.control_enabled is False, "The saved off state must survive a restart"
+    print("  ✓ The control switch state survives a restart")
+
+
+def test_control_failure_does_not_break_the_poll():
+    """A refused mode command is a warning, not a failed cycle.
+
+    myenergi can refuse a mode for reasons Predbat cannot see - nothing plugged in, a
+    fault on the charger. Letting that escape would mark the whole component errored and
+    skip the success timestamp, so repeated refusals would eventually report it unhealthy
+    even though monitoring is working perfectly.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]}, zappi_control=True)
+    zappi = _zappi(12345678)
+    component.transport.fetch_devices = AsyncMock(return_value=[zappi])
+    component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
+    component.load_control_enabled = AsyncMock()
+
+    assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
+    assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
+    # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
+    assert component.control_modes == {}, component.control_modes
+    print("  ✓ A refused mode command warns without failing the poll")
 
 
 def test_component_selects_transport():
@@ -1820,6 +2317,8 @@ def test_myenergi(my_predbat=None):
     test_direct_503_without_header_is_api_error()
     test_direct_boost_urls()
     test_direct_smart_boost_url()
+    test_direct_set_mode()
+    test_direct_set_mode_rejects_bad_input()
     test_direct_401_is_auth_error()
     test_direct_non_200_sets_needs_asn_refresh()
     test_direct_timeout_sets_needs_asn_refresh()
@@ -1828,6 +2327,7 @@ def test_myenergi(my_predbat=None):
     test_direct_resolve_asn_timeout_is_api_error()
     test_cloud_fetch_devices()
     test_cloud_boost_bodies()
+    test_cloud_set_mode()
     test_cloud_sets_bearer_header()
     test_cloud_unauthorised_raises_auth_error()
     test_cloud_non_200_is_api_error()
@@ -1849,6 +2349,27 @@ def test_myenergi(my_predbat=None):
     test_cloud_device_list_cache_expires_on_the_clock()
     test_cloud_one_bad_device_does_not_lose_the_others()
     test_cloud_auth_error_still_aborts_the_poll()
+    test_control_window_parsing()
+    test_control_windows_are_per_car()
+    test_control_windows_tolerate_a_bad_entry_and_a_missing_plan()
+    test_control_windows_cross_the_year_boundary()
+    test_control_charge_sets_fast_inside_and_stopped_outside()
+    test_control_charge_maps_each_zappi_to_its_own_car()
+    test_control_charge_is_edge_triggered_but_corrects_drift()
+    test_control_charge_ignores_eddis()
+    test_control_charge_does_nothing_before_a_plan_exists()
+    test_control_gating_refuses_with_a_reason()
+    test_control_releases_to_the_saved_mode()
+    test_control_releases_to_eco_plus_when_nothing_was_saved()
+    test_control_stops_and_resumes_on_read_only()
+    test_control_switch_is_published_and_toggles_control()
+    test_control_switch_is_not_published_when_control_cannot_run()
+    test_control_switch_publishes_its_restored_state_on_the_first_cycle()
+    test_control_switch_is_not_published_without_the_feature()
+    test_run_enables_control_and_drives_the_zappi()
+    test_run_does_not_control_when_the_feature_is_off()
+    test_control_switch_state_survives_a_restart()
+    test_control_failure_does_not_break_the_poll()
     test_component_selects_transport()
     test_component_publishes_entities()
     test_component_retains_last_good_reading()

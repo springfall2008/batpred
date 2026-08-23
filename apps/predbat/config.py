@@ -2590,6 +2590,7 @@ APPS_SCHEMA = {
     "myenergi_automatic": {"type": "boolean"},
     "myenergi_enable_controls": {"type": "boolean"},
     "myenergi_poll_seconds": {"type": "integer", "zero": False},
+    "myenergi_zappi_control": {"type": "boolean"},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
