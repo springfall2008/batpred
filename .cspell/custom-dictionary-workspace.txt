@@ -12,8 +12,8 @@ aiomqtt
 aios
 Alertfeed
 allclose
-alphaess
 ALPHAESS
+alphaess
 annualform
 Anson
 apexcharts
