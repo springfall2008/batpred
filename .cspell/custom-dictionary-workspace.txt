@@ -443,6 +443,7 @@ pylint
 pypi
 pyproject
 pytest
+pythonhashseed
 pytz
 randn
 rarr

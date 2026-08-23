@@ -30,6 +30,7 @@ async def test_octopus_misc(my_predbat):
     failed += test_octopus_automatic_config_slot_order(my_predbat)
     failed += test_octopus_automatic_config_clears_removed_devices(my_predbat)
     failed += await test_octopus_automatic_config_rewire(my_predbat)
+    failed += test_octopus_automatic_config_respects_slot_claim(my_predbat)
     failed += await test_octopus_run(my_predbat)
 
     if failed == 0:
@@ -2123,6 +2124,73 @@ def test_octopus_automatic_config_clears_removed_devices(my_predbat):
     else:
         print("\n**** ✅ Octopus automatic_config device removal tests PASSED ****")
         return 0
+
+
+def test_octopus_automatic_config_respects_slot_claim(my_predbat):
+    """
+    Test that automatic_config leaves the car slot args alone when another component owns them.
+
+    The Ohme component can be configured to take the Intelligent slots from the charger instead,
+    and claims the args when it does. automatic_config() re-runs whenever the tariff or the live
+    device set moves, so without honouring the claim it silently takes them back part way through
+    a run and the wiring flip-flops between the two components.
+
+    Tests:
+    - Test 1: A claim by another component leaves the slot args untouched
+    - Test 2: The rest of automatic_config still runs while claimed
+    - Test 3: No claim, or Octopus's own claim, wires the slots as normal
+    """
+    print("\n**** Running Octopus automatic_config slot claim tests ****")
+    failed = False
+
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+
+    print("\n*** Test 1: A claim by another component leaves the slot args untouched ***")
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    my_predbat.car_slot_owner = "ohme"
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
+        print(f"ERROR: Expected the Ohme wiring to survive, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+
+    print("\n*** Test 2: The rest of automatic_config still runs while claimed ***")
+    if not my_predbat.args.get("octopus_saving_session"):
+        print("ERROR: Expected saving session wiring to still happen while the slots are claimed")
+        failed = True
+
+    print("\n*** Test 3: No claim wires the slots as normal ***")
+    my_predbat.car_slot_owner = None
+    api2 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api2.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api2.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") == "binary_sensor.predbat_ohme_slot_active":
+        print("ERROR: Expected Octopus to wire its own slots when unclaimed")
+        failed = True
+
+    # And Octopus owning the claim itself is not treated as someone else's
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_slot_owner = "octopus"
+    api3 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api3.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api3.automatic_config(["import"])
+
+    if not my_predbat.args.get("octopus_intelligent_slot"):
+        print("ERROR: Expected Octopus's own claim not to block its wiring")
+        failed = True
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+
+    if failed:
+        print("\n**** \u274c Octopus automatic_config slot claim tests FAILED ****")
+        return 1
+    print("\n**** \u2705 Octopus automatic_config slot claim tests PASSED ****")
+    return 0
 
 
 async def test_octopus_automatic_config_rewire(my_predbat):
