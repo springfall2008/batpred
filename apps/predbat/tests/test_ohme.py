@@ -267,9 +267,11 @@ def test_ohme(my_predbat=None):
         ("energy_left_sum", _test_ohme_energy_today_left_riemann, "energy_today uses a left Riemann sum"),
         ("energy_gap", _test_ohme_energy_today_long_gap, "energy_today skips over-long gaps"),
         ("energy_midnight", _test_ohme_energy_today_midnight_rollover, "energy_today resets at midnight"),
+        ("energy_gap_midnight", _test_ohme_energy_today_gap_across_midnight, "energy_today rolls the day over a long gap"),
         ("energy_restore", _test_ohme_energy_today_restore, "energy_today restores across a restart"),
         ("energy_restore_stale", _test_ohme_energy_today_restore_stale, "energy_today ignores a stale total"),
         ("energy_published", _test_ohme_energy_today_published, "publish_data publishes energy_today"),
+        ("energy_timezone", _test_ohme_energy_today_uses_configured_timezone, "energy_today follows the configured timezone"),
         ("auto_config_energy", _test_ohme_auto_config_wires_car_charging_energy, "auto config wires car_charging_energy"),
         ("iog_flag_forces_on", _test_ohme_iog_flag_forces_on, "explicit flag forces Intelligent on"),
         ("iog_flag_forces_off", _test_ohme_iog_flag_forces_off, "explicit flag forces Intelligent off"),
@@ -2009,6 +2011,34 @@ def _test_ohme_energy_today_midnight_rollover(my_predbat=None):
     return 0
 
 
+def _test_ohme_energy_today_gap_across_midnight(my_predbat=None):
+    """Test a stall spanning midnight still rolls the day over"""
+    print("**** Running test_ohme_energy_today_gap_across_midnight ****")
+
+    # Charging yesterday evening, then Predbat stalls until after midnight. The gap is too long to
+    # integrate, but the day must still roll - otherwise the first publish of the new day reports
+    # yesterday's total against yesterday's date
+    api = MockOhmeAPI()
+    before = datetime.datetime(2026, 8, 22, 23, 0, 0).astimezone()
+    api.update_energy_today(7200, before)
+    api.update_energy_today(7200, datetime.datetime(2026, 8, 22, 23, 2, 0).astimezone())
+    assert api.energy_today > 0, "Expected energy to accumulate before the stall"
+
+    after = datetime.datetime(2026, 8, 23, 0, 30, 0).astimezone()
+    energy = api.update_energy_today(7200, after)
+
+    assert energy == 0.0, f"Expected the new day to start at zero, got {energy}"
+    assert api.energy_today_date == after.date(), f"Expected the date to roll to {after.date()}, got {api.energy_today_date}"
+    assert any("not counting that gap" in msg for msg in api.log_messages), f"Expected the gap to still be skipped, got {api.log_messages}"
+
+    # The stalled interval itself is not counted - we have no evidence the charger ran through it
+    energy = api.update_energy_today(7200, after + datetime.timedelta(seconds=120))
+    assert abs(energy - 7200 * (120 / 3600.0) / 1000.0) < 1e-6, f"Expected only the post-stall interval, got {energy}"
+
+    print("PASS: the day rolled over across a long gap")
+    return 0
+
+
 def _test_ohme_energy_today_restore(my_predbat=None):
     """Test energy_today picks up today's total again after a restart"""
     print("**** Running test_ohme_energy_today_restore ****")
@@ -2067,7 +2097,10 @@ def _test_ohme_energy_today_published(my_predbat=None):
     item = api.dashboard_items[ENERGY_TODAY_ENTITY]
     assert item["attributes"]["unit_of_measurement"] == "kWh", f"Expected kWh, got {item['attributes']}"
     assert item["attributes"]["device_class"] == "energy", f"Expected device_class energy, got {item['attributes']}"
-    assert item["attributes"]["energy_date"] == datetime.datetime.now().astimezone().date().isoformat(), f"Expected today's date attribute, got {item['attributes']}"
+    # Compared against the accumulator's own date rather than a fresh now(), which would make the
+    # test straddle midnight and fail on a correct publish. The date itself is covered by the
+    # rollover tests
+    assert item["attributes"]["energy_date"] == api.energy_today_date.isoformat(), f"Expected the published date to match the accumulator, got {item['attributes']}"
 
     # First publish has no prior reading to integrate over, so it starts at zero
     assert item["state"] == 0.0, f"Expected 0.0 kWh on the first publish, got {item['state']}"
@@ -2199,6 +2232,34 @@ def _test_ohme_connected_sensor(my_predbat=None):
         assert state == expected, f"Expected {mode} to publish connected={expected}, got {state}"
 
     print("PASS: connected binary sensor tracked the plug state")
+    return 0
+
+
+def _test_ohme_energy_today_uses_configured_timezone(my_predbat=None):
+    """Test the daily total follows Predbat's configured timezone, not the host clock"""
+    print("**** Running test_ohme_energy_today_uses_configured_timezone ****")
+
+    # A container running UTC with timezone: Europe/London configured must still reset at the
+    # user's local midnight, so publish_data has to take its clock from Predbat rather than now()
+    api = MockOhmeAPI()
+    api._now_override = api.local_tz.localize(datetime.datetime(2026, 1, 2, 3, 4, 5))
+    api.client._charge_session = {
+        "mode": "SMART_CHARGE",
+        "power": {"watt": 7200, "amp": 32, "volt": 230},
+        "appliedRule": {"targetPercent": 80, "targetTime": 25200},
+        "allSessionSlots": [],
+    }
+    api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
+    api.client._last_rule = {"targetPercent": 80}
+    api.client._cars = []
+
+    run_async(api.publish_data())
+
+    published = api.dashboard_items[ENERGY_TODAY_ENTITY]["attributes"]["energy_date"]
+    assert published == "2026-01-02", f"Expected the configured clock's date, got {published}"
+    assert api.energy_today_date == datetime.date(2026, 1, 2), f"Expected the accumulator to follow it too, got {api.energy_today_date}"
+
+    print("PASS: energy_today followed the configured timezone")
     return 0
 
 

@@ -540,10 +540,9 @@ class OhmeAPI(ComponentBase):
             return self.energy_today
 
         gap_seconds = (now - last_time).total_seconds()
-        if gap_seconds > MAX_ENERGY_GAP_SECONDS:
-            self.log("Warn: Ohme API: {}s since the last power reading, not counting that gap rather than assuming the charger ran throughout".format(int(gap_seconds)))
-            return self.energy_today
 
+        # Roll the day over before any early return below, so a stall spanning midnight cannot
+        # leave yesterday's total being published against yesterday's date into the new day
         if self.energy_today_date != now.date():
             # Past midnight - the finished day's total stays in Home Assistant's history, so start
             # again and count only the part of this interval that falls on the new day
@@ -551,6 +550,12 @@ class OhmeAPI(ComponentBase):
             self.energy_today_date = now.date()
             midnight = datetime.datetime.combine(now.date(), datetime.time(0, 0)).replace(tzinfo=now.tzinfo)
             last_time = max(last_time, midnight)
+
+        # Measured against the original gap, not the part of it that fell after midnight - a stall
+        # is no more evidence of what the charger did either side of midnight
+        if gap_seconds > MAX_ENERGY_GAP_SECONDS:
+            self.log("Warn: Ohme API: {}s since the last power reading, not counting that gap rather than assuming the charger ran throughout".format(int(gap_seconds)))
+            return self.energy_today
 
         self.energy_today += last_watts * (now - last_time).total_seconds() / 3600.0 / 1000.0
         return self.energy_today
@@ -608,7 +613,9 @@ class OhmeAPI(ComponentBase):
         self.dashboard_item(entity_name_binary_sensor + "_connected", state="on" if self.client.status in CONNECTED_STATUSES else "off", attributes=ohme_attribute_table.get("connected", {}), app="ohme")
 
         # Delivered-energy total, suitable for car_charging_energy unlike Ohme's own energy figure
-        energy_today = self.update_energy_today(power.watts if power else 0, datetime.datetime.now().astimezone())
+        # Predbat's configured timezone, not the host's - the daily reset and the date this total is
+        # filed under have to follow the user's local midnight, which a UTC container would not
+        energy_today = self.update_energy_today(power.watts if power else 0, self.now_utc_exact)
         energy_today_attributes = ohme_attribute_table.get("energy_today", {}).copy()
         energy_today_attributes["energy_date"] = self.energy_today_date.isoformat() if self.energy_today_date else None
         self.dashboard_item(ENERGY_TODAY_ENTITY, state=round(energy_today, 3), attributes=energy_today_attributes, app="ohme")
