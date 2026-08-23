@@ -71,7 +71,7 @@ from web_helper import (
 
 from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
-from predbat import THIS_VERSION
+from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
 from web_annual import AnnualPage
@@ -808,6 +808,11 @@ class WebInterface(ComponentBase):
 
         status_entity = self.prefix + ".status"
         last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        if last_updated:
+            try:
+                last_updated = str2time(last_updated).replace(tzinfo=None, microsecond=0)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_updated time {}: {}".format(last_updated, e))
         status = self.get_state_wrapper(status_entity, default="Unknown")
         detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
         debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
@@ -1607,7 +1612,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -2831,7 +2836,7 @@ chart.render();
         """
         Return just the dashboard body content for AJAX refresh (preserves scroll position)
         """
-        text = self.get_status_html(THIS_VERSION)
+        text = self.get_status_html(THIS_VERSION_DISPLAY)
         return web.Response(content_type="text/html", text=text)
 
     async def html_dash(self, request):
@@ -2880,7 +2885,7 @@ chart.render();
 """
         text += "<body>\n"
         text += '<div id="dash-content-container">\n'
-        text += self.get_status_html(THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION_DISPLAY)
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)

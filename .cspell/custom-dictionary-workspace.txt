@@ -231,7 +231,6 @@ hadashboard
 hahistory
 hainterface
 halfhourly
-Hanchu
 hanchu
 hanchuess
 hanres

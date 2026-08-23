@@ -35,13 +35,20 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.51.1"
+THIS_VERSION = "v8.52.0"
+THIS_VERSION_DISPLAY = THIS_VERSION
 
-from download import predbat_update_move, predbat_update_download, check_install, DEFAULT_PREDBAT_REPOSITORY
+from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
 from const import MINUTE_WATT
 
 # Only do the self-install/self-update logic if we are NOT compiled.
 if not IS_COMPILED:
+    # Show the actual commit for a dev deploy (coverage/deploy) or standalone git
+    # checkout (hass.py) rather than just the release tag - see git_version.txt
+    git_version = read_deploy_git_version(os.path.dirname(__file__))
+    if git_version:
+        THIS_VERSION_DISPLAY = "{} ({})".format(THIS_VERSION, git_version)
+
     # Sanity check the install and re-download if corrupted
     passed, modified = check_install(THIS_VERSION, repository=DEFAULT_PREDBAT_REPOSITORY)
     if not passed:
@@ -53,7 +60,7 @@ if not IS_COMPILED:
     elif modified:
         print("Warn: Predbat files are installed but have modifications")
     else:
-        print("Predbat files are installed correctly for version {}".format(THIS_VERSION))
+        print("Predbat files are installed correctly for version {}".format(THIS_VERSION_DISPLAY))
 else:
     # In compiled mode, we skip the entire self-update logic
     print("Running in compiled mode; skipping local file checks and auto-update.")
@@ -1631,7 +1638,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return False
 
         # Check if the last updated time is within the last 15 minutes
-        if (datetime.now() - predbat_last_updated).total_seconds() > 15 * 60:
+        if (datetime.now(timezone.utc) - predbat_last_updated).total_seconds() > 15 * 60:
             return False
         return True
 
