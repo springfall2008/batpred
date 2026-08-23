@@ -1,7 +1,7 @@
 ---
 name: issue-triage
 description: Investigate a newly opened batpred GitHub issue against current main, classify it, assign labels and priority, and post a first-pass triage comment.
-allowed-tools: Bash(gh *), Bash(git log*), Bash(git diff*), Bash(git show*), Bash(git blame*), Bash(./run_all*), Edit, WebFetch, Read, Grep, Glob
+allowed-tools: You can view and edit files in this repo, run local tests, access the issue in github with 'gh' and use git commands to check history etc. Do not go outside this sandbox or push any changes back to git.
 ---
 
 # Issue Triage
@@ -29,8 +29,7 @@ Search existing issues (`gh issue list --search ...`, both open and closed) for 
 
 ## 5. Investigate against current main
 
-This clone is already synced to `origin/main` — don't re-sync it yourself.
-
+- This clone copy should be sync'ed to main, but you should sync to latest and you can discard any local changes left over from previous runs.
 - Read the relevant source area for the reported symptom (e.g. `apps/predbat/fetch.py` for rate issues, `apps/predbat/inverter.py` for a named inverter).
 - Check `git log` / `git blame` on that area for recent related changes — the issue may already be fixed on main since the version the reporter is using.
 - If the issue clearly maps to an existing test module (`apps/predbat/tests/test_<feature>.py`, listed in `TEST_REGISTRY` in `unit_test.py`), run just that test: `cd coverage && ./run_all --test <name>`. Skip this step if there's no clean mapping — never run the full suite.
@@ -66,4 +65,3 @@ Post exactly one comment via `gh issue comment <number> --body "..."`, opening w
 - Analysis only: no commits, no pushes, no PRs, no code changes that leave this clone.
 - Never remove a label a human applied.
 - Never close an issue except a confident duplicate.
-- Don't run the full test suite — targeted single tests only, and only when clearly mapped.
