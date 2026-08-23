@@ -923,6 +923,29 @@ def test_component_oauth_refresh_failure_stops_the_poll():
     print("  ✓ A failed OAuth refresh stops the poll before fetch_devices is ever called")
 
 
+def test_component_registration():
+    """The component is registered with matching config keys and event filter."""
+    from components import COMPONENT_LIST
+    from config import APPS_SCHEMA
+
+    entry = COMPONENT_LIST["myenergi"]
+    assert entry["class"] is MyEnergiAPI
+    assert entry["event_filter"] == "predbat_myenergi_"
+    assert entry["phase"] == 1
+    assert entry["can_restart"] is True
+    assert entry["required_or"] == ["api_key", "key"]
+
+    # Every declared arg must name a config key that exists in the schema, and every
+    # arg must be accepted by initialize()
+    import inspect
+
+    parameters = inspect.signature(MyEnergiAPI.initialize).parameters
+    for arg_name, spec in entry["args"].items():
+        assert arg_name in parameters, "initialize() has no parameter '{}'".format(arg_name)
+        assert spec["config"] in APPS_SCHEMA, "{} missing from APPS_SCHEMA".format(spec["config"])
+    print("  ✓ Component registration and schema keys")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -970,6 +993,7 @@ def test_myenergi(my_predbat=None):
     test_component_empty_device_list_does_not_wipe_devices()
     test_component_poll_seconds_rounding()
     test_component_oauth_refresh_failure_stops_the_poll()
+    test_component_registration()
 
     print("=" * 70)
     return False
