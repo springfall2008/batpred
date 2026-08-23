@@ -551,6 +551,7 @@ Predbat supports both of myenergi's APIs:
 | `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned` and `iboost_energy_today` automatically |
 | `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
 | `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
+| `zappi_control` | Boolean | No | false | `myenergi_zappi_control` | Set to `true` to let Predbat drive your Zappi from its car charging plan — see [Zappi charge control](#zappi-charge-control-myenergi) |
 
 The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash`
 is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging
@@ -592,7 +593,33 @@ Turning a boost switch on sends a boost of the amount selected on the companion 
 
 myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks that one condition before calling, and logs a warning instead. Every other reason a boost can be refused — an Eddi already at its maximum tank temperature, for instance — is only discovered from myenergi's reply, so Predbat issues the call and logs `myenergi: control failed` when it comes back refused. The switch reverts to the device's real state on the next poll either way.
 
-Not implemented in this release: mode selection, priority, minimum green level, phase setting, and charging schedules. These exist on the transport interface as reserved methods, ready for a later release, and nothing in Predbat calls them — there is no entity or service that can reach them, so there is nothing for you to try. If a future release wires one up before it is implemented, it warns once per control rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+Not implemented in this release: priority, minimum green level, phase setting, and charging schedules. These exist on the transport interface as reserved methods, ready for a later release, and nothing in Predbat calls them — there is no entity or service that can reach them, so there is nothing for you to try. If a future release wires one up before it is implemented, it warns once per control rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+
+#### Zappi charge control (myenergi)
+
+With `myenergi_zappi_control: true` Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself.
+
+Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
+
+Each Zappi follows its own car. Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first Zappi follows car 0's plan, your second follows car 1's, and so on.
+
+Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi app while Predbat is in control, it is put back — otherwise control would drift away silently.
+
+##### The control switch
+
+A `switch.predbat_myenergi_zappi_control` entity appears once `myenergi_zappi_control` is set. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
+
+##### When Predbat hands the Zappi back
+
+Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, falling back to **Eco+** when there is nothing saved — after a restart, for instance. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
+
+##### Two things to expect
+
+Charge control needs `myenergi_automatic`, because it is automatic configuration that establishes which Zappi belongs to which car. It also needs `myenergi_enable_controls`. If either is off, Predbat logs which one and leaves the Zappi alone.
+
+While Predbat is in control the Zappi is in Fast or Stopped, and myenergi only accepts a boost in Eco or Eco+ — so the manual boost switch will refuse for as long as control is on. Turn the control switch off if you want to boost by hand.
+
+Outside a planned window the Zappi is Stopped, which means it will not divert surplus solar to the car either. If you would rather keep solar diversion, leave `myenergi_zappi_control` off and let the Zappi run its own modes.
 
 #### Known limitation (myenergi)
 

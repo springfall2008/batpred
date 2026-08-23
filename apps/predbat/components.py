@@ -234,6 +234,7 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
             "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
             "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
+            "zappi_control": {"required": False, "config": "myenergi_zappi_control", "default": False},
         },
         # Gate activation on having at least one auth path — api_key is the direct
         # transport's local hub credential, key is the cloud transport's access token.

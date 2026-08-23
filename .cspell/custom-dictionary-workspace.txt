@@ -147,6 +147,7 @@ dwindow
 eauth
 echargingpile
 Eddi
+eddis
 elif
 elinter
 eload
@@ -646,5 +647,5 @@ ylabel
 YOURSERIAL
 yuanzhi
 zappi
-Zappis
+zappis
 zigbee
