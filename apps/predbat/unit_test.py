@@ -238,6 +238,7 @@ from tests.test_component_base import test_component_base_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
+from tests.test_load_ml_rollout import run_load_ml_rollout_tests
 from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
@@ -639,6 +640,8 @@ def main():
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
         ("annual_integration", run_annual_integration_isolated, "Annual prediction integration tests", True),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),
+        # Autoregressive rollout collapse: long-range forecast must keep repeatable daily events (#4673)
+        ("load_ml_rollout", run_load_ml_rollout_tests, "ML load rollout vs daily-pattern blend tests", False),
         # ML training memory: dataset construction, normalisation dtype and statistics accuracy
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),
         # Production-scale ML training harness against a captured history fixture
