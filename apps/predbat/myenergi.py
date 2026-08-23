@@ -23,6 +23,7 @@ two myenergi APIs: a direct digest-authenticated transport that any myenergi own
 can configure today, and a bearer-token transport for the official 3rd party API.
 """
 
+import argparse
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from typing import Optional
 import aiohttp
 
 from component_base import ComponentBase
+from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
 
@@ -806,3 +808,69 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
                     self.dashboard_item("sensor.{}_temp_1".format(prefix), state=device.temp_1, attributes=myenergi_attribute_table["temp_1"], app="myenergi")
                 if device.temp_2 is not None:
                     self.dashboard_item("sensor.{}_temp_2".format(prefix), state=device.temp_2, attributes=myenergi_attribute_table["temp_2"], app="myenergi")
+
+
+async def run_myenergi_cli(args):  # pragma: no cover
+    """Run one myenergi poll, and optionally a boost command, against the live API."""
+    mock_base = MockBase()
+    arg_dict = {
+        "auth_method": "oauth" if args.token else "direct",
+        "hub_serial": args.hub_serial,
+        "api_key": args.api_key,
+        "key": args.token,
+        "token_hash": args.token_hash,
+        "automatic": False,
+        "enable_controls": True,
+    }
+    component = MyEnergiAPI(mock_base, **arg_dict)
+    if not component.transport:
+        print("No usable credentials - pass --hub-serial and --api-key, or --token")
+        return
+
+    print("Connecting with the {} transport...".format(component.auth_method))
+    devices = await component.transport.fetch_devices()
+    if not devices:
+        print("No Zappi or Eddi devices found")
+        return
+
+    if args.raw:
+        for device in devices:
+            print(device)
+    else:
+        print("{:<12} {:<10} {:<16} {:<10} {:>10} {:>12}".format("DEVICE", "KIND", "STATUS", "MODE", "POWER W", "SESSION kWh"))
+        for device in devices:
+            print("{:<12} {:<10} {:<16} {:<10} {:>10.0f} {:>12.2f}".format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
+
+    target_kind = args.boost or args.cancel_boost
+    if target_kind:
+        device = next((item for item in devices if item.kind == target_kind), None)
+        if not device:
+            print("No {} device found to control".format(target_kind))
+            return
+        if args.boost:
+            print("Boosting {} by {}...".format(device.name, args.amount))
+            await component.transport.send_boost(device, args.amount)
+        else:
+            print("Cancelling boost on {}...".format(device.name))
+            await component.transport.cancel_boost(device)
+        print("Done")
+
+
+def main():  # pragma: no cover
+    """Main function for command line execution."""
+    parser = argparse.ArgumentParser(description="Test the myenergi API")
+    parser.add_argument("--hub-serial", action="store", default=None, help="myenergi hub serial number (direct transport)")
+    parser.add_argument("--api-key", action="store", default=None, help="myenergi API key from myaccount.myenergi.com (direct transport)")
+    parser.add_argument("--token", action="store", default=None, help="myenergi OAuth access token (cloud transport)")
+    parser.add_argument("--token-hash", action="store", default=None, help="myenergi OAuth token hash for refresh (cloud transport)")
+    parser.add_argument("--boost", choices=SUPPORTED_KINDS, default=None, help="Send a boost to the first matching device")
+    parser.add_argument("--cancel-boost", choices=SUPPORTED_KINDS, default=None, help="Cancel a boost on the first matching device")
+    parser.add_argument("--amount", type=int, default=DEFAULT_ZAPPI_BOOST_KWH, help="Boost amount: kWh for a Zappi, minutes for an Eddi")
+    parser.add_argument("--raw", action="store_true", help="Print the full normalised device records")
+
+    args = parser.parse_args()
+    asyncio.run(run_myenergi_cli(args))
+
+
+if __name__ == "__main__":
+    main()
