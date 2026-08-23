@@ -920,6 +920,42 @@ def test_alphaess_6053_backs_off_the_retry_via_min_write_interval():
     assert not failed, "test_alphaess_6053_backs_off_the_retry_via_min_write_interval"
 
 
+def test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick():
+    """A persistently rejected write (6008, 6042, 6001, ...) must be paced by
+    alphaess_min_write_interval exactly like a 6053, not re-POSTed every tick forever.
+
+    Before the fix, only 6053 stamped last_write_time on failure - every other rejection
+    left _write_allowed open, so _reconcile_control re-POSTed on every single tick (roughly
+    5,800 log lines a day at a 60-second cadence) while burning the documented 24-hour
+    write budget doing it. Uses 6008 "Set failed" specifically, since that is the code the
+    API documents for a rejected write, distinct from the already-covered 6053 pacing
+    signal.
+    """
+    failed = False
+    client = _writable()
+    client.min_write_interval = 300
+    schedule = _schedule(charge={"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"})
+    rejected = create_aiohttp_mock_response(status=200, json_data=_envelope(6008, None, msg="Set failed"))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(rejected)) as session:
+        with patch("alphaess.time.time", return_value=1000.0):
+            run_async_local(client.apply_settings("AL70", schedule))
+            calls_after_first = session.return_value.post.call_count
+        # 10 seconds later, well inside the 300s minimum interval: the retry must be held,
+        # not attempted again - exactly the 6053 behaviour, for a different rejection code.
+        with patch("alphaess.time.time", return_value=1010.0):
+            run_async_local(client.apply_settings("AL70", schedule))
+            calls_after_second = session.return_value.post.call_count
+    if calls_after_second != calls_after_first:
+        print(f"ERROR: a persistent 6008 rejection was retried inside min_write_interval, {calls_after_first} -> {calls_after_second} POST(s)")
+        failed = True
+    # A rejected write must still not be cached as applied, so it keeps retrying once the
+    # interval has passed - only the PACE changed, not the retry-forever behaviour itself.
+    if client.applied_payload.get("AL70", {}).get("charge") is not None:
+        print("ERROR: a rejected write was cached as applied")
+        failed = True
+    assert not failed, "test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick"
+
+
 def test_alphaess_held_write_is_not_reported_as_applied():
     """apply_settings must not report success for a payload that was HELD, not sent.
 
@@ -1120,6 +1156,179 @@ def test_alphaess_periodic_charge_limit_floor_is_clamped():
         print(f"ERROR: discharge chargeLimit {discharge_limit} should be floored to 10, not passed through as 0")
         failed = True
     assert not failed, "test_alphaess_periodic_charge_limit_floor_is_clamped"
+
+
+def test_alphaess_periodic_rate_zero_is_freeze_not_demand_mode():
+    """discharge_rate == 0 must mean HOLD on the periodic path too, exactly as
+    build_discharge_payload's ctrDis=1-with-disabled-periods means on the legacy path.
+
+    Before the fix, build_periodic_payload computed export_on = enable and rate > 0, so a
+    zero rate fell straight into the "no export planned" branch and produced ctrDisCycle=0
+    - which this file's own legacy comment defines as demand mode, where the battery covers
+    the house normally. On a periodic-entitled system with iboost_prevent_discharge or a
+    car-charging hold active, that would let the battery discharge into the load against an
+    explicit hold.
+    """
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(reserve=15, export_power=0)
+    payload = client.build_periodic_payload("AL70", schedule)
+    if payload.get("ctrDisCycle") != 1:
+        print(f"ERROR: ctrDisCycle {payload.get('ctrDisCycle')} should be 1 (time control ON, hard hold), not demand mode")
+        failed = True
+    entry = (payload.get("dischargeTimeList") or [{}])[0]
+    if entry.get("beginTime") != "00:00" or entry.get("endTime") != "00:00":
+        print(f"ERROR: discharge period {entry} should be disabled to hold SOC")
+        failed = True
+    if "chargePower" in entry:
+        print(f"ERROR: a frozen (rate 0) entry should carry no chargePower, got {entry}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_rate_zero_is_freeze_not_demand_mode"
+
+
+def test_alphaess_periodic_both_rates_zero_still_holds_the_battery():
+    """Both rates at zero is an ordinary, reachable hold on the periodic path too - see
+    test_alphaess_both_rates_zero_still_holds_the_battery for why this combination is
+    reachable and must not be read as "no plan"."""
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(reserve=10, charge_power=0, export_power=0)
+    payload = client.build_periodic_payload("AL70", schedule)
+    if payload.get("ctrDisCycle") != 1:
+        print(f"ERROR: ctrDisCycle {payload.get('ctrDisCycle')} should still be 1 - both rates zero still means hold")
+        failed = True
+    if payload.get("gridChargeCycle") != 0:
+        print(f"ERROR: gridChargeCycle {payload.get('gridChargeCycle')} should be 0 - charge_rate 0 disables charging")
+        failed = True
+    assert not failed, "test_alphaess_periodic_both_rates_zero_still_holds_the_battery"
+
+
+def test_alphaess_periodic_reserve_reaches_the_idle_discharge_entry():
+    """With no export window planned (demand mode, NOT a hold), the reserve must still
+    reach the inverter.
+
+    Before the fix, the idle discharge filler hard-coded chargeLimit to 10 regardless of
+    schedule["reserve"], so an entitled system's reserve never left Predbat's memory:
+    INVERTER_DEF sets has_reserve_soc True and automatic_config maps reserve, so Predbat
+    believed it set a floor the inverter never received. chargeLimit on the idle entry is
+    the only field this path has to carry a standing floor - there is no separate batUseCap
+    on the periodic pair.
+    """
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    # export not enabled (demand mode): the idle filler must carry the ACTUAL reserve, not
+    # an arbitrary constant. 37 is picked specifically because it differs from the old
+    # hard-coded 10, so a regression back to the constant is caught.
+    schedule = _schedule(reserve=37)
+    payload = client.build_periodic_payload("AL70", schedule)
+    entry = (payload.get("dischargeTimeList") or [{}])[0]
+    if entry.get("chargeLimit") != 37:
+        print(f"ERROR: idle discharge chargeLimit {entry.get('chargeLimit')} should carry the reserve 37")
+        failed = True
+    if payload.get("ctrDisCycle") != 0:
+        print(f"ERROR: ctrDisCycle {payload.get('ctrDisCycle')} should be 0 - this is demand mode, not a hold")
+        failed = True
+    # The [10,100] range constraint still applies to the reserve itself.
+    low = client.build_periodic_payload("AL70", _schedule(reserve=3))
+    if low["dischargeTimeList"][0].get("chargeLimit") != 10:
+        print(f"ERROR: reserve 3 should floor to 10 in the idle entry, got {low['dischargeTimeList'][0].get('chargeLimit')}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_reserve_reaches_the_idle_discharge_entry"
+
+
+def test_alphaess_periodic_non_overlapping_windows_survive_intact():
+    """Windows that do not actually overlap must be written verbatim, not trimmed.
+
+    Before the fix, the overlap check (hm_to_minutes(export_start) < hm_to_minutes(charge_end))
+    ignored charge_start entirely, so an export window entirely BEFORE a later charge
+    window (export 10:00-11:00, charge 13:00-14:00 - no overlap at all) was falsely trimmed:
+    the check saw export_start (10:00) < charge_end (14:00) and moved export_start to
+    14:00, collapsing a genuine window and discarding a whole peak-rate export.
+    """
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "13:00:00", "end": "14:00:00"},
+        export={"enable": True, "soc": 20, "power": 3000, "start": "10:00:00", "end": "11:00:00"},
+    )
+    payload = client.build_periodic_payload("AL70", schedule)
+    charge_entry = payload["chargeTimeList"][0]
+    discharge_entry = payload["dischargeTimeList"][0]
+    if (charge_entry.get("beginTime"), charge_entry.get("endTime")) != ("13:00", "14:00"):
+        print(f"ERROR: charge window trimmed despite no overlap: {charge_entry}")
+        failed = True
+    if (discharge_entry.get("beginTime"), discharge_entry.get("endTime")) != ("10:00", "11:00"):
+        print(f"ERROR: export window trimmed despite no overlap: {discharge_entry}")
+        failed = True
+    if payload.get("ctrDisCycle") != 1 or payload.get("gridChargeCycle") != 1:
+        print(f"ERROR: a falsely-collapsed window disabled a cycle flag: gridChargeCycle={payload.get('gridChargeCycle')} ctrDisCycle={payload.get('ctrDisCycle')}")
+        failed = True
+    if any("overlap" in message.lower() for message in client.log_messages):
+        print(f"ERROR: an overlap was logged when the windows do not overlap: {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_non_overlapping_windows_survive_intact"
+
+
+def test_alphaess_periodic_export_before_charge_overlap_trims_the_export_end():
+    """A genuine before-overlap must be trimmed at the correct (nearer) edge, not destroyed.
+
+    Before the fix, ANY detected overlap trimmed export_start to charge_end regardless of
+    which window came first. For export 12:00-13:30 overlapping charge 13:00-14:00 (export
+    starts BEFORE the charge window), that produced export_start=14:00 with export_end
+    still 13:30 - an inverted, collapsed window - destroying the whole export rather than
+    trimming it to the 12:00-13:00 portion that does not overlap.
+    """
+    failed = False
+    client = _client()
+    client._periodic_ok["AL70"] = True
+    schedule = _schedule(
+        charge={"enable": True, "soc": 90, "power": 3000, "start": "13:00:00", "end": "14:00:00"},
+        export={"enable": True, "soc": 20, "power": 3000, "start": "12:00:00", "end": "13:30:00"},
+    )
+    payload = client.build_periodic_payload("AL70", schedule)
+    discharge_entry = payload["dischargeTimeList"][0]
+    if (discharge_entry.get("beginTime"), discharge_entry.get("endTime")) != ("12:00", "13:00"):
+        print(f"ERROR: export window {discharge_entry.get('beginTime')}-{discharge_entry.get('endTime')} should be trimmed to 12:00-13:00, not destroyed")
+        failed = True
+    if payload.get("ctrDisCycle") != 1:
+        print(f"ERROR: ctrDisCycle {payload.get('ctrDisCycle')} should still be 1 - the trimmed window is still real")
+        failed = True
+    if not any("overlap" in message.lower() for message in client.log_messages):
+        print(f"ERROR: no overlap-trim log, got {client.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_export_before_charge_overlap_trims_the_export_end"
+
+
+def test_alphaess_periodic_direction_detects_interference():
+    """Entitled systems write via setTimeChargeBySn, so applied_payload[sn] only ever
+    carries a "periodic" key for them - note_external_change("charge"/"discharge", ...)
+    can never find a match against it, and interference on an entitled system's REAL
+    write path went undetected forever. The "periodic" direction must detect it too."""
+    failed = False
+    client = _writable()
+    client._periodic_ok["AL70"] = True
+    original = {
+        "sysSn": "AL70",
+        "gridChargeCycle": 1,
+        "ctrDisCycle": 0,
+        "chargeTimeList": [{"beginTime": "01:00", "endTime": "05:00", "chargeLimit": 90, "chargePower": 3000}],
+        "dischargeTimeList": [{"beginTime": "00:00", "endTime": "00:00", "chargeLimit": 10}],
+    }
+    client.applied_payload["AL70"] = {"periodic": original}
+    changed = dict(original, ctrDisCycle=1, dischargeTimeList=[{"beginTime": "17:00", "endTime": "19:00", "chargeLimit": 20, "chargePower": 3000}])
+    for _ in range(ALPHAESS_SETTLE_POLLS + 1):
+        client.note_external_change("AL70", "periodic", changed)
+    if not any("no longer match" in message.lower() for message in client.log_messages):
+        print(f"ERROR: periodic interference not detected: {client.log_messages}")
+        failed = True
+    if "periodic" in client.applied_payload.get("AL70", {}):
+        print(f"ERROR: periodic intent not cleared after detection: {client.applied_payload['AL70']}")
+        failed = True
+    assert not failed, "test_alphaess_periodic_direction_detects_interference"
 
 
 def test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint():
@@ -1340,6 +1549,7 @@ def run_alphaess_control_tests(my_predbat):
         ("min_write_interval", test_alphaess_minimum_write_interval_holds_a_change_rather_than_dropping_it),
         ("6053_backoff", test_alphaess_6053_backs_off_rather_than_counting_as_a_failure),
         ("6053_paces_the_retry", test_alphaess_6053_backs_off_the_retry_via_min_write_interval),
+        ("persistent_rejection_paced", test_alphaess_persistently_rejected_write_is_paced_not_retried_every_tick),
         ("held_write_not_applied", test_alphaess_held_write_is_not_reported_as_applied),
         ("write_button_not_forced", test_alphaess_write_button_is_not_forced),
         ("periodic_6017_cached", test_alphaess_periodic_6017_is_cached_and_never_retried),
@@ -1348,6 +1558,12 @@ def run_alphaess_control_tests(my_predbat):
         ("periodic_disabled_flag", test_alphaess_periodic_disabled_direction_uses_the_cycle_flag),
         ("periodic_no_overlap", test_alphaess_periodic_windows_do_not_overlap),
         ("periodic_charge_limit_floor", test_alphaess_periodic_charge_limit_floor_is_clamped),
+        ("periodic_rate_zero_is_freeze", test_alphaess_periodic_rate_zero_is_freeze_not_demand_mode),
+        ("periodic_both_rates_zero_holds", test_alphaess_periodic_both_rates_zero_still_holds_the_battery),
+        ("periodic_reserve_reaches_idle_entry", test_alphaess_periodic_reserve_reaches_the_idle_discharge_entry),
+        ("periodic_no_overlap_survives", test_alphaess_periodic_non_overlapping_windows_survive_intact),
+        ("periodic_before_overlap_trims_end", test_alphaess_periodic_export_before_charge_overlap_trims_the_export_end),
+        ("periodic_direction_interference", test_alphaess_periodic_direction_detects_interference),
         ("apply_settings_routes_periodic", test_alphaess_apply_settings_routes_entitled_systems_through_the_periodic_endpoint),
         ("unbind_switch_published", test_alphaess_unbind_switch_is_published_for_every_serial),
         ("unbind_switch_reflects_latch", test_alphaess_unbind_switch_reflects_an_already_latched_serial),

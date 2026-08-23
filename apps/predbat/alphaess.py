@@ -36,6 +36,9 @@ from alphaess_const import (
     ALPHAESS_CODE_TIMESTAMP,
     ALPHAESS_CODE_TOO_FAST,
     ALPHAESS_CODE_NO_PERMISSION,
+    ALPHAESS_CODE_OFFLINE,
+    ALPHAESS_CODE_SIGN,
+    ALPHAESS_SIGN_WINDOW_SECONDS,
     ALPHAESS_DEBUG_REDACT_KEYS,
     ALPHAESS_DEBUG_REDACT_KEYS_RESPONSE,
     ALPHAESS_RETRIES,
@@ -198,13 +201,24 @@ class AlphaESSAPI(ComponentBase):
         detail = "{}{}".format(msg, " - {}".format(exp_msg) if exp_msg else "")
         self.last_api_error = detail or self.describe_code(code)
         if code == ALPHAESS_CODE_TIMESTAMP:
-            self.log("Warn: AlphaESS rejected the request timestamp ({}) - this host's clock is more than 300 seconds from AlphaESS server time, it is a clock problem and not a credentials problem".format(self.describe_code(code)))
+            self.log(
+                "Warn: AlphaESS rejected the request timestamp ({}) - this host's clock is more than {} seconds from AlphaESS server time, it is a clock problem and not a credentials problem".format(self.describe_code(code), ALPHAESS_SIGN_WINDOW_SECONDS)
+            )
+            return
+        if code in ALPHAESS_CODE_SIGN:
+            self.log("Warn: AlphaESS rejected the request signature ({}) - check alphaess_app_id and alphaess_app_secret".format(self.describe_code(code)))
             return
         if code == ALPHAESS_CODE_TOO_FAST:
             # A pacing signal, not a component fault: both write endpoints are documented as
             # writable once per 24 hours, so a busy response here is expected under load.
             # Logging it at Warn would contradict that and read as a genuine malfunction.
             self.log("Info: AlphaESS {} was rate-limited ({}); this is a pacing signal, not a fault, and will be retried after the write pacing interval".format(path, self.describe_code(code)))
+            return
+        if code == ALPHAESS_CODE_OFFLINE:
+            # Routine and transient - a system that has simply dropped off the cloud, not a
+            # component fault. fetch_device_data already treats a getLastPowerData failure
+            # (6042 is common there) as the normal trigger to fall back to the history path.
+            self.log("Info: AlphaESS {} reported the system offline ({}); this is routine and not treated as a failure".format(path, self.describe_code(code)))
             return
         self.log("Warn: AlphaESS {} returned {} {}".format(path, self.describe_code(code), detail))
 
@@ -372,6 +386,7 @@ class AlphaESSAPI(ComponentBase):
                 self.log("Warn: AlphaESS this account has no battery systems bound to it")
             return False
         self.mark_refreshed("static")
+        await self.save_static()
         return True
 
     def tier_expired(self, tier, ttl_minutes):
@@ -433,7 +448,7 @@ class AlphaESSAPI(ComponentBase):
         """Map the most recent getOneDayPowerBySn sample into device_values.
 
         Returns False when the history carries no SOC, which is the only thing that makes
-        a serial undriveable - everything else can be defaulted.
+        a serial undriveable - everything else can be defaulted or derived.
         """
         if not isinstance(samples, list) or not samples:
             return False
@@ -449,13 +464,28 @@ class AlphaESSAPI(ComponentBase):
             return False
         feed_in = self._as_float(sample.get(ALPHAESS_HISTORY_FEED_IN), 0.0)
         grid_charge = self._as_float(sample.get(ALPHAESS_HISTORY_GRID_CHARGE), 0.0)
+        pv_power = self._as_float(sample.get(ALPHAESS_HISTORY["pv_power"][0]), 0.0)
+        load_power = self._as_float(sample.get(ALPHAESS_HISTORY["load_power"][0]), 0.0)
         self.device_values[sn] = {
             "soc": soc,
-            "pv_power": self._as_float(sample.get("ppv"), 0.0),
-            "load_power": self._as_float(sample.get("load"), 0.0),
+            "pv_power": pv_power,
+            "load_power": load_power,
             # The history has no signed grid field, so it is reconstructed from the two
             # positive-only fields and then negated for Predbat's convention.
             "grid_power": -(grid_charge - feed_in),
+            # This endpoint has no pbat field either, so battery_power is derived from the
+            # power balance ppv + pgrid + pbat = pload, using AlphaESS's own positive-on-
+            # import pgrid convention (pgrid = gridCharge - feedIn, i.e. the negation of the
+            # grid_power leaf above): pbat = pload - ppv - (gridCharge - feedIn). The design
+            # spec's live-sample arithmetic (pgrid 11 + pbat 1264 = pload 1275 with ppv 0)
+            # establishes that this is positive-on-discharge, matching ALPHAESS_TELEMETRY's
+            # pbat pass-through, so the two paths agree on sign. Deriving it rather than
+            # leaving it unmapped matters because automatic_config() maps battery_power
+            # unconditionally for every inverter, including one that starts life on this
+            # path (a restart landing straight on a demoted serial); an arg pointed at a
+            # sensor that never appears is worse than an absent one, and would silently
+            # disable find_battery_size and battery-curve learning for the whole session.
+            "battery_power": load_power - pv_power - (grid_charge - feed_in),
         }
         return True
 
@@ -515,18 +545,28 @@ class AlphaESSAPI(ComponentBase):
         """Poll telemetry for every inverter, reporting whether anything came back.
 
         The tier clock is started only when a poll actually succeeded - see mark_refreshed.
+        Also persists the live-vs-history verdict (the "ratings" cache) whenever a serial's
+        _live_ok flips this cycle - a demotion or a self-heal - so a restart does not lose
+        it and re-learn it from scratch. Not saved unconditionally every tick: this tier
+        runs every 60 seconds, and most ticks change nothing.
         """
         got_any = False
+        ratings_changed = False
         for sn in self.device_list:
+            before = self._live_ok.get(sn)
             try:
                 if await self.fetch_device_data(sn):
                     got_any = True
             except Exception as error:
                 self.log("Warn: AlphaESS telemetry poll failed for {}: {}".format(sn, error))
+            if self._live_ok.get(sn) != before:
+                ratings_changed = True
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
         if got_any:
             self.mark_refreshed("power")
+        if ratings_changed:
+            await self.save_ratings()
         return got_any
 
     async def fetch_device_energy(self, sn):
@@ -1077,6 +1117,8 @@ class AlphaESSAPI(ComponentBase):
         """
         if direction == "charge":
             return ("gridCharge", "timeChaf1", "timeChae1", "timeChaf2", "timeChae2", "batHighCap")
+        if direction == "periodic":
+            return ("gridChargeCycle", "ctrDisCycle", "chargeTimeList", "dischargeTimeList")
         return ("ctrDis", "timeDisf1", "timeDise1", "timeDisf2", "timeDise2", "batUseCap")
 
     def note_external_change(self, sn, direction, observed):
@@ -1115,17 +1157,20 @@ class AlphaESSAPI(ComponentBase):
     async def fetch_config(self, sn):
         """Read the current charge and discharge config for one inverter.
 
-        NOT a read-modify-write baseline: both payload builders replace the whole object
-        from the locally held schedule rather than patching device_config, so nothing reads
-        this back into a write today. It exists to surface the inverter's current settings
-        for Tasks 10b (external-change detection) and 11 (periodic reconciliation).
+        NOT a read-modify-write baseline: both legacy payload builders replace the whole
+        object from the locally held schedule rather than patching device_config, so
+        nothing reads this back into a write today. It exists to surface the inverter's
+        current settings for external-change detection and, once a serial is entitled to
+        the periodic API, for reconciling that schedule too.
 
-        Returns True only when BOTH reads succeed. refresh_config uses that to decide
-        whether to start the 30-minute config tier clock, and starting it on a half-successful
-        read would leave the failed half stale for a full TTL - the same class of bug Task 4's
-        refresh_static had (marking a tier fresh on an unsuccessful poll). Whatever data DID
-        come back is kept regardless of the overall result, so a transient failure on one
-        endpoint does not blank out the other's last-known values - it is logged instead.
+        Returns True only when every applicable read succeeds: both legacy reads always,
+        plus the periodic schedule read for an entitled serial. refresh_config uses that
+        to decide whether to start the 30-minute config tier clock, and starting it on a
+        half-successful read would leave the failed half stale for a full TTL - the same
+        class of bug a premature refresh_static success would have (marking a tier fresh
+        on an unsuccessful poll). Whatever data DID come back is kept regardless of the
+        overall result, so a transient failure on one endpoint does not blank out the
+        others' last-known values - it is logged instead.
         """
         entry = self.device_config.setdefault(sn, {})
         code, charge = await self._get("charge_config", params={"sysSn": sn})
@@ -1144,15 +1189,43 @@ class AlphaESSAPI(ComponentBase):
             self.log("Warn: AlphaESS {} charge config read failed; keeping the previous cycle's value".format(sn))
         if not discharge_ok:
             self.log("Warn: AlphaESS {} discharge config read failed; keeping the previous cycle's value".format(sn))
-        return charge_ok and discharge_ok
+
+        periodic_ok = True
+        if self._periodic_ok.get(sn) is True:
+            # An entitled system writes via setTimeChargeBySn, so applied_payload[sn] only
+            # ever carries a "periodic" key - note_external_change("charge"/"discharge", ...)
+            # above can never find a match for these serials, and interference on the
+            # legacy config objects (which this serial is not written through) would go
+            # undetected forever. Read the periodic schedule back and compare like-for-like
+            # against what Predbat actually wrote, rather than trying to translate the
+            # legacy fields onto the periodic intent - the two endpoints are not guaranteed
+            # to describe the same state the same way.
+            if self.api_delay:
+                await asyncio.sleep(self.api_delay)
+            code, periodic = await self._get("time_charge", params={"sysSn": sn})
+            periodic_ok = code == ALPHAESS_CODE_OK and isinstance(periodic, dict)
+            if periodic_ok:
+                self.note_external_change(sn, "periodic", periodic)
+                entry["periodic"] = periodic
+            else:
+                self.log("Warn: AlphaESS {} periodic schedule read failed; keeping the previous cycle's value".format(sn))
+        return charge_ok and discharge_ok and periodic_ok
 
     async def refresh_config(self):
         """Refresh the config baseline for every inverter, and re-probe demoted telemetry.
 
         The live re-probe lives here rather than on the power tier so a demoted serial
         costs two extra calls an hour instead of one a minute, while still self-healing.
+
+        Saves inline rather than only at shutdown, so a container kill or crash - the
+        ordinary Home Assistant add-on restart - does not lose what was just learned: the
+        config baseline whenever at least one serial's read fully succeeded, and the
+        live-vs-history ("ratings") verdict whenever a re-probe actually restores one.
+        Neither is saved unconditionally every tick - this tier runs every 30 minutes and
+        most ticks change nothing worth persisting again.
         """
         got_any = False
+        live_restored = False
         for sn in self.device_list:
             try:
                 if await self.fetch_config(sn):
@@ -1166,13 +1239,17 @@ class AlphaESSAPI(ComponentBase):
                     self.log("Warn: AlphaESS periodic probe failed for {}: {}".format(sn, error))
             if self._live_ok.get(sn) is False:
                 try:
-                    await self.reprobe_live(sn)
+                    if await self.reprobe_live(sn):
+                        live_restored = True
                 except Exception as error:
                     self.log("Warn: AlphaESS live re-probe failed for {}: {}".format(sn, error))
             if self.api_delay:
                 await asyncio.sleep(self.api_delay)
         if got_any:
             self.mark_refreshed("config")
+            await self.save_config()
+        if live_restored:
+            await self.save_ratings()
         return got_any
 
     def _is_read_only(self):
@@ -1210,22 +1287,32 @@ class AlphaESSAPI(ComponentBase):
             self.log("Info: AlphaESS {} {} change is held by alphaess_min_write_interval ({}s) and will be applied on the next eligible cycle".format(sn, direction, self.min_write_interval))
             return False
         code, _ = await self._post(endpoint_key, body=payload)
+        # Stamp every attempt, success or not - not just success and 6053. A persistently
+        # rejected write (6008 "Set failed", 6042 "system offline", 6001 "Parameter error",
+        # ...) must still be paced by alphaess_min_write_interval, or _reconcile_control
+        # re-POSTs it every single tick forever, burning the documented 24-hour write budget
+        # while doing it. The write is deliberately NOT cached as applied below on any
+        # failure path, so it keeps retrying - just paced, not hammering.
+        self.last_write_time[(sn, direction)] = time.time()
         if code != ALPHAESS_CODE_OK:
             if code == ALPHAESS_CODE_TOO_FAST:
-                # A pacing signal, not a broken component. Deliberately NOT cached as
-                # applied, so the next cycle retries - but the attempt IS stamped, so that
-                # retry goes through the same minimum-interval gate rather than hammering
-                # the endpoint again immediately with no extra spacing at all. Both write
-                # endpoints are documented as writable once per 24 hours.
-                self.last_write_time[(sn, direction)] = time.time()
+                # A pacing signal, not a broken component.
                 self.log("Info: AlphaESS rate-limited the {} write for {}; it will be retried after the write pacing interval".format(direction, sn))
             else:
                 self.log("Warn: AlphaESS {} write for {} was rejected with {}".format(direction, sn, self.describe_code(code)))
+            # Saved inline so a container kill or crash right after a write does not lose
+            # the pacing timestamp just stamped above and reopen the retry storm this
+            # guards against.
+            await self.save_control()
             return False
         cache[direction] = payload
-        self.last_write_time[(sn, direction)] = time.time()
         self.settle_count[(sn, direction)] = 0
         self.log("Info: AlphaESS wrote {} settings for {}".format(direction, sn))
+        # Saved inline (not only at shutdown) so a container kill or crash right after a
+        # successful write does not lose the applied-payload cache or the write timestamp -
+        # a restart would otherwise re-learn both from scratch, or worse, forget the write
+        # pacing budget was just spent.
+        await self.save_control()
         return True
 
     async def probe_periodic(self, sn):
@@ -1268,40 +1355,70 @@ class AlphaESSAPI(ComponentBase):
 
         Both lists must carry at least one element - an empty list is rejected with 6001
         "time list is null", and omitting the key gets 10001 - so a direction with no plan
-        gets a filler period and is disabled via its cycle flag instead.
+        gets a filler period and is disabled via its cycle flag instead. The discharge
+        filler's chargeLimit is the ONLY carrier of the reserve floor on this path (there is
+        no separate standing-floor field, unlike batUseCap on the legacy pair), so it always
+        holds schedule["reserve"] rather than an arbitrary constant - see
+        build_discharge_payload for the same one-field-two-purposes rule on the legacy pair.
         """
         charge = schedule.get("charge", {}) or {}
         export = schedule.get("export", {}) or {}
+        reserve = schedule.get("reserve", 10)
         charge_rate = self._as_float(charge.get("power"), 0.0)
         export_rate = self._as_float(export.get("power"), 0.0)
         charge_on = bool(charge.get("enable")) and charge_rate > 0
-        export_on = bool(export.get("enable")) and export_rate > 0
 
         (charge_start, charge_end), _ = self._snapped_periods(sn, "charge", charge.get("start"), charge.get("end"), charge_on)
-        (export_start, export_end), _ = self._snapped_periods(sn, "export", export.get("start"), export.get("end"), export_on)
         if window_is_empty(charge_start, charge_end):
             charge_on = False
-        if window_is_empty(export_start, export_end):
-            export_on = False
+        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
 
-        # Charge and discharge periods must not overlap or the write is rejected with 6008.
-        # Trim the export start rather than dropping either window - Predbat's charge
-        # window is the one with a hard SOC target to hit.
-        if charge_on and export_on and hm_to_minutes(export_start) < hm_to_minutes(charge_end):
-            self.log("Info: AlphaESS {} charge window ends {} and export starts {}, which the periodic API rejects as overlapping; trimming the export start to {}".format(sn, charge_end, export_start, charge_end))
-            export_start = charge_end
+        # export_rate zero means hold SOC (freeze export), exactly as build_discharge_payload:
+        # discharge time control ON with no permitted period, so the battery cannot discharge
+        # at all. Decided before, and independently of, the window/enable check - Predbat
+        # reaches export_rate == 0 through ordinary, reachable combinations (see
+        # build_discharge_payload's comment), and that is an explicit hold, not the absence of
+        # a plan. Getting this wrong lets the battery discharge into the EV or iBoost load
+        # against the hold Predbat asked for; ctrDisCycle 0 here is DEMAND MODE, not a hold.
+        export_hold = export_rate <= 0
+        if export_hold:
+            export_on = False
+        else:
+            export_on = bool(export.get("enable"))
+            (export_start, export_end), _ = self._snapped_periods(sn, "export", export.get("start"), export.get("end"), export_on)
             if window_is_empty(export_start, export_end):
                 export_on = False
 
-        charge_list = [self._periodic_entry(charge_start, charge_end, charge.get("soc", 100), charge_rate)] if charge_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
-        discharge_list = [self._periodic_entry(export_start, export_end, export.get("soc", schedule.get("reserve", 10)), export_rate)] if export_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, 10, 0)]
+            # Charge and discharge periods must not overlap or the write is rejected with
+            # 6008. Standard interval overlap: the two windows overlap when each one starts
+            # before the other ends. Trim the edge NEAREST the overlap rather than always the
+            # export start - a charge-after-export window (export 12:00-13:30, charge
+            # 13:00-14:00) needs its END trimmed back to the charge start, not its start
+            # pushed past the charge end, which would invert the window and destroy it.
+            if charge_on and export_on and export_start < charge_end and export_end > charge_start:
+                if export_start < charge_start:
+                    self.log(
+                        "Info: AlphaESS {} export window {}-{} overlaps the charge window {}-{}, which the periodic API rejects as overlapping; trimming the export end to {}".format(sn, export_start, export_end, charge_start, charge_end, charge_start)
+                    )
+                    export_end = charge_start
+                else:
+                    self.log("Info: AlphaESS {} charge window ends {} and export starts {}, which the periodic API rejects as overlapping; trimming the export start to {}".format(sn, charge_end, export_start, charge_end))
+                    export_start = charge_end
+                if window_is_empty(export_start, export_end):
+                    export_on = False
+
+        discharge_list = [self._periodic_entry(export_start, export_end, export.get("soc", reserve), export_rate)] if export_on else [self._periodic_entry(ALPHAESS_TIME_DISABLED, ALPHAESS_TIME_DISABLED, reserve, 0)]
         return {
             "sysSn": sn,
             "executeCycleType": 0,
             "chargeTimeList": charge_list,
             "dischargeTimeList": discharge_list,
             "gridChargeCycle": 1 if charge_on else 0,
-            "ctrDisCycle": 1 if export_on else 0,
+            # export_hold sets this ON (1) with no permitted period - the hard hold.
+            # export_on sets it ON for a real scheduled window. Otherwise it is OFF (0),
+            # demand mode, where the battery covers the house down to the reserve floor
+            # carried by the idle discharge entry above.
+            "ctrDisCycle": 1 if (export_on or export_hold) else 0,
         }
 
     async def apply_settings(self, sn, schedule, force=False):
@@ -1507,7 +1624,13 @@ class AlphaESSAPI(ComponentBase):
         await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok})
 
     async def save_control(self):
-        """Persist the control state that must survive a restart."""
+        """Persist the control state that must survive a restart.
+
+        last_write_time is keyed (sn, direction), which JSON cannot carry as a dict key, so
+        it is flattened to "sn|direction" strings. Without persisting it, the documented
+        24-hour write budget resets on every restart, and a restart loop bypasses
+        alphaess_min_write_interval entirely against endpoints writable once per 24 hours.
+        """
         await self.save_cache(
             ALPHAESS_CACHE_CONTROL,
             {
@@ -1515,6 +1638,7 @@ class AlphaESSAPI(ComponentBase):
                 "applied_payload": self.applied_payload,
                 "control_active": sorted(self.control_active),
                 "unbind_done": sorted(self._unbind_done),
+                "last_write_time": {"{}|{}".format(sn, direction): timestamp for (sn, direction), timestamp in self.last_write_time.items()},
             },
         )
 
@@ -1539,6 +1663,11 @@ class AlphaESSAPI(ComponentBase):
         self.applied_payload = dict(control.get("applied_payload") or {})
         self.control_active = set(control.get("control_active") or [])
         self._unbind_done = set(control.get("unbind_done") or [])
+        self.last_write_time = {}
+        for key, timestamp in (control.get("last_write_time") or {}).items():
+            sn, separator, direction = str(key).partition("|")
+            if separator:
+                self.last_write_time[(sn, direction)] = timestamp
         self._cache_restored = not self._restore_had_error
 
     async def run(self, seconds, first):
@@ -1552,7 +1681,15 @@ class AlphaESSAPI(ComponentBase):
         ever-growing startup backoff (60s doubling to 128 minutes) forever, even though
         every cycle after the first was actually working.
         """
-        if first:
+        if first and not self._cache_restored:
+            # Guarded on _cache_restored, not just `first`: a deferred startup (no
+            # telemetry, no systems found yet) returns False here and leaves
+            # ComponentBase's `first` flag set, so run() is retried with first still True.
+            # Without this guard a SUCCESSFUL restore_state() would re-run on every one of
+            # those retries, redoing storage reads for nothing and re-overwriting anything
+            # already progressed in memory since - restore_state() itself already refuses
+            # to mark the guard done on a genuine failure, so a real storage outage still
+            # retries here as before.
             await self.restore_state()
         if not self.app_id or not self.app_secret:
             self.log("Warn: AlphaESS needs both alphaess_app_id and alphaess_app_secret; get them from https://open.alphaess.com/")

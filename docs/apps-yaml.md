@@ -885,7 +885,7 @@ Register a developer application at [open.alphaess.com](https://open.alphaess.co
 - `alphaess_api_delay` - Optional pacing between API calls, in seconds (default: `2`). AlphaESS advise a minimum 10-second polling interval between calls to the same endpoint
 - `alphaess_min_write_interval` - Optional minimum spacing between writes to the same inverter, in seconds (default: `300`). Both write endpoints are documented as writable once per 24 hours, so this is the first line of defence against exhausting that budget
 
-Regardless of `alphaess_control_enable`, `switch.predbat_set_read_only` holds back every write Predbat would otherwise make - **including Predbat's own periodic re-apply** of a schedule it already believes is correct, not just new plan changes. If you want to be completely sure nothing is written, check that switch rather than relying on `alphaess_control_enable` alone.
+Regardless of `alphaess_control_enable`, `switch.predbat_set_read_only` holds back Predbat's own automatic writes - **including Predbat's periodic re-apply** of a schedule it already believes is correct, not just new plan changes. It does **not** hold back a manual press of a schedule write button in Home Assistant, which always sends immediately - that matches Sunsynk's behaviour. If you want to be completely sure nothing is written, avoid pressing a write button while read-only is set, as well as checking the switch.
 
 Settings changes do not reach the inverter immediately: they land on the AlphaESS cloud straight away, but the inverter only picks them up on its next poll of the cloud, typically one to five minutes after Predbat writes them. Reading the settings back immediately after a write showing the old values is expected during that window, not a failure.
 

@@ -623,6 +623,43 @@ def test_alphaess_history_reads_cbat_not_the_portal_spelling():
     assert not failed, "test_alphaess_history_reads_cbat_not_the_portal_spelling"
 
 
+def test_alphaess_history_derives_battery_power_from_the_energy_balance():
+    """getOneDayPowerBySn has no pbat field, so battery_power must be derived rather than
+    left unmapped - automatic_config() maps battery_power unconditionally for every
+    inverter, including one that starts life on the history path (a restart landing
+    straight on a demoted serial), and an arg pointed at a sensor that never appears is
+    worse than an absent one: it silently zeroes find_battery_size and battery-curve
+    learning for the whole session.
+
+    Two cases, both directions, so a sign error in the derivation cannot slip through:
+    discharging to cover a PV shortfall, and charging from PV surplus, both with no grid
+    interaction so the expected value is unambiguous.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+
+    # PV covers only part of the load; the rest comes from the battery (discharging), so
+    # battery_power (positive-on-discharge, matching the live path's pbat) must be +500.
+    discharging = [{"uploadTime": "2026-08-22 20:09:04", "ppv": 1000.0, "load": 1500.0, "cbat": 50.0, "feedIn": 0.0, "gridCharge": 0.0}]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, discharging)))):
+        run_async_local(client.fetch_device_history("AL70"))
+    battery_power = client.device_values.get("AL70", {}).get("battery_power")
+    if battery_power is None or abs(battery_power - 500.0) > 0.001:
+        print(f"ERROR: discharging battery_power {battery_power} != 500.0")
+        failed = True
+
+    # PV surplus over load charges the battery, so battery_power must be -2500.
+    charging = [{"uploadTime": "2026-08-22 20:14:04", "ppv": 3000.0, "load": 500.0, "cbat": 55.0, "feedIn": 0.0, "gridCharge": 0.0}]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, charging)))):
+        run_async_local(client.fetch_device_history("AL70"))
+    battery_power = client.device_values.get("AL70", {}).get("battery_power")
+    if battery_power is None or abs(battery_power - (-2500.0)) > 0.001:
+        print(f"ERROR: charging battery_power {battery_power} != -2500.0")
+        failed = True
+    assert not failed, "test_alphaess_history_derives_battery_power_from_the_energy_balance"
+
+
 def test_alphaess_live_demotion_latches_and_is_reversible():
     """~288 records is too big for a 60-second loop, so demotion latches after N failures
     and is re-probed on the config tier so a transient failure self-heals."""
@@ -861,6 +898,68 @@ def test_alphaess_fetch_config_both_fail_returns_false():
     assert not failed, "test_alphaess_fetch_config_both_fail_returns_false"
 
 
+def test_alphaess_fetch_config_reads_the_periodic_schedule_for_an_entitled_system():
+    """Once a serial is entitled to the periodic API, fetch_config must ALSO read
+    getTimeChargeBySn - otherwise note_external_change("charge"/"discharge", ...) can
+    never find a match against applied_payload[sn]["periodic"] (writes for an entitled
+    serial only ever populate that key), and interference on the serial's REAL write path
+    goes undetected forever."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    client._periodic_ok["AL70"] = True
+    periodic_sample = {
+        "sysSn": "AL70",
+        "gridChargeCycle": 1,
+        "ctrDisCycle": 0,
+        "chargeTimeList": [{"beginTime": "01:00", "endTime": "05:00", "chargeLimit": 90, "chargePower": 3000}],
+        "dischargeTimeList": [{"beginTime": "00:00", "endTime": "00:00", "chargeLimit": 10}],
+    }
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, periodic_sample)),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)) as session:
+        ok = run_async_local(client.fetch_config("AL70"))
+    if not ok:
+        print("ERROR: fetch_config returned False when all three reads succeeded")
+        failed = True
+    if client.device_config.get("AL70", {}).get("periodic") != periodic_sample:
+        print(f"ERROR: periodic schedule not stored: {client.device_config.get('AL70')}")
+        failed = True
+    calls = session.return_value.get.call_args_list
+    if len(calls) != 3:
+        print(f"ERROR: expected exactly 3 GETs (charge, discharge, periodic) for an entitled serial, got {len(calls)}: {calls}")
+        failed = True
+    elif "getTimeChargeBySn" not in calls[2].args[0]:
+        print(f"ERROR: third GET was not the periodic schedule read: {calls[2]}")
+        failed = True
+    assert not failed, "test_alphaess_fetch_config_reads_the_periodic_schedule_for_an_entitled_system"
+
+
+def test_alphaess_fetch_config_skips_the_periodic_read_when_not_entitled():
+    """The un-entitled (legacy) case must cost exactly the two legacy reads - no wasted
+    call to getTimeChargeBySn, which would just answer 6017 again."""
+    failed = False
+    client = MockAlphaESS()
+    client.api_delay = 0
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)) as session:
+        ok = run_async_local(client.fetch_config("AL70"))
+    if not ok:
+        print("ERROR: fetch_config returned False for a plain (non-entitled) serial")
+        failed = True
+    calls = session.return_value.get.call_args_list
+    if len(calls) != 2:
+        print(f"ERROR: expected exactly 2 GETs when not entitled, got {len(calls)}: {calls}")
+        failed = True
+    assert not failed, "test_alphaess_fetch_config_skips_the_periodic_read_when_not_entitled"
+
+
 def test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds():
     """A half-successful (or fully failed) read must not start the 30-minute config tier
     clock, or the stale half is left unrefreshed for a full TTL - the same class of bug
@@ -1036,6 +1135,60 @@ def test_alphaess_run_returns_false_when_the_account_has_no_systems():
     assert not failed, "test_alphaess_run_returns_false_when_the_account_has_no_systems"
 
 
+def test_alphaess_run_restores_on_the_first_cycle_when_not_yet_restored():
+    """The ordinary case: _cache_restored starts False, so the very first cycle must still
+    call restore_state - the gate added to stop a redundant re-restore must not
+    accidentally skip the genuinely first restore too."""
+    failed = False
+    client = MockAlphaESS()
+    calls = []
+
+    async def spy_restore_state():
+        """Record that restore_state ran, then behave like a completed restore."""
+        calls.append(1)
+        client._cache_restored = True
+
+    client.restore_state = spy_restore_state
+    empty = create_aiohttp_mock_response(status=200, json_data=_envelope(200, []))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(empty)):
+        run_async_local(client.run(seconds=0, first=True))
+    if not calls:
+        print("ERROR: restore_state was never called on the very first cycle")
+        failed = True
+    assert not failed, "test_alphaess_run_restores_on_the_first_cycle_when_not_yet_restored"
+
+
+def test_alphaess_run_does_not_re_restore_once_cache_restored():
+    """_cache_restored is written and asserted in storage tests but was never actually
+    READ anywhere in production - run() called restore_state() on every cycle where
+    `first` was still True, regardless of whether a previous attempt already fully
+    restored it. A deferred startup (no systems found yet, telemetry not in) returns
+    False and leaves `first` set, so every retry re-ran restore_state() and re-read
+    storage for nothing, and - had anything already progressed in memory since the first
+    successful restore - would have overwritten it with the stale on-disk copy. Gating on
+    _cache_restored makes the field load-bearing rather than a write-only flag.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client._cache_restored = True
+    calls = []
+
+    async def spy_restore_state():
+        """Record whether restore_state was invoked."""
+        calls.append(1)
+
+    client.restore_state = spy_restore_state
+    # No systems discovered, so run() returns False quickly - but that must not matter to
+    # whether restore_state is (re)called, since _cache_restored is already True.
+    empty = create_aiohttp_mock_response(status=200, json_data=_envelope(200, []))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(empty)):
+        run_async_local(client.run(seconds=0, first=True))
+    if calls:
+        print(f"ERROR: restore_state was called again despite _cache_restored already being True: {calls}")
+        failed = True
+    assert not failed, "test_alphaess_run_does_not_re_restore_once_cache_restored"
+
+
 def test_alphaess_run_reads_control_entities_on_every_tick_including_the_first():
     """Home Assistant retains the control entities across a Predbat restart, so on restart
     they already hold the live plan.
@@ -1173,6 +1326,7 @@ def run_alphaess_api_tests(my_predbat):
         ("ppv_detail_all_null_signal", test_alphaess_ppv_detail_all_null_signal),
         ("history_fallback", test_alphaess_falls_back_to_history_when_live_data_is_unavailable),
         ("history_cbat_spelling", test_alphaess_history_reads_cbat_not_the_portal_spelling),
+        ("history_derives_battery_power", test_alphaess_history_derives_battery_power_from_the_energy_balance),
         ("live_demotion_reversible", test_alphaess_live_demotion_latches_and_is_reversible),
         ("no_soc_reported", test_alphaess_serial_with_no_soc_on_either_path_is_reported),
         ("power_tier_ttl", test_alphaess_power_tier_ttl_returns_correct_interval_based_on_demotion_state),
@@ -1182,6 +1336,8 @@ def run_alphaess_api_tests(my_predbat):
         ("fetch_config_both_succeed", test_alphaess_fetch_config_populates_both_directions_when_both_reads_succeed),
         ("fetch_config_partial_failure", test_alphaess_fetch_config_partial_failure_keeps_the_stale_half_and_returns_false),
         ("fetch_config_both_fail", test_alphaess_fetch_config_both_fail_returns_false),
+        ("fetch_config_reads_periodic_when_entitled", test_alphaess_fetch_config_reads_the_periodic_schedule_for_an_entitled_system),
+        ("fetch_config_skips_periodic_when_not_entitled", test_alphaess_fetch_config_skips_the_periodic_read_when_not_entitled),
         ("refresh_config_not_marked_on_partial", test_alphaess_refresh_config_does_not_mark_refreshed_when_nothing_fully_succeeds),
         ("refresh_config_marked_on_one_full_success", test_alphaess_refresh_config_marks_refreshed_when_at_least_one_serial_fully_succeeds),
         ("bind_already_bound_ok", test_alphaess_bind_treats_already_bound_as_success),
@@ -1190,6 +1346,8 @@ def run_alphaess_api_tests(my_predbat):
         ("bind_code_redacted", test_alphaess_bind_code_is_never_logged),
         ("run_defers_without_telemetry", test_alphaess_run_defers_startup_without_telemetry),
         ("run_empty_account", test_alphaess_run_returns_false_when_the_account_has_no_systems),
+        ("run_restores_first_cycle", test_alphaess_run_restores_on_the_first_cycle_when_not_yet_restored),
+        ("run_does_not_re_restore", test_alphaess_run_does_not_re_restore_once_cache_restored),
         ("run_reads_controls_first_tick", test_alphaess_run_reads_control_entities_on_every_tick_including_the_first),
         ("run_automatic_config_first_cycle_only", test_alphaess_run_only_calls_automatic_config_on_the_first_cycle),
         ("final_persists_all_caches", test_alphaess_final_persists_all_four_caches),

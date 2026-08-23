@@ -45,12 +45,17 @@ def test_alphaess_publishes_every_monitoring_sensor():
 
 
 def test_alphaess_publish_data_tolerates_the_demoted_serial_shape():
-    """A serial demoted to the Task 5 history fallback reports ONLY soc, pv_power,
-    load_power and grid_power - no battery_power, no ev_power, because the history
-    endpoint has no such fields and the code deliberately omits them rather than
-    fabricating zeros. publish_data must use ``if leaf in values`` rather than direct
-    indexing, or a demoted serial raises KeyError and kills the poll loop for every
-    serial behind it.
+    """A serial on the history fallback reports soc, pv_power, load_power, grid_power and
+    a DERIVED battery_power (the history endpoint has no pbat field, so _apply_history_
+    payload computes it from the power balance) - but genuinely has no ev_power at all,
+    since the history endpoint carries no EV-charger field and the code deliberately omits
+    it rather than fabricating a zero.
+
+    This synthesises a values dict missing BOTH leaves (not just ev_power) to prove the
+    generic mechanism - publish_data must use ``if leaf in values`` rather than direct
+    indexing for any leaf that could be absent, or a demoted serial raises KeyError and
+    kills the poll loop for every serial behind it - not merely that battery_power is
+    absent in the real production shape, which it no longer is.
     """
     failed = False
     client = _ready_client()

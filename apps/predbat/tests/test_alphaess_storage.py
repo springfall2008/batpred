@@ -9,8 +9,9 @@
 """Tests for AlphaESS storage-backed cache persistence across restarts."""
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
-from tests.test_alphaess_api import MockAlphaESS
-from tests.test_infra import run_async as run_async_local
+from unittest.mock import patch
+from tests.test_alphaess_api import MockAlphaESS, ESS_LIST_SAMPLE, CHARGE_CONFIG_SAMPLE, DISCHARGE_CONFIG_SAMPLE, _envelope
+from tests.test_infra import run_async as run_async_local, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 
 class FakeStorage:
@@ -245,6 +246,137 @@ def test_alphaess_corrupted_cache_data_coerced_safely():
     assert not failed, "test_alphaess_corrupted_cache_data_coerced_safely"
 
 
+def test_alphaess_refresh_static_saves_inline_on_success():
+    """A container kill or crash - the ordinary Home Assistant add-on restart - between
+    refresh cycles must not lose discovery. Before the fix, save_static/save_config/
+    save_ratings/save_control were called only from final(), which runs only on a clean
+    loop exit, so the whole point of persisting at all was defeated by the most common
+    restart path. This checks the cache reaches storage the moment refresh_static
+    succeeds, without final() ever being called."""
+    failed = False
+    store = FakeStorage()
+    client = StoredAlphaESS(store=store)
+    client.api_delay = 0
+    response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        ok = run_async_local(client.refresh_static())
+    if not ok:
+        print("ERROR: refresh_static reported failure")
+        failed = True
+    saved = store.data.get(("alphaess", "static"), {})
+    if saved.get("device_list") != client.device_list:
+        print(f"ERROR: static cache not saved inline by refresh_static: {saved}")
+        failed = True
+    assert not failed, "test_alphaess_refresh_static_saves_inline_on_success"
+
+
+def test_alphaess_refresh_config_saves_inline_when_a_serial_fully_succeeds():
+    """Same as refresh_static: the config baseline and the periodic entitlement verdict
+    must reach storage the moment refresh_config succeeds, not only at shutdown."""
+    failed = False
+    store = FakeStorage()
+    client = StoredAlphaESS(store=store)
+    client.api_delay = 0
+    client.device_list = ["AL70"]
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, CHARGE_CONFIG_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, DISCHARGE_CONFIG_SAMPLE)),
+        # probe_periodic, since AL70 is not yet in _periodic_ok.
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6017, None, msg="No operation permissions")),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        got_any = run_async_local(client.refresh_config())
+    if not got_any:
+        print("ERROR: refresh_config reported failure")
+        failed = True
+    saved = store.data.get(("alphaess", "config"), {})
+    if saved.get("device_config", {}).get("AL70", {}).get("charge") != CHARGE_CONFIG_SAMPLE:
+        print(f"ERROR: config cache not saved inline by refresh_config: {saved}")
+        failed = True
+    if saved.get("periodic_ok", {}).get("AL70") is not False:
+        print(f"ERROR: the periodic verdict learned this cycle was not part of the inline save: {saved}")
+        failed = True
+    assert not failed, "test_alphaess_refresh_config_saves_inline_when_a_serial_fully_succeeds"
+
+
+def test_alphaess_write_persists_the_control_cache_inline():
+    """A container kill right after a write must not lose the applied-payload cache or the
+    write-pacing timestamp (last_write_time) - both must reach storage the moment the write
+    completes, success OR rejection, not only at shutdown via final().
+
+    Also covers last_write_time's JSON encoding end to end: it is keyed (sn, direction),
+    which JSON cannot carry as a dict key, so it is flattened to "sn|direction" strings -
+    this checks that flattened key actually lands in the saved cache.
+    """
+    failed = False
+    store = FakeStorage()
+    client = StoredAlphaESS(store=store)
+    client.api_delay = 0
+    client.control_active.add("AL70")
+    schedule = {
+        "reserve": 10,
+        "charge": {"enable": True, "soc": 90, "power": 3000, "start": "01:00:00", "end": "05:00:00"},
+        "export": {"enable": False, "soc": 0, "power": 3000, "start": "00:00:00", "end": "00:00:00"},
+    }
+    ok_response = create_aiohttp_mock_response(status=200, json_data=_envelope(200, None))
+    with patch("alphaess.time.time", return_value=5000.0):
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(ok_response)):
+            run_async_local(client.apply_settings("AL70", schedule))
+    saved = store.data.get(("alphaess", "control"), {})
+    if saved.get("applied_payload", {}).get("AL70", {}).get("charge", {}).get("batHighCap") != 90:
+        print(f"ERROR: applied_payload not saved inline on a successful write: {saved}")
+        failed = True
+    if saved.get("last_write_time", {}).get("AL70|charge") != 5000.0:
+        print(f"ERROR: last_write_time not saved inline (flattened as 'AL70|charge'): {saved}")
+        failed = True
+
+    # A rejected write must ALSO persist its attempt timestamp inline, so the write budget
+    # survives a restart even though nothing was actually written this time.
+    changed_schedule = dict(schedule, charge=dict(schedule["charge"], soc=70))
+    rejected = create_aiohttp_mock_response(status=200, json_data=_envelope(6008, None, msg="Set failed"))
+    with patch("alphaess.time.time", return_value=6000.0):
+        with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(rejected)):
+            run_async_local(client.apply_settings("AL70", changed_schedule))
+    saved = store.data.get(("alphaess", "control"), {})
+    if saved.get("last_write_time", {}).get("AL70|charge") != 6000.0:
+        print(f"ERROR: a rejected write's timestamp was not saved inline: {saved}")
+        failed = True
+    if saved.get("applied_payload", {}).get("AL70", {}).get("charge", {}).get("batHighCap") != 90:
+        print(f"ERROR: a rejected write's payload was wrongly cached as applied: {saved}")
+        failed = True
+    assert not failed, "test_alphaess_write_persists_the_control_cache_inline"
+
+
+def test_alphaess_last_write_time_round_trips_across_a_restart():
+    """The write-pacing timestamps must survive a restart, or the documented 24-hour write
+    budget resets every time the add-on restarts, and a restart loop bypasses
+    alphaess_min_write_interval entirely. Keys are (sn, direction) tuples, which JSON
+    cannot carry, so they must round-trip through the "sn|direction" string encoding
+    without loss - including keeping the (sn, direction) tuple SHAPE, not just the value.
+    """
+    failed = False
+    store = FakeStorage()
+    client = StoredAlphaESS(store=store)
+    client.last_write_time = {("AL70", "charge"): 12345.5, ("AL70", "discharge"): 999.0, ("AL71", "periodic"): 42.0}
+    run_async_local(client.save_control())
+
+    restored = StoredAlphaESS(store=store)
+    run_async_local(restored.restore_state())
+    if restored.last_write_time.get(("AL70", "charge")) != 12345.5:
+        print(f"ERROR: AL70/charge timestamp not restored: {restored.last_write_time}")
+        failed = True
+    if restored.last_write_time.get(("AL70", "discharge")) != 999.0:
+        print(f"ERROR: AL70/discharge timestamp not restored: {restored.last_write_time}")
+        failed = True
+    if restored.last_write_time.get(("AL71", "periodic")) != 42.0:
+        print(f"ERROR: AL71/periodic timestamp not restored: {restored.last_write_time}")
+        failed = True
+    if len(restored.last_write_time) != 3:
+        print(f"ERROR: unexpected extra or missing entries: {restored.last_write_time}")
+        failed = True
+    assert not failed, "test_alphaess_last_write_time_round_trips_across_a_restart"
+
+
 def run_alphaess_storage_tests(my_predbat):
     """Run all AlphaESS storage tests."""
     failed = False
@@ -254,6 +386,10 @@ def run_alphaess_storage_tests(my_predbat):
         ("real_failure_flagged", test_alphaess_real_storage_failure_is_flagged_for_retry),
         ("empty_discovery_not_persisted", test_alphaess_empty_discovery_is_not_persisted),
         ("corrupted_data_coerced_safely", test_alphaess_corrupted_cache_data_coerced_safely),
+        ("refresh_static_saves_inline", test_alphaess_refresh_static_saves_inline_on_success),
+        ("refresh_config_saves_inline", test_alphaess_refresh_config_saves_inline_when_a_serial_fully_succeeds),
+        ("write_persists_control_inline", test_alphaess_write_persists_the_control_cache_inline),
+        ("last_write_time_round_trip", test_alphaess_last_write_time_round_trips_across_a_restart),
     ]:
         try:
             if fn():
