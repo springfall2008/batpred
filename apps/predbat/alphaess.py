@@ -56,6 +56,11 @@ from alphaess_const import (
     ALPHAESS_TIME_DISABLED,
     ALPHAESS_TIME_MAX,
     ALPHAESS_SETTLE_POLLS,
+    ALPHAESS_STORAGE_MODULE,
+    ALPHAESS_CACHE_STATIC,
+    ALPHAESS_CACHE_CONFIG,
+    ALPHAESS_CACHE_RATINGS,
+    ALPHAESS_CACHE_CONTROL,
 )
 
 
@@ -1351,3 +1356,88 @@ class AlphaESSAPI(ComponentBase):
     async def _handle_unbind_event(self, sn, value):
         """Handle the unbind toggle. Replaced with the real implementation in Task 12."""
         return
+
+    async def load_cache(self, name):
+        """Load one cache file, returning {} when absent or unreadable.
+
+        self.storage being None is checked FIRST and returns silently, with no warning and
+        no _restore_had_error: it means there is simply no Storage component configured
+        (the normal state for a standalone CLI run), which is a permanent, by-design
+        condition rather than a transient fault worth retrying or warning about. Only a
+        REAL failure below flags the restore as incomplete.
+        """
+        if self.storage is None:
+            return {}
+        try:
+            data = await self.storage.load(ALPHAESS_STORAGE_MODULE, name)
+        except Exception as error:
+            self.log("Warn: AlphaESS could not load cache {}: {}".format(name, error))
+            self._restore_had_error = True
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    async def save_cache(self, name, data):
+        """Save one cache file, tolerating a storage failure.
+
+        Silently does nothing when self.storage is None - there is nothing to warn about.
+        """
+        if self.storage is None:
+            return
+        try:
+            await self.storage.save(ALPHAESS_STORAGE_MODULE, name, data)
+        except Exception as error:
+            self.log("Warn: AlphaESS could not save cache {}: {}".format(name, error))
+
+    async def save_static(self):
+        """Persist discovery. Refuses to overwrite a good cache with an empty result.
+
+        Writing {'device_list': []} and stamping the tier fresh would make a restart
+        restore nothing and skip re-discovery for a full TTL. Absence of a result is not
+        a result.
+        """
+        if not self.device_list:
+            return
+        await self.save_cache(ALPHAESS_CACHE_STATIC, {"device_list": self.device_list, "device_detail": self.device_detail})
+
+    async def save_config(self):
+        """Persist the config baseline and the periodic entitlement verdicts."""
+        await self.save_cache(ALPHAESS_CACHE_CONFIG, {"device_config": self.device_config, "periodic_ok": self._periodic_ok})
+
+    async def save_ratings(self):
+        """Persist the live-telemetry capability verdicts."""
+        await self.save_cache(ALPHAESS_CACHE_RATINGS, {"live_ok": self._live_ok})
+
+    async def save_control(self):
+        """Persist the control state that must survive a restart."""
+        await self.save_cache(
+            ALPHAESS_CACHE_CONTROL,
+            {
+                "local_schedule": self.local_schedule,
+                "applied_payload": self.applied_payload,
+                "control_active": sorted(self.control_active),
+                "unbind_done": sorted(self._unbind_done),
+            },
+        )
+
+    async def restore_state(self):
+        """Restore every cached verdict so a restart does not re-learn them from scratch.
+
+        _cache_restored is set only when nothing failed, so a transient storage outage is
+        retried on a later cycle rather than silently marked done with nothing restored.
+        """
+        self._restore_had_error = False
+        static = await self.load_cache(ALPHAESS_CACHE_STATIC)
+        if static.get("device_list"):
+            self.device_list = list(static["device_list"])
+            self.device_detail = dict(static.get("device_detail") or {})
+        config = await self.load_cache(ALPHAESS_CACHE_CONFIG)
+        self.device_config = dict(config.get("device_config") or {})
+        self._periodic_ok = dict(config.get("periodic_ok") or {})
+        ratings = await self.load_cache(ALPHAESS_CACHE_RATINGS)
+        self._live_ok = dict(ratings.get("live_ok") or {})
+        control = await self.load_cache(ALPHAESS_CACHE_CONTROL)
+        self.local_schedule = dict(control.get("local_schedule") or {})
+        self.applied_payload = dict(control.get("applied_payload") or {})
+        self.control_active = set(control.get("control_active") or [])
+        self._unbind_done = set(control.get("unbind_done") or [])
+        self._cache_restored = not self._restore_had_error
