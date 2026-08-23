@@ -202,7 +202,53 @@ Launch Predbat with hass.py (from the Predbat-addon repository) either via a Doc
 
 Predbat has a built-in AlphaESS Cloud integration for AlphaESS hybrid inverters via the AlphaESS Open API, providing monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 Home Assistant integration is required.
 
-Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters - every request and response is traced to the log by default so you can capture evidence for an issue report. A standalone diagnostics CLI (`apps/predbat/alphaess.py`) is included specifically so you can verify it against your own system before trusting Predbat with control, and to run the account `--verify`, `--bind` and `--unbind` actions (needed if you ever unbind a system from Home Assistant - re-binding it can only be done through this CLI or the AlphaESS portal, never from Home Assistant itself).
+Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters - every request and response is traced to the log by default so you can capture evidence for an issue report. A standalone diagnostics CLI (`apps/predbat/alphaess.py`) is included specifically so you can verify it against your own system, using the [diagnostics CLI](#verifying-with-the-alphaess-diagnostics-cli) below, before trusting Predbat with control.
+
+### Verifying with the AlphaESS diagnostics CLI
+
+Before turning on control, run the standalone CLI from the `apps/predbat` directory to confirm your AppID/AppSecret work and that the readings match the AlphaESS app:
+
+```bash
+cd apps/predbat
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET
+```
+
+This is read-only: it discovers every battery system on the account, polls each one's config and telemetry once, and prints what it found - it never writes anything. Useful flags for narrowing it down:
+
+- `--serial <sn>` - restrict to one system instead of every system on the account
+- `--dump-settings` - also print the full charge/discharge config object for each system, useful for confirming the current schedule against the app
+- `--api-delay <seconds>` - override the default 2-second pacing between API calls
+
+For each system, the output ends with a `Derived:` line (the capacity/inverter_limit/battery_rate_max Predbat computed) and a `Telemetry source:` line that tells you two things worth checking before you rely on the system:
+
+- Whether it's on `live (getLastPowerData)` or has fallen back to `history (getOneDayPowerBySn, 5 minute)` - the second is expected for some models and Predbat re-probes for live data automatically, but it's worth knowing which one you're on
+- Whether the periodic schedule API is entitled (`yes`, `no (6017)` or `unknown`) - entitled systems get up to six windows and a real power setpoint; everyone else uses the older two-window endpoints, which have no rate field at all
+
+Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the AlphaESS app, and in particular note the sign of `battery_power` while charging versus discharging - this convention is inferred from the API docs rather than confirmed on real hardware, and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.
+
+#### Binding and unbinding a system
+
+Binding and unbinding are account-management actions, separate from the read-only run above, and every one of them prompts `Send the ... request? [y/N]` before doing anything - answer anything other than `y` (or run with stdin closed, e.g. under `cron` or CI) and nothing is sent.
+
+To bind a new system to your AppID, first trigger AlphaESS to email a verification code to the system's registered owner:
+
+```bash
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --verify --serial AL70110230306xx --check-code YOUR_CHECK_CODE
+```
+
+`--check-code` is the system's CheckCode, found on the device label or from your installer - it is not the emailed verification code. Once the email arrives, complete the bind with the code from it:
+
+```bash
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --bind --serial AL70110230306xx --code CODE_FROM_EMAIL
+```
+
+To unbind a system from your AppID:
+
+```bash
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind --serial AL70110230306xx
+```
+
+**`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
 
 See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
 

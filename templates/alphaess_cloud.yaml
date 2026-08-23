@@ -56,8 +56,9 @@ pred_bat:
 
   # REQUIRED: the API does not report a grid export limit. If your grid connection is
   # capped below the inverter rating (G98/G99), set it here or Predbat will plan exports
-  # it cannot deliver.
-  #export_limit: 3680
+  # it cannot deliver. One entry per system if your account has more than one.
+  #export_limit:
+  #  - 3680
 
   # Run balance inverters every N seconds (0=disabled) - only for multi-inverter
   #balance_inverters_seconds: 60
