@@ -975,6 +975,76 @@ def test_alphaess_bind_code_is_never_logged():
     assert not failed, "test_alphaess_bind_code_is_never_logged"
 
 
+def test_alphaess_run_defers_startup_without_telemetry():
+    """automatic_config() runs on the FIRST cycle alone.
+
+    Returning True with no telemetry would map only the args backed by cached ratings and
+    permanently skip soc_max and the energy args for the whole session. Returning False
+    leaves ComponentBase's `first` flag set so the whole startup path is retried.
+    """
+    failed = False
+    client = MockAlphaESS(automatic=True)
+    responses = [
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, ESS_LIST_SAMPLE)),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(6042, None, msg="system offline")),
+        create_aiohttp_mock_response(status=200, json_data=_envelope(200, [])),
+    ]
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(responses)):
+        ok = run_async_local(client.run(seconds=0, first=True))
+    if ok:
+        print("ERROR: run() reported success with no telemetry on the first cycle")
+        failed = True
+    if "inverter_type" in client.base.args:
+        print("ERROR: automatic_config ran without telemetry")
+        failed = True
+    assert not failed, "test_alphaess_run_defers_startup_without_telemetry"
+
+
+def test_alphaess_run_returns_false_when_the_account_has_no_systems():
+    """Deliberately explicit rather than falling through to an implicit None.
+
+    ComponentBase only clears its `first` flag on a truthy return, so an accidental None
+    would strand the component in the ever-growing startup backoff forever.
+    """
+    failed = False
+    client = MockAlphaESS()
+    empty = create_aiohttp_mock_response(status=200, json_data=_envelope(200, []))
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(empty)):
+        ok = run_async_local(client.run(seconds=0, first=True))
+    if ok is not False:
+        print(f"ERROR: run() returned {ok!r}, must be an explicit False")
+        failed = True
+    assert not failed, "test_alphaess_run_returns_false_when_the_account_has_no_systems"
+
+
+def test_alphaess_run_reads_control_entities_on_every_tick_including_the_first():
+    """Home Assistant retains the control entities across a Predbat restart, so on restart
+    they already hold the live plan.
+
+    Seeding local_schedule from _empty_schedule() and publishing that back would reach
+    set_state_wrapper and cancel an in-flight charge until Predbat next replanned.
+    """
+    failed = False
+    client = MockAlphaESS()
+    client.device_list = ["AL70"]
+    client.device_detail = {"AL70": {"sysSn": "AL70", "cobat": 13.34, "poinv": 5.0}}
+    client.mark_refreshed("static")
+    client.mark_refreshed("config")
+    client.mark_refreshed("power")
+    client.mark_refreshed("energy")
+    client.device_values["AL70"] = {"soc": 50.0}
+    # A retained plan, as HA would hold it after a restart.
+    client.state["switch.predbat_alphaess_al70_battery_schedule_charge_enable"] = "on"
+    client.state["number.predbat_alphaess_al70_battery_schedule_charge_soc"] = 88
+    with patch("alphaess.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data=_envelope(200, None)))):
+        run_async_local(client.run(seconds=0, first=True))
+    schedule = client.local_schedule.get("AL70", {})
+    if schedule.get("charge", {}).get("soc") != 88:
+        print(f"ERROR: retained plan was overwritten: {schedule}")
+        failed = True
+    assert not failed, "test_alphaess_run_reads_control_entities_on_every_tick_including_the_first"
+
+
 def run_alphaess_api_tests(my_predbat):
     """Run all AlphaESS API tests."""
     failed = False
@@ -1015,6 +1085,9 @@ def run_alphaess_api_tests(my_predbat):
         ("unbind_not_bound_ok", test_alphaess_unbind_treats_not_bound_as_success),
         ("verification_is_get", test_alphaess_verification_code_is_a_get),
         ("bind_code_redacted", test_alphaess_bind_code_is_never_logged),
+        ("run_defers_without_telemetry", test_alphaess_run_defers_startup_without_telemetry),
+        ("run_empty_account", test_alphaess_run_returns_false_when_the_account_has_no_systems),
+        ("run_reads_controls_first_tick", test_alphaess_run_reads_control_entities_on_every_tick_including_the_first),
     ]:
         try:
             if fn():

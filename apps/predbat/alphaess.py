@@ -63,6 +63,9 @@ from alphaess_const import (
     ALPHAESS_CACHE_CONFIG,
     ALPHAESS_CACHE_RATINGS,
     ALPHAESS_CACHE_CONTROL,
+    ALPHAESS_TTL_STATIC,
+    ALPHAESS_TTL_CONFIG,
+    ALPHAESS_TTL_ENERGY,
 )
 
 
@@ -1537,3 +1540,73 @@ class AlphaESSAPI(ComponentBase):
         self.control_active = set(control.get("control_active") or [])
         self._unbind_done = set(control.get("unbind_done") or [])
         self._cache_restored = not self._restore_had_error
+
+    async def run(self, seconds, first):
+        """Main component tick: refresh by tier, publish, and apply any schedule change.
+
+        Returns True on a completed cycle, False on a failure that should hold the
+        component in ComponentBase's startup backoff and be retried. Deliberately explicit
+        rather than falling through to Python's implicit `None`: ComponentBase only clears
+        its `first` flag and moves to the normal cadence when this returns something
+        truthy, so an accidental `None` here would strand the component in the
+        ever-growing startup backoff (60s doubling to 128 minutes) forever, even though
+        every cycle after the first was actually working.
+        """
+        if first:
+            await self.restore_state()
+        if not self.app_id or not self.app_secret:
+            self.log("Warn: AlphaESS needs both alphaess_app_id and alphaess_app_secret; get them from https://open.alphaess.com/")
+            return False
+
+        if self.tier_expired("static", ALPHAESS_TTL_STATIC) or not self.device_list:
+            await self.refresh_static()
+        if not self.device_list:
+            self.log("Warn: AlphaESS found no battery systems on this account")
+            return False
+        if self.tier_expired("config", ALPHAESS_TTL_CONFIG):
+            await self.refresh_config()
+        live_ok = True
+        if self.tier_expired("power", self.power_tier_ttl()):
+            live_ok = await self.refresh_power()
+        if self.tier_expired("energy", ALPHAESS_TTL_ENERGY):
+            await self.refresh_energy()
+
+        for sn in list(self.device_list):
+            # Read the control entities EVERY tick, the first one included. Home Assistant
+            # retains them across a Predbat restart, so on a restart they already hold the
+            # live plan; seeding local_schedule from _empty_schedule() and publishing that
+            # back would overwrite it (dashboard_item reaches set_state_wrapper) and cancel
+            # an in-flight charge until Predbat next replanned. get_schedule_settings_ha
+            # falls back to the disabled default per field, so a genuinely cold start still
+            # lands on exactly _empty_schedule()'s shape.
+            try:
+                await self.get_schedule_settings_ha(sn)
+            except Exception as error:
+                self.log("Warn: AlphaESS schedule read failed for {}: {}".format(sn, error))
+            await self._reconcile_control(sn)
+            # Published every tick, not just first: this is Predbat's control surface and
+            # must keep reflecting local_schedule as it changes.
+            await self.publish_schedule_settings_ha(sn)
+
+        await self.publish_data()
+
+        if first and not live_ok:
+            # Startup has not really succeeded without telemetry: automatic_config() runs
+            # on the first cycle ALONE, so it would map only the args backed by cached
+            # ratings and permanently skip soc_max and the energy args for the whole
+            # session. Returning False leaves ComponentBase's `first` flag set, so the
+            # entire startup path is retried on its backoff until a poll comes back.
+            self.log("Warn: AlphaESS first telemetry poll returned nothing, deferring startup; it will be retried after a backoff")
+            return False
+
+        if first and self.automatic:
+            await self.automatic_config()
+        self.update_success_timestamp()
+        return True
+
+    async def final(self):
+        """Persist state on shutdown so a restart resumes without re-polling."""
+        await self.save_static()
+        await self.save_config()
+        await self.save_ratings()
+        await self.save_control()
