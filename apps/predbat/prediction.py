@@ -1062,69 +1062,20 @@ class Prediction(PredictionBatch):
                         pv_in_period = pv_compare / step * charge_time_remains
                         potential_import = min((charge_rate_now_curve * charge_time_remains) - pv_in_period, (charge_limit_n - soc))
                         metric_keep += max(potential_import * import_rate, 0)
-            elif set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only):
-                # Freeze - the battery is not actively discharged to help export, but genuine PV
-                # surplus beyond what load+export_limit can absorb still charges it on some
-                # inverters rather than being clipped (#4207) - e.g. FoxESS "Feed-in First"
-                # prioritises load, then export, then the battery. Only the genuine overflow is
-                # charged (not the full charge rate), so freeze still holds SoC flat whenever the
-                # export limit alone can absorb all the surplus - matching the equivalent recapture
-                # logic in the force export branch above, just without any active discharge.
-                battery_draw = 0
-                pv_ac = pv_now * inverter_loss_ac
-                pv_dc = 0
-
-                diff = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
-                if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export:
-                    over_limit = abs(diff) - export_limit
-                    if inverter_hybrid:
-                        charge_rate_now_curve_dc = (
-                            get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
-                            * battery_rate_max_scaling
-                        )
-                        charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
-                        battery_draw = max(-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
-                    else:
-                        battery_draw = max(-over_limit * inverter_loss, -battery_to_max, -charge_rate_now_curve_step)
-
-                    if battery_draw < 0:
-                        pv_dc = min(abs(battery_draw), pv_now)
-                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac
-                elif diff > 0 and inverter_freeze_export_discharge_rate <= 0:
-                    # Freeze Export still allows the battery to discharge to cover a genuine load
-                    # shortfall - only charging is disabled, per the documented behaviour
-                    # (customisation.md "Freeze Export during Demand": "allows battery discharge,
-                    # but not battery charging"). Previously this branch left battery_draw at 0 for
-                    # any shortfall, silently modelling it the same as Freeze Charge (grid covers
-                    # it instead) - see #4676.
-                    battery_draw = min(diff * inverter_loss_recp, discharge_rate_now_curve_step, inverter_limit, battery_to_min)
-
-                # Some inverters (observed on AlphaESS) continue a small residual battery
-                # discharge during Freeze Export. Treat the configured value as battery-side
-                # power and feed it into the normal AC balance: house load consumes it first and
-                # any surplus may reach the grid. Respect the battery reserve and physical export
-                # limit rather than capping the discharge at house demand. Only applies when
-                # nothing else has already decided a movement - a genuine shortfall discharge
-                # (above) already covers the real load more precisely than this residual estimate.
-                if inverter_freeze_export_discharge_rate > 0 and battery_draw >= 0:
-                    freeze_draw = min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min)
-                    freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
-                    if freeze_diff < 0 and abs(freeze_diff) > export_limit:
-                        freeze_draw = max(freeze_draw - (abs(freeze_diff) - export_limit) * inverter_loss_recp, 0)
-                    battery_draw = freeze_draw
-
-                if battery_draw < 0:
-                    battery_state = "fz+"
-                elif battery_draw > 0:
-                    battery_state = "fz-"
-                else:
-                    battery_state = "fz~"
             else:
-                # ECO Mode
+                # ECO Mode.
+                #
+                # Freeze Export is the same inverter mode with charging disabled: execute.py sets
+                # the charge rate to 0 (or pauses charging via the timed pause) and otherwise
+                # leaves the inverter in Demand/ECO mode, never touching the discharge rate. So it
+                # shares this flow with the charge rate zeroed, rather than being modelled by a
+                # parallel branch that has to re-derive the same AC balance. The old duplicate
+                # branch had drifted and pinned battery_draw at 0, wrongly modelling Freeze Export
+                # as Freeze Charge whenever load exceeded PV - see #4676.
+                freeze_export = set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only)
+
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0
-
-                diff = get_diff(0, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
 
                 potential_to_charge = pv_ac
                 required_for_load = load_yesterday
@@ -1138,22 +1089,25 @@ class Prediction(PredictionBatch):
                     battery_draw = min(diff, discharge_rate_now_curve_step, inverter_limit, battery_to_min)
                     battery_state = "e-"
                 else:
-                    # Battery draw is only subject to inverter limit for the AC part
+                    # Battery draw is only subject to inverter limit for the AC part.
+                    # Freeze Export disables charging, so the battery holds rather than absorbing
+                    # the surplus - the #4207 recapture below is the only way it charges, and only
+                    # for the part of the surplus the export limit cannot take.
+                    charge_rate_scale = 0 if freeze_export else 1
+
                     if inverter_hybrid:
                         charge_rate_now_dc = battery_rate_max_charge_dc
 
-                        # Freeze windows are handled by their own elif branch above and never reach
-                        # here - no need to zero the charge rate for them in this branch.
                         charge_rate_now_curve_dc = (
                             get_charge_rate_curve_cached(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
                             * battery_rate_max_scaling
                         )
-                        charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
+                        charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step * charge_rate_scale
 
                         virtual_inverter_limit = inverter_limit + pv_now
                         battery_draw = max(diff, -charge_rate_now_curve_dc_step, -virtual_inverter_limit, -battery_to_max)
                     else:
-                        battery_draw = max(diff, -charge_rate_now_curve_step, -inverter_limit, -battery_to_max)
+                        battery_draw = max(diff, -charge_rate_now_curve_step * charge_rate_scale, -inverter_limit, -battery_to_max)
 
                     if battery_draw < 0:
                         battery_state = "e+"
@@ -1165,6 +1119,49 @@ class Prediction(PredictionBatch):
                     else:
                         pv_dc = 0
                     pv_ac = (pv_now - pv_dc) * inverter_loss_ac
+
+                if freeze_export:
+                    # Genuine PV surplus beyond what load+export_limit can absorb still charges the
+                    # battery on some inverters rather than being clipped (#4207) - e.g. FoxESS
+                    # "Feed-in First" prioritises load, then export, then the battery. Only the
+                    # genuine overflow is charged (not the full charge rate), so freeze still holds
+                    # SoC flat whenever the export limit alone can absorb all the surplus - matching
+                    # the equivalent recapture logic in the force export branch above.
+                    if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export:
+                        over_limit = abs(diff) - export_limit
+                        if inverter_hybrid:
+                            charge_rate_now_curve_dc = (
+                                get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
+                                * battery_rate_max_scaling
+                            )
+                            charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
+                            battery_draw = max(-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
+                        else:
+                            battery_draw = max(-over_limit * inverter_loss, -battery_to_max, -charge_rate_now_curve_step)
+
+                        if battery_draw < 0:
+                            pv_dc = min(abs(battery_draw), pv_now)
+                            pv_ac = (pv_now - pv_dc) * inverter_loss_ac
+
+                    # Some inverters (observed on AlphaESS) continue a small residual battery
+                    # discharge during Freeze Export instead of covering house load. Treat the
+                    # configured value as battery-side power and feed it into the normal AC balance:
+                    # house load consumes it first and any surplus may reach the grid. Configuring
+                    # this rate says the inverter leaks only this much rather than covering load, so
+                    # it replaces the shortfall discharge computed above.
+                    if inverter_freeze_export_discharge_rate > 0 and battery_draw >= 0:
+                        freeze_draw = min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min)
+                        freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp)
+                        if freeze_diff < 0 and abs(freeze_diff) > export_limit:
+                            freeze_draw = max(freeze_draw - (abs(freeze_diff) - export_limit) * inverter_loss_recp, 0)
+                        battery_draw = freeze_draw
+
+                    if battery_draw < 0:
+                        battery_state = "fz+"
+                    elif battery_draw > 0:
+                        battery_state = "fz-"
+                    else:
+                        battery_state = "fz~"
 
             # Clamp at inverter limit
             if inverter_hybrid:

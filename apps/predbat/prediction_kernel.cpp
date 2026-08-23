@@ -1054,53 +1054,15 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     metric_keep += std::max(potential_import * import_rate, 0.0);
                 }
             }
-        } else if (c->set_export_freeze && export_window_active && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only)) {
-            // Freeze - not an active discharge, but genuine PV surplus beyond what
-            // load+export_limit can absorb still charges the battery on some inverters rather
-            // than being clipped (#4207) - mirrors the recapture logic in the force export
-            // branch above, without any active discharge. prediction.py's matching elif.
-            battery_draw = 0;
-            pv_ac = pv_now * inverter_loss_ac;
-            pv_dc = 0;
-
-            const double diff_freeze = get_diff(battery_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
-            if (diff_freeze < 0 && std::fabs(diff_freeze) > export_limit && c->inverter_can_charge_during_export) {
-                const double over_limit = std::fabs(diff_freeze) - export_limit;
-                if (inverter_hybrid) {
-                    const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
-                    const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
-                    battery_draw = std::max({-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
-                } else {
-                    battery_draw = std::max({-over_limit * inverter_loss, -battery_to_max, -charge_rate_now_curve_step});
-                }
-
-                if (battery_draw < 0) {
-                    pv_dc = std::min(std::fabs(battery_draw), pv_now);
-                    pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
-                }
-            } else if (diff_freeze > 0 && inverter_freeze_export_discharge_rate <= 0) {
-                // Freeze Export still allows the battery to discharge to cover a genuine load
-                // shortfall - only charging is disabled (customisation.md "Freeze Export during
-                // Demand"). Mirrors prediction.py's matching elif - see #4676.
-                battery_draw = std::min({diff_freeze * inverter_loss_recp, discharge_rate_now_curve_step, inverter_limit, battery_to_min});
-            }
-
-            // Some inverters (observed on AlphaESS) continue a small residual battery
-            // discharge during Freeze Export. Feed the battery-side rate into the normal AC
-            // balance so load consumes it first and any surplus may export, while respecting
-            // the reserve and the physical grid export limit. Only applies when nothing else
-            // has already decided a movement - a genuine shortfall discharge above already
-            // covers the real load more precisely than this residual estimate.
-            if (inverter_freeze_export_discharge_rate > 0 && battery_draw >= 0) {
-                double freeze_draw = std::min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min);
-                const double freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
-                if (freeze_diff < 0 && std::abs(freeze_diff) > export_limit) {
-                    freeze_draw = std::max(freeze_draw - (std::abs(freeze_diff) - export_limit) * inverter_loss_recp, 0.0);
-                }
-                battery_draw = freeze_draw;
-            }
         } else {
             // ECO Mode - prediction.py:951-997
+            //
+            // Freeze Export is the same inverter mode with charging disabled: execute.py sets the
+            // charge rate to 0 (or pauses charging) and otherwise leaves the inverter in
+            // Demand/ECO mode, never touching the discharge rate. So it shares this flow with the
+            // charge rate zeroed rather than being modelled by a parallel branch - see #4676.
+            const bool freeze_export = c->set_export_freeze && export_window_active && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only);
+
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
 
@@ -1114,18 +1076,21 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             if (diff > 0) {
                 battery_draw = std::min({diff, discharge_rate_now_curve_step, inverter_limit, battery_to_min});
             } else {
+                // Freeze Export disables charging, so the battery holds rather than absorbing the
+                // surplus - the #4207 recapture below is the only way it charges, and only for the
+                // part of the surplus the export limit cannot take.
+                const double charge_rate_scale = freeze_export ? 0.0 : 1.0;
+
                 if (inverter_hybrid) {
                     const double charge_rate_now_dc = battery_rate_max_charge_dc;
-                    // Freeze windows are handled by their own else-if branch above and never
-                    // reach here - no need to zero the charge rate for them in this branch.
                     // Note: Python passes the un-rounded soc for the DC-rate lookup here
                     const double charge_rate_now_curve_dc = rate_curve(soc, charge_rate_now_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
-                    const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
+                    const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step * charge_rate_scale;
 
                     const double virtual_inverter_limit = inverter_limit + pv_now;
                     battery_draw = std::max({diff, -charge_rate_now_curve_dc_step, -virtual_inverter_limit, -battery_to_max});
                 } else {
-                    battery_draw = std::max({diff, -charge_rate_now_curve_step, -inverter_limit, -battery_to_max});
+                    battery_draw = std::max({diff, -charge_rate_now_curve_step * charge_rate_scale, -inverter_limit, -battery_to_max});
                 }
 
                 if (inverter_hybrid) {
@@ -1134,6 +1099,41 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                     pv_dc = 0;
                 }
                 pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
+            }
+
+            if (freeze_export) {
+                // Genuine PV surplus beyond what load+export_limit can absorb still charges the
+                // battery on some inverters rather than being clipped (#4207) - mirrors the
+                // recapture logic in the force export branch above.
+                if (diff < 0 && std::fabs(diff) > export_limit && c->inverter_can_charge_during_export) {
+                    const double over_limit = std::fabs(diff) - export_limit;
+                    if (inverter_hybrid) {
+                        const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                        const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
+                        battery_draw = std::max({-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
+                    } else {
+                        battery_draw = std::max({-over_limit * inverter_loss, -battery_to_max, -charge_rate_now_curve_step});
+                    }
+
+                    if (battery_draw < 0) {
+                        pv_dc = std::min(std::fabs(battery_draw), pv_now);
+                        pv_ac = (pv_now - pv_dc) * inverter_loss_ac;
+                    }
+                }
+
+                // Some inverters (observed on AlphaESS) continue a small residual battery
+                // discharge during Freeze Export instead of covering house load. Feed the
+                // battery-side rate into the normal AC balance so load consumes it first and any
+                // surplus may export. Configuring this rate says the inverter leaks only this much
+                // rather than covering load, so it replaces the shortfall discharge above.
+                if (inverter_freeze_export_discharge_rate > 0 && battery_draw >= 0) {
+                    double freeze_draw = std::min(inverter_freeze_export_discharge_rate * step * battery_loss_discharge, battery_to_min);
+                    const double freeze_diff = get_diff(freeze_draw, pv_dc, pv_ac, load_yesterday, inverter_loss, inverter_loss_recp);
+                    if (freeze_diff < 0 && std::abs(freeze_diff) > export_limit) {
+                        freeze_draw = std::max(freeze_draw - (std::abs(freeze_diff) - export_limit) * inverter_loss_recp, 0.0);
+                    }
+                    battery_draw = freeze_draw;
+                }
             }
         }
 
