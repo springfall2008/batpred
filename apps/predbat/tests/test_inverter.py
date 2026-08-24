@@ -1235,6 +1235,11 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     ha.service_store_enable = True
     if clear:
         ha.service_store = []
+        # Also drop the charge-domain dedup memory so this call is judged fresh rather than against
+        # whatever the previous sub-test happened to send - mirrors the discharge-domain reset in
+        # test_call_adjust_export_immediate(), and is needed now the freeze fallback collapses onto
+        # the same charge_stop call other sub-tests make (batpred#4424/#4432).
+        my_predbat.last_service_hash.pop("charge", None)
 
     print("**** Running Test: {} ****".format(test_name))
 
@@ -1264,10 +1269,20 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
 
     if repeat:
         pass
-    elif soc == inv.soc_percent or freeze:
+    elif freeze:
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
-        expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
+        if no_freeze:
+            # An explicit freeze with no charge_freeze_service configured must fall back to a plain
+            # charge stop, never a real charge_start_service (batpred#4424/#4432)
+            expected.append(["charge_stop", {"device_id": "DID0"}])
+        else:
+            expected.append(["charge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
+    elif soc == inv.soc_percent:
+        if stop_discharge:
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
+        # Reaching the target without an explicit freeze request keeps its existing behaviour
+        expected.append(["charge_freeze" if not no_freeze else "charge_start", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     elif soc > 0 and (inv.has_target_soc or soc > inv.soc_percent):
         if stop_discharge:
             expected.append(["discharge_stop", {"device_id": "DID0"}])
@@ -1327,7 +1342,12 @@ def test_call_adjust_export_immediate(test_name, my_predbat, ha, inv, dummy_item
     elif freeze:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
-        expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
+        if no_freeze:
+            # An explicit freeze with no discharge_freeze_service configured must fall back to a
+            # plain discharge stop, never a real discharge_start_service (batpred#4424/#4432)
+            expected.append(["discharge_stop", {"device_id": "DID0"}])
+        else:
+            expected.append(["discharge_freeze", {"device_id": "DID0", "target_soc": int(soc), "power": power}])
     elif soc < inv.soc_percent:
         if charge_stop:
             expected.append(["charge_stop", {"device_id": "DID0"}])
@@ -3241,6 +3261,16 @@ charge_start_service:
     failed |= test_call_adjust_export_immediate("export_immediate7", my_predbat, ha, inv, dummy_items, 50, freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate8", my_predbat, ha, inv, dummy_items, 50, freeze=False, no_freeze=True)
     failed |= test_call_adjust_export_immediate("export_immediate9", my_predbat, ha, inv, dummy_items, 30.0)
+    # batpred#4424/#4432: an explicit freeze request must never degrade into a real charge/export
+    # when the corresponding freeze service isn't configured - it must fall back to a plain stop.
+    # Kept at the end of this group: the fallback emits charge_stop/discharge_stop, which would
+    # otherwise be deduplicated against the identical calls the earlier sub-tests expect to make.
+    # The freeze branch ignores target_soc, so each second call takes the same path and is
+    # deduplicated as a repeat - confirming the fallback isn't re-issued every cycle.
+    failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True, stop_discharge=True)
+    failed |= test_call_adjust_charge_immediate("charge_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 75, freeze=True, no_freeze=True, repeat=True)
+    failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service", my_predbat, ha, inv, dummy_items, 50, freeze=True, no_freeze=True, clear=True)
+    failed |= test_call_adjust_export_immediate("export_immediate_freeze_no_service_repeat", my_predbat, ha, inv, dummy_items, 30, freeze=True, no_freeze=True, repeat=True)
     if failed:
         return failed
 
