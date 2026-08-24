@@ -28,6 +28,12 @@ SOLIS_BASE_URL = "https://www.soliscloud.com:13333"
 # different namespace, so paths are translated via SOLIS_OAUTH_ENDPOINTS below. (Design #366
 # approach 1 assumed path parity here; that was verified false against the live gateway.)
 SOLIS_OAUTH_BASE_URL = "https://api-oauth2.soliscloud.com"
+
+# Recorded as predbat.status when an account has inverters but none with a battery.
+# The SaaS instance-health sweep matches the "No battery found on any inverter"
+# substring to escalate this specific case, so keep that wording stable and ASCII.
+NO_BATTERY_STATUS = "Error: No battery found on any inverter - PredBat requires a battery to optimise"
+
 SOLIS_READ_ENDPOINT = "/v2/api/atRead"
 SOLIS_READ_BATCH_ENDPOINT = "/v2/api/atReadBatch"
 SOLIS_CONTROL_ENDPOINT = "/v2/api/control"
@@ -382,6 +388,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slots_reset = set()  # Track which inverters had slots reset
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.tou_bit_refused = {}  # Inverter -> when it was seen to reject the TOU bit on CID 636 (issue #4707)
+        # Set by automatic_config() when no discovered inverter has a battery.
+        self._no_battery_fatal = False
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
@@ -1411,8 +1419,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         num_inverters = len(batteries)
         self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s) with batteries")
         if num_inverters == 0:
+            # Fatal: PredBat optimises battery charging and there is no battery to optimise.
+            # Re-asserted every run() tick because had_errors (and so the status) resets each
+            # plan cycle - see _assert_no_battery_status().
+            self._no_battery_fatal = True
             self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration")
             return
+        self._no_battery_fatal = False
 
         # Convert SNs to lowercase for entity naming
         devices = [sn.lower() for sn in batteries]
@@ -1469,6 +1482,20 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.set_arg_auto("export_limit", [f"number.{self.prefix}_solis_{device}_max_export_power" for device in devices])
 
         self.log("Solis API: Automatic configuration complete")
+
+    async def _assert_no_battery_status(self):
+        """Keep the fatal no-battery status current.
+
+        predbat.py resets had_errors at the start of every plan cycle and the completion
+        path may write a fresh status, so a status recorded once at startup would not
+        survive. Called from run() on every tick; the current_status check keeps it to one
+        write per overwrite rather than one per tick.
+        """
+        if not self._no_battery_fatal:
+            return
+        if getattr(self.base, "current_status", None) == NO_BATTERY_STATUS:
+            return
+        self.base.record_status(NO_BATTERY_STATUS, had_errors=True)
 
     async def poll_inverter_data(self, inverter_sn, cid_list, batch=True):
         """Poll CID values for specific inverter"""
@@ -3298,6 +3325,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Auto-configure Predbat if enabled
         if first and self.automatic and self.inverter_sn:
             await self.automatic_config()
+
+        # Keep the fatal no-battery status current (no-op unless it applies)
+        await self._assert_no_battery_status()
 
         # Return status. A refused control write must not refresh the success timestamp:
         # components.is_alive() treats a stale timestamp as unhealthy, which surfaces as

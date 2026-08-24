@@ -29,12 +29,19 @@ class MockBase:
 
     def __init__(self, prefix="predbat"):
         self.prefix = prefix
+        self.current_status = ""
+        self.record_status_calls = []
 
     def get_arg(self, key, default=None):
         """Mock get_arg method"""
         if key == "prefix":
             return self.prefix
         return default
+
+    def record_status(self, message, debug="", had_errors=False, notify=False, extra=""):
+        """Mock record_status - track calls and mirror output.py's current_status write."""
+        self.record_status_calls.append({"message": message, "had_errors": had_errors})
+        self.current_status = message + extra
 
 
 class MockSolisAPI(SolisAPI):
@@ -60,6 +67,8 @@ class MockSolisAPI(SolisAPI):
         self.tou_bit_refused = {}
         self.control_enable = True
         self.inverter_sn = []
+        # Set by automatic_config() when no discovered inverter has a battery.
+        self._no_battery_fatal = False
 
         # Mock base object for get_arg calls
         self.base = MockBase(prefix)
@@ -1294,6 +1303,87 @@ async def test_automatic_config_keeps_real_battery_reporting_zero_soh():
     return failed
 
 
+async def test_run_records_fatal_status_when_no_inverter_has_a_battery():
+    """An account where no inverter has a battery is fatal - PredBat cannot do its job.
+
+    Recorded with had_errors=True so predbat.py's run-completion path leaves it alone
+    (it logs without calling record_status when had_errors is set), which makes the
+    status terminal for the cycle and visible to the hourly instance-health sweep.
+    """
+    failed = False
+    print("**** Testing run() records a fatal status when no inverter has a battery ****")
+
+    api = MockSolisAPI()
+    api.inverter_sn = ["6031042245160206"]
+    api.inverter_details = {"6031042245160206": _DETAIL_NO_BATTERY}
+    api.set_arg_auto = lambda key, value: None
+    await api.automatic_config()
+
+    if not api._no_battery_fatal:
+        print("ERROR: expected _no_battery_fatal to be set when no inverter has a battery")
+        failed = True
+
+    api.base.record_status_calls = []
+    await api._assert_no_battery_status()
+    if len(api.base.record_status_calls) != 1:
+        print("ERROR: expected exactly one record_status call, got {}".format(api.base.record_status_calls))
+        failed = True
+    else:
+        call = api.base.record_status_calls[0]
+        if "No battery found on any inverter" not in call["message"]:
+            print("ERROR: status must contain the cross-repo contract substring, got {!r}".format(call["message"]))
+            failed = True
+        if call["had_errors"] is not True:
+            print("ERROR: status must be recorded with had_errors=True or it will be overwritten")
+            failed = True
+
+    # Idempotent: already our status, so no repeat write on the next 5s tick.
+    await api._assert_no_battery_status()
+    if len(api.base.record_status_calls) != 1:
+        print("ERROR: expected no repeat write while the status is already ours, got {} calls".format(len(api.base.record_status_calls)))
+        failed = True
+
+    # Something else overwrote it (a new plan cycle) - we must re-assert.
+    api.base.current_status = "Demand"
+    await api._assert_no_battery_status()
+    if len(api.base.record_status_calls) != 2:
+        print("ERROR: expected a re-assert after the status was overwritten, got {} calls".format(len(api.base.record_status_calls)))
+        failed = True
+
+    if not failed:
+        print("PASSED: run() records a fatal status when no inverter has a battery")
+    return failed
+
+
+async def test_no_fatal_status_when_some_inverter_has_a_battery():
+    """A mixed account is NOT fatal - the customer has a working battery and must not be paused."""
+    failed = False
+    print("**** Testing no fatal status when at least one inverter has a battery ****")
+
+    api = MockSolisAPI()
+    api.inverter_sn = ["1031260253072197", "6031042245160206"]
+    api.inverter_details = {
+        "1031260253072197": _DETAIL_WITH_BATTERY,
+        "6031042245160206": _DETAIL_NO_BATTERY,
+    }
+    api.set_arg_auto = lambda key, value: None
+    await api.automatic_config()
+
+    if api._no_battery_fatal:
+        print("ERROR: a mixed account must not be fatal - the customer has a working battery")
+        failed = True
+
+    api.base.record_status_calls = []
+    await api._assert_no_battery_status()
+    if api.base.record_status_calls:
+        print("ERROR: expected no status recorded for a mixed account, got {}".format(api.base.record_status_calls))
+        failed = True
+
+    if not failed:
+        print("PASSED: no fatal status when at least one inverter has a battery")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -1316,6 +1406,8 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
+        failed |= asyncio.run(test_run_records_fatal_status_when_no_inverter_has_a_battery())
+        failed |= asyncio.run(test_no_fatal_status_when_some_inverter_has_a_battery())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())
