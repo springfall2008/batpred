@@ -16,7 +16,7 @@ from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME,
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
 from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
-from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT
+from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_RECOVERY_SOC, SOLIS_CID_DISCHARGE_SOC
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
 from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
@@ -1244,6 +1244,13 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v2_no_changes())
         failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
         failed |= asyncio.run(test_write_time_windows_v2_no_active_slot())
+        failed |= asyncio.run(test_discharge_soc_clamped_to_recovery_soc())
+        failed |= asyncio.run(test_recovery_soc_lowered_when_above_minimum())
+        failed |= asyncio.run(test_recovery_soc_lowered_to_target_when_reachable())
+        failed |= asyncio.run(test_discharge_soc_unchanged_above_recovery())
+        failed |= asyncio.run(test_discharge_soc_unclamped_when_recovery_unknown())
+        failed |= asyncio.run(test_recovery_soc_not_lowered_below_inverter_minimum())
+        failed |= asyncio.run(test_recovery_soc_polled_outside_batch())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
@@ -2183,6 +2190,165 @@ async def test_write_time_windows_v2_stale_slot_clearing():
     assert slot2_time_idx < first_slot1_active, "Slot 2 time clear must precede slot 1 active write"
 
     print("PASSED: V2 mode two-pass clears stale disabled slots before writing active slot")
+    return False
+
+
+def _discharge_slot_api(discharge_soc, recovery_soc, over_discharge_soc, inverter_sn="TEST123"):
+    """Build a V2-mode MockSolisAPI with one enabled discharge slot and the given SOC limits.
+
+    Args:
+        discharge_soc: Cut-off SOC Predbat wants for the slot
+        recovery_soc: Value cached for CID 7229, or None to leave it absent
+        over_discharge_soc: Value cached for CID 158, or None to leave it absent
+        inverter_sn: Inverter serial number to use
+
+    Returns: The configured MockSolisAPI
+    """
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    api.inverter_sn = [inverter_sn]
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 1,
+            "discharge_start_time": "16:00",
+            "discharge_end_time": "19:00",
+            "discharge_soc": discharge_soc,
+            "discharge_current": 30,
+        }
+    }
+    cache = {}
+    if recovery_soc is not None:
+        cache[SOLIS_CID_BATTERY_RECOVERY_SOC] = str(recovery_soc)
+    if over_discharge_soc is not None:
+        cache[SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC] = str(over_discharge_soc)
+    api.cached_values[inverter_sn] = cache
+    return api
+
+
+def _written_soc(api, inverter_sn="TEST123"):
+    """Return the value written to the discharge slot 1 cut-off SOC register, or None.
+
+    Args:
+        api: MockSolisAPI whose recorded calls should be searched
+        inverter_sn: Inverter serial number the write was made against
+
+    Returns: The written value as a string, or None if the register was not written
+    """
+    call = next((c for c in api.read_and_write_cid_calls if c["cid"] == SOLIS_CID_DISCHARGE_SOC[0]), None)
+    return call["value"] if call else None
+
+
+def _written_recovery(api):
+    """Return the value written to the battery recovery SOC register, or None.
+
+    Args:
+        api: MockSolisAPI whose recorded calls should be searched
+
+    Returns: The written value as a string, or None if the register was not written
+    """
+    call = next((c for c in api.read_and_write_cid_calls if c["cid"] == SOLIS_CID_BATTERY_RECOVERY_SOC), None)
+    return call["value"] if call else None
+
+
+async def test_discharge_soc_clamped_to_recovery_soc():
+    """A discharge target below the recovery SOC is raised to it when recovery cannot be lowered.
+
+    Reproduces issue #4702: with over-discharge at 20 the inverter holds recovery at 21 and
+    silently discards a write of 20, leaving the slot on a stale cut-off.
+    """
+    print("\n=== Test: discharge SOC clamped to recovery SOC ===")
+
+    api = _discharge_slot_api(discharge_soc=20, recovery_soc=21, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_soc(api) == "21", f"Discharge SOC should be clamped up to 21, got {_written_soc(api)}"
+    # Recovery is already at the inverter's minimum of over_discharge + 1, so must not be touched
+    assert _written_recovery(api) is None, "Recovery SOC must not be written when already at its minimum"
+    print("PASSED: Target of 20 clamped to recovery SOC of 21, recovery left alone")
+    return False
+
+
+async def test_recovery_soc_lowered_when_above_minimum():
+    """A recovery SOC above over-discharge + 1 is lowered towards the target before clamping."""
+    print("\n=== Test: recovery SOC lowered when above its minimum ===")
+
+    # Recovery sits at 50 but over-discharge is 20, so the inverter would accept 21
+    api = _discharge_slot_api(discharge_soc=20, recovery_soc=50, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_recovery(api) == "21", f"Recovery SOC should be lowered to 21, got {_written_recovery(api)}"
+    assert _written_soc(api) == "21", f"Discharge SOC should then be 21, got {_written_soc(api)}"
+    print("PASSED: Recovery lowered 50 -> 21 and discharge SOC written as 21 rather than a stale 50")
+    return False
+
+
+async def test_recovery_soc_lowered_to_target_when_reachable():
+    """When the target sits above over-discharge + 1 the recovery SOC drops to the target exactly."""
+    print("\n=== Test: recovery SOC lowered to the target itself ===")
+
+    # Target 30 is comfortably above the inverter minimum of 11, so no clamping is needed
+    api = _discharge_slot_api(discharge_soc=30, recovery_soc=45, over_discharge_soc=10)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_recovery(api) == "30", f"Recovery SOC should be lowered to the target 30, got {_written_recovery(api)}"
+    assert _written_soc(api) == "30", f"Discharge SOC should be the unclamped target 30, got {_written_soc(api)}"
+    print("PASSED: Recovery lowered to the target so no capacity is given up")
+    return False
+
+
+async def test_discharge_soc_unchanged_above_recovery():
+    """A target already at or above the recovery SOC is written through untouched."""
+    print("\n=== Test: discharge SOC above recovery SOC is untouched ===")
+
+    api = _discharge_slot_api(discharge_soc=40, recovery_soc=21, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_soc(api) == "40", f"Discharge SOC should stay at 40, got {_written_soc(api)}"
+    assert _written_recovery(api) is None, "Recovery SOC must not be written when the target is already reachable"
+    print("PASSED: Reachable target written unchanged with no recovery write")
+    return False
+
+
+async def test_discharge_soc_unclamped_when_recovery_unknown():
+    """With no cached recovery SOC the target is written as-is rather than guessed at."""
+    print("\n=== Test: discharge SOC unclamped when recovery SOC is unknown ===")
+
+    api = _discharge_slot_api(discharge_soc=20, recovery_soc=None, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_soc(api) == "20", f"Discharge SOC should be the raw target 20, got {_written_soc(api)}"
+    assert _written_recovery(api) is None, "Recovery SOC must not be written when its value is unknown"
+    print("PASSED: Unknown recovery SOC leaves the target untouched")
+    return False
+
+
+async def test_recovery_soc_not_lowered_below_inverter_minimum():
+    """Recovery is never driven below over-discharge + 1, which the inverter refuses."""
+    print("\n=== Test: recovery SOC floored at over-discharge + 1 ===")
+
+    # Target of 5 is below the inverter minimum of 21, so recovery stops at 21 and the target clamps
+    api = _discharge_slot_api(discharge_soc=5, recovery_soc=40, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_recovery(api) == "21", f"Recovery SOC should stop at over-discharge + 1 = 21, got {_written_recovery(api)}"
+    assert _written_soc(api) == "21", f"Discharge SOC should be clamped to 21, got {_written_soc(api)}"
+    print("PASSED: Recovery floored at 21 and the target clamped to match")
+    return False
+
+
+async def test_recovery_soc_polled_outside_batch():
+    """CID 7229 is polled individually, the batch endpoint mis-reports it as 1."""
+    print("\n=== Test: recovery SOC excluded from the batch poll ===")
+
+    assert SOLIS_CID_BATTERY_RECOVERY_SOC not in solis_module.SOLIS_CID_INFREQUENT, "Recovery SOC must not be in the batched infrequent list"
+    assert SOLIS_CID_BATTERY_RECOVERY_SOC in solis_module.SOLIS_CID_INFREQUENT_SINGLE, "Recovery SOC must be in the single-read infrequent list"
+    print("PASSED: Recovery SOC is polled via the single-read list")
     return False
 
 
