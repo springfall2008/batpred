@@ -80,6 +80,48 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         battery_rate_max_charge=2.0,
         assert_battery_cycle=1.1111,
     )
+    # Solar only pays the inverter loss on a hybrid (inverter_loss_ac is 1.0 otherwise, see
+    # prediction.py), but the battery always sits behind the inverter, so the DC gross-up on the
+    # shortfall discharge applies to both topologies. These four must pair up exactly: Freeze
+    # Export is ECO with charging disabled, and in a shortfall slot no charging could happen
+    # anyway, so freeze and ECO cannot legitimately differ here.
+    # Non-hybrid: pv_ac = 0.4 (no solar loss), shortfall 0.6 AC, battery draw 0.6/0.9 = 0.6667 DC.
+    # Hybrid:     pv_ac = 0.36 (solar loss),   shortfall 0.64 AC, battery draw 0.64/0.9 = 0.7111 DC.
+    for freeze_label, freeze_limit in (("eco", 100), ("freeze_export", 99)):
+        failed |= simple_scenario(
+            "{}_shortfall_with_pv_ac_coupled".format(freeze_label),
+            my_predbat,
+            1.0,
+            0.4,
+            assert_final_metric=0.0,
+            assert_final_soc=9.3333,
+            battery_size=10.0,
+            battery_soc=10.0,
+            hybrid=False,
+            discharge=freeze_limit,
+            end_record=60,
+            inverter_limit=5.0,
+            inverter_loss=0.9,
+            battery_rate_max_charge=2.0,
+            assert_battery_cycle=0.6667,
+        )
+        failed |= simple_scenario(
+            "{}_shortfall_with_pv_hybrid".format(freeze_label),
+            my_predbat,
+            1.0,
+            0.4,
+            assert_final_metric=0.0,
+            assert_final_soc=9.2889,
+            battery_size=10.0,
+            battery_soc=10.0,
+            hybrid=True,
+            discharge=freeze_limit,
+            end_record=60,
+            inverter_limit=5.0,
+            inverter_loss=0.9,
+            battery_rate_max_charge=2.0,
+            assert_battery_cycle=0.7111,
+        )
     # When inverter_freeze_export_discharge_rate is configured the user is telling Predbat
     # their inverter does NOT cover house load during Freeze Export - it only leaks this fixed
     # rate. So the configured rate wins over the shortfall discharge above. Same scenario as
