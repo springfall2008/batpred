@@ -18,10 +18,10 @@ from web import WebInterface
 HOUSE_CENTRE = (300, 200)
 NODE_RADIUS = 50
 NODE_BY_COLOUR = {
-    "#2196F3": ("PV", (150, 100)),
-    "#FF9800": ("Battery", (150, 300)),
-    "#4CAF50": ("Grid", (450, 300)),
-    "#00BCD4": ("Car", (450, 100)),
+    "#F9A825": ("PV", (150, 100)),
+    "#43A047": ("Battery", (150, 300)),
+    "#757575": ("Grid", (450, 300)),
+    "#E53935": ("Car", (450, 100)),
 }
 
 # The arrowhead is drawn beyond the end of the line, not on it. The markers use the default
@@ -161,6 +161,114 @@ def check_label_clearance(html, state_description):
                 print(f"  ERROR [{state_description}]: the {name} label '{text}' at ({x:.0f},{y:.0f}) is printed across an arm")
                 failed += 1
                 break
+    return failed
+
+
+def run_power_flow_icon_tests(my_predbat, web):
+    """Each circle is labelled by its Material Design Icon, with the name kept as a tooltip."""
+    failed = 0
+    print("Test: every node in the diagram is drawn as an icon, named by a tooltip")
+
+    saved = (my_predbat.car_charging_power_configured, my_predbat.car_charging_power, my_predbat.load_power)
+    my_predbat.car_charging_power_configured = True
+    my_predbat.car_charging_power = 0
+    my_predbat.load_power = 1372
+    html = web.get_power_flow_diagram()
+
+    # Codepoints taken from the @mdi/font stylesheet the web interface already loads. The battery
+    # is the one node whose icon changes with its state, so it is covered by its own test.
+    icons = {
+        "PV": "&#xF0D9B;",  # solar-panel
+        "Grid": "&#xF0D3E;",  # transmission-tower
+        "House": "&#xF02DC;",  # home
+        "Car": "&#xF010B;",  # car
+    }
+    for name, codepoint in icons.items():
+        if codepoint not in html:
+            print(f"  ERROR: the {name} circle has no {name} icon ({codepoint}) in it")
+            failed += 1
+    for name in list(icons) + ["Battery"]:
+        if f"<title>{name}</title>" not in html:
+            print(f"  ERROR: the {name} circle has no tooltip naming it, so an unrecognised icon cannot be identified")
+            failed += 1
+
+    if 'font-family="Material Design Icons"' not in html:
+        print("  ERROR: the icon glyphs need the Material Design Icons font, or they render as empty boxes")
+        failed += 1
+
+    # The reading the House circle carries is the point of the diagram - an icon must not cost it
+    if ">1372 W<" not in html:
+        print("  ERROR: the House circle should still show its power reading alongside the icon")
+        failed += 1
+
+    (my_predbat.car_charging_power_configured, my_predbat.car_charging_power, my_predbat.load_power) = saved
+    return failed
+
+
+def run_battery_icon_tests(my_predbat, web):
+    """The battery icon shows how full the battery is, and whether it is charging.
+
+    battery_power is positive for DISCHARGE in Predbat (gateway.py negates the firmware's sign
+    for exactly this reason), so the charging icon has to key off a negative reading. Getting
+    that backwards would show a battery charging while it empties.
+    """
+    failed = 0
+    print("Test: the battery icon follows the state of charge and the direction of flow")
+
+    saved = (my_predbat.soc_percent, my_predbat.battery_power)
+    cases = [
+        (10, 1500, "&#xF12A1;", "10% discharging", "battery-low"),
+        (50, 1500, "&#xF12A2;", "50% discharging", "battery-medium"),
+        (90, 1500, "&#xF12A3;", "90% discharging", "battery-high"),
+        (0, 0, "&#xF12A1;", "empty and idle", "battery-low"),
+        (50, 0, "&#xF12A2;", "50% idle", "battery-medium"),
+        (100, 0, "&#xF12A3;", "full and idle", "battery-high"),
+        (10, -1500, "&#xF12A4;", "10% charging", "battery-charging-low"),
+        (50, -1500, "&#xF12A5;", "50% charging", "battery-charging-medium"),
+        (90, -1500, "&#xF12A6;", "90% charging", "battery-charging-high"),
+    ]
+    for soc, battery_power, codepoint, description, icon_name in cases:
+        my_predbat.soc_percent = soc
+        my_predbat.battery_power = battery_power
+        html = web.get_power_flow_diagram()
+        if codepoint not in html:
+            print(f"  ERROR: at {description} the battery should be drawn as {icon_name} ({codepoint})")
+            failed += 1
+
+    (my_predbat.soc_percent, my_predbat.battery_power) = saved
+    return failed
+
+
+def run_power_flow_colour_tests(my_predbat, web):
+    """Each node carries its own colour, on the circle and on the arm that reaches it."""
+    failed = 0
+    print("Test: each node is drawn in its own colour")
+
+    saved = my_predbat.car_charging_power_configured
+    my_predbat.car_charging_power_configured = True
+    html = web.get_power_flow_diagram()
+
+    # Each node carries the colour of the thing it is, on the circle and on its arm
+    for name, fill in (("PV", "#FDD835"), ("Battery", "#43A047"), ("Grid", "#757575"), ("House", "#6D4C41"), ("Car", "#E53935")):
+        if f'fill="{fill}"><title>{name}</title>' not in html:
+            print(f"  ERROR: the {name} circle should be filled {fill}")
+            failed += 1
+
+    # Every icon is white, whatever it sits on
+    for name, codepoint, size in (("solar panel", "&#xF0D9B;", 44), ("pylon", "&#xF0D3E;", 44), ("car", "&#xF010B;", 44), ("house", "&#xF02DC;", 34)):
+        if f'font-size="{size}" fill="#fff">{codepoint}' not in html:
+            print(f"  ERROR: the {name} icon should be white")
+            failed += 1
+    if 'font-size="44" fill="#fff">&#xF12A' not in html:
+        print("  ERROR: the battery icon should be white")
+        failed += 1
+
+    # A #FDD835 line is close to invisible against the page, so the PV arm takes a deeper shade
+    if "#F9A825" not in html:
+        print("  ERROR: the PV arm should use a deeper yellow than its circle so it reads against the page")
+        failed += 1
+
+    my_predbat.car_charging_power_configured = saved
     return failed
 
 
@@ -392,6 +500,9 @@ def run_web_power_flow_tests(my_predbat):
         print("  ERROR: the House circle must never show a negative load")
         failed += 1
 
+    failed += run_power_flow_icon_tests(my_predbat, web)
+    failed += run_power_flow_colour_tests(my_predbat, web)
+    failed += run_battery_icon_tests(my_predbat, web)
     failed += run_power_flow_geometry_tests(my_predbat, web)
 
     my_predbat.args = original_args
