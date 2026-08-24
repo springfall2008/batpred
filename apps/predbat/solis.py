@@ -113,7 +113,6 @@ SOLIS_CID_INFREQUENT = [
     SOLIS_CID_BATTERY_RESERVE_SOC,
     SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC,
     SOLIS_CID_BATTERY_FORCE_CHARGE_SOC,
-    SOLIS_CID_BATTERY_RECOVERY_SOC,
     SOLIS_CID_BATTERY_MAX_CHARGE_SOC,
     # Battery max currents
     SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT,
@@ -123,6 +122,14 @@ SOLIS_CID_INFREQUENT = [
     SOLIS_CID_MAX_OUTPUT_POWER,
     SOLIS_CID_MAX_EXPORT_POWER,
     SOLIS_CID_BATTERY_CAPACITY,
+]
+
+# Infrequent poll CIDs that must be read one at a time. The atReadBatch endpoint returns a
+# wrong value for these - CID 7229 comes back as "1" rather than the real recovery SOC, which
+# a single atRead reports correctly - so batching them silently poisons the cache and the
+# published entity. Polled alongside SOLIS_CID_INFREQUENT with batch=False.
+SOLIS_CID_INFREQUENT_SINGLE = [
+    SOLIS_CID_BATTERY_RECOVERY_SOC,
 ]
 
 SOLIS_CID_LIST_TOU_V2 = [
@@ -182,6 +189,23 @@ SOLIS_BIT_BACKUP_MODE = 4  # Battery reserve/backup mode
 SOLIS_BIT_GRID_CHARGING = 5  # Allow grid charging
 SOLIS_BIT_FEED_IN_PRIORITY = 6  # Feed-in priority mode
 SOLIS_BIT_PEAK_SHAVING = 11  # Peak-shaving mode
+
+def parse_cid_int(value, default=None):
+    """Convert a CID register value to an int, returning default when it is missing or not numeric.
+
+    Register reads arrive as strings and are None when a poll has not populated the cache yet,
+    so callers that need to compare them numerically go through here rather than guessing a value.
+
+    Args:
+        value: Raw register value, usually a string
+        default: Value to return when the conversion is not possible
+
+    Returns: The value as an int, or default
+    """
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
 
 def get_solis_mode_enum(value):
     """
@@ -668,6 +692,52 @@ class SolisAPI(ComponentBase, OAuthMixin):
             slot_data["charge_enable"] = 0
             slot_data["discharge_enable"] = 0
 
+    async def resolve_discharge_soc_floor(self, inverter_sn, target_soc):
+        """Return the lowest discharge slot cut-off SOC the inverter will actually accept.
+
+        The inverter refuses any discharge slot cut-off below the battery recovery SOC
+        (CID 7229), and refuses to take a recovery SOC below the over-discharge SOC
+        (CID 158) plus one. A refused write is silent - the control API answers with
+        code 0 and the register keeps its previous value - so a slot can sit at a stale
+        cut-off far above the target and never force export at all.
+
+        Where the recovery SOC is higher than the inverter's own minimum it is lowered
+        towards the target first, so only the unavoidable one percent is given up. The
+        over-discharge SOC is never written here, leaving the battery protection floor
+        where the user set it.
+
+        Args:
+            inverter_sn: Inverter serial number
+            target_soc: Cut-off SOC Predbat wants for the discharge slot, as a percentage
+
+        Returns: The cut-off SOC to write, which is target_soc or the lowest value above it the inverter will take
+        """
+        values = self.cached_values.get(inverter_sn, {})
+
+        # Cache only - the infrequent poll runs before the first control write, so a missing
+        # value means we cannot tell where the floor is and the target is left alone
+        recovery_soc = parse_cid_int(values.get(SOLIS_CID_BATTERY_RECOVERY_SOC))
+        if recovery_soc is None or target_soc >= recovery_soc:
+            return target_soc
+
+        # The inverter will not accept a recovery SOC at or below the over-discharge SOC
+        over_discharge_soc = parse_cid_int(values.get(SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC))
+        hard_floor = (over_discharge_soc + 1) if over_discharge_soc is not None else recovery_soc
+
+        wanted_recovery = max(target_soc, hard_floor)
+        if wanted_recovery < recovery_soc:
+            self.log(f"Solis API: Discharge target {target_soc}% is below recovery SOC {recovery_soc}% on {inverter_sn}, lowering recovery SOC to {wanted_recovery}%")
+            if await self.read_and_write_cid(inverter_sn, SOLIS_CID_BATTERY_RECOVERY_SOC, wanted_recovery, field_description="battery recovery SOC"):
+                recovery_soc = wanted_recovery
+            else:
+                # Re-read rather than trust the requested value, the write may have been refused
+                recovery_soc = parse_cid_int(self.cached_values.get(inverter_sn, {}).get(SOLIS_CID_BATTERY_RECOVERY_SOC), recovery_soc)
+
+        if target_soc < recovery_soc:
+            self.log(f"Solis API: Clamping discharge slot SOC from {target_soc}% to {recovery_soc}% on {inverter_sn}, the inverter will not discharge below its recovery SOC")
+            return recovery_soc
+        return target_soc
+
     async def write_time_windows_if_changed(self, inverter_sn):
         """Write charge/discharge time windows, SOC, and current to inverter, only if values changed from cache.
         Automatically handles V1 vs V2 modes and only writes registers that have changed.
@@ -819,7 +889,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         # Check and write discharge SOC if changed
                         if "discharge_soc" in slot_data:
                             soc_cid = SOLIS_CID_DISCHARGE_SOC[slot - 1]
-                            new_soc_str = str(int(slot_data['discharge_soc']))
+                            # The inverter silently discards a cut-off below its recovery SOC, leaving the
+                            # slot on a stale value that can stop it exporting at all (see issue #4702)
+                            new_soc = await self.resolve_discharge_soc_floor(inverter_sn, int(slot_data['discharge_soc']))
+                            new_soc_str = str(new_soc)
                             cached_soc = self.cached_values.get(inverter_sn, {}).get(soc_cid)
                             if cached_soc != new_soc_str:
                                 result = await self.read_and_write_cid(inverter_sn, soc_cid, new_soc_str, field_description=f"discharge slot {slot} SOC")
@@ -3091,6 +3164,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             for sn in self.inverter_sn:
                 self.log(f"Solis API: Performing infrequent data poll for inverter {sn}...")
                 await self.poll_inverter_data(sn, SOLIS_CID_INFREQUENT)
+                # Read separately, the batch endpoint mis-reports these (see SOLIS_CID_INFREQUENT_SINGLE)
+                await self.poll_inverter_data(sn, SOLIS_CID_INFREQUENT_SINGLE, batch=False)
                 # Recalculate max currents after polling infrequent data
                 self._calculate_max_currents(sn)
 
@@ -3120,13 +3195,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         await self.fetch_entity_data(sn)
 
         # Control mode
+        control_success = True
         if first or (seconds % 60 == 0):
             # Write to inverter using new function (handles both V1 and V2)
             is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
             if self.control_enable and not is_readonly:
                 for sn in self.inverter_sn:
                     await self.reset_charge_windows_if_needed(sn)
-                    await self.write_time_windows_if_changed(sn)
+                    if not await self.write_time_windows_if_changed(sn):
+                        control_success = False
             else:
                 self.log("Solis API: Control disabled, skipping writing time windows")
 
@@ -3138,8 +3215,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         if first and self.automatic and self.inverter_sn:
             await self.automatic_config()
 
-        # Return status
-        if poll_success:
+        # Return status. A refused control write must not refresh the success timestamp:
+        # components.is_alive() treats a stale timestamp as unhealthy, which surfaces as
+        # "component errors: Solis" in the run status. Without this a register the inverter
+        # keeps rejecting is invisible outside the log (see issue #4702).
+        #
+        # The run itself is still reported as successful, so a control failure does not reach
+        # non_fatal_error_occurred(). That sets base.had_errors, and the had_errors branch in
+        # update_pred() skips record_status() entirely, which would freeze predbat.status on
+        # its last value rather than show an error.
+        if poll_success and control_success:
             self.update_success_timestamp()
 
         # Mark API as started after first successful run
