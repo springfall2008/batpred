@@ -105,11 +105,16 @@ ALLOWED_TOOLS = ",".join(
         "Bash(git restore*)",
         "Bash(git clean*)",
         "Bash(git stash*)",
-        # Running one targeted test, from coverage/ or from the repo root
+        # Running one targeted test. tools/triage_test.sh keeps the cd into
+        # coverage/ and the output redirect inside the script, because Claude Code
+        # prompts on a cd combined with an output redirect - which is what the
+        # obvious "cd coverage && ./run_all --test X > log 2>&1" form is, so it is
+        # denied outright under dontAsk no matter what rules are listed here.
+        "Bash(tools/triage_test.sh *)",
+        "Bash(./tools/triage_test.sh *)",
         "Bash(cd *)",
-        "Bash(./run_all*)",
-        "Bash(coverage/run_all*)",
-        "Bash(./coverage/run_all*)",
+        "Bash(./run_all *)",
+        "Bash(./run_all)",
         "Bash(python3 *)",
         # Pulling issue attachments down and picking them apart. A predbat.log
         # is often tens of MB - too big for WebFetch and too big to read into
@@ -137,10 +142,10 @@ ALLOWED_TOOLS = ",".join(
         "Bash(tr *)",
         "Bash(tee *)",
         "Bash(echo *)",
+        # Edit rules cover every file-editing tool (Write included) - a Write(path)
+        # rule is not matched by the file permission check, so don't add one.
         f"Edit({EDIT_SCOPE})",
         f"Edit({SCRATCH_SCOPE})",
-        f"Write({EDIT_SCOPE})",
-        f"Write({SCRATCH_SCOPE})",
         "WebFetch",
         "Read",
         "Grep",

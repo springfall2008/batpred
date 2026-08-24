@@ -57,12 +57,13 @@ Search existing issues (`gh issue list --search ...`, both open and closed) for 
 - Read [references/debug-journal.md](references/debug-journal.md) before forming a hypothesis. It maps common symptoms to modules, records known per-integration behaviour from past investigations, and lists the traps that have wasted time before. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
 - Read the relevant source area for the reported symptom (e.g. `apps/predbat/fetch.py` for rate issues, `apps/predbat/inverter.py` for a named inverter).
 - Check `git log` / `git blame` on that area for recent related changes — the issue may already be fixed on main since the version the reporter is using.
-- If the issue clearly maps to an existing test module (`apps/predbat/tests/test_<feature>.py`, listed in `TEST_REGISTRY` in `unit_test.py`), run just that test. Save the output and grep it rather than reading it all back — the run is verbose:
+- If the issue clearly maps to an existing test module (`apps/predbat/tests/test_<feature>.py`, listed in `TEST_REGISTRY` in `unit_test.py`), run just that test with the wrapper, from the repo root:
 
   ```bash
-  cd coverage && ./run_all --test <name> > <scratch>/test.log 2>&1; echo "exit=$?"
-  tail -30 <scratch>/test.log
+  tools/triage_test.sh <name> <scratch>/test.log
   ```
+
+  It prints the exit status and the last 30 lines; grep the log file for anything more. Use the wrapper rather than composing your own `cd coverage && ./run_all ... > log` — a `cd` combined with an output redirect is refused outright in this session's permission mode, which is why the wrapper exists.
 
   Skip this step if there's no clean mapping — never run the full suite. A test only settles questions about code behaviour; it can't settle what real hardware did, so don't run one to look thorough.
 
