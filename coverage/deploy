@@ -3,6 +3,14 @@ if [ -n "$(git -C .. status --porcelain)" ]; then
   GIT_HASH="${GIT_HASH}-dirty"
 fi
 echo "$GIT_HASH" > /Volumes/addon_configs/6adb4f0d_predbat/git_version.txt
+
+
+# HA changed terminology from 'addons' to 'apps' in HA 2026.2 with 'addon_configs' becoming 'app_configs' but retained
+# the old directory names for transition
+#
+# At present have not changed Predbat deployment in order to not break installations that are still using an older HA supervisor
+# TODO: Propose in Feb 2027 that Predbat be changed to use the new directory name
+
 cp ../apps/predbat/*.py /Volumes/addon_configs/6adb4f0d_predbat
 cp ../apps/predbat/*.proto /Volumes/addon_configs/6adb4f0d_predbat
 cp ../apps/predbat/*.so /Volumes/addon_configs/6adb4f0d_predbat
