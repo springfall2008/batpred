@@ -49,6 +49,13 @@ DISALLOWED_TOOLS blocks all MCP tools plus the git/gh commands that
 would publish something, and --max-turns/--max-budget-usd cap a single
 invocation from running away.
 
+Everything Claude prints for an issue is captured to
+~/predbat-triage-bot/logs/issue-<number>.log - appended, not truncated, so a
+run that failed and got retried keeps the failed attempt too. The daemon's own
+console output just says which issue it is working on and where that log is;
+`tail -f` it to watch a triage in progress. Logs are never pruned, so clear the
+directory out yourself if it grows.
+
 The allowlist deliberately includes general-purpose tools (python3,
 curl, ./run_all), which together amount to arbitrary code execution
 inside the clone - the triage skill needs to open a reporter's log,
@@ -69,6 +76,7 @@ REPO = "springfall2008/batpred"
 BASE_DIR = Path.home() / "predbat-triage-bot"
 CLONE_DIR = BASE_DIR / "batpred"
 SCRATCH_DIR = BASE_DIR / "scratch"
+LOG_DIR = BASE_DIR / "logs"
 STATE_FILE = BASE_DIR / "state.json"
 POLL_SECONDS = 300
 
@@ -212,6 +220,9 @@ def triage(issue_number):
         ALLOWED_TOOLS,
         "--disallowedTools",
         DISALLOWED_TOOLS,
+        # Turn-by-turn trace rather than just the final message, so the per-issue
+        # log below shows which tool calls ran and which were denied.
+        "--verbose",
         # Downloads land outside the clone, so the session needs the scratch
         # directory in scope for Read/Grep as well as for the Bash rules above.
         "--add-dir",
@@ -225,8 +236,16 @@ def triage(issue_number):
         "--max-budget-usd",
         "10.00",
     ]
-    print(f"[triage] issue #{issue_number}: starting", flush=True)
-    result = subprocess.run(cmd, cwd=str(CLONE_DIR))
+    log_path = LOG_DIR / f"issue-{issue_number}.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[triage] issue #{issue_number}: starting, logging to {log_path}", flush=True)
+    # Append rather than truncate: a failed run leaves the issue unprocessed, so the
+    # next poll retries it - and the failed attempt's output is the part worth keeping.
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== issue #{issue_number} started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== issue #{issue_number} exited {result.returncode} ====\n")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(result.returncode, cmd)
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
