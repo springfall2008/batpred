@@ -85,6 +85,7 @@ SCENARIO_STATE_ATTRS = [
     "export_limit",
     "pv_ac_limit",
     "inverter_can_charge_during_export",
+    "inverter_support_feedin_first",
     "set_charge_freeze",
     "set_reserve_enable",
     "set_export_freeze",
@@ -215,6 +216,12 @@ def apply_random_scenario(my_predbat, rng):
     my_predbat.export_limit = rng.uniform(0, 10) / 60.0
     my_predbat.pv_ac_limit = rng.choice([0.0, rng.uniform(1, 5) / 60.0])
     my_predbat.inverter_can_charge_during_export = rng.choice([True, False])
+    # Derived from an existing draw rather than a new one, so the seeded scenario stream is
+    # unchanged (see the inverter_freeze_export_discharge_rate note below). battery_loss's third
+    # decimal is an even coin and is independent of everything the Feed-in First gate reads -
+    # hybrid, inverter_can_charge_during_export, export_limit and set_export_freeze - so both
+    # sides of the gate get exercised against every combination of those.
+    my_predbat.inverter_support_feedin_first = (round(my_predbat.battery_loss * 1000) % 2) == 0
 
     my_predbat.set_charge_freeze = rng.choice([True, False])
     my_predbat.set_reserve_enable = rng.choice([True, False])
@@ -470,6 +477,21 @@ def run_edge_case_tests(my_predbat):
         ("export_low_power", {"soc_kw": 100.0, "set_export_low_power": True}, [], [], half_window, [49.5], 0, 0.5, forecast_minutes),
         ("export_limited", {"soc_kw": 100.0, "export_limit": 0.5 / 60.0, "battery_rate_max_export": 2 / 60.0}, [], [], half_window, [0.0], 2.0, 0.2, forecast_minutes),
         ("export_no_charge_during", {"soc_kw": 100.0, "inverter_can_charge_during_export": False, "export_limit": 0.5 / 60.0}, [], [], half_window, [0.0], 3.0, 0.2, forecast_minutes),
+        # Freeze Export with PV well past the export limit, either side of the Feed-in First gate:
+        # one recaptures the overflow into the battery, the other clips it.
+        ("export_freeze_feedin_first", {"soc_kw": 20.0, "set_export_freeze": True, "inverter_support_feedin_first": True, "export_limit": 0.5 / 60.0}, [], [], half_window, [99.0], 3.0, 0.2, forecast_minutes),
+        ("export_freeze_no_feedin_first", {"soc_kw": 20.0, "set_export_freeze": True, "inverter_support_feedin_first": False, "export_limit": 0.5 / 60.0}, [], [], half_window, [99.0], 3.0, 0.2, forecast_minutes),
+        (
+            "export_freeze_feedin_first_hybrid",
+            {"soc_kw": 20.0, "set_export_freeze": True, "inverter_support_feedin_first": True, "inverter_hybrid": True, "inverter_loss": 0.9, "battery_rate_max_charge_dc": 4 / 60.0, "export_limit": 0.5 / 60.0},
+            [],
+            [],
+            half_window,
+            [99.0],
+            3.0,
+            0.2,
+            forecast_minutes,
+        ),
         ("intersecting_windows", {"soc_kw": 50.0}, [100.0], full_window, half_window, [0.0], 1.0, 0.5, forecast_minutes),
         ("pv_ac_limit_clip", {"pv_ac_limit": 1 / 60.0}, [], [], [], [], 3.0, 0.2, forecast_minutes),
         ("small_inverter", {"soc_kw": 50.0, "inverter_limit": 0.5 / 60.0}, [], [], [], [], 2.0, 2.0, forecast_minutes),

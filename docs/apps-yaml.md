@@ -1254,7 +1254,9 @@ During a force export **or freeze export** period, if the generated solar exceed
 If this setting is `true` then the inverter is able to charge the battery from excess PV while still in Force Export or Freeze Export mode.
 If this setting is `false` then the inverter will not charge the battery and the excess PV will be lost.
 
-For Freeze Export specifically, this means that during a solar surplus the battery still holds its SoC flat while the export limit alone can absorb all that surplus - it only starts charging once solar genuinely exceeds what load and the export limit together can use, matching how many hybrid inverters actually behave (e.g. FoxESS's "Feed-in First" mode prioritises house load, then export, then the battery).
+For Freeze Export specifically, this means that during a solar surplus the battery still holds its SoC flat while the export limit alone can absorb all that surplus - it only starts charging once solar genuinely exceeds what load and the export limit together can use.
+
+Freeze Export recapture also depends on your inverter type, not just this setting. Most inverters implement Freeze Export by simply disabling charging, so PV beyond the export limit really is clipped and lost; only inverters with a genuine "Feed-in First" mode - which prioritises house load, then export, then the battery - recapture it. Today that means FoxESS and FoxCloud, plus the four cloud integrations that switch the inverter into an export-first work mode for the freeze: SolisCloud ("Feed-in priority"), SolaxCloud ("Feed-in"), SunsynkCloud and DeyeCloud (both "Selling First"). Predbat knows which is which from your inverter type and models the two differently, so setting `inverter_can_charge_during_export` to `true` will not make a non-Feed-in-First inverter charge during Freeze Export. Force Export is unaffected and is still controlled by this setting alone.
 
 ### **inverter_freeze_export_discharge_rate**
 

@@ -168,6 +168,7 @@ class Prediction(PredictionBatch):
             self.iboost_running_solar = False
             self.iboost_running_full = False
             self.inverter_can_charge_during_export = base.inverter_can_charge_during_export
+            self.inverter_support_feedin_first = base.inverter_support_feedin_first
             self.prediction_cache_enable = base.prediction_cache_enable
             self.prediction_cache = {}
             self.plan_interval_minutes = base.plan_interval_minutes
@@ -1122,12 +1123,15 @@ class Prediction(PredictionBatch):
 
                 if freeze_export:
                     # Genuine PV surplus beyond what load+export_limit can absorb still charges the
-                    # battery on some inverters rather than being clipped (#4207) - e.g. FoxESS
-                    # "Feed-in First" prioritises load, then export, then the battery. Only the
-                    # genuine overflow is charged (not the full charge rate), so freeze still holds
-                    # SoC flat whenever the export limit alone can absorb all the surplus - matching
-                    # the equivalent recapture logic in the force export branch above.
-                    if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export:
+                    # battery on inverters that implement a real "Feed-in First" mode (#4207) - e.g.
+                    # FoxESS prioritises load, then export, then the battery. Gated on
+                    # inverter_support_feedin_first: most inverters merely disable charging for
+                    # Freeze Export, so their surplus really is clipped and recapturing it here would
+                    # invent energy that never reaches the battery. Only the genuine overflow is
+                    # charged (not the full charge rate), so freeze still holds SoC flat whenever the
+                    # export limit alone can absorb all the surplus - matching the equivalent
+                    # recapture logic in the force export branch above.
+                    if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export and self.inverter_support_feedin_first:
                         over_limit = abs(diff) - export_limit
                         if inverter_hybrid:
                             charge_rate_now_curve_dc = (

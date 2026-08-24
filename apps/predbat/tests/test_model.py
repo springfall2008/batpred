@@ -236,6 +236,118 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         battery_rate_max_charge=0.0,
         assert_battery_cycle=0.1,
     )
+    # Freeze Export PV recapture (#4207) is only real on inverters whose freeze mode is a genuine
+    # "Feed-in First" (load, then export, then battery) - FoxESS. Everything else just disables
+    # charging, so PV above the export limit really is clipped. inverter_support_feedin_first is
+    # what separates the two, and these pairs differ in nothing else.
+    #
+    # 2kW PV, no load, 0.5kW export limit: 1.5kW of PV has nowhere to go. With Feed-in First the
+    # battery takes exactly that overflow (1.5kWh over the hour) and nothing is clipped; without
+    # it the battery holds and the same 1.5kWh is clipped. Either way 0.5kWh is exported, so the
+    # bill is identical and only the SoC/clipping tell the two models apart.
+    # assert_clipped is the only figure here that is not bounded by end_record - it is a running
+    # total over the whole 24 hour horizon, so 1.5kW of clipping reads as 0.125 * 287 steps.
+    for feedin_first, expect_soc, expect_cycle, expect_clipped in ((True, 11.5, 1.5, 0), (False, 10.0, 0.0, 35.875)):
+        failed |= simple_scenario(
+            "freeze_export_feedin_first_{}".format(feedin_first),
+            my_predbat,
+            0,
+            2.0,
+            assert_final_metric=-export_rate * 0.5,
+            assert_final_soc=expect_soc,
+            battery_soc=10.0,
+            discharge=99,
+            end_record=60,
+            export_limit=0.5,
+            inverter_limit=10.0,
+            battery_rate_max_charge=5.0,
+            inverter_support_feedin_first=feedin_first,
+            assert_battery_cycle=expect_cycle,
+            assert_clipped=expect_clipped,
+        )
+    # Same contrast on a hybrid with a lossy inverter, where the recapture happens on the DC side.
+    # pv_ac = 2 * 0.8 = 1.6kW, so the AC overflow past the 0.5kW export limit is 1.1kW; charging it
+    # DC-side costs the loss reciprocal, 1.1 / 0.8 = 1.375kW (1.375kWh over the hour). Without
+    # Feed-in First that 1.1kWh of AC PV is clipped instead.
+    for feedin_first, expect_soc, expect_cycle, expect_clipped in ((True, 11.375, 1.375, 0), (False, 10.0, 0.0, 26.308)):
+        failed |= simple_scenario(
+            "freeze_export_feedin_first_hybrid_{}".format(feedin_first),
+            my_predbat,
+            0,
+            2.0,
+            assert_final_metric=-export_rate * 0.5,
+            assert_final_soc=expect_soc,
+            battery_soc=10.0,
+            hybrid=True,
+            inverter_loss=0.8,
+            discharge=99,
+            end_record=60,
+            export_limit=0.5,
+            inverter_limit=10.0,
+            battery_rate_max_charge=5.0,
+            inverter_support_feedin_first=feedin_first,
+            assert_battery_cycle=expect_cycle,
+            assert_clipped=expect_clipped,
+        )
+    # inverter_can_charge_during_export still vetoes the recapture on a Feed-in First inverter -
+    # a user who has told Predbat the battery cannot charge while exporting is believed either way.
+    failed |= simple_scenario(
+        "freeze_export_feedin_first_no_charge_during_export",
+        my_predbat,
+        0,
+        2.0,
+        assert_final_metric=-export_rate * 0.5,
+        assert_final_soc=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        inverter_support_feedin_first=True,
+        inverter_can_charge_during_export=False,
+        assert_battery_cycle=0.0,
+        assert_clipped=35.875,
+    )
+    # PV surplus the export limit can absorb on its own must leave SoC flat even with Feed-in
+    # First - freeze is still a freeze, only genuine overflow moves the battery. 2kW PV against a
+    # 5kW export limit is all exportable, so nothing is recaptured and nothing is clipped.
+    failed |= simple_scenario(
+        "freeze_export_feedin_first_within_export_limit",
+        my_predbat,
+        0,
+        2.0,
+        assert_final_metric=-export_rate * 2.0,
+        assert_final_soc=10.0,
+        battery_soc=10.0,
+        discharge=99,
+        end_record=60,
+        export_limit=5.0,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        inverter_support_feedin_first=True,
+        assert_battery_cycle=0.0,
+        assert_clipped=0,
+    )
+    # A full battery has no headroom to recapture into, so the overflow is clipped regardless of
+    # Feed-in First - battery_to_max, not the charge rate, is the binding clamp here.
+    failed |= simple_scenario(
+        "freeze_export_feedin_first_full_battery",
+        my_predbat,
+        0,
+        2.0,
+        assert_final_metric=-export_rate * 0.5,
+        assert_final_soc=100.0,
+        battery_soc=100.0,
+        discharge=99,
+        end_record=60,
+        export_limit=0.5,
+        inverter_limit=10.0,
+        battery_rate_max_charge=5.0,
+        inverter_support_feedin_first=True,
+        assert_battery_cycle=0.0,
+        assert_clipped=35.875,
+    )
     if failed:
         return failed
 

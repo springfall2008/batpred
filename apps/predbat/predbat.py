@@ -605,6 +605,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.set_export_low_power = False
         self.config_root = "./"
         self.inverter_can_charge_during_export = True
+        self.inverter_support_feedin_first = False
         self.octopus_last_joined_try = None
         # None = not yet confirmed, True = the current Power Down join service is confirmed registered.
         # Deliberately never set to False - a failed probe still re-tries every join rather than being

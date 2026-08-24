@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 9
+#define PK_PARITY_REVISION 10
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -214,6 +214,7 @@ struct PkContext {
     int32_t set_export_low_power;
     int32_t calculate_export_on_pv;
     int32_t inverter_can_charge_during_export;
+    int32_t inverter_support_feedin_first;
     int32_t num_cars;
     int32_t car_energy_reported_load;
     int32_t car_charging_from_battery;
@@ -1105,9 +1106,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
             if (freeze_export) {
                 // Genuine PV surplus beyond what load+export_limit can absorb still charges the
-                // battery on some inverters rather than being clipped (#4207) - mirrors the
-                // recapture logic in the force export branch above.
-                if (diff < 0 && std::fabs(diff) > export_limit && c->inverter_can_charge_during_export) {
+                // battery on inverters that implement a real "Feed-in First" mode (#4207) - mirrors
+                // the recapture logic in the force export branch above. Inverters that merely
+                // disable charging for Freeze Export really do clip the surplus, hence the
+                // inverter_support_feedin_first gate.
+                if (diff < 0 && std::fabs(diff) > export_limit && c->inverter_can_charge_during_export && c->inverter_support_feedin_first) {
                     const double over_limit = std::fabs(diff) - export_limit;
                     if (inverter_hybrid) {
                         const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;

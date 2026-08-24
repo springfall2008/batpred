@@ -523,6 +523,7 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_loss = 1.0
     my_predbat.battery_loss_discharge = 1.0
     my_predbat.inverter_hybrid = False
+    my_predbat.inverter_support_feedin_first = False
     my_predbat.battery_charge_power_curve = {}
     my_predbat.battery_discharge_power_curve = {}
     my_predbat.battery_rate_max_scaling = 1.0
@@ -651,6 +652,7 @@ def simple_scenario(
     battery_temperature=20,
     set_export_freeze_only=False,
     inverter_can_charge_during_export=True,
+    inverter_support_feedin_first=False,
     prediction_handle=None,
     return_prediction_handle=False,
     ignore_failed=False,
@@ -755,6 +757,7 @@ def simple_scenario(
     my_predbat.car_charging_soc[0] = car_soc
     my_predbat.car_charging_limit[0] = car_limit
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+    my_predbat.inverter_support_feedin_first = inverter_support_feedin_first
     my_predbat.charge_scaling10 = charge_scaling10
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):

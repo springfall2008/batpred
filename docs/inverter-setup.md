@@ -3668,6 +3668,22 @@ When True, the inverter supports charge freeze modes.
 
 When True, the inverter supports discharge freeze modes.
 
+### support_feedin_first
+
+When True, the inverter's Freeze Export is a genuine "Feed-in First" mode - it prioritises house load,
+then grid export, and only puts what is left into the battery. Predbat then models solar above your
+export limit as charging the battery rather than being clipped and lost.
+
+Optional and defaults to False, because most inverters implement Freeze Export by simply disabling
+charging, so that surplus really is clipped - modelling recapture on those would credit the battery
+with energy it never receives. Only set it True for hardware where Freeze Export selects an
+export-first work mode: FoxESS and FoxCloud, and the SolisCloud ("Feed-in priority"), SolaxCloud
+("Feed-in"), SunsynkCloud and DeyeCloud ("Selling First") integrations.
+
+Recapture is additionally gated on the `apps.yaml` setting
+[inverter_can_charge_during_export](apps-yaml.md#inverter_can_charge_during_export), so setting that
+to `false` disables it regardless.
+
 ### has_ge_inverter_mode
 
 When True, the inverter supports the GivEnergy inverter modes (ECO, Timed Export etc).

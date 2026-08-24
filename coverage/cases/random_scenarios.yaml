@@ -5810,6 +5810,7 @@ scenarios:
       export_limit_kw: 4.34
       hybrid: false
       inverter_limit_kw: 5.54
+      support_feedin_first: false
     iog:
       enabled: true
       run_slots: 5
@@ -11748,6 +11749,7 @@ scenarios:
       export_limit_kw: 2.57
       hybrid: false
       inverter_limit_kw: 3.38
+      support_feedin_first: true
     iog:
       enabled: false
       run_slots: 0
@@ -17575,6 +17577,7 @@ scenarios:
       export_limit_kw: 0.93
       hybrid: false
       inverter_limit_kw: 4.39
+      support_feedin_first: false
     iog:
       enabled: true
       run_slots: 9
@@ -23396,6 +23399,7 @@ scenarios:
       export_limit_kw: 0.47
       hybrid: false
       inverter_limit_kw: 7.19
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 9
@@ -29231,6 +29235,7 @@ scenarios:
       export_limit_kw: 0.06
       hybrid: true
       inverter_limit_kw: 3.18
+      support_feedin_first: true
     iog:
       enabled: false
       run_slots: 0
@@ -35152,6 +35157,7 @@ scenarios:
       export_limit_kw: 6.83
       hybrid: true
       inverter_limit_kw: 8.8
+      support_feedin_first: false
     iog:
       enabled: false
       run_slots: 0
@@ -41011,6 +41017,7 @@ scenarios:
       export_limit_kw: 2.11
       hybrid: true
       inverter_limit_kw: 3.59
+      support_feedin_first: false
     iog:
       enabled: true
       run_slots: 3
@@ -46913,6 +46920,7 @@ scenarios:
       export_limit_kw: 0.3
       hybrid: true
       inverter_limit_kw: 5.24
+      support_feedin_first: false
     iog:
       enabled: false
       run_slots: 0
@@ -52788,6 +52796,7 @@ scenarios:
       export_limit_kw: 0.78
       hybrid: true
       inverter_limit_kw: 3.14
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 7
@@ -58606,6 +58615,7 @@ scenarios:
       export_limit_kw: 2.34
       hybrid: true
       inverter_limit_kw: 5.04
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 4
@@ -64482,6 +64492,7 @@ scenarios:
       export_limit_kw: 2.93
       hybrid: true
       inverter_limit_kw: 5.97
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 6
@@ -70347,6 +70358,7 @@ scenarios:
       export_limit_kw: 3.71
       hybrid: false
       inverter_limit_kw: 6.31
+      support_feedin_first: false
     iog:
       enabled: false
       run_slots: 0
@@ -76230,6 +76242,7 @@ scenarios:
       export_limit_kw: 5.34
       hybrid: true
       inverter_limit_kw: 5.36
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 9
@@ -82053,6 +82066,7 @@ scenarios:
       export_limit_kw: 4.92
       hybrid: true
       inverter_limit_kw: 7.39
+      support_feedin_first: false
     iog:
       enabled: true
       run_slots: 9
@@ -87972,6 +87986,7 @@ scenarios:
       export_limit_kw: 1.16
       hybrid: true
       inverter_limit_kw: 4.53
+      support_feedin_first: false
     iog:
       enabled: false
       run_slots: 0
@@ -93842,6 +93857,7 @@ scenarios:
       export_limit_kw: 2.31
       hybrid: true
       inverter_limit_kw: 2.63
+      support_feedin_first: false
     iog:
       enabled: true
       run_slots: 2
@@ -99657,6 +99673,7 @@ scenarios:
       export_limit_kw: 2.17
       hybrid: false
       inverter_limit_kw: 2.54
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 4
@@ -105537,6 +105554,7 @@ scenarios:
       export_limit_kw: 2.69
       hybrid: false
       inverter_limit_kw: 3.81
+      support_feedin_first: true
     iog:
       enabled: true
       run_slots: 5
@@ -111358,6 +111376,7 @@ scenarios:
       export_limit_kw: 6.06
       hybrid: true
       inverter_limit_kw: 9.64
+      support_feedin_first: false
     iog:
       enabled: true
       run_slots: 7
@@ -117177,6 +117196,7 @@ scenarios:
       export_limit_kw: 5.43
       hybrid: true
       inverter_limit_kw: 5.45
+      support_feedin_first: false
     iog:
       enabled: false
       run_slots: 0
