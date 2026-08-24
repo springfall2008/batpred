@@ -127,6 +127,8 @@ def triage(issue_number):
     ]
     print(f"[triage] issue #{issue_number}: starting", flush=True)
     result = subprocess.run(cmd, cwd=str(CLONE_DIR))
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
