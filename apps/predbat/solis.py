@@ -190,6 +190,13 @@ SOLIS_BIT_GRID_CHARGING = 5  # Allow grid charging
 SOLIS_BIT_FEED_IN_PRIORITY = 6  # Feed-in priority mode
 SOLIS_BIT_PEAK_SHAVING = 11  # Peak-shaving mode
 
+# How long a learnt "this inverter will not take the TOU bit on CID 636" verdict stands before it
+# is tested again. The verdict comes from a single write at one moment, and the inverter's answer
+# can depend on state Predbat does not fully see (#4239 found the bit is only retained while a
+# window is configured), so holding it for the life of the process would risk silently leaving
+# timed charging off on an inverter that does use bit 1. Three extra writes a day buys that back.
+SOLIS_TOU_BIT_REPROBE_HOURS = 8
+
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
 
@@ -227,9 +234,21 @@ def get_solis_mode_enum(value):
             break
     return mode, mode_str
 
-def compute_solis_mode_value(mode_enum, old_value):
+def compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=False):
     """
     Convert storage mode enum to bit flag value for CID 636
+
+    Args:
+        mode_enum: The storage mode to select
+        old_value: Current register value, so bits this function does not manage are preserved
+        drop_tou_bit: Leave the time-of-use bit clear even for the modes that normally set it.
+                      Some inverters will not take it - the control API answers with code 0 and
+                      the register reads back without it - and the remaining modes are still
+                      valid, they just shift down: 35 becomes 33 and 98 becomes 96. Set by
+                      set_storage_mode_if_needed() once a refusal has actually been observed
+                      (see issue #4707).
+
+    Returns: The value to write to CID 636
     """
     value = old_value  # Start with current value to preserve unrelated bits
     if mode_enum == ENUM_SELF_USE_NO_GRID_CHARGING:
@@ -256,6 +275,9 @@ def compute_solis_mode_value(mode_enum, old_value):
         value |=  (1 << SOLIS_BIT_FEED_IN_PRIORITY)  # Set feed-in priority bit
         value &= ~(1 << SOLIS_BIT_OFF_GRID)  # Clear off-grid bit
         value &= ~(1 << SOLIS_BIT_TOU_MODE)  # Clear TOU mode bit
+
+    if drop_tou_bit:
+        value &= ~(1 << SOLIS_BIT_TOU_MODE)
     return value
 
 
@@ -359,6 +381,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
+        self.tou_bit_refused = {}  # Inverter -> when it was seen to reject the TOU bit on CID 636 (issue #4707)
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
@@ -1350,6 +1373,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
             if str(entry.get("batteryTypeName", "")).strip().lower() == "no battery":
                 return True
         return False
+
+    def is_battery_inverter(self, inverter_sn):
+        """False only when Solis Cloud explicitly declares this inverter has no battery attached.
+
+        Predbat has nothing to control on a PV-only inverter, and writing to one produces an
+        endless stream of refused control writes: it is never planned for, so its slot 1 keeps
+        whatever stale window it happened to hold and the storage mode is recomputed and
+        rewritten every cycle (see issue #4707). It is still polled and published, so its PV
+        sensors keep working - only the writes are withheld.
+        """
+        return not self._reports_no_battery(self.inverter_details.get(inverter_sn, {}))
 
     async def automatic_config(self):
         """Automatically configure Predbat base args based on discovered inverters"""
@@ -2486,7 +2520,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log(f"Error: Unknown storage mode '{mode}' for {inverter_sn}")
                 return
             cached_mode = self.get_current_solis_mode_value(inverter_sn)
-            mode_value = compute_solis_mode_value(mode_enum, cached_mode)
+            mode_value = compute_solis_mode_value(mode_enum, cached_mode, drop_tou_bit=self.is_tou_bit_refused(inverter_sn))
 
             if cached_mode != mode_value:
                 await self.set_storage_mode_value(inverter_sn, mode_value)
@@ -2494,12 +2528,56 @@ class SolisAPI(ComponentBase, OAuthMixin):
         except Exception as e:
             self.log(f"Warn: Solis API set storage mode if needed failed for {inverter_sn}: {e}")
 
+    def is_tou_bit_refused(self, inverter_sn):
+        """True while this inverter is known to reject the time-of-use bit on CID 636.
+
+        The verdict expires after SOLIS_TOU_BIT_REPROBE_HOURS and is re-tested, so a false
+        positive costs one window rather than the life of the process.
+        """
+        noted_at = self.tou_bit_refused.get(inverter_sn)
+        if noted_at is None:
+            return False
+        if (self.now_utc_exact - noted_at) < timedelta(hours=SOLIS_TOU_BIT_REPROBE_HOURS):
+            return True
+        del self.tou_bit_refused[inverter_sn]
+        self.log(f"Solis API: re-testing whether {inverter_sn} accepts the time-of-use bit on CID {SOLIS_CID_STORAGE_MODE} after {SOLIS_TOU_BIT_REPROBE_HOURS} hours")
+        return False
+
+    def note_tou_bit_refused(self, inverter_sn, mode_value):
+        """Record an inverter that took a CID 636 write but left the time-of-use bit clear.
+
+        Only a read-back differing by exactly that one bit counts. A write dropped wholesale says
+        nothing about bit 1 in particular, and acting on it would switch Predbat to a mode value
+        it never asked for.
+
+        Learning this from the inverter rather than predicting it from the firmware generation
+        keeps it correct either way round: on the newer firmware the timed charge/discharge enable
+        moved into the per-slot registers (CIDs 5916/5922) and every value carrying this bit was
+        dropped from the mode table, but an inverter that still honours it keeps getting it.
+
+        Nothing here is persisted, so a restart re-probes and a firmware update cannot be masked
+        by a stale verdict (issue #4707).
+        """
+        if inverter_sn in self.tou_bit_refused:
+            return
+        if not (mode_value & (1 << SOLIS_BIT_TOU_MODE)):
+            return
+        read_back = self.get_current_solis_mode_value(inverter_sn)
+        if read_back != (mode_value & ~(1 << SOLIS_BIT_TOU_MODE)):
+            return
+        self.tou_bit_refused[inverter_sn] = self.now_utc_exact
+        self.log(
+            f"Solis API: {inverter_sn} will not accept the time-of-use bit on CID {SOLIS_CID_STORAGE_MODE} "
+            f"(wrote {mode_value}, read back {read_back}), so Predbat will stop setting it and will re-test after {SOLIS_TOU_BIT_REPROBE_HOURS} hours"
+        )
+
     async def set_storage_mode_value(self, inverter_sn, mode_value):
         """Set storage mode numerical value directly"""
         try:
             # Write storage mode CID
             success = await self.read_and_write_cid(inverter_sn, SOLIS_CID_STORAGE_MODE, mode_value, field_description=f"storage mode to {mode_value}")
             if not success:
+                self.note_tou_bit_refused(inverter_sn, mode_value)
                 self.log(f"Warn: Solis API set storage mode encountered errors for {inverter_sn}")
 
         except Exception as e:
@@ -3146,7 +3224,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 else:
                     self.log(f"Solis API: Inverter {sn} is in standard Time of Use mode")
                 if self.control_enable:
-                    await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                    if self.is_battery_inverter(sn):
+                        await self.startup_reset_registers(sn)  # Reset registers on startup to ensure we have write access and correct initial state
+                    else:
+                        # automatic_config() logs its own version of this, but only when auto-config is on
+                        self.log(f"Solis API: Inverter {sn} reports no battery attached, so Predbat will poll it but not write any control registers to it")
 
             if not self.inverter_sn:
                 self.log("Error: Solis API: No inverters to manage after discovery")
@@ -3201,6 +3283,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
             is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
             if self.control_enable and not is_readonly:
                 for sn in self.inverter_sn:
+                    if not self.is_battery_inverter(sn):
+                        continue
                     await self.reset_charge_windows_if_needed(sn)
                     if not await self.write_time_windows_if_changed(sn):
                         control_success = False
