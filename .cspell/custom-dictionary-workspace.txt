@@ -176,6 +176,7 @@ Enpower
 entrez
 epod
 epvtoday
+errno
 ESSAPI
 etoday
 etok
@@ -649,4 +650,5 @@ YOURSERIAL
 yuanzhi
 zappi
 zappis
+zcat
 zigbee
