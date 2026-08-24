@@ -82,7 +82,10 @@ def load_state():
 
 
 def save_state(state):
-    STATE_FILE.write_text(json.dumps(state))
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(state))
+    tmp_path.replace(STATE_FILE)
 
 
 def fetch_new_issues(since_number):
