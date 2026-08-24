@@ -1119,10 +1119,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                 "state_class": "measurement",
                 "unit_of_measurement": "changes",
                 "icon": "mdi:account-alert",
-                # Newest 20 BY TIME. The stored list is sorted by restore(), so on a pod whose clock
-                # is behind, this run's real event carries a small "at", sorts to index 0, and a
-                # plain [-20:] tail discarded the very event just detected - from the attribute that
-                # IS the durable store.
+                # Newest 20, but explicitly NOT purely by time - see newest_events(). This
+                # attribute is the durable store restore() reads back, and on a pod whose clock is
+                # behind, the event just detected carries a small "at" and looks like the oldest
+                # thing here, so any by-time cap would discard exactly the one that cannot be
+                # recovered from anywhere else.
                 "events": self.control_ledger.newest_events(20),
                 "sustained": sustained,
             },

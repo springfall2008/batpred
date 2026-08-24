@@ -2030,8 +2030,8 @@ class Inverter:
         observe()'s verdict is otherwise discarded at all three call sites, which makes the
         whole suppression ladder invisible. When a customer reports interference and the
         entity reads 0 there is then no way to tell whether the ledger owned nothing,
-        suppressed on the freshness gate, refused the read as implausible, saw a dropout, or
-        had been wiped by a service template - four completely different problems that look
+        suppressed on the freshness gate, refused the read as implausible, saw a dropout, or is
+        holding a divergence pending a repeat - five completely different problems that look
         identical from outside. This line is the feature's only diagnostic.
         """
         owned = ledger.owned_value(entity_id)
@@ -2068,6 +2068,14 @@ class Inverter:
 
         if current_state == new_value:
             self.base.log("Inverter {} write_and_poll_switch: No write needed for {} as {} == {}".format(self.id, name, new_value, current_state))
+            # Re-arm. Once an EXTERNAL event (or a clear) has dropped ownership, a control already
+            # sitting at Predbat's target reaches this early return on every cycle from now on, so
+            # record_write() below is never called again and the control is silently unwatched for
+            # the rest of the process. record_ownership_from_read() refuses to touch a live record,
+            # so this only ever fills that gap - see its docstring for why a matching read is
+            # weaker but sufficient evidence.
+            if ledger is not None:
+                ledger.record_ownership_from_read(entity_id, name, raw_state, now=time.time(), generation=self._ledger_generation(entity_id))
             return True
 
         retry = 0
@@ -2173,6 +2181,10 @@ class Inverter:
 
         if retry == 0:
             self.base.log(f"Inverter {self.id} write_and_poll_value: No write needed for {name}: {new_value} == {current_state} fuzzy {fuzzy}")
+            # Re-arm - see write_and_poll_switch() for why this early return would otherwise leave
+            # the control unwatched for good once ownership had been dropped.
+            if ledger is not None:
+                ledger.record_ownership_from_read(entity_id, name, raw_state, fuzzy=fuzzy, now=time.time(), generation=self._ledger_generation(entity_id))
             return True
         elif matched:
             self.base.log(f"Inverter {self.id} write_and_poll_value: Wrote {new_value} to {name}, successfully now {current_state}")
