@@ -288,6 +288,17 @@ def run_execute_test(
         inverter.reserve_max = reserve_max_array[inverter.id] if reserve_max_array else reserve_max
         inverter.battery_temperature = battery_temperature
 
+    # fetch_inverter_data() only ever narrows the freeze capability flags (it sets them False for an
+    # inverter that doesn't support freeze, and never widens them back), matching production where
+    # fetch_config_options() re-derives them from raw config every cycle before fetch_inverter_data()
+    # runs. This helper calls fetch_inverter_data() directly and is reused across many scenarios in
+    # one process, so re-derive them here too - otherwise a narrowing from an earlier scenario (e.g.
+    # one using an inverter with no freeze support) leaks forward into every later scenario, making
+    # results depend on test ordering.
+    my_predbat.set_charge_freeze = my_predbat.get_arg("set_charge_freeze")
+    my_predbat.set_export_freeze = my_predbat.get_arg("set_export_freeze")
+    my_predbat.set_export_freeze_only = my_predbat.get_arg("set_export_freeze_only")
+
     my_predbat.fetch_inverter_data(create=False)
 
     if my_predbat.soc_kw != soc_kw:
@@ -3063,5 +3074,39 @@ def run_execute_tests(my_predbat):
         failed = True
     if failed:
         return failed
+
+    failed |= test_freeze_flags_do_not_leak_between_scenarios(my_predbat)
+
+    return failed
+
+
+def test_freeze_flags_do_not_leak_between_scenarios(my_predbat):
+    """
+    fetch_inverter_data() narrows the freeze capability flags for an inverter that doesn't support
+    freeze and never widens them back. In production fetch_config_options() re-derives them from raw
+    config every cycle, so the narrowing lasts one cycle; run_execute_test() calls
+    fetch_inverter_data() directly, so without re-deriving them the narrowing would persist for the
+    rest of the process and silently disable freeze in every later scenario.
+    """
+    print("**** Running test_freeze_flags_do_not_leak_between_scenarios ****")
+    failed = False
+    saved = [(inverter.inv_support_charge_freeze, inverter.inv_support_discharge_freeze) for inverter in my_predbat.inverters]
+
+    for inverter in my_predbat.inverters:
+        inverter.inv_support_charge_freeze = False
+        inverter.inv_support_discharge_freeze = False
+    run_execute_test(my_predbat, "freeze_unsupported_inverter", set_charge_window=True, set_export_window=True)
+
+    for inverter, (support_charge, support_discharge) in zip(my_predbat.inverters, saved):
+        inverter.inv_support_charge_freeze = support_charge
+        inverter.inv_support_discharge_freeze = support_discharge
+    run_execute_test(my_predbat, "freeze_supported_inverter_after", set_charge_window=True, set_export_window=True)
+
+    for name in ("set_charge_freeze", "set_export_freeze", "set_export_freeze_only"):
+        expected = my_predbat.get_arg(name)
+        actual = getattr(my_predbat, name)
+        if actual != expected:
+            print("ERROR: {} leaked from the previous scenario - is {} but config says {}".format(name, actual, expected))
+            failed = True
 
     return failed
