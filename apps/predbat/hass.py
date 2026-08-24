@@ -231,9 +231,18 @@ class Hass:
             # writes into the rotated file - which is harmless, and far better than writing to a closed
             # one. This leaves only the gap between another thread's read and its write, which is what
             # the retry in write_log_line() is for.
-            os.rename("predbat.log", "predbat.1.log")
-            self.logfile = open("predbat.log", "w")
-            old_logfile.close()
+            try:
+                os.rename("predbat.log", "predbat.1.log")
+                self.logfile = open("predbat.log", "w")
+            except OSError as e:
+                # Do not allow logfile rotation failures (e.g. disk full) to raise out of log()
+                self.logfile = old_logfile
+                print("Warn: logfile rotation failed ({}).".format(e), file=sys.stderr)
+                return
+            try:
+                old_logfile.close()
+            except OSError as e:
+                print("Warn: unable to close rotated logfile ({}).".format(e), file=sys.stderr)
 
     async def run_in_executor(self, callback, *args):
         """
