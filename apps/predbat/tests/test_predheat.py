@@ -43,7 +43,7 @@ async def _turn_switch(my_predbat, service):
 def _run_due_now(my_predbat, predheat):
     """Make every registered timer due and run one timer tick."""
     for item in my_predbat.run_list:
-        item["next_time"] = datetime.now()
+        item["next_time"] = datetime.now() - timedelta(seconds=1)
     asyncio.get_event_loop().run_until_complete(my_predbat.timer_tick())
 
 
