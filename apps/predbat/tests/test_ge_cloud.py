@@ -4283,6 +4283,11 @@ def _test_async_automatic_config_evc(my_predbat):
             "binary_sensor.predbat_gecloud_evc100_evc_car_connected",
             "binary_sensor.predbat_gecloud_evc200_evc_car_connected",
         ], "car_charging_planned should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_planned"))
+        # Display-only live power, wired in the same serial order so it describes the same chargers
+        assert ge.config_args.get("car_charging_power") == [
+            "sensor.predbat_gecloud_evc100_evc_power_active_import",
+            "sensor.predbat_gecloud_evc200_evc_power_active_import",
+        ], "car_charging_power should list both chargers in serial order, got {}".format(ge.config_args.get("car_charging_power"))
         assert ge.config_args.get("num_cars") == 2, "num_cars should be raised to the number of chargers"
 
         # Test 2: an existing larger num_cars is left alone - another component may own those cars
@@ -4297,6 +4302,7 @@ def _test_async_automatic_config_evc(my_predbat):
         await ge.async_automatic_config_evc()
         assert ge.config_args.get("car_charging_energy") is None, "car_charging_energy should be left alone with no chargers"
         assert ge.config_args.get("car_charging_planned") is None, "car_charging_planned should be left alone with no chargers"
+        assert ge.config_args.get("car_charging_power") is None, "car_charging_power should be left alone with no chargers"
         assert ge.config_args.get("num_cars") is None, "num_cars should be left alone with no chargers"
 
         # Test 4: a charger whose serial has not been read yet is skipped rather than

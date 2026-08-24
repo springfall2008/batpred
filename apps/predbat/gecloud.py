@@ -1449,10 +1449,11 @@ class GECloudDirect(ComponentBase):
         devices in a different order. car_charging_energy lets car_charging_hold subtract
         the charging precisely instead of falling back to the car_charging_threshold
         heuristic; car_charging_planned tells Predbat when there is actually a car to plan
-        for. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
+        for; car_charging_power is display-only and drives the web power flow diagram. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
         about to override is logged rather than silently discarded.
         """
         energy_entities = []
+        power_entities = []
         connected_entities = []
         for uuid in sorted(self.evc_device_list, key=lambda item: str(self.evc_device.get(item, {}).get("serial_number", "") or "")):
             serial = self.evc_device.get(uuid, {}).get("serial_number", None)
@@ -1464,6 +1465,7 @@ class GECloudDirect(ComponentBase):
                 continue
             entity_name = "{}_gecloud_{}".format(self.prefix, serial).lower()
             energy_entities.append("sensor." + entity_name + "_evc_energy_active_import_register")
+            power_entities.append("sensor." + entity_name + "_evc_power_active_import")
             connected_entities.append("binary_sensor." + entity_name + "_evc_car_connected")
 
         if not energy_entities:
@@ -1479,6 +1481,8 @@ class GECloudDirect(ComponentBase):
         self.set_arg_auto("car_charging_energy", energy_entities)
         self.log("GECloud: Setting car_charging_planned to {}".format(connected_entities))
         self.set_arg_auto("car_charging_planned", connected_entities)
+        self.log("GECloud: Setting car_charging_power to {}".format(power_entities))
+        self.set_arg_auto("car_charging_power", power_entities)
 
     async def run(self, seconds, first):
         """

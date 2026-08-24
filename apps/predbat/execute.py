@@ -996,6 +996,8 @@ class Execute:
                     except (TypeError, ValueError):
                         self.log("Warn: Invalid PV power value for sensor {}".format(pv_power_sensors[idx]))
 
+        self.update_car_charging_power()
+
         self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
@@ -1043,6 +1045,49 @@ class Execute:
             self.publish_inverter_data()
             return True
         return False
+
+    def update_car_charging_power(self):
+        """
+        Read the live car charging power (W) from the optional car_charging_power sensors
+
+        This is a monitoring input only - the plan still models car charging from
+        car_charging_energy - so it is kept apart from the inverter totals above. Several
+        chargers can be listed and are summed, as car_charging_energy allows. A charger that
+        is configured but reading zero is not the same as no charger at all, so whether the
+        key is set at all is recorded separately: that is what decides if the car appears on
+        the power flow diagram and is published as a sensor.
+        """
+        sensors = self.get_arg("car_charging_power", None, indirect=False)
+        if not isinstance(sensors, list):
+            sensors = [sensors] if sensors else []
+
+        # The apps.yaml templates ship this as a regular expression matching the common chargers.
+        # auto_config(final=True) deletes the key when nothing matched, but until it has run the
+        # literal "re:" string is still here - treat it as unconfigured so a household with no
+        # charger never gets a car drawn on the power flow diagram.
+        sensors = [sensor for sensor in sensors if sensor and not (isinstance(sensor, str) and sensor.startswith("re:"))]
+
+        if not sensors:
+            self.car_charging_power_configured = False
+            self.car_charging_power = 0
+            return
+
+        self.car_charging_power_configured = True
+        car_charging_power = 0.0
+        for sensor in sensors:
+            # Resolved one entity at a time rather than by index, as auto_config() leaves a None
+            # in place of a list entry whose regular expression found nothing and an index-based
+            # read would then stop at the hole instead of the chargers after it.
+            #
+            # No numeric default is passed, and the conversion happens here, because get_arg would
+            # report a charger sitting at 'unavailable' with nothing plugged in as an error and
+            # leave the whole run flagged with errors - which is normal for a charger, not a fault.
+            value = self.resolve_arg("car_charging_power", sensor, default=None, required_unit="W")
+            try:
+                car_charging_power += float(value)
+            except (ValueError, TypeError):
+                pass
+        self.car_charging_power = car_charging_power
 
     def publish_inverter_data(self):
         """
@@ -1092,6 +1137,21 @@ class Execute:
                 "icon": "mdi:battery",
             },
         )
+        if self.car_charging_power_configured:
+            # Only published when a charger sensor is actually configured - a sensor pinned at
+            # zero for everyone else is noise, and its absence is how upstream consumers tell
+            # "no car charger" from "car charger idle"
+            self.dashboard_item(
+                self.prefix + ".car_charging_power",
+                state=dp3(self.car_charging_power / 1000.0),
+                attributes={
+                    "friendly_name": "Current Car Charging Power",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kW",
+                    "device_class": "power",
+                    "icon": "mdi:ev-station",
+                },
+            )
 
     def publish_inverter_config(self):
         """

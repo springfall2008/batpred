@@ -83,6 +83,24 @@ car_charging_energy can be set to a list of energy sensors, one per line if you 
 - **input_number.predbat_car_charging_energy_scale** - Used to define a scaling factor (in the range of 0 to 1.0)
 to multiply the **car_charging_energy** sensor data by if required (e.g. set to 0.001 to convert Watts to kW). Default 1.0, i.e. no scaling.
 
+- **car_charging_power** - Set in `apps.yaml` to point to an entity giving the **live charging power** of your car charger (in Watts, or any unit Predbat can convert such as kW).
+This has been pre-defined as a regular expression that should auto-detect the appropriate Wallbox and Zappi car charger sensors, or edit as necessary in `apps.yaml` for your charger sensor.<BR>
+Unlike **car_charging_energy** this is display only - it has no effect at all on the Predbat plan. When it is set:
+
+- the [web interface](web-interface.md) power flow diagram gains a Car showing what the charger is drawing, and the House figure becomes the household load with the car charging subtracted from it
+- Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations
+
+Like car_charging_energy it can be a list of sensors, one per line, if you have more than one charger - they are added together:
+
+```yaml
+  car_charging_power:
+    - sensor.zappi_charge_power
+    - sensor.wallbox_charging_power
+```
+
+If your car charger has no live power sensor, leave **car_charging_power** commented out in `apps.yaml`; the power flow diagram then shows the same four items it always has, and no **predbat.car_charging_power** sensor is published.<BR>
+If you use one of the supported charger integrations (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS EV charger or the Predbat gateway) then this is configured automatically and you do not need an `apps.yaml` entry of your own.
+
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the **car_charging_energy** line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold**
 
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging

@@ -583,6 +583,15 @@ class WebInterface(ComponentBase):
         pv_power = self.base.pv_power
         load_power = self.base.load_power
 
+        # Car charging only appears when a car_charging_power sensor is configured (execute.py
+        # update_car_charging_power). The charger sits on the house side of the meter, so its power
+        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # house rather than counting the car twice. Clamped at zero because the two readings come
+        # from different meters and a slow-updating load sensor can briefly read below the car.
+        car_configured = self.base.car_charging_power_configured
+        car_power = self.base.car_charging_power
+        house_power = max(0, load_power - car_power) if car_configured else load_power
+
         # Determine flow directions
         grid_importing = grid_power <= -10  # Grid is importing power (negative value)
         grid_exporting = grid_power >= 10  # Grid is exporting power (positive value)
@@ -630,8 +639,57 @@ class WebInterface(ComponentBase):
                     <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
                 </defs>
         """.format(
-            dp0(load_power)
+            dp0(house_power)
         )
+
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        if car_configured:
+            car_charging = car_power >= 10
+            html += """
+                <!-- Car Circle -->
+                <circle cx="450" cy="100" r="50" fill="#00BCD4" />
+                <text x="450" y="100" text-anchor="middle" dy=".3em" fill="#fff">Car</text>
+
+                <defs>
+                    <!-- House to Car path -->
+                    <path id="house-car-path" d="M342,172 L408,128" stroke="transparent" fill="none" />
+                    <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#00BCD4"/>
+                    </marker>
+                </defs>
+            """
+            if car_charging:
+                # Calculate animation speed based on power flow - faster for higher power
+                car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
+
+                html += """
+                <!-- House to Car Arrow -->
+                <line x1="342" y1="172" x2="408" y2="128" stroke="#00BCD4" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text x="370" y="135" text-anchor="middle" fill="#00BCD4">{} W</text>
+
+                <!-- Moving dots for House to Car -->
+                <circle r="4" fill="#00BCD4" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L408,128" />
+                </circle>
+                <circle r="3" fill="#00BCD4" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L408,128" />
+                </circle>
+                <circle r="2" fill="#00BCD4" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L408,128" />
+                </circle>
+                """.format(
+                    dp0(car_power), car_speed, car_speed, car_speed
+                )
+            else:
+                html += """
+                <!-- House to Car Arrow (dashed) -->
+                <line x1="342" y1="172" x2="408" y2="128" stroke="#00BCD4" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text x="370" y="135" text-anchor="middle" fill="#00BCD4">{} W</text>
+                <!-- No moving dot when the car is not charging -->
+                """.format(
+                    dp0(car_power)
+                )
+
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power

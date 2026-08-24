@@ -287,6 +287,7 @@ Predbat outputs the values it read from your inverters as totals, this gives the
 - predbat.battery_power - The current power of your battery (charging or discharging) in Watts
 - predbat.pv_power - The current power of your PV system in Watts
 - predbat.grid_power - The current grid power flow (import or export) in Watts
+- predbat.car_charging_power - The current power drawn by your car charger in kW, only published when **car_charging_power** is set in `apps.yaml` (see [car charging](car-charging.md#configure-appsyaml-for-your-car-charging))
 
 ## Baseline data
 

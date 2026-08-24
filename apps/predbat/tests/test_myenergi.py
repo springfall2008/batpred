@@ -1582,6 +1582,37 @@ def test_automatic_config():
     print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")
 
 
+def test_automatic_config_wires_car_charging_power():
+    """Zappi live power sensors wire into car_charging_power in the same serial order.
+
+    The power sensors are display-only (the plan runs off car_charging_energy), but they have to
+    line up with the energy list so both describe the same chargers.
+    """
+    component = _make_component()
+    second_zappi = dict(MOCK_DIRECT_ZAPPI, sno=22223333)
+    component.devices = {
+        "Z22223333": normalise_direct_device(second_zappi, DEVICE_KIND_ZAPPI),
+        "E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI),
+        "Z12345678": normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI),
+    }
+    component.automatic_config()
+
+    assert component.base.args["car_charging_power"] == [
+        "sensor.predbat_myenergi_zappi_12345678_power",
+        "sensor.predbat_myenergi_zappi_22223333_power",
+    ], component.base.args["car_charging_power"]
+    print("  ✓ Automatic configuration wires the Zappi power sensors for the flow diagram")
+
+
+def test_automatic_config_eddi_only_leaves_car_charging_power_alone():
+    """An Eddi is not a car charger, so it must not appear as car charging power."""
+    component = _make_component()
+    component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
+    component.automatic_config()
+    assert "car_charging_power" not in component.base.args
+    print("  ✓ Eddi-only site leaves car_charging_power unset")
+
+
 def test_automatic_config_single_zappi_is_still_a_list():
     """A single Zappi still produces a list, so adding a second changes nothing else."""
     component = _make_component()
@@ -2416,6 +2447,8 @@ def test_myenergi(my_predbat=None):
     test_component_direct_auth_error_never_refreshes()
     test_component_registration()
     test_automatic_config()
+    test_automatic_config_wires_car_charging_power()
+    test_automatic_config_eddi_only_leaves_car_charging_power_alone()
     test_automatic_config_single_zappi_is_still_a_list()
     test_automatic_config_eddi_only()
     test_automatic_config_uses_set_arg_auto()

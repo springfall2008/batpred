@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ohme import (
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
+    POWER_WATTS_ENTITY,
     OhmeAPI,
     OhmeApiClient,
     ChargerStatus,
@@ -289,6 +290,7 @@ def test_ohme(my_predbat=None):
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
+        ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
         ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
         ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
         ("run_first", _test_ohme_run_first_call, "OhmeAPI run first call"),
@@ -2305,6 +2307,25 @@ def _test_ohme_auto_config_keeps_existing_car_charging_energy(my_predbat=None):
     assert any("Leaving car_charging_energy" in msg for msg in api.log_messages), f"Expected a note about keeping it, got {api.log_messages}"
 
     print("PASS: auto config kept the existing car_charging_energy sensor")
+    return 0
+
+
+def _test_ohme_auto_config_wires_car_charging_power(my_predbat=None):
+    """Test car registration points car_charging_power at the live charge power sensor"""
+    print("**** Running test_ohme_auto_config_wires_car_charging_power ****")
+
+    api = MockOhmeAPI()
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected {POWER_WATTS_ENTITY}, got {api.args.get('car_charging_power')}"
+
+    # The energy and power sensors have to describe the same charger, so when a real third-party
+    # energy sensor is kept, Ohme's own power figure must not be wired in beside it
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = "sensor.myenergi_zappi_1234_charge_added_session"
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") is None, f"Expected no power wiring when another charger owns the energy sensor, got {api.args.get('car_charging_power')}"
+
+    print("PASS: auto config wired car_charging_power")
     return 0
 
 

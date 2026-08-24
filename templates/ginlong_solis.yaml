@@ -202,6 +202,12 @@ pred_bat:
   # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
   # car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
 
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  # car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+
   num_cars: 0
 
   # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
