@@ -4243,7 +4243,20 @@ class Plan:
                 if self.export_window_best[window_n]["start"] in self.manual_demand_times:
                     self.export_limits_best[window_n] = EXPORT_LIMIT_IDLE
                 elif self.export_window_best[window_n]["start"] in self.manual_export_times:
-                    self.export_limits_best[window_n] = 0.0
+                    if self.set_export_freeze_only:
+                        # A manual "export now" request can't be honoured as an active export when
+                        # the user has said Predbat may only ever freeze export, never force it - the
+                        # optimiser's own search already respects this (optimise_export's loop_options
+                        # excludes every active target when set_export_freeze_only is set), so a
+                        # manual override doing the same silently was the one path where the plan
+                        # ended up assuming charging was disabled (Freeze Export) while execution left
+                        # it enabled (Hold Export) - see #4690. Clamp to freeze instead of dropping the
+                        # override entirely, since freeze is the closest available approximation of
+                        # "export what you can right now".
+                        self.log("Warn: Manual export time {} clamped to freeze export as set_export_freeze_only is enabled".format(self.time_abs_str(self.export_window_best[window_n]["start"])))
+                        self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
+                    else:
+                        self.export_limits_best[window_n] = 0.0
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
                     self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
 
