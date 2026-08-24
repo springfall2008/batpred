@@ -689,7 +689,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Combine Rate Threshold",
         "type": "input_number",
         "min": 0,
-        "max": 5.0,
+        "max": 1000,
         "step": 0.1,
         "unit": "p",
         "icon": "mdi:table-merge-cells",
@@ -915,8 +915,8 @@ CONFIG_ITEMS = [
         "name": "car_charging_plan_max_price",
         "friendly_name": "Car Charging Plan max price",
         "type": "input_number",
-        "min": -99,
-        "max": 99,
+        "min": -1000,
+        "max": 1000,
         "step": 1,
         "unit": "p",
         "icon": "mdi:ev-station",
@@ -1117,7 +1117,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Export more solar threshold",
         "type": "input_number",
         "min": 0,
-        "max": 10.0,
+        "max": 1000,
         "step": 0.1,
         "unit": "p",
         "icon": "mdi:currency-usd",
@@ -1187,6 +1187,42 @@ CONFIG_ITEMS = [
         "friendly_name": "Debug Enable",
         "type": "switch",
         "icon": "mdi:bug-outline",
+        "default": False,
+    },
+    {
+        "name": "debug_history_enable",
+        "friendly_name": "Debug history rolling capture enable",
+        "type": "switch",
+        "icon": "mdi:history",
+        "default": True,
+    },
+    {
+        "name": "debug_history_count",
+        "friendly_name": "Debug history snapshot count",
+        "type": "input_number",
+        "min": 1,
+        "max": 50,
+        "step": 1,
+        "unit": "snapshots",
+        "icon": "mdi:history",
+        "default": 15,
+    },
+    {
+        "name": "debug_history_interval",
+        "friendly_name": "Debug history snapshot interval",
+        "type": "input_number",
+        "min": 1,
+        "max": 24,
+        "step": 1,
+        "unit": "hours",
+        "icon": "mdi:clock-outline",
+        "default": 3,
+    },
+    {
+        "name": "debug_history_force_capture",
+        "friendly_name": "Debug history force capture now",
+        "type": "switch",
+        "icon": "mdi:camera",
         "default": False,
     },
     {
@@ -2068,9 +2104,13 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         # "Feed-in first"/freeze export mode does not hold SoC flat on FoxESS - PV above the
-        # export limit still charges the battery instead of being clipped (#4207) - matching
-        # FoxCloud's entry below, which was already correctly set False for the same hardware.
-        "support_discharge_freeze": False,
+        # export limit still charges the battery instead of being clipped (#4207). That's now
+        # correctly modelled (prediction.py's freeze branch, gated on support_feedin_first)
+        # rather than treated as a reason to disable freeze outright, so support_discharge_freeze
+        # can stay True - see FoxCloud's entry below for the same hardware via a different
+        # connection method.
+        "support_feedin_first": True,
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
@@ -2099,7 +2139,9 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
-        "support_discharge_freeze": False,
+        # See FoxESS's entry above - same hardware, correctly modelled rather than disabled (#4207).
+        "support_feedin_first": True,
+        "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
@@ -2186,6 +2228,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects SELLING_FIRST (deye.py) - the same Deye firmware behaviour the
+        # Sunsynk cloud drives through the same registers, so PV goes to load, then grid, then
+        # the battery.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2215,8 +2261,50 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects Selling First with the per-slot sell flag on (sunsynk.py), which
+        # runs PV -> load -> grid ahead of the battery. Confirmed on live hardware that the
+        # alternative (Limited to Home) fills the battery first, which is why the mode is changed.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
+        "can_span_midnight": False,
+        "charge_discharge_with_rate": False,
+        "target_soc_used_for_discharge": True,
+    },
+    "AlphaESSCloud": {
+        "name": "AlphaESSCloud",
+        "has_rest_api": False,
+        "has_mqtt_api": False,
+        # The periodic path carries a real chargePower setpoint. On the legacy path a
+        # non-zero rate just means "unrestricted"; a rate of ZERO is meaningful on both
+        # paths and is how Predbat signals freeze (see the component's payload builder).
+        "output_charge_control": "power",
+        "charge_control_immediate": False,
+        "has_charge_enable_time": True,
+        "has_discharge_enable_time": True,
+        "has_target_soc": True,
+        "has_reserve_soc": True,
+        # There is no pause endpoint, so Predbat expresses freeze via the rate entities.
+        "has_timed_pause": False,
+        # Anything other than HH:MM:SS makes inverter.py replace the published select
+        # entities with its own dummies and the window never reaches the component. The
+        # API wants HH:mm; the conversion happens at the payload boundary.
+        "charge_time_format": "HH:MM:SS",
+        "charge_time_entity_is_option": True,
+        "soc_units": "%",
+        "num_load_entities": 1,
+        "has_ge_inverter_mode": False,
+        "has_ge_eco_toggle": False,
+        "has_fox_inverter_mode": False,
+        "time_button_press": True,
+        "clock_time_format": "%Y-%m-%d %H:%M:%S",
+        "write_and_poll_sleep": 2,
+        "has_time_window": False,
+        "support_charge_freeze": True,
+        "support_discharge_freeze": True,
+        "has_idle_time": False,
+        # Wrap-around behaviour is undocumented for timeChaf1/timeChae1, so Predbat splits
+        # the window and period 2 carries the remainder.
         "can_span_midnight": False,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
@@ -2244,6 +2332,9 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects SolaX's "feedin" work mode (solax.py), which exports the surplus
+        # ahead of charging the battery rather than just disabling the charge.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
@@ -2273,6 +2364,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export drops the charge current to 0A, which the SolisCloud component turns into
+        # "Feed-in priority" storage mode (solis.py, "Decide if Solar charges the battery or
+        # exports") - PV serves load, then exports, and only what the grid cannot take charges.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2407,6 +2502,8 @@ APPS_SCHEMA = {
     "ge_cloud_direct": {"type": "boolean"},
     "ge_cloud_automatic": {"type": "boolean"},
     "ge_cloud_load_today_ignore": {"type": "boolean"},
+    "ge_cloud_automatic_evc": {"type": "boolean"},
+    "ge_cloud_evc_control": {"type": "boolean"},
     "ge_cloud_automatic_shared_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_ct": {"type": "boolean"},
     "ge_cloud_automatic_split_pv": {"type": "boolean"},
@@ -2438,6 +2535,8 @@ APPS_SCHEMA = {
     "pause_start_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "pause_end_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "inverter_limit": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
+    "inverter_can_charge_during_export": {"type": "boolean"},
+    "inverter_freeze_export_discharge_rate": {"type": "float", "zero": True},
     "pv_ac_limit": {"type": "float", "zero": True},
     "inverter_limit_charge": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "inverter_limit_charge_dc": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
@@ -2501,6 +2600,16 @@ APPS_SCHEMA = {
     "solis_access_token": {"type": "string", "empty": False},
     "solis_token_expires_at": {"type": "string", "empty": False},
     "solis_token_hash": {"type": "string", "empty": False},
+    "myenergi_auth_method": {"type": "string", "empty": False},
+    "myenergi_hub_serial": {"type": "string", "empty": False},
+    "myenergi_api_key": {"type": "string", "empty": False},
+    "myenergi_key": {"type": "string", "empty": False},
+    "myenergi_token_expires_at": {"type": "string", "empty": False},
+    "myenergi_token_hash": {"type": "string", "empty": False},
+    "myenergi_automatic": {"type": "boolean"},
+    "myenergi_enable_controls": {"type": "boolean"},
+    "myenergi_poll_seconds": {"type": "integer", "zero": False},
+    "myenergi_zappi_control": {"type": "boolean"},
     "fox_key": {"type": "string", "empty": False},
     "fox_automatic": {"type": "boolean"},
     "fox_automatic_ignore_pv": {"type": "boolean"},
@@ -2534,6 +2643,15 @@ APPS_SCHEMA = {
     "sunsynk_automatic_ignore_pv": {"type": "boolean"},
     "sunsynk_control_enable": {"type": "boolean"},
     "sunsynk_battery_nominal_voltage": {"type": "float"},
+    "alphaess_app_id": {"type": "string", "empty": False},
+    "alphaess_app_secret": {"type": "string", "empty": False},
+    "alphaess_inverter_sn": {"type": "string|string_list", "empty": False},
+    "alphaess_automatic": {"type": "boolean"},
+    "alphaess_automatic_ignore_pv": {"type": "boolean"},
+    "alphaess_control_enable": {"type": "boolean"},
+    "alphaess_battery_rate_max": {"type": "float"},
+    "alphaess_api_delay": {"type": "float"},
+    "alphaess_min_write_interval": {"type": "integer"},
     "teslemetry_key": {"type": "string", "empty": False},
     "teslemetry_site_id": {"type": "string|string_list"},
     "teslemetry_base_url": {"type": "string", "empty": False},
@@ -2552,6 +2670,7 @@ APPS_SCHEMA = {
     "octopus_slot_low_rate": {"type": "boolean"},
     "octopus_slot_max": {"type": "integer"},
     "octopus_saving_session_octopoints_per_penny": {"type": "integer"},
+    "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},
     "octopus_free_url": {"type": "string", "empty": False},
     "metric_octopus_import": {"type": "sensor", "sensor_type": "float"},

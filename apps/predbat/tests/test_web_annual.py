@@ -11,6 +11,7 @@
 
 import asyncio
 import builtins
+import calendar
 import copy
 import json
 import re
@@ -109,7 +110,7 @@ def valid_postdata():
         "solar_efficiency_0": "0.95",
         "battery_size_kwh": "9.5",
         "battery_inverter_kw": "5.0",
-        "battery_export_limit_kw": "5.0",
+        "export_limit_kw": "5.0",
         "battery_hybrid": "on",
         "load_source": "manual",
         "load_annual_kwh": "3800",
@@ -154,6 +155,9 @@ def test_web_annual(my_predbat):
         if not config["solar"]:
             print("  ERROR: solar should fall back to the default array")
             failed = True
+        if config["export_limit_kw"] != DEFAULT_CONFIG["export_limit_kw"]:
+            print("  ERROR: export_limit_kw should fall back to the default, got {}".format(config["export_limit_kw"]))
+            failed = True
 
         print("Test: prefill_config() never reads apps.yaml (or anything else) from disk")
         # The unconfigured case above is exactly where this matters: apps.yaml may not
@@ -194,8 +198,8 @@ def test_web_annual(my_predbat):
         if config["battery"]["inverter_kw"] != 3.6:
             print("  ERROR: a [3600] inverter_limit should read as 3.6 kW, got {}".format(config["battery"]["inverter_kw"]))
             failed = True
-        if config["battery"]["export_limit_kw"] != 3.6:
-            print("  ERROR: a [3600] export_limit should read as 3.6 kW, got {}".format(config["battery"]["export_limit_kw"]))
+        if config["export_limit_kw"] != 3.6:
+            print("  ERROR: a [3600] export_limit should read as a top-level 3.6 kW, got {}".format(config["export_limit_kw"]))
             failed = True
 
         print("Test: an AC-coupled system is not prefilled as hybrid")
@@ -987,7 +991,7 @@ def test_web_annual_form(my_predbat):
             "solar_efficiency_0": "0.95",
             "battery_size_kwh": "9.5",
             "battery_inverter_kw": "5.0",
-            "battery_export_limit_kw": "5.0",
+            "export_limit_kw": "5.0",
             "battery_hybrid": "on",
             "load_source": "manual",
             "load_annual_kwh": "3800",
@@ -1184,6 +1188,69 @@ def test_web_annual_form(my_predbat):
     return failed
 
 
+def test_web_annual_fast_mode(my_predbat):
+    """The fast mode checkbox renders, round-trips, and interpolated months are marked."""
+    failed = False
+    print("**** Testing annual web tab fast mode ****")
+    page = make_page(my_predbat)
+
+    print("Test: the Advanced block offers a fast mode checkbox")
+    form = page.render_form(dict(DEFAULT_CONFIG))
+    if 'name="fast_mode"' not in form:
+        print("  ERROR: the form should contain a fast_mode checkbox")
+        failed = True
+
+    print("Test: a ticked box round-trips into the config")
+    postdata = valid_postdata()
+    postdata["fast_mode"] = "on"
+    config = page.config_from_post(postdata)
+    if config.get("fast_mode") is not True:
+        print("  ERROR: a ticked fast_mode box should set fast_mode True, got {!r}".format(config.get("fast_mode")))
+        failed = True
+
+    print("Test: an absent box means off")
+    # A checkbox absent from postdata means unchecked - there is no "off" value to read.
+    config = page.config_from_post(valid_postdata())
+    if config.get("fast_mode") is not False:
+        print("  ERROR: an absent fast_mode box should set fast_mode False, got {!r}".format(config.get("fast_mode")))
+        failed = True
+
+    print("Test: an interpolated month renders as interpolated, not unavailable")
+    results = sample_run_results()
+    first = results["months"][0]
+    results["months"][0] = {
+        "month": first["month"],
+        "status": "interpolated",
+        "days": first["days"],
+        "standing_charge_p": first["standing_charge_p"],
+        "scenarios": first["scenarios"],
+        "interpolated_from": {"anchors": [3, 6, 9, 12], "basis": "solar_affine"},
+    }
+    table = page._render_month_table(results)
+    name = calendar.month_abbr[first["month"]]
+    cell = table.split(name, 1)[1][:400] if name in table else ""
+    if "unavailable" in cell:
+        print("  ERROR: an interpolated month must not render as unavailable")
+        failed = True
+    if "interpolated" not in table.lower():
+        print("  ERROR: an interpolated month should be labelled as such")
+        failed = True
+
+    print("Test: an interpolated month is charted rather than dropped")
+    chart = page._render_chart(results)
+    if name not in chart:
+        print("  ERROR: an interpolated month should appear in the chart categories")
+        failed = True
+
+    print("Test: the run details table reports fast mode")
+    details = page._render_run_details({"config": {"fast_mode": True, "samples_per_month": 2}, "annual": {"fast_mode": True, "months_interpolated": 8}})
+    if "Fast mode" not in details:
+        print("  ERROR: 'what this run used' should report fast mode")
+        failed = True
+
+    return failed
+
+
 def test_web_annual_terminal_state(my_predbat):
     """Verify a finished job is claimed exactly once and never re-reports as complete.
 
@@ -1266,7 +1333,7 @@ def test_web_annual_error_isolation(my_predbat):
     page = make_page(my_predbat)
 
     print("Test: an invalid POST (no location) renders its own validation error")
-    bad_postdata = {"battery_size_kwh": "9.5", "battery_inverter_kw": "5.0", "battery_export_limit_kw": "5.0"}
+    bad_postdata = {"battery_size_kwh": "9.5", "battery_inverter_kw": "5.0", "export_limit_kw": "5.0"}
     response = asyncio.run(page.html_annual_post(FakeRequest(bad_postdata)))
     if "Could not run" not in response.text:
         print("  ERROR: an invalid POST should render its own validation error, got no banner in the response")
@@ -1432,7 +1499,8 @@ def sample_run_results():
         # must describe, rather than whatever the live form happens to hold.
         "config": {
             "solar": [{"kwp": 5.6, "declination": 35, "azimuth": 180}],
-            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "export_limit_kw": 5.0, "hybrid": True},
+            "battery": {"size_kwh": 9.5, "inverter_kw": 5.0, "hybrid": True},
+            "export_limit_kw": 5.0,
             "load": {"annual_kwh": 3800, "shape": "night", "car_charging_kwh": 3000, "car_rate_kw": 7.4},
             # Templated, with dno_region beside them: results["config"] is the RAW config
             # (annual.py stores self.config["raw"]), and AnnualTariff substitutes the
@@ -1514,7 +1582,7 @@ def test_web_annual_results(my_predbat):
 
     print("Test: a run states the key settings it actually used")
     details = page._render_run_details(results)
-    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "Octopus Outgoing Prime", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day"]:
+    for expected in ["5.6 kWp", "9.5 kWh", "Octopus Agile", "Octopus Outgoing Prime", "3,800 kWh a year", "more at night", "3,000 kWh a year", "60p a day", "Grid export limit", "5 kW"]:
         if expected not in details:
             print("  ERROR: the run details should state {}, got {}".format(expected, details))
             failed = True
@@ -2343,7 +2411,7 @@ def test_web_annual_post_numeric_coercion(my_predbat):
         "solar_efficiency_0": "0.9",
         "battery_size_kwh": "9.5",
         "battery_inverter_kw": "5.0",
-        "battery_export_limit_kw": "5.0",
+        "export_limit_kw": "5.0",
         "battery_hybrid": "on",
         "load_source": "manual",
         "load_annual_kwh": "3800",

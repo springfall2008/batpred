@@ -31,8 +31,8 @@ from const import PREDICT_STEP, PREDBAT_MAX_CARS
 from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 4
-KERNEL_PARITY_REVISION = 6
+KERNEL_ABI_VERSION = 5
+KERNEL_PARITY_REVISION = 10
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -78,6 +78,7 @@ class PkContext(ctypes.Structure):
         ("battery_loss", ctypes.c_double),
         ("battery_loss_discharge", ctypes.c_double),
         ("inverter_loss", ctypes.c_double),
+        ("inverter_freeze_export_discharge_rate", ctypes.c_double),
         ("inverter_limit", ctypes.c_double),
         ("export_limit", ctypes.c_double),
         ("pv_ac_limit", ctypes.c_double),
@@ -119,6 +120,7 @@ class PkContext(ctypes.Structure):
         ("set_export_low_power", ctypes.c_int32),
         ("calculate_export_on_pv", ctypes.c_int32),
         ("inverter_can_charge_during_export", ctypes.c_int32),
+        ("inverter_support_feedin_first", ctypes.c_int32),
         ("num_cars", ctypes.c_int32),
         ("car_energy_reported_load", ctypes.c_int32),
         ("car_charging_from_battery", ctypes.c_int32),
@@ -658,6 +660,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.battery_loss = pred.battery_loss
         ctx.battery_loss_discharge = pred.battery_loss_discharge
         ctx.inverter_loss = pred.inverter_loss
+        ctx.inverter_freeze_export_discharge_rate = pred.inverter_freeze_export_discharge_rate
         ctx.inverter_limit = pred.inverter_limit
         ctx.export_limit = pred.export_limit
         ctx.pv_ac_limit = pred.pv_ac_limit
@@ -701,6 +704,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.set_export_low_power = 1 if pred.set_export_low_power else 0
         ctx.calculate_export_on_pv = 1 if pred.calculate_export_on_pv else 0
         ctx.inverter_can_charge_during_export = 1 if pred.inverter_can_charge_during_export else 0
+        ctx.inverter_support_feedin_first = 1 if pred.inverter_support_feedin_first else 0
         ctx.num_cars = num_cars
         ctx.car_energy_reported_load = 1 if pred.car_energy_reported_load else 0
         ctx.car_charging_from_battery = 1 if pred.car_charging_from_battery else 0

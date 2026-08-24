@@ -296,6 +296,50 @@ def test_annual_cli(my_predbat):
     return failed
 
 
+def test_annual_cli_fast_flag(my_predbat):
+    """--fast sets annual.fast_mode on either config form, and is absent by default."""
+    failed = False
+    print("**** Testing annual CLI --fast flag ****")
+
+    print("Test: --fast sets fast_mode on the wrapped config form")
+    config = {"annual": {"location": {"postcode": "SW1A 1AA"}}}
+    result = annual_cli.apply_fast_override(config, True)
+    if result["annual"].get("fast_mode") is not True:
+        print("  ERROR: --fast should set annual.fast_mode True, got {!r}".format(result["annual"].get("fast_mode")))
+        failed = True
+
+    print("Test: --fast sets fast_mode on the bare inner form")
+    # validate_config accepts either shape (raw = config.get("annual", config)), so the
+    # override has to reach the same mapping validate_config will read.
+    config = {"location": {"postcode": "SW1A 1AA"}}
+    result = annual_cli.apply_fast_override(config, True)
+    if result.get("fast_mode") is not True:
+        print("  ERROR: --fast should set fast_mode on an unwrapped config, got {!r}".format(result.get("fast_mode")))
+        failed = True
+
+    print("Test: without --fast nothing is added")
+    config = {"annual": {"location": {"postcode": "SW1A 1AA"}}}
+    result = annual_cli.apply_fast_override(config, False)
+    if "fast_mode" in result["annual"]:
+        print("  ERROR: fast_mode must not be injected when --fast was not given")
+        failed = True
+
+    print("Test: a config that is not a mapping is passed through untouched")
+    # An empty YAML file loads as None and a malformed one as a list or a string. Any of
+    # those must reach validate_config, which explains the problem, rather than dying here
+    # with a bare TypeError - which is what --fast used to do on an empty config file.
+    for broken in (None, [], "not a config", 42):
+        try:
+            if annual_cli.apply_fast_override(broken, True) is not broken:
+                print("  ERROR: a non-mapping config should be returned unchanged, got a different object for {!r}".format(broken))
+                failed = True
+        except Exception as error:  # noqa: BLE001 - the whole point is that nothing raises
+            print("  ERROR: apply_fast_override({!r}, True) raised {}: {}".format(broken, type(error).__name__, error))
+            failed = True
+
+    return failed
+
+
 def test_annual_cli_machine(my_predbat):
     """Verify machine mode emits JSON progress on stderr and nothing human on stdout."""
     import io

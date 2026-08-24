@@ -1,0 +1,271 @@
+# Predbat config for the Hanchu iESS, via the hanchu-ess-ha HACS
+# integration (https://github.com/upton68/hanchu-ess-ha)
+#
+# Copy this over your apps.yaml and:
+#   1. Install the "Hanchu iESS" integration via HACS and configure it
+#      with your Hanchu cloud account credentials.
+#   2. Create three helpers in Home Assistant (see inverter-setup docs).
+#   3. Create the bridge script (see inverter-setup docs).
+#   4. Add the soc_kw template sensor to configuration.yaml (see inverter-setup docs).
+#   5. Replace YOURSERIAL throughout with your device serial number as it
+#      appears in your HA entity IDs (set automatically by the integration).
+#   6. Adjust inverter_limit, inverter_limit_charge, inverter_limit_discharge,
+#      inverter_limit_export and battery_rate_max to match your hardware.
+#   7. Delete the template: True line below once you have configured this file.
+#
+# Note: The 5000W limits are set to the author's hardware — adjust these
+# to match your own inverter and battery rated capacity.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  currency_symbols:
+    - '£'
+    - 'p'
+  threads: auto
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+  load_filter_threshold: 30
+  # ─── Hanchu iESS daily energy sensors ─────────────────────────────────────
+  load_today:
+    - sensor.hanchuess_YOURSERIAL_daily_load_energy
+  import_today:
+    - sensor.hanchuess_YOURSERIAL_daily_grid_import
+  export_today:
+    - sensor.hanchuess_YOURSERIAL_daily_grid_export
+  pv_today:
+    - sensor.hanchuess_YOURSERIAL_daily_pv_energy
+  # ─── Hanchu iESS inverter definition ──────────────────────────────────────
+  num_inverters: 1
+  inverter_type: "HC"
+  inverter:
+    name: "Hanchu iESS"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "power"
+    charge_control_immediate: true
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    has_target_soc: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    soc_units: "%"
+    num_load_entities: 1
+    has_ge_inverter_mode: false
+    has_fox_inverter_mode: false
+    time_button_press: false
+    clock_time_format: "%d-%m-%y %H:%M:%S"
+    write_and_poll_sleep: 2
+    has_time_window: false
+    support_charge_freeze: false
+    support_discharge_freeze: false
+  balance_inverters_seconds: 0
+  # ─── Hanchu iESS control surface (write) ──────────────────────────────────
+  # All four hooks call the same queued script, passing mode_action so it
+  # knows which state to apply. See inverter-setup docs for the full script.
+  charge_start_service:
+    - service: script.hanchu_set_state_queued
+      data:
+        mode_action: charge_start
+  charge_stop_service:
+    - service: script.hanchu_set_state_queued
+      data:
+        mode_action: charge_stop
+  discharge_start_service:
+    - service: script.hanchu_set_state_queued
+      data:
+        mode_action: discharge_start
+  discharge_stop_service:
+    - service: script.hanchu_set_state_queued
+      data:
+        mode_action: discharge_stop
+  # ─── Hanchu iESS sensor entities (read) ───────────────────────────────────
+  charge_rate:
+    - number.hanchuess_YOURSERIAL_charge_power_limit
+  discharge_rate:
+    - number.hanchuess_YOURSERIAL_discharge_power_limit
+  battery_power:
+    - sensor.hanchuess_YOURSERIAL_battery_power
+  battery_power_invert:
+    - true  # Hanchu sign convention is opposite to Predbat's
+  pv_power:
+    - sensor.hanchuess_YOURSERIAL_power
+  load_power:
+    - sensor.hanchuess_YOURSERIAL_load_power
+  load_power_invert:
+    - false
+  grid_power:
+    - sensor.hanchuess_YOURSERIAL_grid_power
+  grid_power_invert:
+    - true  # Hanchu sign convention is opposite to Predbat's
+  soc_percent:
+    - sensor.hanchuess_YOURSERIAL_battery_soc
+  soc_max:
+    - sensor.hanchuess_YOURSERIAL_battery_capacity_kwh  # Returns capacity in kWh, used to derive soc_kw
+  soc_kw:
+    - sensor.home_battery_state_of_charge_kwh  # Template sensor — see configuration.yaml step in inverter-setup docs
+  battery_min_soc:
+    - number.hanchuess_YOURSERIAL_minimum_discharge_soc
+  # ─── Hanchu iESS battery physical specs ───────────────────────────────────
+  # Adjust all limits to match your inverter and battery rated capacity in watts
+  inverter_battery_rate_min:
+    - 0  # Older firmware may require 500
+  inverter_limit:
+    - 5000
+  inverter_limit_charge:
+    - 5000
+  inverter_limit_discharge:
+    - 5000
+  inverter_limit_export:
+    - 5000
+  battery_rate_max:
+    - 5000
+  # Charge/discharge power curves based on observed Hanchu iESS behaviour
+  battery_charge_power_curve:
+    97: 0.5
+    98: 0.2
+    99: 0.1
+  battery_discharge_power_curve:
+    4: 1.0
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  inverter_can_charge_during_export: false  # Single inverter setup
+  clock_skew: 0
+  # ─── Solcast solar forecast ───────────────────────────────────────────────
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # ─── Car charging ─────────────────────────────────────────────────────────
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+  num_cars: 1
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'connected'
+    - 'ev connected'
+    - 'ev ready to charge'
+    - 'charging'
+    - 'paused'
+    - 'waiting for car demand'
+    - 'waiting for ev'
+    - 'scheduled'
+    - 'enabled'
+    - 'latched'
+    - 'locked'
+    - 'plugged in'
+    - 'waiting'
+  #car_charging_now:
+  #  - off
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.tsunami_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.tsunami_battery'
+  #car_charging_exclusive:
+  #  - True
+  # ─── Octopus Energy ───────────────────────────────────────────────────────
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
+  #octopus_slot_low_rate: False
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  # octopus_free_url: 'http://octopus.energy/free-electricity'
+  # axle_api_key: "xxxxxxx"
+  # ─── Energy rates ─────────────────────────────────────────────────────────
+  metric_octopus_import: 're:(event.octopus_energy_electricity_[0-9a-z_]+(?<!export)_current_day_rates)'
+  #metric_octopus_export: 're:(event.octopus_energy_electricity_[0-9a-z_]+_export_current_day_rates)'
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+  #rates_import:
+  #  -  start: "00:30:00"
+  #     end: "04:30:00"
+  #     rate: 7.5
+  #  -  start: "04:30:00"
+  #     end: "00:30:00"
+  #     rate: 40.0
+  #rates_export:
+  #  -  rate: 4.2
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  #rates_import_override:
+  # -  date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
+  # ─── Forecast and history ─────────────────────────────────────────────────
+  days_previous:
+    - 7
+  forecast_hours: 48
+  load_ml_enable: true
+  # load_ml_source: true
+  temperature_enable: true
+  # ─── Notifications ────────────────────────────────────────────────────────
+  #notify_devices:
+  #  - mobile_app_treforsiphone12_2
+  # ─── Scaling ──────────────────────────────────────────────────────────────
+  battery_scaling:
+    - 1.0
+  import_export_scaling: 1.0
+  # ─── Export triggers ──────────────────────────────────────────────────────
+  export_triggers:
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  #futurerate_adjust_import: True
+  #futurerate_adjust_export: False
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
+  #octopus_region: "A"
+  #compare_list:
+  #  - id: 'current'
+  #    name: 'Current Tariff'
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 40
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '{octopus_saving_session}'
+  #  - '+[car_charging_planned]'
+  #  - '+[car_charging_soc]'
+  #  - '{car_charging_now}'

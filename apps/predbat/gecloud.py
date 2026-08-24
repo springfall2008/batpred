@@ -16,7 +16,7 @@ import re
 import aiohttp
 import pytz
 from datetime import timedelta, datetime, timezone
-from utils import str2time, dp1, dp2, dp4
+from utils import str2time, dp1, dp2, dp4, parse_car_plan_windows, in_car_plan_window
 from predbat_metrics import record_api_call
 import asyncio
 import json
@@ -111,6 +111,27 @@ EVC_METER_GRID = 1
 EVC_METER_PV1 = 2
 EVC_METER_PV2 = 3
 
+# The charger statuses that mean a car is physically plugged in. GivEnergy reports the
+# OCPP vocabulary, where every stage of a session from Preparing to Finishing has a car
+# on the end of the cable - only Available and the fault states do not.
+EVC_CONNECTED_STATUSES = {"preparing", "charging", "suspendedev", "suspendedevse", "finishing", "connected", "plugged_in", "charge_complete"}
+
+# The statuses that mean no car. Listed rather than inferred from the set above so an
+# unrecognised value can be reported instead of silently reading as "nothing plugged in",
+# which would look exactly like a working charger that Predbat quietly ignores.
+EVC_DISCONNECTED_STATUSES = {"available", "idle", "offline", "unavailable", "faulted", "reserved", "unknown"}
+
+
+def evc_status_key(status):
+    """Normalise a charger status into the form the status tables use.
+
+    The API has been seen returning both 'charging' and 'SuspendedEV', and a status is
+    only ever compared here, never displayed, so case and separator differences are
+    flattened rather than every spelling being listed in the tables.
+    """
+    return str(status or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
 # Commands
 # ['start-charge', 'stop-charge', 'adjust-charge-power-limit', 'set-plug-and-go', 'set-session-energy-limit', 'set-schedule', 'unlock-connector', 'delete-charging-profile', 'change-mode', 'restart-charger', 'change-randomised-delay-duration', 'add-id-tags', 'delete-id-tags', 'rename-id-tag', 'installation-mode', 'setup-version', 'set-active-schedule', 'set-max-import-capacity', 'enable-front-panel-led', 'configure-inverter-control', 'perform-factory-reset', 'configuration-mode', 'enable-local-control']
 # Command adjust-charge-power-limit  {'min': 6, 'max': 32, 'value': 32, 'unit': 'A'}
@@ -166,6 +187,15 @@ EVC_SELECT_VALUE_KEY = {
     "change-randomised-delay-duration": "delay",
     "set-plug-and-go": "enabled",
 }
+
+# The two commands Predbat-led charge control drives a charger between. They are commands
+# rather than modes, so there is nothing to restore on release - see release_evc_devices().
+EVC_COMMAND_START = "start-charge"
+EVC_COMMAND_STOP = "stop-charge"
+
+# Where the EVC control switch is persisted, so an off survives a restart
+EVC_STORAGE_MODULE = "gecloud"
+EVC_CONTROL_STATE = "evc_control_state"
 
 # Unsupported commands
 EVC_BLACKLIST_COMMANDS = ["installation-mode", "perform-factory-reset", "rename-id-tag", "delete-id-tags", "change-randomised-delay-duration"]
@@ -228,15 +258,57 @@ def regname_to_ha(name):
     return name
 
 
+def merge_non_null(fresh, previous):
+    """
+    Overlay a fresh API reading onto the previous one, ignoring null leaves.
+
+    GE Cloud (notably on Gateway devices) intermittently answers with HTTP 200 and a well-formed
+    envelope whose leaf values are explicitly null. Those nulls mean "no fresh datalog sample this
+    poll", not "zero" - coercing them to 0 is indistinguishable from a real idle inverter or a flat
+    battery, and passing None through poisons every downstream consumer.
+
+    A null leaf keeps the last good value for that field. With no previous reading to fall back on
+    the null is kept as None rather than dropped, so the field carries on reporting "no value" as it
+    does today instead of a fabricated zero (dropping the key would let a .get(field, 0) default
+    invent one).
+    """
+    if fresh is None:
+        return previous
+    if not isinstance(fresh, dict):
+        return fresh
+    merged = dict(previous) if isinstance(previous, dict) else {}
+    for key, value in fresh.items():
+        if value is None:
+            if key not in merged:
+                # Never had a good reading for this field - report no value rather than a fake zero
+                merged[key] = None
+            continue
+        merged[key] = merge_non_null(value, merged.get(key))
+    return merged
+
+
 class GECloudDirect(ComponentBase):
     """
     GivEnergy Cloud Direct API interface
     """
 
-    def initialize(self, ge_cloud_direct, api_key, automatic):
+    def initialize(self, ge_cloud_direct, api_key, automatic, automatic_evc=False, evc_control=False):
         """Initialise the GE Cloud Direct component"""
         self.api_key = api_key
         self.automatic = automatic
+        # Kept apart from automatic, which existing users already have on: wiring the
+        # chargers into the car planning registers a car and moves num_cars, so it has to
+        # be something a user turns on rather than something an upgrade does to them.
+        self.automatic_evc = automatic_evc
+        self.evc_control = evc_control
+        self.evc_control_active = False
+        # The runtime switch, on unless the user turns it off. Restored from storage at startup.
+        self.evc_control_enabled = True
+        self.evc_control_released = False
+        # What Predbat last asked each charger to do, so a poll that changes nothing sends
+        # nothing - every command goes through async_send_evc_command's retry loop.
+        self.evc_control_state = {}
+        self.evc_control_windows = {}
         self.register_list = {}
         self.settings = {}
         self.status = {}
@@ -248,6 +320,7 @@ class GECloudDirect(ComponentBase):
         self.evc_device = {}
         self.evc_data = {}
         self.evc_sessions = {}
+        self.evc_status_unknown = set()
         self.api_fatal = False
         self.api_auth_failed = False
         self.auth_denied_reported = False
@@ -348,6 +421,12 @@ class GECloudDirect(ComponentBase):
         """
         Switch event
         """
+        if entity_id.endswith("_gecloud_evc_control"):
+            self.evc_control_enabled = service == "turn_on"
+            self.log("GECloud: EV charger control switched {}".format("on" if self.evc_control_enabled else "off"))
+            await self.save_evc_control_enabled()
+            return
+
         mapping = self.register_entity_map.get(entity_id, None)
         if mapping:
             device = mapping.get("device", None)
@@ -574,6 +653,44 @@ class GECloudDirect(ComponentBase):
             self.dashboard_item(entity_name + "_model", model, attributes=model_attr, app="gecloud")
             self.dashboard_item(entity_name + "_max_inverter_rate", max_inverter_rate, attributes=attribute_table.get("max_inverter_rate", {}), app="gecloud")
             self.dashboard_item(entity_name + "_last_updated", last_updated, attributes=attribute_table.get("time", {}), app="gecloud")
+
+    def evc_car_connected(self, status):
+        """Is a car plugged into the charger, judged from its status string.
+
+        An unrecognised status counts as no car - the safe way round, since a false
+        'connected' would have Predbat plan charging slots for a car that is not there.
+        It is reported once per distinct value rather than every poll, because the only
+        way a status missing from the tables gets added is somebody seeing the log line.
+        """
+        key = evc_status_key(status)
+        if key in EVC_CONNECTED_STATUSES:
+            return True
+        if key not in EVC_DISCONNECTED_STATUSES and key not in self.evc_status_unknown:
+            self.evc_status_unknown.add(key)
+            self.log("GECloud: Warn: Unrecognised EV charger status '{}', treating it as no car connected - please report it so it can be added".format(status))
+        return False
+
+    async def publish_evc_device(self, serial, evc_device):
+        """Publish the charger's own status, and whether a car is connected.
+
+        The status arrives on every device poll and used to be dropped - only the meter
+        measurands were published. It goes out raw for visibility, and again reduced to a
+        binary sensor for planning: that sensor answers 'on', which the default
+        car_charging_planned_response already matches, so automatic configuration works
+        without the user having to extend a response list written around other vendors'
+        status vocabulary.
+        """
+        status = evc_device.get("status", None)
+        if not status:
+            return
+        entity_name = "{}_gecloud_{}".format(self.prefix, serial).lower()
+        self.dashboard_item("sensor." + entity_name + "_evc_status", state=status, attributes={"friendly_name": "EV Charger Status", "icon": "mdi:ev-station"}, app="gecloud")
+        self.dashboard_item(
+            "binary_sensor." + entity_name + "_evc_car_connected",
+            state="on" if self.evc_car_connected(status) else "off",
+            attributes={"friendly_name": "EV Charger Car Connected", "icon": "mdi:ev-plug-type2"},
+            app="gecloud",
+        )
 
     async def publish_evc_data(self, serial, evc_data):
         """
@@ -1165,9 +1282,203 @@ class GECloudDirect(ComponentBase):
                     break
         entity_id = "switch.{}_inverter_hybrid".format(self.prefix)
         self.log("GECloud: Detected inverter model {} indicates ac_coupled={}, setting {} to {}".format(model_name, ac_coupled, entity_id, "off" if ac_coupled else "on"))
-        await self.base.ha_interface.set_state_external(entity_id, not ac_coupled)
+        await self.set_state_external(entity_id, not ac_coupled)
 
         self.log("GECloud: Automatic configuration complete")
+
+    def evc_control_enable(self):
+        """Decide whether Predbat-led charger control should run, and say why when it will not.
+
+        Control needs the EVC automatic configuration because a charger is driven from its
+        own car's plan, and it is that configuration which establishes which charger is
+        which car - without it, charger 1 could be told to follow a car it is not attached to.
+        """
+        self.evc_control_active = False
+        if not self.evc_control:
+            return
+        if not self.automatic_evc:
+            self.log("GECloud: Warn: ge_cloud_evc_control needs ge_cloud_automatic_evc to map each charger to a car, EV charger control is disabled")
+            return
+        self.evc_control_active = True
+        self.log("GECloud: Predbat-led EV charger control enabled")
+
+    async def save_evc_control_enabled(self):
+        """Persist the control switch so an off survives a restart.
+
+        Without this a restart would silently take back a charger the user had deliberately
+        released, which they would only notice when the car charged at the wrong time.
+        Fails soft: no Storage component just means the switch is not sticky.
+        """
+        if self.storage is None:
+            return
+        try:
+            await self.storage.save(EVC_STORAGE_MODULE, EVC_CONTROL_STATE, {"evc_control_enabled": self.evc_control_enabled})
+        except Exception as exc:
+            self.log("GECloud: Warn: Could not save the EV charger control switch state: {}".format(exc))
+
+    async def load_evc_control_enabled(self):
+        """Restore the control switch from storage, leaving it on when nothing is saved."""
+        if self.storage is None:
+            return
+        try:
+            saved = await self.storage.load(EVC_STORAGE_MODULE, EVC_CONTROL_STATE)
+        except Exception as exc:
+            self.log("GECloud: Warn: Could not read the EV charger control switch state: {}".format(exc))
+            return
+        if isinstance(saved, dict) and "evc_control_enabled" in saved:
+            self.evc_control_enabled = bool(saved["evc_control_enabled"])
+            if not self.evc_control_enabled:
+                self.log("GECloud: EV charger control is switched off from the last session")
+
+    def evc_read_only_now(self):
+        """Is Predbat in read only mode - the live attribute rather than just the config arg.
+
+        Other components force read only by setting the attribute without touching the arg,
+        so read the attribute first and fall back to the switch for the window before it is set.
+        """
+        read_only = getattr(self.base, "set_read_only", None)
+        if read_only is None:
+            return self.get_state_wrapper("switch.{}_set_read_only".format(self.prefix), default="off") == "on"
+        return bool(read_only)
+
+    def refresh_evc_car_windows(self, now):
+        """Read Predbat's planned car charging windows for every car into evc_control_windows.
+
+        Returns True once at least one car's plan has been read, False while no slot sensor
+        has ever been published - which is what stops a restart stopping a charge before
+        Predbat has decided anything.
+        """
+        windows = {}
+        found = False
+        for car_n in range(self.num_cars):
+            postfix = "" if car_n == 0 else "_{}".format(car_n)
+            planned = self.get_state_wrapper("binary_sensor.{}_car_charging_slot{}".format(self.prefix, postfix), attribute="planned")
+            if planned is None:
+                continue
+            found = True
+            windows[car_n] = parse_car_plan_windows(planned, now, self.local_tz)
+        self.evc_control_windows = windows
+        return found
+
+    def evc_should_charge_now(self, car_n, now):
+        """Is now inside one of the planned charging windows for this car."""
+        return in_car_plan_window(self.evc_control_windows.get(car_n, []), now)
+
+    def controlled_evc_devices(self):
+        """The chargers to drive, in serial order, so charger N is auto-config's Nth car.
+
+        async_automatic_config_evc() wires car_charging_energy and car_charging_planned as
+        per-car lists in this same order, so the two cannot disagree about which charger
+        is which car.
+        """
+        known = [uuid for uuid in self.evc_device_list if self.evc_device.get(uuid, {}).get("serial_number", None)]
+        return sorted(known, key=lambda uuid: str(self.evc_device[uuid]["serial_number"]))
+
+    async def evc_control_tick(self, now):
+        """Run one cycle of EV charger control, releasing rather than just going quiet.
+
+        Read only mode and the control switch are both releases: Predbat may have left a
+        charger stopped, and walking away from that would strand the car unable to charge.
+        """
+        if not self.evc_control_active:
+            return
+        reason = None
+        if self.evc_read_only_now():
+            reason = "Predbat is in read only mode"
+        elif not self.evc_control_enabled:
+            reason = "the EV charger control switch is off"
+        if reason:
+            if not self.evc_control_released:
+                self.log("GECloud: Releasing the EV chargers because {}".format(reason))
+                await self.release_evc_devices()
+                self.evc_control_released = True
+            return
+        if self.evc_control_released:
+            self.log("GECloud: Resuming EV charger control")
+            self.evc_control_released = False
+        await self.evc_control_charge(now)
+
+    async def release_evc_devices(self):
+        """Hand every held charger back by starting it again.
+
+        start-charge and stop-charge are commands rather than modes, so unlike a Zappi
+        there is no previous mode to restore - releasing means undoing the only thing
+        Predbat did, which is the stop. A charger Predbat had left running needs nothing.
+        The charger's own mode still decides what happens next.
+        """
+        for uuid in self.controlled_evc_devices():
+            if self.evc_control_state.get(uuid, None) != EVC_COMMAND_STOP:
+                continue
+            self.log("GECloud: Releasing EV charger {}".format(self.evc_device[uuid]["serial_number"]))
+            await self.async_send_evc_command(uuid, EVC_COMMAND_START, {})
+        self.evc_control_state = {}
+
+    async def evc_control_charge(self, now):
+        """Drive every controlled charger from its car's charge plan.
+
+        Predbat holds the charger for as long as it is in control: charging inside a
+        planned window, stopped outside one. A charger with no car plugged in is left
+        alone - commanding it would achieve nothing and every command costs a retry loop.
+        """
+        if not self.refresh_evc_car_windows(now):
+            return
+        # Only as far as there are cars to follow. async_automatic_config_evc() raises
+        # num_cars to the charger count, but that reaches the base object a cycle later,
+        # so there is a window where a charger has no plan of its own - and a charger with
+        # no plan would read as "not planned" and be stopped while its car was charging.
+        for car_n, uuid in enumerate(self.controlled_evc_devices()[: self.num_cars]):
+            device = self.evc_device[uuid]
+            if not self.evc_car_connected(device.get("status", None)):
+                continue
+            wanted = EVC_COMMAND_START if self.evc_should_charge_now(car_n, now) else EVC_COMMAND_STOP
+            if self.evc_control_state.get(uuid, None) == wanted:
+                continue
+            self.log("GECloud: Sending {} to EV charger {} for car {}".format(wanted, device["serial_number"], car_n))
+            await self.async_send_evc_command(uuid, wanted, {})
+            self.evc_control_state[uuid] = wanted
+
+    async def async_automatic_config_evc(self):
+        """Wire the EV chargers into Predbat's car charging inputs.
+
+        Deliberately separate from async_automatic_config(), which returns early when no
+        battery inverter is found: a GivEnergy charger paired with somebody else's battery
+        is a normal setup, and folding this in there would leave it unconfigured.
+
+        Chargers are taken in serial order so charger N is always the same car as entry N
+        of both lists, and so the mapping does not shuffle when the API returns the
+        devices in a different order. car_charging_energy lets car_charging_hold subtract
+        the charging precisely instead of falling back to the car_charging_threshold
+        heuristic; car_charging_planned tells Predbat when there is actually a car to plan
+        for. Both go through set_arg_auto so an apps.yaml entry that auto-discovery is
+        about to override is logged rather than silently discarded.
+        """
+        energy_entities = []
+        connected_entities = []
+        for uuid in sorted(self.evc_device_list, key=lambda item: str(self.evc_device.get(item, {}).get("serial_number", "") or "")):
+            serial = self.evc_device.get(uuid, {}).get("serial_number", None)
+            if not serial:
+                # The serial is read from the device endpoint, so a charger that has not
+                # answered yet has no entity name to point at - skip it rather than wire
+                # up a name with a hole in it.
+                self.log("GECloud: Warn: EV charger {} has no serial number yet, skipping it in automatic configuration".format(uuid))
+                continue
+            entity_name = "{}_gecloud_{}".format(self.prefix, serial).lower()
+            energy_entities.append("sensor." + entity_name + "_evc_energy_active_import_register")
+            connected_entities.append("binary_sensor." + entity_name + "_evc_car_connected")
+
+        if not energy_entities:
+            return
+
+        # Only ever raised, never lowered, as ohme and octopus do with the same setting -
+        # another component may already have registered cars of its own that are not this
+        # charger, and shrinking the count would drop them off the plan.
+        if self.get_arg("num_cars", 0) < len(energy_entities):
+            self.set_arg("num_cars", len(energy_entities))
+
+        self.log("GECloud: Setting car_charging_energy to {}".format(energy_entities))
+        self.set_arg_auto("car_charging_energy", energy_entities)
+        self.log("GECloud: Setting car_charging_planned to {}".format(connected_entities))
+        self.set_arg_auto("car_charging_planned", connected_entities)
 
     async def run(self, seconds, first):
         """
@@ -1209,6 +1520,12 @@ class GECloudDirect(ComponentBase):
                 # device_name = device.get("alias", None)
                 self.evc_device_list.append(uuid)
             self.log("GECloud: Starting up, found devices {}, evc_devices {}".format(self.device_list, self.evc_device_list))
+
+            # Before the first control cycle: the switch has to carry its restored state from
+            # the start, or a restart with control switched off would take the charger back
+            # for a cycle and then hand it over again
+            await self.load_evc_control_enabled()
+            self.evc_control_enable()
             for device in self.device_list:
                 self.pending_writes[device] = []
 
@@ -1266,6 +1583,18 @@ class GECloudDirect(ComponentBase):
                 self.evc_data[uuid] = await self.async_get_evc_device_data(uuid, self.evc_data.get(uuid, {}))
                 self.evc_sessions[uuid] = await self.async_get_evc_sessions(uuid, self.evc_sessions.get(uuid, []))
                 await self.publish_evc_data(serial, self.evc_data[uuid])
+                await self.publish_evc_device(serial, self.evc_device[uuid])
+
+            if self.evc_control_active:
+                # Published only when control could actually act on it - a switch reading
+                # "on" for a feature that cannot run would be a lie
+                self.dashboard_item(
+                    "switch.{}_gecloud_evc_control".format(self.prefix),
+                    state="on" if self.evc_control_enabled else "off",
+                    attributes={"friendly_name": "EV Charger Control", "icon": "mdi:ev-station"},
+                    app="gecloud",
+                )
+                await self.evc_control_tick(self.now_utc_exact)
 
         if first or (seconds % (10 * 60) == 0):
             # Get All registers every now and again in case user changes them
@@ -1287,6 +1616,8 @@ class GECloudDirect(ComponentBase):
             if first:
                 if self.automatic:
                     await self.async_automatic_config(self.devices_dict)
+                if self.automatic_evc:
+                    await self.async_automatic_config_evc()
 
             now_utc = self.now_utc_exact
             options_due = self.default_options_stamp is None or (now_utc - self.default_options_stamp) >= timedelta(hours=24)
@@ -1799,7 +2130,7 @@ class GECloudDirect(ComponentBase):
         result = await self.async_get_inverter_data_retry(GE_API_INVERTER_STATUS, serial)
         if result is None:
             return previous
-        return result
+        return merge_non_null(result, previous)
 
     async def async_get_inverter_meter(self, serial, previous={}):
         """
@@ -1808,7 +2139,15 @@ class GECloudDirect(ComponentBase):
         meter = await self.async_get_inverter_data_retry(GE_API_INVERTER_METER, serial)
         if meter is None:
             return previous
-        return meter
+        merged = merge_non_null(meter, previous)
+        # today/total are objects rather than readings, so a null section with nothing cached to
+        # fall back on cannot be kept as None the way a null leaf is - publish_meter would iterate
+        # it. Drop it and pick the counters up on the next poll rather than failing the whole read,
+        # which would leave a device that nulls one section persistently with no meter data at all.
+        for section in ("today", "total"):
+            if section in merged and not isinstance(merged[section], dict):
+                merged.pop(section)
+        return merged
 
     async def async_get_inverter_data_retry(self, endpoint, serial="", setting_id="", post=False, datain=None, uuid="", meter_ids="", start_time="", end_time="", command="", measurands=""):
         """
@@ -2157,26 +2496,39 @@ class GECloudData(ComponentBase):
         return self.mdata, self.oldest_data_time
 
 
-class MockHAInterface:  # pragma: no cover
-    """Mock HA interface for testing"""
-
-    def __init__(self):
-        pass
-
-    async def set_state_external(self, entity_id, state):
-        print(f"Set state external {entity_id} = {state}")
-
-
 class MockBase(SharedMockBase):  # pragma: no cover
-    """Mock base for the GE Cloud command-line harness, with its own cache root and HA interface."""
+    """Mock base for the GE Cloud command-line harness, with its own cache root."""
 
     def __init__(self):
-        """Initialise the shared mock with the GE Cloud cache root and a mock HA interface."""
+        """Initialise the shared mock with the GE Cloud cache root."""
         super().__init__(config_root="./temp_gecloud")
-        self.ha_interface = MockHAInterface()
 
 
-async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # pragma: no cover
+def find_registers_by_name(gecloud_direct, register_name, device=None):  # pragma: no cover
+    """
+    Find all (entity_id, device, key, raw_name) matches for a register name, optionally restricted to one device serial.
+
+    Matches case-insensitively against both the raw GivEnergy Cloud register name (e.g.
+    "Battery_Charge_Power") and its HA-style equivalent (e.g. "battery_charge_power"), so the
+    harness can be driven without knowing the API's exact casing. When 'device' is given, only
+    that device serial (case-insensitive) is considered, so a name shared by multiple inverters
+    can be aimed at a single one.
+    """
+    register_name_lower = register_name.lower()
+    device_lower = device.lower() if device else None
+    matches = []
+    for entity_id, mapping in gecloud_direct.register_entity_map.items():
+        this_device = mapping["device"]
+        if device_lower and this_device.lower() != device_lower:
+            continue
+        key = mapping["key"]
+        raw_name = gecloud_direct.settings.get(this_device, {}).get(key, {}).get("name", "")
+        if register_name_lower in (raw_name.lower(), regname_to_ha(raw_name)):
+            matches.append((entity_id, this_device, key, raw_name))
+    return matches
+
+
+async def test_gecloud_direct(api_key, write_entity=None, write_value=None, write_register_name=None, write_register_value=None, write_register_device=None):  # pragma: no cover
     """
     Test the GECloud Direct API
     """
@@ -2221,6 +2573,33 @@ async def test_gecloud_direct(api_key, write_entity=None, write_value=None):  # 
             else:
                 print(f"Write failed for entity '{write_entity}'")
 
+    if write_register_name and write_register_value is not None:
+        matches = find_registers_by_name(gecloud_direct, write_register_name, device=write_register_device)
+        if not matches:
+            if write_register_device:
+                print(f"ERROR: Register '{write_register_name}' not found on device '{write_register_device}'")
+            else:
+                print(f"ERROR: Register '{write_register_name}' not found on any device")
+            print("Available registers:")
+            seen = set()
+            for mapping in gecloud_direct.register_entity_map.values():
+                raw_name = gecloud_direct.settings.get(mapping["device"], {}).get(mapping["key"], {}).get("name", "")
+                label = f"{raw_name}  (ha_name={regname_to_ha(raw_name)}, device={mapping['device']})"
+                if label not in seen:
+                    seen.add(label)
+                    print(f"  {label}")
+        else:
+            distinct_devices = {device for _, device, _, _ in matches}
+            if not write_register_device and len(distinct_devices) > 1:
+                print(f"Warn: Register '{write_register_name}' matched {len(distinct_devices)} devices ({', '.join(sorted(distinct_devices))}) - writing to all of them. Pass --device to target just one.")
+            for entity_id, device, key, raw_name in matches:
+                print(f"Writing register '{raw_name}' (device={device}, setting_id={key}) = {write_register_value}")
+                result = await gecloud_direct.async_write_inverter_setting(device, key, write_register_value)
+                if result:
+                    print(f"Write succeeded: {result}")
+                else:
+                    print(f"Write failed for device {device} register '{raw_name}'")
+
     await gecloud_direct.final()
 
     print("Test completed")
@@ -2236,11 +2615,30 @@ def main():  # pragma: no cover
     parser.add_argument("--api-key", required=True, help="GECloud Direct API key")
     parser.add_argument("--write-entity", default=None, help="Entity ID to write (e.g. number.predbat_gecloud_SA1234_battery_charge_power)")
     parser.add_argument("--write-value", default=None, help="Value to write to the entity")
+    parser.add_argument(
+        "--write-register",
+        nargs=2,
+        default=None,
+        metavar=("NAME", "VALUE"),
+        help="Register name (raw or HA-style, e.g. Battery_Charge_Power or battery_charge_power) and value to write",
+    )
+    parser.add_argument("--device", default=None, help="Device serial to restrict --write-register to, when the register name is shared by more than one device")
 
     args = parser.parse_args()
 
+    write_register_name, write_register_value = args.write_register if args.write_register else (None, None)
+
     # Run the test
-    asyncio.run(test_gecloud_direct(args.api_key, write_entity=args.write_entity, write_value=args.write_value))
+    asyncio.run(
+        test_gecloud_direct(
+            args.api_key,
+            write_entity=args.write_entity,
+            write_value=args.write_value,
+            write_register_name=write_register_name,
+            write_register_value=write_register_value,
+            write_register_device=args.device,
+        )
+    )
 
 
 if __name__ == "__main__":

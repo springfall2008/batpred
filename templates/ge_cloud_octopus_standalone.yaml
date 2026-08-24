@@ -135,6 +135,7 @@ pred_bat:
     - 'true'
     - 'connected'
     - 'ev connected'
+    - 'ev ready to charge'
     - 'charging'
     - 'paused'
     - 'waiting for car demand'
@@ -178,6 +179,8 @@ pred_bat:
   #  - True
 
   octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
 
   # Octopus free session points to the free session Sensor in the Octopus plugin
   # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work

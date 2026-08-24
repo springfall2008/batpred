@@ -117,7 +117,9 @@ validates, stores it and starts a run.
 
 A run takes roughly one to three minutes with the default two samples per month, or two
 to six minutes with a car configured (each sampled day is planned twice — with and
-without a charging session — to work out how often the car overflows the cheap window).
+without a charging session — to work out how often the car overflows the cheap window). With
+**Fast mode** on (see below) those fall to roughly 30 to 90 seconds, or one to two and a
+half minutes with a car.
 Once started it shows a progress bar with the current step and elapsed time, and it keeps
 running on the server if you navigate away or close the tab — come back to the WhatIf tab
 later and the same run is still there, or already finished. The progress area appears on
@@ -134,6 +136,33 @@ navigated. The progress poll runs in every open tab, so reloading them all would
 silently discard whatever had been typed into a form somewhere else — an earlier
 version of the page did exactly that. Only the tab that actually started the run
 follows the completion.
+
+### Fast mode
+
+**Fast mode**, under **Advanced** on the Configure page, plans March, June, September and
+December only and estimates the other eight months from those four against the year's
+actual solar yield. It takes about 2.5 times less time — less than the four-months-in-twelve
+might suggest, because the weather download, the rate downloads and starting the engine
+all still happen.
+
+It exists for comparing systems: try 5 kWh against 10 kWh, or one tariff against another,
+without waiting three minutes for each answer. Measured against a full run of the same
+system, the annual savings came out within 0.5% and the payback within 0.2%.
+
+Individual months are rougher — typically within about 10%, worse in the tails — so the
+month table and the chart both mark every estimated month. If you want to read one
+particular month's figure, turn fast mode off.
+
+**Some tariffs get a full run anyway.** Estimating one month from another only works while
+a month's economics follow the solar curve. On a tariff whose prices swing from day to day
+rather than following a fixed daily pattern — Agile most obviously — they do not, and the
+estimated savings can be tens of percent out. Predbat measures this before planning starts
+and, when it finds it, plans all twelve months instead. You get the slower, correct answer
+rather than a fast wrong one, the run says so in its caveats, and "what this run used"
+reports that fast mode was requested but a full run was needed.
+
+Rate data is still downloaded for all twelve months in fast mode, so a month with no rates
+available is still reported as unavailable rather than quietly estimated over.
 
 ### The results view
 
@@ -404,16 +433,19 @@ cd apps/predbat
 python3 annual_cli.py --config annual.yaml --out results.json
 ```
 
-Other options: `--work-dir` (default `./annual_work`) sets where the headless Predbat
-instance and the download cache live, and `--quiet` suppresses only the per-month
-progress lines written to stderr. Warnings - a P10 fallback, missing rate data, a failed
+Other options: `--fast` enables fast mode for that run, overriding the config file —
+four months are planned and the rest estimated, subject to the same tariff check described
+under [Fast mode](#fast-mode). `--work-dir` (default `./annual_work`) sets where the
+headless Predbat instance and the download cache live, and `--quiet` suppresses only the
+per-month progress lines written to stderr. Warnings - a P10 fallback, missing rate data, a failed
 sample day, a car-charging shortfall - are never suppressed, `--quiet` or not: failures
 stay visible. A human-readable table is always printed to stdout; `--out` additionally
 writes the full results document as JSON.
 
 A run takes roughly one to three minutes with the default two samples per month: 24 plan
 calculations (12 months × 2 samples) plus the weather, tariff and (if configured)
-Octopus consumption downloads, which are cached between runs in `--work-dir`.
+Octopus consumption downloads, which are cached between runs in `--work-dir`. With
+`--fast` it is 8 plan calculations instead of 24, so roughly 30 to 90 seconds.
 
 ## Advanced: the configuration file
 
@@ -433,10 +465,13 @@ annual:
       azimuth: 180               # 180 = south, default 180
       efficiency: 0.95           # default 0.95, must be greater than 0 and at most 1
 
+  export_limit_kw: 10.0          # grid connection export cap, default 10.0; applies with
+                                  # or without a battery (previously battery.export_limit_kw,
+                                  # which is still read for backward compatibility)
+
   battery:                       # omit for a PV-only run
     size_kwh: 9.5
     inverter_kw: 5.0
-    export_limit_kw: 5.0         # defaults to inverter_kw
     hybrid: true                 # false = AC coupled
     charge_rate_kw: 3.6          # defaults to inverter_kw
     discharge_rate_kw: 3.6       # defaults to inverter_kw
@@ -460,6 +495,7 @@ annual:
       - rate: 4.1
 
   samples_per_month: 2
+  fast_mode: false               # plan 4 months and estimate the rest, see Fast mode
   debug: false                   # keep each sampled day's plan, see Debugging a run
 ```
 

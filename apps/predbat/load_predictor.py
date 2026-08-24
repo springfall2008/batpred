@@ -107,6 +107,7 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             out -= self.mean
             out /= self.std
+        np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return out.astype(dtype) if dtype is not None and dtype != np.float32 else out
 
     def _assemble(self, target_chunks, out):
@@ -142,6 +143,7 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             batch -= self.mean
             batch /= self.std
+        np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return batch[0] if scalar else batch
 
 
@@ -222,6 +224,11 @@ class LoadPredictor:
         self.training_timestamp = None
         self.validation_mae = None
         self.validation_bias = None  # Signed metric: mean(predicted - actual); + = over-predicting, - = under-predicting
+        # Holdout scores for the multi-step rollout and the daily-pattern baseline it is
+        # blended with, reported for diagnosis only. validation_mae above is teacher-forced
+        # and stays small even when the multi-step rollout has degenerated.
+        self.rollout_mae = None
+        self.pattern_mae = None
         self.epochs_trained = 0
         self.model_initialized = False
 
@@ -361,6 +368,10 @@ class LoadPredictor:
                 if dropout_masks is not None and (i - 1) < len(dropout_masks) and dropout_masks[i - 1] is not None:
                     delta = delta * dropout_masks[i - 1]
 
+        # Clip gradients to prevent exploding gradients and NaN weight updates
+        weight_grads = [np.clip(g, -10.0, 10.0) for g in weight_grads]
+        bias_grads = [np.clip(g, -10.0, 10.0) for g in bias_grads]
+
         return weight_grads, bias_grads
 
     def _adam_update(self, weight_grads, bias_grads, beta1=0.9, beta2=0.999, epsilon=1e-8, lr=None):
@@ -404,6 +415,10 @@ class LoadPredictor:
 
             # Update biases (no weight decay on biases)
             self.biases[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
+
+            # Ensure weights and biases remain finite
+            self.weights[i] = np.nan_to_num(self.weights[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            self.biases[i] = np.nan_to_num(self.biases[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _create_time_features(self, minute_of_day, day_of_week, day_of_year=1):
         """
@@ -533,12 +548,16 @@ class LoadPredictor:
             for j in range(CHUNK_STEPS):
                 m = minute + j * STEP_MINUTES
                 if m in energy_per_step:
-                    total += energy_per_step[m]
+                    val = energy_per_step[m]
+                    if val is None or np.isnan(val) or np.isinf(val):
+                        valid = False
+                        break
+                    total += float(val)
                 else:
                     valid = False
                     break
-            if valid:
-                chunked[chunk_idx] = total
+            if valid and np.isfinite(total):
+                chunked[chunk_idx] = float(total)
             chunk_idx += 1
             minute += CHUNK_MINUTES
 
@@ -572,9 +591,13 @@ class LoadPredictor:
             for j in range(CHUNK_STEPS):
                 m = minute + j * STEP_MINUTES
                 if m in values_per_step:
-                    vals.append(values_per_step[m])
+                    val = values_per_step[m]
+                    if val is not None and not np.isnan(val) and not np.isinf(val):
+                        vals.append(float(val))
             if vals:
-                chunked[chunk_idx] = float(np.mean(vals))
+                mean_val = float(np.mean(vals))
+                if np.isfinite(mean_val):
+                    chunked[chunk_idx] = mean_val
             chunk_idx += 1
             minute += CHUNK_MINUTES
 
@@ -784,6 +807,12 @@ class LoadPredictor:
         this feeds each predicted chunk back as the next step's context, exposing
         how compounding errors accumulate over the holdout window.
 
+        The same holdout is also scored against the day-of-week daily-pattern baseline
+        that predict() blends in. A one-step-ahead model can post an excellent
+        teacher-forced MAE and still collapse to a flat line once it is fed its own
+        output, at which point the trivial pattern is the better long-range forecast.
+        Reporting both makes that visible; neither figure changes the forecast.
+
         Args:
             load_minutes: Dict of {minute: kwh_per_step} historical load data
             now_utc: Current UTC timestamp used during training
@@ -794,10 +823,10 @@ class LoadPredictor:
             validation_holdout_hours: Size of the holdout window (must match training)
 
         Returns:
-            (ar_mae, ar_bias) in kWh per chunk, or (None, None) on failure.
+            (ar_mae, ar_bias, pattern_mae) in kWh per chunk, or (None, None, None) on failure.
         """
         if not self.model_initialized or self.weights is None:
-            return None, None
+            return None, None, None
 
         energy_per_step = load_minutes
         pv_energy_per_step = pv_minutes if pv_minutes else {}
@@ -806,7 +835,7 @@ class LoadPredictor:
         export_rate_values = export_rates if export_rates else {}
 
         if not energy_per_step:
-            return None, None
+            return None, None, None
 
         # Chunk data identically to _create_dataset
         chunked_energy, alignment_offset = self._chunk_energy_to_aligned(energy_per_step, now_utc)
@@ -816,7 +845,7 @@ class LoadPredictor:
         chunked_export = self._chunk_instantaneous_to_aligned(export_rate_values, alignment_offset)
 
         if not chunked_energy:
-            return None, None
+            return None, None, None
 
         # Holdout window: chunks 0 .. validation_end_chunk-1 (most-recent = 0)
         validation_end_chunk = validation_holdout_hours * 60 // CHUNK_MINUTES
@@ -824,7 +853,7 @@ class LoadPredictor:
         # We need LOOKBACK_STEPS real chunks immediately before the holdout as context
         context_start = validation_end_chunk  # chunk just before the holdout starts
         if (context_start + LOOKBACK_STEPS - 1) not in chunked_energy:
-            return None, None
+            return None, None, None
 
         # Initialise lookback buffers from real data (index 0 = most-recent context)
         ar_load = [chunked_energy.get(context_start + lb, 0.0) for lb in range(LOOKBACK_STEPS)]
@@ -835,6 +864,12 @@ class LoadPredictor:
 
         errors = []
         biases = []
+        pattern_errors = []
+
+        # Daily-pattern baseline, built only from data outside the holdout so the
+        # comparison is on the same footing as the model rollout
+        holdout_minutes = validation_holdout_hours * 60
+        baseline_patterns = self._compute_daily_pattern({minute: value for minute, value in energy_per_step.items() if minute >= holdout_minutes}, now_utc)
 
         # Step from oldest holdout chunk down to newest (autoregressive order)
         for step in range(validation_end_chunk):
@@ -868,6 +903,10 @@ class LoadPredictor:
             errors.append(abs(pred_value - true_value))
             biases.append(pred_value - true_value)
 
+            slot = (minute_of_day // CHUNK_MINUTES) * CHUNK_MINUTES
+            pattern_value = baseline_patterns[day_of_week].get(slot, baseline_patterns[None].get(slot, 0.0))
+            pattern_errors.append(abs(pattern_value - true_value))
+
             # Feed predicted load back; use real exogenous values (they are known history)
             ar_load.insert(0, pred_value)
             ar_load.pop()
@@ -881,9 +920,9 @@ class LoadPredictor:
             ar_exp.pop()
 
         if not errors:
-            return None, None
+            return None, None, None
 
-        return float(np.mean(errors)), float(np.mean(biases))
+        return float(np.mean(errors)), float(np.mean(biases)), float(np.mean(pattern_errors))
 
     @staticmethod
     def _feature_mean_std(X, block=512):
@@ -909,7 +948,7 @@ class LoadPredictor:
         total = np.zeros(X.shape[1], dtype=np.float64)
         for start in range(0, rows, block):
             total += X[start : start + block].sum(axis=0, dtype=np.float64)
-        mean = total / rows
+        mean = np.nan_to_num(total / rows, nan=0.0, posinf=0.0, neginf=0.0)
 
         squares = np.zeros(X.shape[1], dtype=np.float64)
         for start in range(0, rows, block):
@@ -918,7 +957,7 @@ class LoadPredictor:
             # Square into the deviation buffer rather than allocating a second one of the
             # same size; the values are identical either way
             squares += np.square(deviation, out=deviation).sum(axis=0)
-        std = np.sqrt(squares / rows)
+        std = np.nan_to_num(np.sqrt(squares / rows), nan=1.0, posinf=1.0, neginf=1.0)
 
         return mean.astype(np.float32), std.astype(np.float32)
 
@@ -936,14 +975,14 @@ class LoadPredictor:
         total = np.zeros(TOTAL_FEATURES, dtype=np.float64)
         for block in dataset.blocks():
             total += block.sum(axis=0, dtype=np.float64)
-        mean = total / rows
+        mean = np.nan_to_num(total / rows, nan=0.0, posinf=0.0, neginf=0.0)
 
         squares = np.zeros(TOTAL_FEATURES, dtype=np.float64)
         for block in dataset.blocks():
             deviation = block.astype(np.float64)
             deviation -= mean
             squares += np.square(deviation, out=deviation).sum(axis=0)
-        std = np.sqrt(squares / rows)
+        std = np.nan_to_num(np.sqrt(squares / rows), nan=1.0, posinf=1.0, neginf=1.0)
 
         new_mean = mean.astype(np.float32)
         new_std = np.maximum(std.astype(np.float32), self._get_min_std_array(TOTAL_FEATURES))
@@ -1054,9 +1093,11 @@ class LoadPredictor:
         if in_place:
             X -= self.feature_mean
             X /= self.feature_std
+            np.nan_to_num(X, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
             return X
 
-        return (X - self.feature_mean) / self.feature_std
+        out = (X - self.feature_mean) / self.feature_std
+        return np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _normalize_targets(self, y, fit=False):
         """
@@ -1070,14 +1111,17 @@ class LoadPredictor:
             Normalized target array
         """
         if fit:
-            self.target_mean = np.mean(y)
-            self.target_std = np.std(y)
+            m = np.nanmean(y)
+            s = np.nanstd(y)
+            self.target_mean = float(m) if np.isfinite(m) else 0.0
+            self.target_std = float(s) if np.isfinite(s) else 1.0
             self.target_std = max(self.target_std, 1e-8)
 
         if self.target_mean is None or self.target_std is None:
             return y
 
-        return (y - self.target_mean) / self.target_std
+        out = (y - self.target_mean) / self.target_std
+        return np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _denormalize_predictions(self, y_pred):
         """
@@ -1364,12 +1408,13 @@ class LoadPredictor:
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)
         self.epochs_trained += epochs
-
-        self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), 100.0 * float(best_val_bias) / (float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8)))
+        mean_y = float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8
+        pct_bias = 100.0 * float(best_val_bias) / mean_y
+        self.log("ML Predictor: Training complete, final val_mae={:.4f} kWh val_bias={:+.4f} kWh ({:+.1f}%)".format(best_val_loss, float(best_val_bias), pct_bias))
 
         # Autoregressive diagnostic: run a full AR rollout over the holdout period
         # to expose compounding error (teacher-forced val_mae won't show this)
-        ar_mae, ar_bias = self._ar_rollout_diagnostic(
+        ar_mae, ar_bias, pattern_mae = self._ar_rollout_diagnostic(
             load_minutes,
             now_utc,
             pv_minutes=pv_minutes,
@@ -1378,10 +1423,14 @@ class LoadPredictor:
             export_rates=export_rates,
             validation_holdout_hours=validation_holdout_hours,
         )
+        self.rollout_mae = ar_mae
+        self.pattern_mae = pattern_mae
         if ar_mae is not None:
             mean_y_val = float(np.mean(y_val)) if float(np.mean(y_val)) > 1e-8 else 1e-8
             ar_drift = ar_mae - best_val_loss
             self.log("ML Predictor: AR rollout over holdout: ar_mae={:.4f} kWh ar_bias={:+.4f} kWh ({:+.1f}%) [drift vs teacher-forced: {:+.4f} kWh]".format(ar_mae, ar_bias, 100.0 * ar_bias / mean_y_val, ar_drift))
+        if ar_mae is not None and pattern_mae is not None:
+            self.log("ML Predictor: Holdout rollout vs daily-pattern baseline: rollout_mae={:.4f} kWh pattern_mae={:.4f} kWh -> long-range forecast led by {}".format(ar_mae, pattern_mae, "daily pattern" if pattern_mae < ar_mae else "model"))
 
         return best_val_loss
 
@@ -1516,7 +1565,7 @@ class LoadPredictor:
             )
 
         total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
-        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}→{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
+        self.log("ML Predictor: Curriculum training - {} passes, window {:.1f}->{:.1f} days + final full pass ({:.1f} days)".format(total_passes, window_sizes[0] / day_minutes, window_sizes[-1] / day_minutes, max_minute / day_minutes))
 
         val_mae = None
         for pass_idx, window in enumerate(window_sizes):
@@ -1542,7 +1591,7 @@ class LoadPredictor:
                 temp_minutes=temp_slice,
                 import_rates=import_slice,
                 export_rates=export_slice,
-                is_initial=(pass_idx == 0),
+                is_initial=(pass_idx == 0 and not self.model_initialized),
                 epochs=epochs,
                 time_decay_days=time_decay_days,
                 patience=patience,
@@ -1566,7 +1615,7 @@ class LoadPredictor:
             temp_minutes=temp_minutes,
             import_rates=import_rates,
             export_rates=export_rates,
-            is_initial=False,
+            is_initial=(not self.model_initialized),
             epochs=epochs,
             time_decay_days=time_decay_days,
             patience=patience,
@@ -1674,6 +1723,23 @@ class LoadPredictor:
         # Seed previous value from the most recent historical chunk for the step-to-step cap
         prev_energy_value = lookback_buffer[0] if lookback_buffer else baseline_floor
 
+        # Last known exogenous values, carried forward when a forward forecast is missing.
+        # Normally it is not: rate_replicate() extends rates past the forecast horizon and
+        # publish_rates() emits them to minutes_now + forecast_minutes + 24h, so a healthy
+        # system supplies the whole rollout. This guards the case where the source entity
+        # is unavailable - before the first plan cycle publishes it, or after a failed rate
+        # fetch. Rates and temperature are 3 of the 5 input channels (864 of 1446 features),
+        # so filling the gap with 0.0 puts 0 p/kWh and 0 degrees into the network, far
+        # outside anything training saw: measured on a real model, the 48-hour rollout then
+        # peaks at 1.9 kW against a 10.5 kW true peak. Carrying the last value forward
+        # restores it to 9.9 kW, and changes nothing when the forecast is present.
+        # PV is left at 0.0: past the solar forecast there is no generation to assume, and
+        # holding a daytime value overnight would be worse than zero.
+        last_temp_value = temp_lookback_buffer[0] if temp_lookback_buffer else 0.0
+        last_import_rate = import_rate_buffer[0] if import_rate_buffer else 0.0
+        last_export_rate = export_rate_buffer[0] if export_rate_buffer else 0.0
+        exog_carried_steps = 0
+
         self.log("ML Predictor: Starting autoregressive prediction loop for {} steps ({} hours), prev_energy value {} max_dow {}".format(PREDICT_HORIZON, PREDICT_HORIZON * CHUNK_MINUTES / 60, prev_energy_value, max_energy_by_dow))
 
         for step_idx in range(PREDICT_HORIZON):
@@ -1690,13 +1756,21 @@ class LoadPredictor:
             # Future PV energy: sum of the CHUNK_STEPS 5-min future values for this chunk
             # Future 5-min keys are negative (e.g. -5, -10, ...) going forward in time
             next_pv_value = sum(pv_energy_per_step.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS))
-            # Future temperature: average of CHUNK_STEPS 5-min future values
-            temp_future = [temp_values.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS)]
+            # Future temperature and rates: average over the chunk, holding the last known
+            # value wherever the forward forecast has run out rather than dropping to zero
+            temp_future, imp_future, exp_future = [], [], []
+            for j in range(CHUNK_STEPS):
+                future_key = -(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES)
+                if future_key not in import_rate_values and future_key not in temp_values and future_key not in export_rate_values:
+                    exog_carried_steps += 1
+                last_temp_value = temp_values.get(future_key, last_temp_value)
+                last_import_rate = import_rate_values.get(future_key, last_import_rate)
+                last_export_rate = export_rate_values.get(future_key, last_export_rate)
+                temp_future.append(last_temp_value)
+                imp_future.append(last_import_rate)
+                exp_future.append(last_export_rate)
             next_temp_value = float(np.mean(temp_future))
-            # Future import/export rates: average over the chunk
-            imp_future = [import_rate_values.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS)]
             next_import_rate = float(np.mean(imp_future))
-            exp_future = [export_rate_values.get(-(step_idx * CHUNK_MINUTES + (j + 1) * STEP_MINUTES), 0.0) for j in range(CHUNK_STEPS)]
             next_export_rate = float(np.mean(exp_future))
 
             # Combine features: [load_lookback..., pv_lookback..., temp_lookback..., import_rates..., export_rates..., time_features...]
@@ -1754,6 +1828,11 @@ class LoadPredictor:
             export_rate_buffer.insert(0, next_export_rate)
             export_rate_buffer.pop()
 
+        # Only worth reporting when there was exogenous data to carry; a setup with no
+        # temperature or rate sensors legitimately runs the whole rollout without any
+        if exog_carried_steps and (temp_values or import_rate_values or export_rate_values):
+            self.log("ML Predictor: Forward temperature/rate forecast ran out for {} of {} rollout steps, last known values carried forward".format(exog_carried_steps, PREDICT_HORIZON * CHUNK_STEPS))
+
         # Convert to cumulative kWh format at STEP_MINUTES resolution.
         # Each CHUNK_MINUTES prediction is split into CHUNK_STEPS equal 5-min sub-steps
         # so that the output matches the format expected by fetch_extra_load_forecast
@@ -1793,6 +1872,8 @@ class LoadPredictor:
                 "training_timestamp": self.training_timestamp.isoformat() if self.training_timestamp else None,
                 "validation_mae": float(self.validation_mae) if self.validation_mae else None,
                 "validation_bias": float(self.validation_bias) if self.validation_bias is not None else None,
+                "rollout_mae": float(self.rollout_mae) if self.rollout_mae is not None else None,
+                "pattern_mae": float(self.pattern_mae) if self.pattern_mae is not None else None,
                 "epochs_trained": self.epochs_trained,
                 "learning_rate": self.learning_rate,
                 "max_load_kw": self.max_load_kw,
@@ -1910,6 +1991,8 @@ class LoadPredictor:
                 self.training_timestamp = datetime.fromisoformat(metadata["training_timestamp"])
             self.validation_mae = metadata.get("validation_mae")
             self.validation_bias = metadata.get("validation_bias", None)
+            self.rollout_mae = metadata.get("rollout_mae", None)
+            self.pattern_mae = metadata.get("pattern_mae", None)
             self.epochs_trained = metadata.get("epochs_trained", 0)
             # Restore dropout rate; fall back to 0.1 for models saved before this feature
             self.dropout_rate = metadata.get("dropout_rate", 0.1)

@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import os
 
 from web import WebInterface
 from web_helper import get_plan_renderer_js
@@ -174,6 +175,43 @@ def run_web_functions_tests(my_predbat):
     if "2026-07-10T01:10:39+0100" in status_html:
         print(f"  ERROR: 'Last Started' should not show the raw stored ISO format, got: {status_html}")
         failed += 1
+
+    # -------------------------------------------------------------------------
+    # is_running() must handle both the legacy naive last_updated format (pre-existing
+    # installs, before record_status() started writing a timezone-aware value) and the
+    # current timezone-aware format, without raising on the naive/aware datetime subtraction
+    print("Test: is_running() handles both naive and timezone-aware last_updated")
+    original_stop_thread = my_predbat.stop_thread
+    original_fatal_error = my_predbat.fatal_error
+    my_predbat.stop_thread = False
+    my_predbat.fatal_error = False
+    my_predbat.dashboard_index = [status_entity]
+
+    set_entity(my_predbat, status_entity, state="Idle", error=False, last_updated="2026-07-10 14:40:10.512590")
+    try:
+        result = my_predbat.is_running()
+    except TypeError as e:
+        print(f"  ERROR: is_running() raised on a legacy naive last_updated: {e}")
+        failed += 1
+    else:
+        if result is not False:
+            print(f"  ERROR: expected is_running() False for a stale (2026-07-10) naive last_updated, got: {result}")
+            failed += 1
+
+    set_entity(my_predbat, status_entity, state="Idle", error=False, last_updated="2026-07-10T14:40:10+0100")
+    try:
+        result = my_predbat.is_running()
+    except TypeError as e:
+        print(f"  ERROR: is_running() raised on a timezone-aware last_updated: {e}")
+        failed += 1
+    else:
+        if result is not False:
+            print(f"  ERROR: expected is_running() False for a stale (2026-07-10) aware last_updated, got: {result}")
+            failed += 1
+
+    my_predbat.dashboard_index = original_dashboard_index
+    my_predbat.stop_thread = original_stop_thread
+    my_predbat.fatal_error = original_fatal_error
 
     # -------------------------------------------------------------------------
     # Currency unit display in the web config pages (issue #4071)
@@ -345,4 +383,97 @@ def run_currency_unit_tests(my_predbat, web):
         my_predbat.currency_symbols = original_symbols
         my_predbat.num_cars = original_num_cars
 
+    return failed
+
+
+class FakeImageRequest:
+    """A minimal aiohttp-request stand-in exposing only ``match_info``."""
+
+    def __init__(self, filename=None):
+        """Store the route parameter a handler will read."""
+        self.match_info = {} if filename is None else {"filename": filename}
+
+
+def run_web_logo_image_tests(my_predbat):
+    """Unit tests for the local logo image route (issue #4562).
+
+    The Predbat logo used to be fetched from raw.githubusercontent.com on every page
+    load, so a GitHub outage or rate limit left the dashboard hanging for ~15s. The
+    images now ship alongside the app and are served locally, with no network
+    dependency at all.
+    """
+    failed = 0
+    print("**** Running web logo image tests ****")
+
+    web = make_web(my_predbat)
+
+    print("Test: each bundled logo file is served with the right content type")
+    expected_content_types = {
+        "bat_logo.svg": "image/svg+xml",
+        "bat_logo_light.png": "image/png",
+        "bat_logo_dark.png": "image/png",
+    }
+    for filename, content_type in expected_content_types.items():
+        response = asyncio.run(web.html_logo_image(FakeImageRequest(filename)))
+        if response.status != 200:
+            print(f"  ERROR: {filename} should serve with status 200, got {response.status}")
+            failed += 1
+        if response.content_type != content_type:
+            print(f"  ERROR: {filename} should serve as {content_type}, got {response.content_type}")
+            failed += 1
+        if not response.body:
+            print(f"  ERROR: {filename} should have a non-empty body")
+            failed += 1
+
+    print("Test: an unknown or missing filename 404s rather than leaking the app directory")
+    for request in [FakeImageRequest("predbat.py"), FakeImageRequest("../predbat.py"), FakeImageRequest()]:
+        response = asyncio.run(web.html_logo_image(request))
+        if response.status != 404:
+            print(f"  ERROR: request for {request.match_info} should 404, got {response.status}")
+            failed += 1
+
+    print("Test: a whitelisted filename whose file is genuinely absent on disk 404s cleanly")
+    # Regression for issue #4568: when an install has updated predbat.py before its self-updater has
+    # fetched these newly-added logo files (an old download.py running against a new release), the
+    # image genuinely won't exist yet. This should degrade to a missing image, not raise.
+    filename = "bat_logo_light.png"
+    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", filename)
+    moved_path = file_path + ".test_moved"
+    os.rename(file_path, moved_path)
+    try:
+        response = asyncio.run(web.html_logo_image(FakeImageRequest(filename)))
+        if response.status != 404:
+            print(f"  ERROR: {filename} missing from disk should 404, got {response.status}")
+            failed += 1
+    finally:
+        os.rename(moved_path, file_path)
+
+    print("Test: the page header no longer depends on GitHub for the logo")
+    from web_helper import get_header_html
+
+    header = get_header_html("Test", False, "./dash", [], "v1.0", "")
+    if "githubusercontent" in header:
+        print("  ERROR: the page header should not reference githubusercontent.com any more")
+        failed += 1
+    if "./images/bat_logo" not in header:
+        print("  ERROR: the page header should reference the local logo route")
+        failed += 1
+
+    print("Test: the dark mode background colour is set before any render-blocking external resource (issue #2256)")
+    dark_mode_class_pos = header.find("classList.add('dark-mode')")
+    external_resource_pos = header.find("cdn.jsdelivr.net")
+    background_style_pos = header.find("background-color: #121212")
+    if dark_mode_class_pos < 0 or external_resource_pos < 0 or background_style_pos < 0:
+        print("  ERROR: expected to find the dark-mode class script, an external CDN resource, and a dark background-color rule in the header")
+        failed += 1
+    elif not (dark_mode_class_pos < background_style_pos < external_resource_pos):
+        print(
+            "  ERROR: the dark-mode background colour must be set before the external CDN font/chart resources "
+            "(which block rendering while they load) - otherwise a slow fetch flashes the default white "
+            f"background first. Positions: dark-mode class {dark_mode_class_pos}, background colour rule "
+            f"{background_style_pos}, external CDN resource {external_resource_pos}"
+        )
+        failed += 1
+
+    print("**** Web logo image tests completed ****")
     return failed

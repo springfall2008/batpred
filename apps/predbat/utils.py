@@ -785,6 +785,63 @@ def format_time_ago(last_updated):
         return "Unknown ({})".format(last_updated)
 
 
+# The format Predbat publishes car charging plan windows in. No year, because a plan never
+# reaches more than 48 hours ahead - parse_car_plan_windows() puts one back.
+CAR_PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
+
+# How far from now a parsed window has to land before the year stamped on it is treated as
+# the wrong one. Comfortably beyond the 48 hours a plan covers, so a genuinely distant
+# window is never dragged into a different year, and far short of the ~12 months a
+# mis-stamped year produces.
+CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
+
+
+def parse_car_plan_windows(planned, now, local_tz):
+    """Turn one car's published charging plan into a list of localised (start, end) pairs.
+
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
+    so the awkward parts stay in one place: the plan carries no year, so each window is
+    rebuilt around now - without that, a plan read either side of New Year lands eleven
+    months out - and a malformed entry is skipped rather than costing the rest of the plan.
+
+    The rebuild is symmetric. A window read at 23:30 on 31 December whose end is stamped
+    01-01 parses as January of the year just ending, and needs shifting forward; the same
+    window read at 00:30 on 1 January has its 12-31 start parsed as December of the year
+    just started, and needs shifting back. Only the second case ever hides an active
+    window, which is why it is the one that stops a car mid-charge if it is missed.
+
+    Args:
+        planned: The 'planned' attribute of a car charging slot sensor, a list of dicts
+            with 'start' and 'end' keys.
+        now: The instant every window is judged against, localised.
+        local_tz: The timezone the plan's wall clock times are expressed in.
+    """
+    parsed = []
+    for window in planned or []:
+        try:
+            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Shift both ends together so their spacing survives, then close a window whose
+        # end is in January while its start is still in December
+        if start > now + CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year - 1)
+            end = end.replace(year=end.year - 1)
+        elif start < now - CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year + 1)
+            end = end.replace(year=end.year + 1)
+        if end < start:
+            end = end.replace(year=end.year + 1)
+        parsed.append((start, end))
+    return parsed
+
+
+def in_car_plan_window(windows, now):
+    """Is now inside one of the (start, end) pairs returned by parse_car_plan_windows."""
+    return any(start <= now < end for start, end in windows)
+
+
 def in_iboost_slot(minute, iboost_plan):
     """
     Is the given minute inside a car slot

@@ -144,16 +144,24 @@ if you don't want the standing charge (and only have consumption usage) to be in
 Note that this configuration option to suppress the standing charge only applies if you are using the Octopus Integration from Predbat.
 If you are using the Octopus Energy direct method of Predbat directly connecting to Octopus then the standing charge will always be included in the plan and charts.
 
-### Octopus Saving sessions
+### Octopus Saving sessions (Power Down events)
 
-Predbat can automatically join you to Octopus saving sessions and plan battery activity for the saving session period to maximise your income.
+Predbat can automatically join you to Octopus saving sessions - now called Power Down events - and plan battery activity for the session period to maximise your income.
 
-Note: **You must have signed up to both the Octopus Octoplus and then the Saving Session schemes to benefit from these events**
+Note: **You must have signed up to both the Octopus Octoplus and then the Saving Session/Power Down schemes to benefit from these events**
 
 For Predbat to automatically manage Octopus saving sessions the following additional configuration item in `apps.yaml` is used.
 Like the electricity rates, this is set in the `apps.yaml` template to a regular expression that should auto-discover the Octopus Energy integration.
 
-- **octopus_saving_session** - Indicates if a saving session is active, should point to the sensor 'event.octopus_energy_ACCOUNT_ID_saving_session_event'.
+- **octopus_saving_session** - Indicates if a saving session/Power Down event is active, should point to the sensor 'event.octopus_energy_ACCOUNT_ID_octoplus_power_down_events'.
+
+```yaml
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
+```
+
+Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_saving_session_events` to `..._octoplus_power_down_events`. The above pattern matches either name, so existing configurations keep working unchanged.
+The old sensor is retained by the integration until **January 2027**, after which only the Power Down naming will exist. The new sensor ships disabled by default in Home Assistant
+(`entity_registry_enabled_default: False`) - if Predbat's Octopus entity list does not show a Power Down sensor, [enable it in the entity registry first](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them), otherwise Predbat will keep silently using the old sensor with no visible warning.
 
 When a saving session is available it will be automatically joined by Predbat and should then appear as a joined session within the next 30 minutes.
 
@@ -162,6 +170,8 @@ Auto-joining is controlled by the **switch.predbat_octopus_saving_auto_join** sw
 available sessions on your behalf.
 
 If an available saving session overlaps an Axle VPP session (any overlap in time), Predbat will **not** auto-join the saving session, as the two events cannot both be honoured for the same period. The Axle session takes priority.
+
+Predbat will also **not** auto-join a session whose reward rate doesn't exceed the **octopus_saving_session_min_octopoints_per_kwh** configuration item in `apps.yaml` (default 0 octopoints/kWh - joins any session with a positive reward). Raise this if you want to also skip low-value sessions you don't consider worth the disruption. The default of 0 additionally works around the Octopus Energy integration currently reporting some non-joinable events (national Power Up/free electricity slots) inside the same data set at 0 p/kWh - see [#4593](https://github.com/springfall2008/batpred/issues/4593).
 
 In the Predbat plan, for joined saving sessions the energy rates for import and export will be overridden by adding the assumed saving rate to your normal rate.
 The assumed rate will be taken from the Octopus Energy integration and converted into pence
@@ -181,9 +191,9 @@ If you do not have an export tariff then forced export will not apply and Predba
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
 simply delete or comment out the **octopus_saving_session** entry in `apps.yaml`.
 
-### Octopus free (power up) events
+### Octopus free (Power Up) events
 
-Predbat can automatically detect Octopus free events and adjust your battery plan according. Note that this is derived from external sources, which do not verify your eligibility for free sessions.
+Predbat can automatically detect Octopus free events - now called Power Up events - and adjust your battery plan accordingly. Note that this is derived from external sources, which do not verify your eligibility for free sessions.
 
 For Predbat to automatically manage Octopus free sessions the following additional configuration item in `apps.yaml` is used.
 
@@ -195,10 +205,14 @@ Like the electricity rates, this is set in the `apps.yaml` template to a regular
 all the free events.
 
 ```yaml
-  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 ```
 
-Note: **This event may need to be enabled in Home Assistant first** - see [How to Enable Octopus events](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them)
+Octopus Energy integration v19.0.0 renamed this sensor from `..._octoplus_free_electricity_session_events` to `..._octoplus_power_up_events`. The above pattern matches either name, so existing
+configurations keep working unchanged. The old sensor is retained by the integration until **January 2027**, after which only the Power Up naming will exist.
+
+Note: **This event may need to be enabled in Home Assistant first** - the new Power Up sensor ships disabled by default (`entity_registry_enabled_default: False`), so if it is not appearing in
+Predbat's entity list, enable it in the entity registry - see [How to Enable Octopus events](https://bottlecapdave.github.io/HomeAssistant-OctopusEnergy/faq/#there-are-entities-that-are-disabled-why-are-they-disabled-and-how-do-i-enable-them)
 
 If you normally increase your house usage during a free session then you can change **input_number.predbat_load_scaling_free** to allow Predbat to assume an energy
 increase in this period. E.g. setting to a value of 1.2 would indicate you will use 20% more energy than normal during this period. (Default is 1.2)

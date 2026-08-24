@@ -189,6 +189,7 @@ pred_bat:
     - 'true'
     - 'connected'
     - 'ev connected'
+    - 'ev ready to charge'
     - 'charging'
     - 'paused'
     - 'waiting for car demand'
@@ -249,8 +250,10 @@ pred_bat:
 
   # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
-  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
   octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
