@@ -2568,8 +2568,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.tou_bit_refused[inverter_sn] = self.now_utc_exact
         self.log(
             f"Solis API: {inverter_sn} will not accept the time-of-use bit on CID {SOLIS_CID_STORAGE_MODE} "
-            f"(wrote {mode_value}, read back {read_back}), so Predbat will stop setting it - the timed slots "
-            f"are enabled by the per-slot registers on this inverter"
+            f"(wrote {mode_value}, read back {read_back}), so Predbat will stop setting it and will re-test after {SOLIS_TOU_BIT_REPROBE_HOURS} hours"
         )
 
     async def set_storage_mode_value(self, inverter_sn, mode_value):
