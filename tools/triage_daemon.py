@@ -76,8 +76,11 @@ ALLOWED_TOOLS = ",".join(
 
 
 def load_state():
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
+    try:
+        if STATE_FILE.exists():
+            return json.loads(STATE_FILE.read_text())
+    except json.JSONDecodeError:
+        return {"last_processed": 0}
     return {"last_processed": 0}
 
 
