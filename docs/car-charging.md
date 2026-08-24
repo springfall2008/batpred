@@ -88,7 +88,7 @@ If you do not have a suitable car charging energy kWh sensor in Home Assistant t
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
 and **input_number.predbat_car_charging_rate** (in kW) will be subtracted from the historical load data.
 
-Used to 'detect' EV charging if you have an EV charger but it does not have an energy today sensor that you can use.
+Used to 'detect' EV charging if you have an EV charger but it does not have an energy today sensor that you can use.  If **car_charging_energy** is set in `apps.yaml` then **input_number.predbat_car_charging_threshold** is ignored.
 
 If you do not have an EV charger then ensure you set **switch.predbat_car_charging_hold** to Off otherwise Predbat will assume any house load in excess of car_charging_threshold is EV charging and remove it from your house load predictions!
 
