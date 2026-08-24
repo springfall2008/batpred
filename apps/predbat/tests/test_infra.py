@@ -16,6 +16,19 @@ import asyncio
 import numpy as np
 from unittest.mock import MagicMock
 
+# Whether a failure plot is displayed on screen as well as written to a PNG. Off by default and
+# turned on by the harness --plot flag: plt.show() blocks until the window is closed, so leaving
+# it on makes a failing run hang rather than report.
+PLOT_ENABLED = False
+
+
+def set_plot_enabled(enabled):
+    """
+    Enable or disable on-screen display of failure plots
+    """
+    global PLOT_ENABLED
+    PLOT_ENABLED = bool(enabled)
+
 
 def run_async(coro):
     """Helper function to run async coroutines in sync test functions"""
@@ -566,7 +579,12 @@ def plot(name, prediction):
     ax.set(xlabel="time (minutes)", ylabel="Value", title=name)
     ax.legend()
     plt.savefig("{}.png".format(name))
-    plt.show()
+    if PLOT_ENABLED:
+        plt.show()
+    else:
+        # plt.show() blocks until the window is closed, so a failing run would never terminate.
+        # Close the figure instead - matplotlib warns once more than 20 are left open.
+        plt.close(fig)
 
 
 def simple_scenario(
