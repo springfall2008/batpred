@@ -137,10 +137,10 @@ ALLOWED_TOOLS = ",".join(
         "Bash(tr *)",
         "Bash(tee *)",
         "Bash(echo *)",
+        # Edit rules cover every file-editing tool (Write included) - a Write(path)
+        # rule is not matched by the file permission check, so don't add one.
         f"Edit({EDIT_SCOPE})",
         f"Edit({SCRATCH_SCOPE})",
-        f"Write({EDIT_SCOPE})",
-        f"Write({SCRATCH_SCOPE})",
         "WebFetch",
         "Read",
         "Grep",
