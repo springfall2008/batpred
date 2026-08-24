@@ -268,6 +268,57 @@ def test_dynamic_load_high_load_baseline(my_predbat):
             print(f"ERROR: Expected baseline at {minute_absolute} to be {expected_value} after two consecutive high checks, got {value}")
             failed = True
 
+    # Test 5: A measured car-energy increment is removed before a high-load observation is carried
+    # across the slot boundary. The residual should represent house load only, not the full car load.
+    print("Test 5: Measured car energy is excluded from the next-slot baseline")
+    my_predbat.load_last_period = 7.2  # 6kW car plus 1.2kW house load
+    my_predbat.load_last_status = "high"  # Treat this as the second consecutive high reading
+    my_predbat.load_last_car_slot = True
+    my_predbat.car_energy_reported_load = True
+    my_predbat.car_charging_hold = True
+    my_predbat.car_charging_energy = {0: 0.5}  # 0.5kWh measured in the latest 5-minute period
+    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 3.0}], [], [], []]
+
+    my_predbat.dynamic_load()
+
+    expected_residual = 0.1  # (7.2kW * 5/60) - 0.5kWh
+    next_slot_value = my_predbat.dynamic_load_baseline.get(minutes_end_slot)
+    if next_slot_value is None or abs(next_slot_value - expected_residual) > 0.001:
+        print(f"ERROR: Expected next-slot baseline to be {expected_residual}, got {next_slot_value}")
+        failed = True
+
+    # Test 6: When the car-energy sensor has no current increment, the planned-slot fallback is
+    # converted from kW to kWh before it is removed from the measured load.
+    print("Test 6: Planned car power fallback uses kWh per prediction step")
+    my_predbat.load_last_period = 6.0  # 4.8kW car plus 1.2kW house load
+    my_predbat.load_last_status = "high"
+    my_predbat.car_charging_energy = {}
+    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 2.4}], [], [], []]
+
+    my_predbat.dynamic_load()
+
+    expected_residual = 0.1  # 0.5kWh measured load - 2.4kWh / 30min * 5min = 0.1kWh
+    next_slot_value = my_predbat.dynamic_load_baseline.get(minutes_end_slot)
+    if next_slot_value is None or abs(next_slot_value - expected_residual) > 0.001:
+        print(f"ERROR: Expected fallback next-slot baseline to be {expected_residual}, got {next_slot_value}")
+        failed = True
+
+    # Test 7: A positive but lagging sensor increment must not leave the planned car energy in
+    # the residual baseline carried into the next slot.
+    print("Test 7: Planned car energy covers a lagging sensor reading")
+    my_predbat.load_last_period = 7.2  # 6kW car plus 1.2kW house load
+    my_predbat.load_last_status = "high"
+    my_predbat.car_charging_energy = {0: 0.1}  # Sensor has only caught up with part of the 0.5kWh
+    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 3.0}], [], [], []]
+
+    my_predbat.dynamic_load()
+
+    expected_residual = 0.1  # 0.6kWh measured load - planned 3.0kWh / 30min * 5min = 0.1kWh
+    next_slot_value = my_predbat.dynamic_load_baseline.get(minutes_end_slot)
+    if next_slot_value is None or abs(next_slot_value - expected_residual) > 0.001:
+        print(f"ERROR: Expected lagging-sensor next-slot baseline to be {expected_residual}, got {next_slot_value}")
+        failed = True
+
     if not failed:
         print("*** Dynamic load high load baseline test PASSED")
     else:
