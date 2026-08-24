@@ -1072,7 +1072,6 @@ class Execute:
             self.car_charging_power = 0
             return
 
-        self.car_charging_power_configured = True
         car_charging_power = 0.0
         for sensor in sensors:
             # Resolved one entity at a time rather than by index, as auto_config() leaves a None
@@ -1087,7 +1086,13 @@ class Execute:
                 car_charging_power += float(value)
             except (ValueError, TypeError):
                 pass
+
+        # Published together, after every sensor has been read, so the web server - which runs in
+        # its own thread and reads the pair independently - can never see a car declared but its
+        # power still left over from the previous cycle. Same reason fetch_inverter_data publishes
+        # its accumulated totals in one go rather than as it sums them.
         self.car_charging_power = car_charging_power
+        self.car_charging_power_configured = True
 
     def publish_inverter_data(self):
         """

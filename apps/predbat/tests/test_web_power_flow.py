@@ -406,6 +406,30 @@ def run_web_power_flow_tests(my_predbat):
     my_predbat.had_errors = original_had_errors
 
     # -------------------------------------------------------------------------
+    # update_car_charging_power() tolerates an unavailable charger, but apps.yaml validation is a
+    # separate path that reads the same entity and checks its state is a float. A charger sitting
+    # at 'unavailable' with nothing plugged in is normal, so it must not end the run in an error
+    # state through that route either (#4715 review)
+    print("Test: an unavailable charger does not fail apps.yaml validation")
+    my_predbat.args.pop("car_charging_power", None)
+    baseline_errors = my_predbat.validate_config()
+    my_predbat.args["car_charging_power"] = "sensor.car_charger_offline"
+    errors_with_unavailable = my_predbat.validate_config()
+    if errors_with_unavailable != baseline_errors:
+        print(f"  ERROR: an unavailable car charger added {errors_with_unavailable - baseline_errors} validation error(s): {my_predbat.arg_errors.get('car_charging_power')}")
+        failed += 1
+
+    print("Test: a genuinely wrong car charging power sensor is still rejected")
+    my_predbat.ha_interface.dummy_items["sensor.car_charger_nonsense"] = {"state": "banana", "unit_of_measurement": "W"}
+    my_predbat.args["car_charging_power"] = "sensor.car_charger_nonsense"
+    errors_with_nonsense = my_predbat.validate_config()
+    if errors_with_nonsense <= baseline_errors:
+        print("  ERROR: a non-numeric, non-transient state should still be reported as a configuration error")
+        failed += 1
+    my_predbat.args.pop("car_charging_power", None)
+    my_predbat.validate_config()
+
+    # -------------------------------------------------------------------------
     print("Test: car charging power is published as a sensor for upstream consumers")
     my_predbat.args["car_charging_power"] = "sensor.car_charger_power"
     my_predbat.update_car_charging_power()
@@ -427,13 +451,22 @@ def run_web_power_flow_tests(my_predbat):
             failed += 1
 
     # -------------------------------------------------------------------------
+    # Checked from a clean slate rather than by deleting what the test above published, so this
+    # cannot pass just because the entity was removed by hand a moment earlier (#4715 review)
     print("Test: the sensor is not published when no charger is configured")
-    my_predbat.ha_interface.dummy_items.pop(entity, None)
+    for store in (my_predbat.ha_interface.dummy_items, my_predbat.dashboard_values, my_predbat.dashboard_index_app):
+        store.pop(entity, None)
+    if entity in my_predbat.dashboard_index:
+        my_predbat.dashboard_index.remove(entity)
     my_predbat.args.pop("car_charging_power", None)
     my_predbat.update_car_charging_power()
     my_predbat.publish_inverter_data()
-    if entity in my_predbat.ha_interface.dummy_items:
-        print(f"  ERROR: {entity} should not be published when no car charging power sensor is configured")
+    for name, store in (("the HA state", my_predbat.ha_interface.dummy_items), ("dashboard_values", my_predbat.dashboard_values), ("dashboard_index_app", my_predbat.dashboard_index_app)):
+        if entity in store:
+            print(f"  ERROR: {entity} should not reach {name} when no car charging power sensor is configured")
+            failed += 1
+    if entity in my_predbat.dashboard_index:
+        print(f"  ERROR: {entity} should not reach dashboard_index when no car charging power sensor is configured")
         failed += 1
 
     # -------------------------------------------------------------------------
@@ -499,6 +532,13 @@ def run_web_power_flow_tests(my_predbat):
     if "-2000 W" in html:
         print("  ERROR: the House circle must never show a negative load")
         failed += 1
+
+    # dashboard_item() records an entity in four separate stores, and a lingering
+    # predbat.car_charging_power would show up in any later test that enumerates them
+    for store in (my_predbat.ha_interface.dummy_items, my_predbat.dashboard_values, my_predbat.dashboard_index_app):
+        store.pop(my_predbat.prefix + ".car_charging_power", None)
+    if (my_predbat.prefix + ".car_charging_power") in my_predbat.dashboard_index:
+        my_predbat.dashboard_index.remove(my_predbat.prefix + ".car_charging_power")
 
     failed += run_power_flow_icon_tests(my_predbat, web)
     failed += run_power_flow_colour_tests(my_predbat, web)

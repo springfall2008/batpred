@@ -2325,6 +2325,19 @@ def _test_ohme_auto_config_wires_car_charging_power(my_predbat=None):
     run_async(api.automatic_config())
     assert api.args.get("car_charging_power") is None, f"Expected no power wiring when another charger owns the energy sensor, got {api.args.get('car_charging_power')}"
 
+    # ...but Ohme's own energy entity, set explicitly in apps.yaml or left behind by an earlier
+    # run, is still Ohme's charger, so the power sensor belongs with it (#4715 review)
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = ENERGY_TODAY_ENTITY
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected power wiring alongside Ohme's own energy entity, got {api.args.get('car_charging_power')}"
+
+    # The same entity handed over as a single-item list, which is how it round-trips through apps.yaml
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = [ENERGY_TODAY_ENTITY]
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected power wiring for the list form, got {api.args.get('car_charging_power')}"
+
     print("PASS: auto config wired car_charging_power")
     return 0
 

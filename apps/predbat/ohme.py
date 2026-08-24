@@ -476,8 +476,14 @@ class OhmeAPI(ComponentBase):
         # before auto_config(final=True), so an unmatched regex from the apps.yaml default is
         # still present as its literal "re:" string rather than having been removed yet - treat
         # that as unconfigured, but leave a real charger (Zappi, Wallbox, hand-set sensor) alone.
+        # A list of one is how several components hand over a single entity, so unwrap it before
+        # comparing - otherwise an explicit ["sensor.predbat_ohme_energy_today"] looks third-party
         existing = self.get_arg("car_charging_energy", default=None, indirect=False)
-        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")):
+        if isinstance(existing, list) and len(existing) == 1:
+            existing = existing[0]
+        # Ohme already owns the energy figure when the entity configured is its own, whether that
+        # was set here on a previous run or written into apps.yaml by hand (#4715 review)
+        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY:
             self.set_arg_auto("car_charging_energy", ENERGY_TODAY_ENTITY)
             # Live charge power, for the web power flow diagram and the predbat.car_charging_power
             # sensor. Deliberately tied to the same decision as the energy sensor above: the two
