@@ -71,6 +71,9 @@ ALLOWED_TOOLS = ",".join(
         "Bash(./run_all*)",
         f"Edit({EDIT_SCOPE})",
         "WebFetch",
+        "Read",
+        "Grep",
+        "Glob",
     ]
 )
 
