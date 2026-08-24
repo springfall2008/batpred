@@ -2479,6 +2479,24 @@ def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
         print(f"ERROR: {test_name}: a changed window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
         failed = True
 
+    # A failed button press must not be recorded as committed - it has to be retried next cycle, rather
+    # than the schedule being treated as applied until it happens to change again on its own.
+    saved_press = inv.press_and_poll_button
+    try:
+        inv.last_export_schedule_committed = None
+        inv.press_and_poll_button = lambda side="both": False
+        inv.adjust_force_export(True, ts, te)
+
+        attempts = []
+        inv.press_and_poll_button = lambda side="both", _a=attempts: (_a.append(side), True)[1]
+        inv.adjust_force_export(True, ts, te)
+
+        if not attempts:
+            print(f"ERROR: {test_name}: a failed commit must be retried on the next cycle, not recorded as done")
+            failed = True
+    finally:
+        inv.press_and_poll_button = saved_press
+
     inv.last_export_schedule_committed = None
     return failed
 

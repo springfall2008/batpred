@@ -2715,9 +2715,13 @@ class Inverter:
             schedule_changed = True
 
         if schedule_changed:
+            committed = True
             if self.inv_time_button_press:
-                self.press_and_poll_button(side="discharge")
-            self.last_export_schedule_committed = export_schedule
+                committed = self.press_and_poll_button(side="discharge")
+            if committed:
+                # Only remember a commit that actually succeeded, otherwise a failed button press would
+                # be recorded as done and never retried until the schedule next changes on its own.
+                self.last_export_schedule_committed = export_schedule
 
         # Force export, turn it on after we change the window
         if force_export:
