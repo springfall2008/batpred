@@ -164,6 +164,7 @@ DISALLOWED_TOOLS = ",".join(
         "Bash(gh workflow*)",
         "Bash(gh auth*)",
         "Bash(gh secret*)",
+        "Bash(gh api*)",
     ]
 )
 
