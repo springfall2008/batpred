@@ -1072,7 +1072,7 @@ class Prediction(PredictionBatch):
                 # parallel branch that has to re-derive the same AC balance. The old duplicate
                 # branch had drifted and pinned battery_draw at 0, wrongly modelling Freeze Export
                 # as Freeze Charge whenever load exceeded PV - see #4676.
-                freeze_export = set_export_freeze and export_window_active and export_limit_now < 100.0 and (export_limit_now == 99.0 or set_export_freeze_only)
+                freeze_export = set_export_freeze and export_window_active and export_limit_now < EXPORT_LIMIT_IDLE and (export_limit_now == EXPORT_LIMIT_FREEZE or set_export_freeze_only)
 
                 pv_ac = pv_now * inverter_loss_ac
                 pv_dc = 0

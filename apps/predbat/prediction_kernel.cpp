@@ -46,6 +46,8 @@
 #define PK_PARITY_REVISION 9
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
+#define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
+#define PK_EXPORT_LIMIT_IDLE 100.0  // const.py EXPORT_LIMIT_IDLE
 
 namespace {
 
@@ -429,7 +431,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
     std::vector<std::pair<int32_t, int32_t>> export_active;
     export_active.reserve(n_export);
     for (int32_t n = 0; n < n_export; n++) {
-        if (export_limits[n] < 100.0) {
+        if (export_limits[n] < PK_EXPORT_LIMIT_IDLE) {
             export_active.emplace_back(export_start[n], export_end[n]);
         }
     }
@@ -504,7 +506,7 @@ void build_window_membership(std::vector<int32_t> &member, int32_t n_windows, co
 {
     member.assign(n_steps, -1);
     for (int32_t window_n = 0; window_n < n_windows; window_n++) {
-        if (is_export ? !(limits[window_n] < 100.0) : !(limits[window_n] > 0.0)) {
+        if (is_export ? !(limits[window_n] < PK_EXPORT_LIMIT_IDLE) : !(limits[window_n] > 0.0)) {
             continue;
         }
         for (int32_t m = starts[window_n]; m < ends[window_n]; m += 5) {
@@ -753,7 +755,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const int32_t export_window_n = export_window_optimised[k];
         const bool charge_window_active = charge_window_n >= 0;
         const bool export_window_active = export_window_n >= 0;
-        const double export_limit_now = export_window_active ? s->export_limits[export_window_n] : 100.0;
+        const double export_limit_now = export_window_active ? s->export_limits[export_window_n] : PK_EXPORT_LIMIT_IDLE;
 
         // Find charge limit - prediction.py:609-620
         double charge_limit_n = 0;
@@ -939,7 +941,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         double pv_dc = 0;
         double pv_ac = 0;
 
-        if (!c->set_export_freeze_only && export_window_active && export_limit_now < 99.0 && (soc > discharge_min)) {
+        if (!c->set_export_freeze_only && export_window_active && export_limit_now < PK_EXPORT_LIMIT_FREEZE && (soc > discharge_min)) {
             // Force export - prediction.py:795-902
             double export_rate_adjust = 1.0;
             if (c->set_export_low_power) {
@@ -1061,7 +1063,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // charge rate to 0 (or pauses charging) and otherwise leaves the inverter in
             // Demand/ECO mode, never touching the discharge rate. So it shares this flow with the
             // charge rate zeroed rather than being modelled by a parallel branch - see #4676.
-            const bool freeze_export = c->set_export_freeze && export_window_active && export_limit_now < 100.0 && (export_limit_now == 99.0 || c->set_export_freeze_only);
+            const bool freeze_export = c->set_export_freeze && export_window_active && export_limit_now < PK_EXPORT_LIMIT_IDLE && (export_limit_now == PK_EXPORT_LIMIT_FREEZE || c->set_export_freeze_only);
 
             pv_ac = pv_now * inverter_loss_ac;
             pv_dc = 0;
