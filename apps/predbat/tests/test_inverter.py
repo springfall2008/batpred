@@ -2407,6 +2407,82 @@ def test_force_export_unchanged_times_HM_format(test_name, ha, inv):
     return failed
 
 
+def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
+    """
+    Regression test for issue #4709: a stable export window must commit to the inverter once, not on
+    every Predbat cycle.
+
+    H M format rewrites the time registers unconditionally as a write-reliability workaround (#1529),
+    so changed_start_end is True on every cycle of an unchanged window. Gating the button press on it
+    (as #4000 did) pressed the button every 5 minutes for the whole window. On Solis each press zeroes
+    the timed charge/discharge current registers, stopping export until something restores them, and it
+    also triggers the 30 second GivTCP settle sleep in adjust_inverter_mode.
+
+    The writes themselves must be preserved - this asserts only that the *commit* stops repeating.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "H M"
+    inv.inv_time_button_press = True
+
+    export_time = "07:58:00"
+    export_end = "09:02:00"
+
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["time.discharge_start_hour"] = export_time
+    ha.dummy_items["time.discharge_end_hour"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "on"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args["discharge_start_hour"] = "time.discharge_start_hour"
+    inv.base.args["discharge_end_hour"] = "time.discharge_end_hour"
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+
+    # Nothing committed yet, as after a Predbat restart - this cycle must commit the schedule (#4000)
+    inv.last_export_schedule_committed = None
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, te)
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: first cycle should commit the schedule (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    # Subsequent cycles of the same, unchanged window must not press the button again (#4709)
+    for cycle in range(2, 4):
+        ha.dummy_items["switch.inverter_button"] = "off"
+        before_writes = inv.count_register_writes
+        inv.adjust_force_export(True, ts, te)
+
+        if ha.dummy_items.get("switch.inverter_button") != "off":
+            print(f"ERROR: {test_name}: cycle {cycle} of an unchanged window should not press the button again")
+            failed = True
+
+        # The time registers are still rewritten - only the commit is suppressed
+        if inv.count_register_writes < before_writes + 2:
+            print(f"ERROR: {test_name}: cycle {cycle} should still rewrite the time registers, writes went {before_writes} -> {inv.count_register_writes}")
+            failed = True
+
+    # A genuine change to the window must commit again
+    ha.dummy_items["switch.inverter_button"] = "off"
+    inv.adjust_force_export(True, ts, datetime.strptime("09:32:00", "%H:%M:%S"))
+
+    if ha.dummy_items.get("switch.inverter_button") != "on":
+        print(f"ERROR: {test_name}: a changed window must be committed, got {ha.dummy_items.get('switch.inverter_button')}")
+        failed = True
+
+    inv.last_export_schedule_committed = None
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -3533,6 +3609,11 @@ charge_start_service:
 
     # Regression test: GS_fb00 H M format must write time entities and press button even when times are unchanged
     failed |= test_force_export_unchanged_times_HM_format("force_export_unchanged_HM_format", ha, inv)
+    if failed:
+        return failed
+
+    # Regression test for issue #4709: a stable export window must be committed once, not every cycle
+    failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
     if failed:
         return failed
 

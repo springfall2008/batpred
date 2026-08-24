@@ -201,6 +201,9 @@ class Inverter:
         self.track_discharge_end = "00:00:00"
         self.idle_start_minutes = 0
         self.idle_end_minutes = 0
+        # Last export schedule (start, end, enabled) Predbat actually committed to this inverter.
+        # None means nothing has been committed yet in this run, so the next call commits once.
+        self.last_export_schedule_committed = None
 
         if rest_postCommand:
             self.rest_postCommand = rest_postCommand
@@ -2697,19 +2700,34 @@ class Inverter:
             if not old_discharge_enable:
                 self.log("Inverter {} Turning on scheduled export".format(self.id))
 
-        if (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable) or changed_start_end:
+        # Whether the export schedule itself actually needs (re)committing to the inverter, as opposed
+        # to us merely having rewritten the time registers. For H M format those registers are rewritten
+        # every cycle as a write-reliability workaround (#1529), so changed_start_end is True on every
+        # cycle of a stable export window and must not be used to gate the commit - on Solis each button
+        # press zeroes the timed current registers (#4709), and it also triggers the 30s GivTCP sleep in
+        # adjust_inverter_mode. Tracking what we last committed keeps a stable window quiet while still
+        # committing once after a restart, when nothing has been committed yet (#4000).
+        export_schedule = (new_start, new_end, force_export)
+        schedule_changed = (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable)
+        if is_hm_format and export_schedule != self.last_export_schedule_committed:
+            # Only the H M path rewrites unconditionally, so only it needs the extra commit-once-per-run
+            # safety net; every other format already commits on a real change alone.
+            schedule_changed = True
+
+        if schedule_changed:
             if self.inv_time_button_press:
                 self.press_and_poll_button(side="discharge")
+            self.last_export_schedule_committed = export_schedule
 
         # Force export, turn it on after we change the window
         if force_export:
-            self.adjust_inverter_mode(force_export, changed_start_end=changed_start_end)
+            self.adjust_inverter_mode(force_export, changed_start_end=schedule_changed)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)
 
         # Notify
-        if changed_start_end:
+        if schedule_changed and changed_start_end:
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} Export time slot set to {} - {} at time {}".format(self.id, new_start, new_end, self.base.time_now_str()))
 
