@@ -3006,7 +3006,7 @@ class Octopus:
                                 # Once the current service name is confirmed to exist it can't stop existing
                                 # again for the life of this run (it only depends on the installed integration
                                 # version), so a confirmed success is cached to skip re-probing it on every
-                                # future join. A false result is deliberately *not* cached the same way and
+                                # future join. A falsy result is deliberately *not* cached the same way and
                                 # still re-probes every time - the underlying call can return a false negative
                                 # on an ambiguous timeout (see async_call_service_websocket_command), and an
                                 # occasional harmless extra probe is a much smaller cost than permanently
