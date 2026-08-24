@@ -1422,7 +1422,11 @@ class GECloudDirect(ComponentBase):
         """
         if not self.refresh_evc_car_windows(now):
             return
-        for car_n, uuid in enumerate(self.controlled_evc_devices()):
+        # Only as far as there are cars to follow. async_automatic_config_evc() raises
+        # num_cars to the charger count, but that reaches the base object a cycle later,
+        # so there is a window where a charger has no plan of its own - and a charger with
+        # no plan would read as "not planned" and be stopped while its car was charging.
+        for car_n, uuid in enumerate(self.controlled_evc_devices()[: self.num_cars]):
             device = self.evc_device[uuid]
             if not self.evc_car_connected(device.get("status", None)):
                 continue

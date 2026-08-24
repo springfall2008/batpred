@@ -789,6 +789,12 @@ def format_time_ago(last_updated):
 # reaches more than 48 hours ahead - parse_car_plan_windows() puts one back.
 CAR_PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
 
+# How far from now a parsed window has to land before the year stamped on it is treated as
+# the wrong one. Comfortably beyond the 48 hours a plan covers, so a genuinely distant
+# window is never dragged into a different year, and far short of the ~12 months a
+# mis-stamped year produces.
+CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
+
 
 def parse_car_plan_windows(planned, now, local_tz):
     """Turn one car's published charging plan into a list of localised (start, end) pairs.
@@ -797,6 +803,12 @@ def parse_car_plan_windows(planned, now, local_tz):
     so the awkward parts stay in one place: the plan carries no year, so each window is
     rebuilt around now - without that, a plan read either side of New Year lands eleven
     months out - and a malformed entry is skipped rather than costing the rest of the plan.
+
+    The rebuild is symmetric. A window read at 23:30 on 31 December whose end is stamped
+    01-01 parses as January of the year just ending, and needs shifting forward; the same
+    window read at 00:30 on 1 January has its 12-31 start parsed as December of the year
+    just started, and needs shifting back. Only the second case ever hides an active
+    window, which is why it is the one that stops a car mid-charge if it is missed.
 
     Args:
         planned: The 'planned' attribute of a car charging slot sensor, a list of dicts
@@ -811,11 +823,15 @@ def parse_car_plan_windows(planned, now, local_tz):
             end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
         except (KeyError, TypeError, ValueError):
             continue
-        # Rebuild the year around now for windows that cross New Year
-        if start < now - timedelta(hours=23):
+        # Shift both ends together so their spacing survives, then close a window whose
+        # end is in January while its start is still in December
+        if start > now + CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year - 1)
+            end = end.replace(year=end.year - 1)
+        elif start < now - CAR_PLAN_YEAR_MARGIN:
             start = start.replace(year=start.year + 1)
             end = end.replace(year=end.year + 1)
-        elif end < start:
+        if end < start:
             end = end.replace(year=end.year + 1)
         parsed.append((start, end))
     return parsed

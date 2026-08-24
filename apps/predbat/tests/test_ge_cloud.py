@@ -4429,6 +4429,21 @@ def _test_evc_control(my_predbat):
         await ge.evc_control_charge(inside)
         assert sorted(commands) == sorted([("evc-second", "start-charge"), ("evc-first", "stop-charge")]), "The lower serial should be car 0, got {}".format(commands)
 
+        # Test 10: a charger with no car index yet is left alone rather than stopped.
+        # num_cars is raised by async_automatic_config_evc, but that lands on the base
+        # object a cycle later, so briefly there can be more chargers than cars.
+        commands = []
+        ge = _evc_control_component(commands, num_cars=1)
+        ge.evc_device_list = ["evc-first", "evc-second"]
+        ge.evc_device = {
+            "evc-first": {"serial_number": "EVC100", "status": "charging"},
+            "evc-second": {"serial_number": "EVC200", "status": "charging"},
+        }
+        ge.entity_attributes = {EVC_PLAN_SENSOR: plan[EVC_PLAN_SENSOR]}
+
+        await ge.evc_control_charge(inside)
+        assert commands == [("evc-first", "start-charge")], "Only the charger with a car should be commanded, got {}".format(commands)
+
         return 0
 
     return run_async(test())
