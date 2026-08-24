@@ -2987,25 +2987,41 @@ class Octopus:
                             self.log("Octopus: Joining Octopus saving event code {} {}-{} at rate {} p/kWh".format(code, start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             entity_id_join = self.get_arg("octopus_saving_session_join", indirect=False)
                             if entity_id_join:
-                                # Join via selector
-                                cmd = "select/select_option, entity_id={}, option={}".format(entity_id_join, code)
-                                result = self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code, return_response=True)
+                                # Join via selector (Octopus Energy Direct, or any other integration wired
+                                # up this way) - unaffected by which Bottle Cap Dave service name is current.
+                                # This only queues the join - OctopusAPI's own select_event() picks up the
+                                # entity write and performs the real join on a later cycle, so the "joined"
+                                # notification is sent there (async_join_saving_session_events()), once the
+                                # actual result is known, not here (issue #4593).
+                                self.call_service_wrapper("select/select_option", entity_id=entity_id_join, option=code)
                             else:
-                                # Join via octopus event (Bottle Cap Dave)
-                                cmd = "octopus_energy/join_octoplus_saving_session_event, event_code={}, entity_id={}".format(code, entity_id)
-                                # result = self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id, return_response=True)
-                                #
-                                # at present bottle cap dave integration doesn't return a response from the saving session so can't check it succeeds
-                                # see https://github.com/BottlecapDave/HomeAssistant-OctopusEnergy/issues/1823
-                                # so for now dummy a positive response
-                                result = True
-                                self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
-                            if result:
+                                # Join via Bottle Cap Dave's Octopus Energy HA integration. Try the current
+                                # service name first (join_octoplus_power_down_session_event, which
+                                # superseded join_octoplus_saving_session_event - see the integration's
+                                # ADR-0004), falling back to the old name for anyone on an integration
+                                # version that predates the rename. Both remain registered until the old
+                                # one is removed in January 2027, so this fallback is a temporary bridge,
+                                # not a permanent branch.
+                                # TODO(#4599): remove this fallback once the old service name is retired upstream.
+                                # Once the current service name is confirmed to exist it can't stop existing
+                                # again for the life of this run (it only depends on the installed integration
+                                # version), so a confirmed success is cached to skip re-probing it on every
+                                # future join. A false result is deliberately *not* cached the same way and
+                                # still re-probes every time - the underlying call can return a false negative
+                                # on an ambiguous timeout (see async_call_service_websocket_command), and an
+                                # occasional harmless extra probe is a much smaller cost than permanently
+                                # mis-classifying someone who genuinely has the current service.
+                                if self.octopus_join_service_power_down is True:
+                                    # Already confirmed to exist - still call it to actually perform the join,
+                                    # just without needing to check the result to decide on a fallback.
+                                    self.call_service_wrapper("octopus_energy/join_octoplus_power_down_session_event", event_code=code, entity_id=entity_id)
+                                elif self.call_service_wrapper("octopus_energy/join_octoplus_power_down_session_event", event_code=code, entity_id=entity_id):
+                                    self.octopus_join_service_power_down = True
+                                else:
+                                    self.log("Note: octopus_energy/join_octoplus_power_down_session_event not available, falling back to the deprecated join_octoplus_saving_session_event service")
+                                    self.call_service_wrapper("octopus_energy/join_octoplus_saving_session_event", event_code=code, entity_id=entity_id)
                                 if self.get_arg("set_event_notify"):
-                                    msg = "Joined Octopus saving event " + start_time.strftime("%a %d/%m %H:%M") + "-" + end_time.strftime("%H:%M") + ", " + str(saving_rate) + " p/kWh"
-                                    self.call_notify(f"{self.prefix.capitalize()}: {msg}")
-                            else:
-                                self.log("Warn: Unable to join Octoplus saving event with command {}, result was {}".format(cmd, result))
+                                    self.call_notify("Predbat: Joined Octopus saving event {}-{}, {} p/kWh".format(start_time.strftime("%a %d/%m %H:%M"), end_time.strftime("%H:%M"), saving_rate))
                             self.octopus_last_joined_try = self.now_utc
 
             # Default saving session rate for when octopoints_per_kwh is not available
