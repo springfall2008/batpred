@@ -1175,6 +1175,18 @@ _DETAIL_WITH_BATTERY_ALT_FIRMWARE = {
     "batteryList": [{"batteryType": 99, "batteryTypeName": "Lithium Battery LV", "battSn": "", "noBattery": None, "batteryVoltage": 54.83}],
 }
 
+# A real pack whose firmware simply omits batteryHealthSoh. It still names a real battery type, so
+# _reports_no_battery says False - only the (separate, wider) SoH gate in automatic_config excludes
+# it from num_inverters. _no_battery_fatal must not follow num_inverters here.
+_DETAIL_WITH_BATTERY_MISSING_SOH = {
+    "batteryType": "PYLON_LV",
+    "batteryTypeCode": "0001",
+    "batteryVoltage": 51.28,
+    "batteryCDEnableSet": 1,
+    "batteryJump": {"canJump": True, "batteryCount": 1, "batterySn": "1031260253072197BAT01"},
+    "batteryList": [{"batteryTypeName": "PYLON_LV", "battSn": "PYLON", "batteryVoltage": 51.28}],
+}
+
 # A real pack that happens to report SoH 0 - a documented, valid SolisCloud response. It must stay
 # enrolled; SoH alone can never be the reason to drop an inverter.
 _DETAIL_REAL_BATTERY_ZERO_SOH = {
@@ -1384,6 +1396,57 @@ async def test_no_fatal_status_when_some_inverter_has_a_battery():
     return failed
 
 
+async def test_no_fatal_status_when_single_inverter_has_battery_but_no_soh():
+    """A single real battery whose firmware omits/mis-reports batteryHealthSoh must not be fatal.
+
+    num_inverters is 0 here (the SoH gate in automatic_config still excludes the inverter, exactly
+    as before this change), but _no_battery_fatal must stay False: the inverter never declared "No
+    Battery" - see _reports_no_battery - so treating this like the fatal case would auto-pause a
+    paying customer whose battery is fine (day-3 alert, day-7 pause).
+    """
+    failed = False
+    print("**** Testing no fatal status for a real battery with missing/unparseable batteryHealthSoh ****")
+
+    sn = "1031260253072197"
+
+    api = MockSolisAPI()
+    api.inverter_sn = [sn]
+    api.inverter_details = {sn: _DETAIL_WITH_BATTERY_MISSING_SOH}
+    api.set_arg_auto = lambda key, value: None
+    await api.automatic_config()
+
+    if api._no_battery_fatal:
+        print("ERROR: a real battery with missing batteryHealthSoh must not be fatal")
+        failed = True
+
+    await api._assert_no_battery_status()
+    if api.base.record_status_calls:
+        print("ERROR: expected no status recorded for a real battery with missing SoH, got {}".format(api.base.record_status_calls))
+        failed = True
+
+    # Same again with a non-numeric batteryHealthSoh (some firmware reports a placeholder string).
+    detail_non_numeric = dict(_DETAIL_WITH_BATTERY_MISSING_SOH)
+    detail_non_numeric["batteryHealthSoh"] = "N/A"
+    api2 = MockSolisAPI()
+    api2.inverter_sn = [sn]
+    api2.inverter_details = {sn: detail_non_numeric}
+    api2.set_arg_auto = lambda key, value: None
+    await api2.automatic_config()
+
+    if api2._no_battery_fatal:
+        print("ERROR: a real battery with non-numeric batteryHealthSoh must not be fatal")
+        failed = True
+
+    await api2._assert_no_battery_status()
+    if api2.base.record_status_calls:
+        print("ERROR: expected no status recorded for a real battery with non-numeric SoH, got {}".format(api2.base.record_status_calls))
+        failed = True
+
+    if not failed:
+        print("PASSED: no fatal status for a real battery with missing/unparseable batteryHealthSoh")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -1408,6 +1471,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_run_records_fatal_status_when_no_inverter_has_a_battery())
         failed |= asyncio.run(test_no_fatal_status_when_some_inverter_has_a_battery())
+        failed |= asyncio.run(test_no_fatal_status_when_single_inverter_has_battery_but_no_soh())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())

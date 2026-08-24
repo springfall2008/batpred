@@ -1399,6 +1399,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log("Warn: Solis API automatic_config: No inverters to configure")
             return
 
+        # Fatal only when every inverter explicitly declares no battery attached - this must match
+        # NO_BATTERY_STATUS and the SaaS block predicate exactly, not the (wider) batteryHealthSoh
+        # gate below, which also excludes inverters with a real battery but an unparseable SoH.
+        self._no_battery_fatal = all(self._reports_no_battery(self.inverter_details.get(sn, {})) for sn in self.inverter_sn)
+
         # Count inverters with batteries
         batteries = []
         for inverter_sn in self.inverter_sn:
@@ -1419,13 +1424,13 @@ class SolisAPI(ComponentBase, OAuthMixin):
         num_inverters = len(batteries)
         self.log(f"Solis API: Configuring Predbat for {num_inverters} inverter(s) with batteries")
         if num_inverters == 0:
-            # Fatal: PredBat optimises battery charging and there is no battery to optimise.
-            # Re-asserted every run() tick because had_errors (and so the status) resets each
-            # plan cycle - see _assert_no_battery_status().
-            self._no_battery_fatal = True
+            # No inverter has a usable batteryHealthSoh (missing/unparseable field, or every
+            # inverter explicitly has no battery). self._no_battery_fatal was already computed
+            # above from the explicit declaration only - see _assert_no_battery_status(), which
+            # re-asserts it every run() tick because had_errors (and so the status) resets each
+            # plan cycle.
             self.log("Warn: Solis API automatic_config: No inverters with batteries found, skipping configuration")
             return
-        self._no_battery_fatal = False
 
         # Convert SNs to lowercase for entity naming
         devices = [sn.lower() for sn in batteries]
