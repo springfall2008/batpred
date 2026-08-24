@@ -3195,13 +3195,15 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         await self.fetch_entity_data(sn)
 
         # Control mode
+        control_success = True
         if first or (seconds % 60 == 0):
             # Write to inverter using new function (handles both V1 and V2)
             is_readonly = self.get_state_wrapper(f'switch.{self.prefix}_set_read_only', default='off') == 'on'
             if self.control_enable and not is_readonly:
                 for sn in self.inverter_sn:
                     await self.reset_charge_windows_if_needed(sn)
-                    await self.write_time_windows_if_changed(sn)
+                    if not await self.write_time_windows_if_changed(sn):
+                        control_success = False
             else:
                 self.log("Solis API: Control disabled, skipping writing time windows")
 
@@ -3213,8 +3215,16 @@ class SolisAPI(ComponentBase, OAuthMixin):
         if first and self.automatic and self.inverter_sn:
             await self.automatic_config()
 
-        # Return status
-        if poll_success:
+        # Return status. A refused control write must not refresh the success timestamp:
+        # components.is_alive() treats a stale timestamp as unhealthy, which surfaces as
+        # "component errors: Solis" in the run status. Without this a register the inverter
+        # keeps rejecting is invisible outside the log (see issue #4702).
+        #
+        # The run itself is still reported as successful, so a control failure does not reach
+        # non_fatal_error_occurred(). That sets base.had_errors, and the had_errors branch in
+        # update_pred() skips record_status() entirely, which would freeze predbat.status on
+        # its last value rather than show an error.
+        if poll_success and control_success:
             self.update_success_timestamp()
 
         # Mark API as started after first successful run

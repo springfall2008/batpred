@@ -508,6 +508,8 @@ def _make_run_api(configured_sns=None, control_enable=True, automatic=False):
 
     async def mock_write_time_windows_if_changed(sn):
         api.write_time_windows_calls.append(sn)
+        # Mirror the real method, which reports whether every control register write verified
+        return getattr(api, "_test_write_result", True)
 
     api.write_time_windows_if_changed = mock_write_time_windows_if_changed
 
@@ -1250,6 +1252,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_discharge_soc_unchanged_above_recovery())
         failed |= asyncio.run(test_discharge_soc_unclamped_when_recovery_unknown())
         failed |= asyncio.run(test_recovery_soc_not_lowered_below_inverter_minimum())
+        failed |= asyncio.run(test_control_write_failure_withholds_success_timestamp())
+        failed |= asyncio.run(test_control_write_success_updates_success_timestamp())
+        failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
         failed |= asyncio.run(test_recovery_soc_polled_outside_batch())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
@@ -2339,6 +2344,90 @@ async def test_recovery_soc_not_lowered_below_inverter_minimum():
     assert _written_recovery(api) == "21", f"Recovery SOC should stop at over-discharge + 1 = 21, got {_written_recovery(api)}"
     assert _written_soc(api) == "21", f"Discharge SOC should be clamped to 21, got {_written_soc(api)}"
     print("PASSED: Recovery floored at 21 and the target clamped to match")
+    return False
+
+
+async def test_control_write_failure_withholds_success_timestamp():
+    """A refused control register write stops the success timestamp advancing, so the component ages out.
+
+    components.is_alive() treats a timestamp older than an hour as unhealthy, which is what puts
+    "component errors: Solis" into the run status instead of the failure sitting only in the log.
+    """
+    print("\n=== Test: control write failure withholds the success timestamp ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+    api._test_write_result = False
+
+    async def mock_get_inverter_list():
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    result = await api.run(seconds=0, first=True)
+
+    assert api.write_time_windows_calls == [sn], "The control write should still have been attempted"
+    assert api.update_success_timestamp_calls == 0, "A failed control write must not refresh the success timestamp"
+    # Still True: routing this through the return value would hit non_fatal_error_occurred(), whose
+    # had_errors flag makes update_pred() skip record_status() and freeze predbat.status
+    assert result is True, "The run itself should still be reported as successful"
+    print("PASSED: Failed control write withheld the timestamp without failing the run")
+    return False
+
+
+async def test_control_write_success_updates_success_timestamp():
+    """A clean control write refreshes the success timestamp as before."""
+    print("\n=== Test: successful control write updates the success timestamp ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+
+    async def mock_get_inverter_list():
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    result = await api.run(seconds=0, first=True)
+
+    assert api.update_success_timestamp_calls == 1, "A successful control write should refresh the timestamp"
+    assert result is True, "Run should return True"
+    print("PASSED: Successful control write refreshed the timestamp")
+    return False
+
+
+async def test_storage_mode_failure_does_not_fail_control_write():
+    """A refused CID 636 write must not make write_time_windows_if_changed report failure.
+
+    The TOU bit on CID 636 is cleared by some inverters for reasons that are not understood, and it
+    fails verification on every cycle. Letting that count as a control failure would age those
+    systems out to unhealthy permanently, so the storage mode result is deliberately not folded
+    into the return value. This test pins that down.
+    """
+    print("\n=== Test: storage mode failure does not fail the control write ===")
+
+    inverter_sn = "TEST123"
+    api = _discharge_slot_api(discharge_soc=40, recovery_soc=21, over_discharge_soc=20, inverter_sn=inverter_sn)
+    api._mock_storage_mode = False  # Exercise the real set_storage_mode_if_needed path
+    # Force a mode change so the CID 636 write is actually attempted
+    api.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] = "0"
+
+    async def failing_storage_mode_write(sn, cid, value, field_description=None):
+        api.read_and_write_cid_calls.append({"inverter_sn": sn, "cid": cid, "value": str(value), "field_description": field_description})
+        if cid == SOLIS_CID_STORAGE_MODE:
+            return False
+        if sn not in api.cached_values:
+            api.cached_values[sn] = {}
+        api.cached_values[sn][cid] = str(value)
+        return True
+
+    api.read_and_write_cid = failing_storage_mode_write
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+
+    storage_calls = [c for c in api.read_and_write_cid_calls if c["cid"] == SOLIS_CID_STORAGE_MODE]
+    assert len(storage_calls) > 0, "The storage mode write should have been attempted"
+    assert result is True, "A failed storage mode write must not fail the control write"
+    print("PASSED: CID 636 failure left the control write reporting success")
     return False
 
 
