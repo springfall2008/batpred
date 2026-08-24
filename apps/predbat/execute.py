@@ -105,14 +105,26 @@ class Execute:
     adjustment, and multi-inverter balancing.
     """
 
-    def clear_control_ledger(self):
+    def clear_control_ledger(self, reason):
         """Drop every control ownership record, if the ledger is configured.
 
-        Called wherever PredBat stops controlling the inverter - read-only mode and
-        calibration.
+        Called wherever PredBat stops controlling the inverter - read-only mode and calibration.
+
+        Deliberately global, and both callers are genuinely fleet-wide even though they read as
+        though they were per-inverter. set_read_only is one config flag for the whole install. And
+        the calibration branch, on finding ANY inverter in calibration, writes charge rate,
+        discharge rate, battery target and reserve to EVERY inverter through the ordinary helpers
+        before breaking out - so every inverter's ownership is conferred there and every
+        inverter's has to go. Scoping this to the inverter that happened to trigger it would leave
+        the others owning values calibration itself had just written.
+
+        Logged because a user whose detection reports nothing needs to be able to find out why.
         """
-        if self.control_ledger is not None:
-            self.control_ledger.clear()
+        if self.control_ledger is None:
+            return
+        if self.control_ledger.records:
+            self.log("Control ledger: dropping ownership of {} control(s) - {}".format(len(self.control_ledger.records), reason))
+        self.control_ledger.clear()
 
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
@@ -143,7 +155,7 @@ class Execute:
         # PredBat is no longer controlling anything, so it is not ours to claim. set_read_only
         # is a global flag, so this is decided once rather than re-decided per inverter.
         if self.set_read_only:
-            self.clear_control_ledger()
+            self.clear_control_ledger("read-only mode is enabled, so Predbat is not setting anything")
 
         isCharging = False
         isExporting = False
@@ -171,7 +183,7 @@ class Execute:
                 # exactly the mode where the inverter's own firmware is driving its settings.
                 # A value found moved next cycle is the inverter calibrating, not a third
                 # party, so ownership is dropped after the writes rather than before them.
-                self.clear_control_ledger()
+                self.clear_control_ledger("inverter {} is calibrating, so its own firmware is driving the settings".format(inverter.id))
                 break
 
             resetDischarge = self.set_charge_window or self.set_export_window
@@ -1020,6 +1032,13 @@ class Execute:
         """
         if self.inverters is None:
             return False
+        # Its own control-ledger cycle. This runs every 120s and reaches update_status(), which
+        # writes scheduled_charge_enable through write_and_poll_switch - so it both observes and
+        # confirms. Without advancing the cycle, every observation here was unconditionally STALE
+        # (cycle <= confirmed_cycle) and its confirmations collided with the plan run's. Every
+        # entry point that can observe or confirm gets its own cycle.
+        if self.control_ledger is not None:
+            self.control_ledger.begin_cycle()
         if self.fetch_inverter_data(create=False):
             self.publish_inverter_data()
             return True
