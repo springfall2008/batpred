@@ -2952,7 +2952,17 @@ class Inverter:
                 self.call_service_template("charge_stop_service", service_data_stop, domain="discharge")
 
             # Start charge or charge freeze
-            if target_soc == self.soc_percent or freeze:
+            if freeze:
+                # An explicit freeze request must never degrade into a real charge. When no
+                # charge_freeze_service is configured, fall back to a plain charge stop: the passive
+                # hold is already established by the caller before we get here (target SoC written to
+                # the current SoC, plus pause_discharge / discharge rate 0 / reserve), so stopping is
+                # a genuine hold. Falling back to charge_start_service instead issued a fresh active
+                # charge command, which some inverters briefly ramp to full power every cycle,
+                # producing repeated short full-rate import bursts (batpred#4424/#4432).
+                if not self.call_service_template("charge_freeze_service", service_data, domain="charge", extra_data=extra_data):
+                    self.call_service_template("charge_stop_service", service_data_stop, domain="charge")
+            elif target_soc == self.soc_percent:
                 if not self.call_service_template("charge_freeze_service", service_data, domain="charge", extra_data=extra_data):
                     self.call_service_template("charge_start_service", service_data, domain="charge", extra_data=extra_data)
             elif not self.inv_has_target_soc and target_soc < self.soc_percent:
@@ -2991,8 +3001,14 @@ class Inverter:
             # to it) whenever export naturally reached its target, regardless of set_export_freeze
             # (batpred#4464).
             if freeze:
+                # As in adjust_charge_immediate(): an explicit freeze request must never degrade into
+                # a real export. Without a discharge_freeze_service configured, fall back to a plain
+                # discharge stop - combined with the charge_stop_service issued just above, that is
+                # neither charging nor force-discharging, i.e. a genuine freeze export. Falling back
+                # to discharge_start_service instead began a real timed export the caller never asked
+                # for (batpred#4424/#4432).
                 if not self.call_service_template("discharge_freeze_service", service_data, domain="discharge", extra_data=extra_data):
-                    self.call_service_template("discharge_start_service", service_data, domain="discharge", extra_data=extra_data)
+                    self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge")
             elif target_soc >= self.soc_percent:
                 self.call_service_template("discharge_stop_service", service_data_stop, domain="discharge")
             else:
