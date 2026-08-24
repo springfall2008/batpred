@@ -2105,10 +2105,11 @@ INVERTER_DEF = {
         "support_charge_freeze": True,
         # "Feed-in first"/freeze export mode does not hold SoC flat on FoxESS - PV above the
         # export limit still charges the battery instead of being clipped (#4207). That's now
-        # correctly modelled (prediction.py's freeze branch, gated on
-        # inverter_can_charge_during_export) rather than treated as a reason to disable freeze
-        # outright, so this can stay True - see FoxCloud's entry below for the same hardware via
-        # a different connection method.
+        # correctly modelled (prediction.py's freeze branch, gated on support_feedin_first)
+        # rather than treated as a reason to disable freeze outright, so support_discharge_freeze
+        # can stay True - see FoxCloud's entry below for the same hardware via a different
+        # connection method.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
@@ -2139,6 +2140,7 @@ INVERTER_DEF = {
         "has_time_window": False,
         "support_charge_freeze": True,
         # See FoxESS's entry above - same hardware, correctly modelled rather than disabled (#4207).
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2226,6 +2228,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects SELLING_FIRST (deye.py) - the same Deye firmware behaviour the
+        # Sunsynk cloud drives through the same registers, so PV goes to load, then grid, then
+        # the battery.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2255,6 +2261,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects Selling First with the per-slot sell flag on (sunsynk.py), which
+        # runs PV -> load -> grid ahead of the battery. Confirmed on live hardware that the
+        # alternative (Limited to Home) fills the battery first, which is why the mode is changed.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,
@@ -2322,6 +2332,9 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export selects SolaX's "feedin" work mode (solax.py), which exports the surplus
+        # ahead of charging the battery rather than just disabling the charge.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": True,
@@ -2351,6 +2364,10 @@ INVERTER_DEF = {
         "write_and_poll_sleep": 2,
         "has_time_window": False,
         "support_charge_freeze": True,
+        # Freeze Export drops the charge current to 0A, which the SolisCloud component turns into
+        # "Feed-in priority" storage mode (solis.py, "Decide if Solar charges the battery or
+        # exports") - PV serves load, then exports, and only what the grid cannot take charges.
+        "support_feedin_first": True,
         "support_discharge_freeze": True,
         "has_idle_time": False,
         "can_span_midnight": False,

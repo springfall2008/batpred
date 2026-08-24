@@ -26,10 +26,9 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
     FoxESS (modbus) and FoxCloud are the same hardware via two different connection methods - "feed-in
     first"/freeze export does not hold SoC flat on either, PV above the export limit still charges the
     battery instead of being clipped (#4207). Both are now True: that spillover-charges-the-battery
-    behaviour is correctly modelled (prediction.py's freeze branch, gated on
-    inverter_can_charge_during_export) rather than being a reason to disable freeze outright for this
-    hardware - see test_freeze_export_recapture_beyond_limit in test_optimise_solar.py for the modelling
-    itself.
+    behaviour is correctly modelled (prediction.py's freeze branch, gated on support_feedin_first)
+    rather than being a reason to disable freeze outright for this hardware - see
+    test_freeze_export_recapture_beyond_limit in test_optimise_solar.py for the modelling itself.
     """
     failed = False
     if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] is not True:
@@ -37,6 +36,40 @@ def test_foxess_support_discharge_freeze_matches_foxcloud():
         failed = True
     if INVERTER_DEF["FoxESS"]["support_discharge_freeze"] != INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]:
         print("ERROR: FoxESS support_discharge_freeze ({}) should match FoxCloud ({}) - same hardware, different connection method".format(INVERTER_DEF["FoxESS"]["support_discharge_freeze"], INVERTER_DEF["FoxCloud"]["support_discharge_freeze"]))
+        failed = True
+    return failed
+
+
+def test_support_feedin_first_is_opt_in():
+    """
+    support_feedin_first says the inverter's Freeze Export really is a "Feed-in First" mode (load,
+    then export, then battery), so PV past the export limit charges the battery instead of being
+    clipped. Only types whose component actually selects such a mode may opt in - the Fox hardware,
+    plus the four clouds that switch work mode for the freeze: SolisCloud ("Feed-in priority",
+    solis.py), SolaxCloud ("feedin", solax.py), SunsynkCloud and DeyeCloud (Selling First,
+    sunsynk.py/deye.py). Every other type must default off, because modelling recapture on an
+    inverter that merely disables charging invents energy that never reaches the battery.
+    """
+    failed = False
+    expect_feedin_first = {"FoxESS", "FoxCloud", "SolisCloud", "SolaxCloud", "SunsynkCloud", "DeyeCloud"}
+
+    for inverter_type in expect_feedin_first:
+        if INVERTER_DEF[inverter_type].get("support_feedin_first", False) is not True:
+            print("ERROR: {} support_feedin_first should be True, got {}".format(inverter_type, INVERTER_DEF[inverter_type].get("support_feedin_first", False)))
+            failed = True
+
+    for inverter_type, definition in INVERTER_DEF.items():
+        if inverter_type in expect_feedin_first:
+            continue
+        if definition.get("support_feedin_first", False):
+            print("ERROR: {} declares support_feedin_first - only inverters with a genuine Feed-in First freeze mode may opt in".format(inverter_type))
+            failed = True
+
+    # The Inverter object reads it through .get(), so a type that never mentions the key at all must
+    # still end up with a usable False rather than a KeyError.
+    missing = [inverter_type for inverter_type, definition in INVERTER_DEF.items() if "support_feedin_first" not in definition]
+    if not missing:
+        print("ERROR: every inverter type declares support_feedin_first - the .get() default in inverter.py is no longer covered")
         failed = True
     return failed
 
@@ -2632,6 +2665,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed = False
     print("**** Running Inverter tests ****")
     failed |= test_foxess_support_discharge_freeze_matches_foxcloud()
+    failed |= test_support_feedin_first_is_opt_in()
     ha = my_predbat.ha_interface
 
     time_now = my_predbat.now_utc.strftime("%Y-%m-%dT%H:%M:%S%z")

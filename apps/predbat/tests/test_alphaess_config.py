@@ -76,7 +76,11 @@ def test_alphaess_inverter_def_complete():
     if not entry:
         print("ERROR: AlphaESSCloud not in INVERTER_DEF")
         assert False, "test_alphaess_inverter_def_complete"
-    reference = set(INVERTER_DEF["SunsynkCloud"].keys())
+    # Keys inverter.py reads through .get() with a default are opt-in capabilities a type is meant
+    # to omit - AlphaESS's Freeze Export holds SoC via the rate entities rather than switching to a
+    # feed-in work mode, so it must NOT declare support_feedin_first.
+    optional_keys = {"support_feedin_first"}
+    reference = set(INVERTER_DEF["SunsynkCloud"].keys()) - optional_keys
     missing = reference - set(entry.keys())
     if missing:
         print(f"ERROR: AlphaESSCloud missing keys {sorted(missing)}")

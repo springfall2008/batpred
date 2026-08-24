@@ -854,6 +854,7 @@ class Execute:
         grid_power = 0
         inverter_limit = 0.0
         export_limit = 0.0
+        inverter_support_feedin_first = True
 
         # Create inverters list if needed
         if create or (not self.inverters) or (len(self.inverters) != self.num_inverters):
@@ -924,6 +925,11 @@ class Execute:
                     self.set_reserve_enable = False
                     self.set_reserve_hold = False
                     self.set_discharge_during_charge = True
+            # Unlike the first-inverter-only settings above this is a fleet-wide capability: the
+            # prediction models one combined battery, so a single inverter that just disables
+            # charging during Freeze Export means the fleet as a whole cannot recapture PV.
+            if not inverter.inv_support_feedin_first:
+                inverter_support_feedin_first = False
             current_charge_limit_kwh += dp2(inverter.current_charge_limit * inverter.soc_max / 100.0)
             soc_max += inverter.soc_max
             soc_kw += inverter.soc_kw
@@ -965,6 +971,7 @@ class Execute:
         self.grid_power = grid_power
         self.battery_temperature = int(dp0(battery_temperature / self.num_inverters))
         self.current_charge_limit = calc_percent_limit(self.current_charge_limit_kwh, self.soc_max)
+        self.inverter_support_feedin_first = inverter_support_feedin_first
 
         # Additional PVs without inverters
         pv_power_sensors = self.get_arg("pv_power", [], indirect=False)
@@ -1097,6 +1104,7 @@ class Execute:
                 "num_inverters": self.num_inverters,
                 "num_cars": self.num_cars,
                 "inverter_can_charge_during_export": self.inverter_can_charge_during_export,
+                "inverter_support_feedin_first": self.inverter_support_feedin_first,
                 "metric_standing_charge": dp2(self.metric_standing_charge),
                 "forecast_minutes": self.forecast_minutes,
                 "plan_interval_minutes": self.plan_interval_minutes,

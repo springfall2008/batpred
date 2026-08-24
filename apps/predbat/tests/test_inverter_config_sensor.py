@@ -12,7 +12,7 @@ from const import MINUTE_WATT
 from tests.test_infra import reset_inverter, TestInverter
 
 
-def make_stub_inverter(inverter_id, inverter_limit_watts):
+def make_stub_inverter(inverter_id, inverter_limit_watts, support_feedin_first=True):
     """Build an inverter stub carrying just the values fetch_inverter_data() aggregates"""
     inverter = TestInverter()
     inverter.id = inverter_id
@@ -21,6 +21,7 @@ def make_stub_inverter(inverter_id, inverter_limit_watts):
     inverter.export_window = []
     inverter.export_limits = []
     inverter.inv_support_discharge_freeze = True
+    inverter.inv_support_feedin_first = support_feedin_first
     inverter.inv_support_charge_freeze = True
     inverter.inv_has_reserve_soc = True
     inverter.current_charge_limit = 100.0
@@ -90,6 +91,7 @@ def run_inverter_config_checks(my_predbat):
     my_predbat.num_inverters = 2
     my_predbat.num_cars = 1
     my_predbat.inverter_can_charge_during_export = False
+    my_predbat.inverter_support_feedin_first = True
     my_predbat.metric_standing_charge = 42.5
     my_predbat.forecast_minutes = 48 * 60
     my_predbat.plan_interval_minutes = 30
@@ -138,6 +140,7 @@ def run_inverter_config_checks(my_predbat):
         "num_inverters": 2,
         "num_cars": 1,
         "inverter_can_charge_during_export": False,
+        "inverter_support_feedin_first": True,
         "metric_standing_charge": 42.5,
         "forecast_minutes": 48 * 60,
         "plan_interval_minutes": 30,
@@ -171,9 +174,27 @@ def run_inverter_config_checks(my_predbat):
         print("ERROR: {} was not published by fetch_inverter_data".format(entity_id))
         failed = True
     else:
-        for key, value in {"state": 6.0, "inverter_limit": 6.0, "export_limit": 6.0, "soc_max": 10.0, "reserve": 1.0, "num_inverters": 2}.items():
+        for key, value in {"state": 6.0, "inverter_limit": 6.0, "export_limit": 6.0, "soc_max": 10.0, "reserve": 1.0, "num_inverters": 2, "inverter_support_feedin_first": True}.items():
             if item.get(key, None) != value:
                 print("ERROR: {} {} is {} expected {} after fetch_inverter_data".format(entity_id, key, item.get(key, None), value))
                 failed = True
+
+    # Feed-in First is a fleet-wide capability - the prediction models one combined battery, so a
+    # single inverter that just disables charging during Freeze Export has to turn it off for the
+    # whole fleet. Put the unsupported one second: aggregating only the first inverter (the way the
+    # freeze/reserve settings above are handled) would wrongly leave this True.
+    print("Test: one inverter without Feed-in First turns it off for the whole fleet")
+    my_predbat.inverters = [make_stub_inverter(0, 3000), make_stub_inverter(1, 3000, support_feedin_first=False)]
+    my_predbat.ha_interface.dummy_items.pop(entity_id, None)
+
+    my_predbat.fetch_inverter_data(create=False)
+
+    if my_predbat.inverter_support_feedin_first is not False:
+        print("ERROR: inverter_support_feedin_first is {} expected False when one inverter does not support it".format(my_predbat.inverter_support_feedin_first))
+        failed = True
+    item = my_predbat.ha_interface.dummy_items.get(entity_id)
+    if item is None or item.get("inverter_support_feedin_first", None) is not False:
+        print("ERROR: {} inverter_support_feedin_first is {} expected False".format(entity_id, item.get("inverter_support_feedin_first", None) if item else None))
+        failed = True
 
     return failed

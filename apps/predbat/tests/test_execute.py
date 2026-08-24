@@ -62,6 +62,7 @@ class ActiveTestInverter:
         self.export_limits = []
         self.inv_support_discharge_freeze = True
         self.inv_support_charge_freeze = True
+        self.inv_support_feedin_first = False
         self.inv_has_reserve_soc = True
         self.current_charge_limit = 0
         self.charge_rate_now = 1000

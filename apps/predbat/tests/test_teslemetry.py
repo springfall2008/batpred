@@ -1151,8 +1151,14 @@ def test_teslemetry_inverter_def_tesla():
     assert tesla["support_discharge_freeze"] is False
     assert tesla["can_span_midnight"] is False
     assert tesla["target_soc_used_for_discharge"] is True
-    # inverter.py reads the FoxCloud key set unconditionally - TESLA must not miss any of them
+    # inverter.py reads the FoxCloud key set unconditionally - TESLA must not miss any of them.
+    # Exempt are the keys inverter.py reads through .get() with a default: those are opt-in
+    # capabilities a type is meant to omit, so requiring them here would force every inverter to
+    # spell out a capability it does not have.
+    optional_keys = {"support_feedin_first"}
     for key in INVERTER_DEF["FoxCloud"]:
+        if key in optional_keys:
+            continue
         assert key in tesla, "TESLA INVERTER_DEF missing key {}".format(key)
 
 
