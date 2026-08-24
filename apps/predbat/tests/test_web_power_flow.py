@@ -8,8 +8,26 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import math
+import re
+
 from config import APPS_SCHEMA
 from web import WebInterface
+
+# Where each node is drawn in the diagram's SVG, keyed by the colour of the arm that reaches it
+HOUSE_CENTRE = (300, 200)
+NODE_RADIUS = 50
+NODE_BY_COLOUR = {
+    "#2196F3": ("PV", (150, 100)),
+    "#FF9800": ("Battery", (150, 300)),
+    "#4CAF50": ("Grid", (450, 300)),
+    "#00BCD4": ("Car", (450, 100)),
+}
+
+# The arrowhead is drawn beyond the end of the line, not on it. The markers use the default
+# markerUnits of "strokeWidth", so markerWidth="10" on a stroke-width="2" line is 20 user units
+# of arrowhead past the line's end vertex - which is where the point of the arrow actually lands.
+ARROW_HEAD_LENGTH = 20
 
 
 def make_web(my_predbat):
@@ -20,6 +38,162 @@ def make_web(my_predbat):
 def set_power_sensor(my_predbat, entity_id, watts):
     """Publish a power sensor into the HA mock for get_arg() to resolve."""
     my_predbat.ha_interface.dummy_items[entity_id] = {"state": watts, "unit_of_measurement": "W"}
+
+
+def arrow_lines(html):
+    """Return (colour, (x1, y1, x2, y2)) for every arrow drawn in the diagram."""
+    found = []
+    for match in re.finditer(r'<line x1="([-\d.]+)" y1="([-\d.]+)" x2="([-\d.]+)" y2="([-\d.]+)" stroke="(#[0-9A-Fa-f]{6})"', html):
+        found.append((match.group(5), tuple(float(match.group(index)) for index in range(1, 5))))
+    return found
+
+
+def distance(point_a, point_b):
+    """Distance between two (x, y) points."""
+    return math.hypot(point_a[0] - point_b[0], point_a[1] - point_b[1])
+
+
+def distance_from_line(point, line_start, line_end):
+    """Perpendicular distance of a point from the infinite line through two points."""
+    run_x = line_end[0] - line_start[0]
+    run_y = line_end[1] - line_start[1]
+    cross = (point[0] - line_start[0]) * run_y - (point[1] - line_start[1]) * run_x
+    return abs(cross) / math.hypot(run_x, run_y)
+
+
+def check_arm_geometry(html, state_description):
+    """Every arm runs along the line joining the two circles, tail on one edge and point on the other.
+
+    Drawn at any other angle the arrow leaves its circle off-centre and its head stops in open
+    space short of the House, which is what the PV, battery and grid arms did (all three were
+    drawn at 45 degrees when the true angle between the circles is 33.7).
+
+    The point of the arrow is ARROW_HEAD_LENGTH beyond the line's end vertex, so the line has to
+    stop short by exactly that much. Ending it on the circle edge instead drives the arrowhead
+    inside the circle it is pointing at.
+    """
+    failed = 0
+    for colour, (x1, y1, x2, y2) in arrow_lines(html):
+        name, node_centre = NODE_BY_COLOUR[colour]
+        start, end = (x1, y1), (x2, y2)
+
+        # marker-end puts the arrowhead on (x2, y2), so the line is always drawn tail first and
+        # an arm reversed by the flow direction swaps which circle each end belongs to
+        tail, head = start, end
+        tail_at_node = distance(tail, node_centre) < distance(tail, HOUSE_CENTRE)
+        tail_centre, head_centre = (node_centre, HOUSE_CENTRE) if tail_at_node else (HOUSE_CENTRE, node_centre)
+        tail_name, head_name = (name, "House") if tail_at_node else ("House", name)
+
+        tail_gap = distance(tail, tail_centre) - NODE_RADIUS
+        if abs(tail_gap) > 1.5:
+            print(f"  ERROR [{state_description}]: the {name} arm starts {tail_gap:+.1f}px off the {tail_name} circle edge, it should touch it")
+            failed += 1
+
+        # Where the point of the arrow actually lands, once the marker past the line end is counted
+        length = distance(tail, head)
+        if length > 0:
+            direction = ((head[0] - tail[0]) / length, (head[1] - tail[1]) / length)
+            tip = (head[0] + direction[0] * ARROW_HEAD_LENGTH, head[1] + direction[1] * ARROW_HEAD_LENGTH)
+            tip_gap = distance(tip, head_centre) - NODE_RADIUS
+            if tip_gap < -1.5:
+                print(f"  ERROR [{state_description}]: the {name} arrowhead reaches {abs(tip_gap):.1f}px inside the {head_name} circle, it should stop on the edge")
+                failed += 1
+            elif tip_gap > 1.5:
+                print(f"  ERROR [{state_description}]: the {name} arrowhead stops {tip_gap:.1f}px short of the {head_name} circle, leaving it pointing at nothing")
+                failed += 1
+
+        for point in (tail, head):
+            offset = distance_from_line(point, node_centre, HOUSE_CENTRE)
+            if offset > 1.5:
+                print(f"  ERROR [{state_description}]: the {name} arm is {offset:.1f}px off the line joining {name} to the House, so it points the wrong way")
+                failed += 1
+    return failed
+
+
+def power_labels(html):
+    """Return (colour, text, x, y) for each 'NNN W' label on an arm."""
+    found = []
+    for match in re.finditer(r'<text x="([-\d.]+)" y="([-\d.]+)" text-anchor="middle" fill="(#[0-9A-Fa-f]{6})">([^<]*)</text>', html):
+        if match.group(3) in NODE_BY_COLOUR:
+            found.append((match.group(3), match.group(4), float(match.group(1)), float(match.group(2))))
+    return found
+
+
+def segment_hits_box(segment, box):
+    """True if a line segment crosses (or ends inside) an axis-aligned box."""
+    (x1, y1), (x2, y2) = segment
+    left, top, right, bottom = box
+
+    def inside(x, y):
+        return left <= x <= right and top <= y <= bottom
+
+    if inside(x1, y1) or inside(x2, y2):
+        return True
+
+    def segments_cross(p1, p2, p3, p4):
+        def orientation(a, b, c):
+            value = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+            return (value > 0) - (value < 0)
+
+        return orientation(p1, p2, p3) != orientation(p1, p2, p4) and orientation(p3, p4, p1) != orientation(p3, p4, p2)
+
+    corners = [(left, top), (right, top), (right, bottom), (left, bottom)]
+    for index in range(4):
+        if segments_cross((x1, y1), (x2, y2), corners[index], corners[(index + 1) % 4]):
+            return True
+    return False
+
+
+def check_label_clearance(html, state_description):
+    """A power reading must sit beside its arm, not printed across it.
+
+    The text is rendered at the browser default of 16px with no font-size set, so it is estimated
+    generously here - a label that only just clears at this width is too close to be readable.
+    """
+    failed = 0
+    lines = [((x1, y1), (x2, y2)) for _, (x1, y1, x2, y2) in arrow_lines(html)]
+    for colour, text, x, y in power_labels(html):
+        name = NODE_BY_COLOUR[colour][0]
+        half_width = len(text) * 9 / 2.0
+        box = (x - half_width, y - 12, x + half_width, y + 4)
+        for line in lines:
+            if segment_hits_box(line, box):
+                print(f"  ERROR [{state_description}]: the {name} label '{text}' at ({x:.0f},{y:.0f}) is printed across an arm")
+                failed += 1
+                break
+    return failed
+
+
+def run_power_flow_geometry_tests(my_predbat, web):
+    """The arms line up with the circles they join, in every flow direction."""
+    failed = 0
+    print("Test: every arm runs circle edge to circle edge, whichever way the power is flowing")
+
+    saved = (my_predbat.pv_power, my_predbat.load_power, my_predbat.battery_power, my_predbat.grid_power, my_predbat.car_charging_power, my_predbat.car_charging_power_configured)
+
+    my_predbat.car_charging_power_configured = True
+
+    # Importing, battery discharging, PV generating, car charging
+    my_predbat.pv_power = 2000
+    my_predbat.load_power = 4000
+    my_predbat.battery_power = 1500
+    my_predbat.grid_power = -1000
+    my_predbat.car_charging_power = 2000
+    html = web.get_power_flow_diagram()
+    failed += check_arm_geometry(html, "importing, battery discharging")
+    failed += check_label_clearance(html, "importing, battery discharging")
+
+    # The opposite of every branch: exporting, battery charging, PV idle, car idle
+    my_predbat.pv_power = 0
+    my_predbat.battery_power = -1500
+    my_predbat.grid_power = 1000
+    my_predbat.car_charging_power = 0
+    html = web.get_power_flow_diagram()
+    failed += check_arm_geometry(html, "exporting, battery charging")
+    failed += check_label_clearance(html, "exporting, battery charging")
+
+    (my_predbat.pv_power, my_predbat.load_power, my_predbat.battery_power, my_predbat.grid_power, my_predbat.car_charging_power, my_predbat.car_charging_power_configured) = saved
+    return failed
 
 
 def run_web_power_flow_tests(my_predbat):
@@ -217,6 +391,8 @@ def run_web_power_flow_tests(my_predbat):
     if "-2000 W" in html:
         print("  ERROR: the House circle must never show a negative load")
         failed += 1
+
+    failed += run_power_flow_geometry_tests(my_predbat, web)
 
     my_predbat.args = original_args
     my_predbat.load_power = original_load_power

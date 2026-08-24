@@ -626,17 +626,17 @@ class WebInterface(ComponentBase):
                 <!-- Define animation paths -->
                 <defs>
                     <!-- PV to House path -->
-                    <path id="pv-house-path" d="M200,100 L250,150" stroke="transparent" fill="none" />
+                    <path id="pv-house-path" d="M192,128 L241,161" stroke="transparent" fill="none" />
                     <!-- House to PV path -->
-                    <path id="house-pv-path" d="M250,150 L200,100" stroke="transparent" fill="none" />
+                    <path id="house-pv-path" d="M241,161 L192,128" stroke="transparent" fill="none" />
                     <!-- Battery to House path -->
-                    <path id="battery-house-path" d="M200,300 L250,250" stroke="transparent" fill="none" />
+                    <path id="battery-house-path" d="M192,272 L241,239" stroke="transparent" fill="none" />
                     <!-- House to Battery path -->
-                    <path id="house-battery-path" d="M265,235 L215,275" stroke="transparent" fill="none" />
+                    <path id="house-battery-path" d="M258,228 L209,261" stroke="transparent" fill="none" />
                     <!-- Grid to House path -->
-                    <path id="grid-house-path" d="M410,290 L355,240" stroke="transparent" fill="none" />
+                    <path id="grid-house-path" d="M408,272 L359,239" stroke="transparent" fill="none" />
                     <!-- House to Grid path -->
-                    <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
+                    <path id="house-grid-path" d="M342,228 L391,261" stroke="transparent" fill="none" />
                 </defs>
         """.format(
             dp0(house_power)
@@ -652,7 +652,7 @@ class WebInterface(ComponentBase):
 
                 <defs>
                     <!-- House to Car path -->
-                    <path id="house-car-path" d="M342,172 L408,128" stroke="transparent" fill="none" />
+                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
                     <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
                     <polygon points="0 0, 10 3.5, 0 7" fill="#00BCD4"/>
                     </marker>
@@ -664,18 +664,18 @@ class WebInterface(ComponentBase):
 
                 html += """
                 <!-- House to Car Arrow -->
-                <line x1="342" y1="172" x2="408" y2="128" stroke="#00BCD4" stroke-width="2" marker-end="url(#car-arrow)" />
-                <text x="370" y="135" text-anchor="middle" fill="#00BCD4">{} W</text>
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#00BCD4" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#00BCD4">{} W</text>
 
                 <!-- Moving dots for House to Car -->
                 <circle r="4" fill="#00BCD4" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L408,128" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
                 </circle>
                 <circle r="3" fill="#00BCD4" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L408,128" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
                 </circle>
                 <circle r="2" fill="#00BCD4" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L408,128" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
                 </circle>
                 """.format(
                     dp0(car_power), car_speed, car_speed, car_speed
@@ -683,8 +683,8 @@ class WebInterface(ComponentBase):
             else:
                 html += """
                 <!-- House to Car Arrow (dashed) -->
-                <line x1="342" y1="172" x2="408" y2="128" stroke="#00BCD4" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
-                <text x="370" y="135" text-anchor="middle" fill="#00BCD4">{} W</text>
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#00BCD4" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#00BCD4">{} W</text>
                 <!-- No moving dot when the car is not charging -->
                 """.format(
                     dp0(car_power)
@@ -697,18 +697,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- PV to House Arrow -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#2196F3">{} W</text>
 
                 <!-- Moving dots for PV to House -->
                 <circle r="4" fill="#2196F3" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,128 L241,161" />
                 </circle>
                 <circle r="3" fill="#2196F3" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,100 L250,150" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,128 L241,161" />
                 </circle>
                 <circle r="2" fill="#2196F3" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,128 L241,161" />
                 </circle>
             """.format(
                 dp0(pv_power), pv_speed, pv_speed, pv_speed
@@ -717,8 +717,8 @@ class WebInterface(ComponentBase):
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#2196F3">{} W</text>
                 <!-- No moving dot when PV is not generating -->
             """.format(
                 dp0(pv_power)
@@ -729,18 +729,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- Battery to House Arrow -->
-                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="192" y1="272" x2="241" y2="239" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#FF9800">{} W</text>
 
                 <!-- Moving dots for Battery to House -->
                 <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,272 L241,239" />
                 </circle>
                 <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,300 L250,250" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,272 L241,239" />
                 </circle>
                 <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,272 L241,239" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -751,18 +751,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Battery Arrow -->
-                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="258" y1="228" x2="209" y2="261" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#FF9800">{} W</text>
 
                 <!-- Moving dots for House to Battery -->
                 <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M258,228 L209,261" />
                 </circle>
                 <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M265,235 L215,275" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M258,228 L209,261" />
                 </circle>
                 <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M258,228 L209,261" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -774,18 +774,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- Grid to House Arrow -->
-                <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="408" y1="272" x2="359" y2="239" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#4CAF50">{} W</text>
 
                 <!-- Moving dots for Grid to House -->
                 <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M408,272 L359,239" />
                 </circle>
                 <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M410,290 L355,240" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M408,272 L359,239" />
                 </circle>
                 <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M408,272 L359,239" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -796,18 +796,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Grid Arrow -->
-                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="342" y1="228" x2="391" y2="261" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#4CAF50">{} W</text>
 
                 <!-- Moving dots for House to Grid -->
                 <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,228 L391,261" />
                 </circle>
                 <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M340,230 L390,270" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,228 L391,261" />
                 </circle>
                 <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,228 L391,261" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
