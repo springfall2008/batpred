@@ -1225,6 +1225,37 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
                     self.dashboard_item("sensor.{}_temp_2".format(prefix), state=device.temp_2, attributes=myenergi_attribute_table["temp_2"], app="myenergi")
 
 
+# myenergi accepts a command before the device reports it, so a read-back fired straight
+# after one still shows the old state. Long enough for the change to land, short enough
+# that a boost/cancel test is not a chore to sit through.
+COMMAND_SETTLE_SECONDS = 8
+
+
+def print_device_table(devices):  # pragma: no cover
+    """Print the device summary table, for the poll and for a command read-back alike."""
+    print("{:<12} {:<10} {:<16} {:<10} {:>10} {:>12}".format("DEVICE", "KIND", "STATUS", "MODE", "POWER W", "SESSION kWh"))
+    for device in devices:
+        print("{:<12} {:<10} {:<16} {:<10} {:>10.0f} {:>12.2f}".format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
+
+
+async def confirm_command(component, device_id):  # pragma: no cover
+    """Re-poll after a command and show the device's new state, so one run proves the effect.
+
+    Reads through the transport rather than run(), which would republish every entity and
+    bury the two lines that matter.
+    """
+    print("\nWaiting {}s for the device to report the change...".format(COMMAND_SETTLE_SECONDS))
+    await asyncio.sleep(COMMAND_SETTLE_SECONDS)
+    devices = await component.transport.fetch_devices()
+    device = next((item for item in devices if item.device_id == device_id), None)
+    if not device:
+        print("{} is no longer in the poll response".format(device_id))
+        return
+    print_device_table([device])
+    remaining = ", {} minutes remaining".format(device.boost_remaining_mins) if device.boost_remaining_mins else ""
+    print("Boost active: {}{}".format(device.boost_active, remaining))
+
+
 async def run_myenergi_cli(args):  # pragma: no cover
     """Run one myenergi poll, and optionally a boost command, against the live API."""
     mock_base = MockBase()
@@ -1234,7 +1265,10 @@ async def run_myenergi_cli(args):  # pragma: no cover
         "api_key": args.api_key,
         "key": args.token,
         "token_hash": args.token_hash,
-        "automatic": False,
+        # On by default, as it is in apps.yaml, so a harness run shows the car_charging_energy,
+        # car_charging_planned and iboost_energy_today wiring a real run would set up - that
+        # mapping is most of what there is to check before trusting the component with a car.
+        "automatic": not args.no_automatic,
         "enable_controls": True,
     }
     component = MyEnergiAPI(mock_base, **arg_dict)
@@ -1244,18 +1278,27 @@ async def run_myenergi_cli(args):  # pragma: no cover
 
     print("Connecting with the {} transport...".format(component.auth_method_config))
     await component.transport.connect()
-    devices = await component.transport.fetch_devices()
+
+    # One whole component cycle, as the other harnesses do, rather than a bare
+    # fetch_devices(): publishing is part of run(), so a raw fetch shows the readings but
+    # none of the sensors, switches and numbers a real run creates - which is exactly what
+    # this harness is used to check before wiring the component into apps.yaml.
+    print("Running one poll cycle...")
+    if not await component.run(0, True):
+        print("The poll cycle failed - see the messages above")
+        return
+    devices = sorted(component.devices.values(), key=lambda item: item.serial)
     if not devices:
         print("No Zappi or Eddi devices found")
         return
+
+    print("")
 
     if args.raw:
         for device in devices:
             print(device)
     else:
-        print("{:<12} {:<10} {:<16} {:<10} {:>10} {:>12}".format("DEVICE", "KIND", "STATUS", "MODE", "POWER W", "SESSION kWh"))
-        for device in devices:
-            print("{:<12} {:<10} {:<16} {:<10} {:>10.0f} {:>12.2f}".format(device.device_id, device.kind, device.status, device.mode, device.power_w, device.session_energy_kwh))
+        print_device_table(devices)
 
     # The three supply modes Predbat-led charge control drives a Zappi between, so the
     # same commands the component issues can be exercised by hand against a live charger.
@@ -1271,9 +1314,9 @@ async def run_myenergi_cli(args):  # pragma: no cover
         if not zappi:
             print("No Zappi found to control")
             return
-        print("Setting {} to {}...".format(zappi.name, mode))
+        print("\nSetting {} to {}...".format(zappi.name, mode))
         await component.transport.set_mode(zappi, mode)
-        print("Done - run again with no action to see the new mode")
+        await confirm_command(component, zappi.device_id)
         return
 
     target_kind = args.boost or args.cancel_boost
@@ -1283,12 +1326,12 @@ async def run_myenergi_cli(args):  # pragma: no cover
             print("No {} device found to control".format(target_kind))
             return
         if args.boost:
-            print("Boosting {} by {}...".format(device.name, args.amount))
+            print("\nBoosting {} by {}...".format(device.name, args.amount))
             await component.transport.send_boost(device, args.amount)
         else:
-            print("Cancelling boost on {}...".format(device.name))
+            print("\nCancelling boost on {}...".format(device.name))
             await component.transport.cancel_boost(device)
-        print("Done")
+        await confirm_command(component, device.device_id)
 
 
 def main():  # pragma: no cover
@@ -1307,6 +1350,7 @@ def main():  # pragma: no cover
     charge_group.add_argument("--start-charge", action="store_true", help="Put the first Zappi in {} to charge now, as a planned window does".format(ZAPPI_MODE_CHARGING))
     charge_group.add_argument("--stop-charge", action="store_true", help="Put the first Zappi in {}, as being outside a planned window does".format(ZAPPI_MODE_STOPPED))
     charge_group.add_argument("--release", action="store_true", help="Put the first Zappi back in {}, as releasing it does".format(ZAPPI_MODE_RELEASE))
+    parser.add_argument("--no-automatic", action="store_true", help="Skip the automatic configuration of car_charging_energy, car_charging_planned and iboost_energy_today")
     parser.add_argument("--raw", action="store_true", help="Print the full normalised device records")
 
     args = parser.parse_args()

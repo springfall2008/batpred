@@ -543,7 +543,7 @@ Predbat supports both of myenergi's APIs:
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `auth_method` | String | No | `direct` | `myenergi_auth_method` | `direct` (local digest API) or `oauth` (official cloud API) |
-| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct` |
+| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct`. It is the API login rather than a device filter, so it cannot default to all devices; one serial reads every device on the account. With no hub, use the serial the API key was generated against |
 | `api_key` | String | No | - | `myenergi_api_key` | API key generated at myaccount.myenergi.com — required when `auth_method` is `direct` |
 | `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
 | `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
@@ -570,7 +570,9 @@ myenergi_api_key: !secret myenergi_api_key
 1. Sign in at <https://myaccount.myenergi.com>.
 2. Open **Advanced** then **API Key**.
 3. Generate a key for your hub and copy it.
-4. Your hub serial number is printed on the hub and shown in the myenergi app.
+4. Your hub serial number is printed on the hub and shown in the myenergi app. If you have no hub, use the serial of the device
+   acting as one — the Zappi or Eddi you generated the key against. Either way a single serial is enough, because it is the
+   login for the account rather than a choice of which device to read: Predbat discovers every Zappi and Eddi behind it.
 
 #### Published entities (myenergi)
 

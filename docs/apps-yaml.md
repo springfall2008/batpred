@@ -1906,10 +1906,15 @@ The direct transport (the default) needs your hub serial number and an API key y
   myenergi_api_key: !secret myenergi_api_key
 ```
 
+The hub serial is the login for the direct API - it is sent as the HTTP digest username, with the API key as the password -
+and not a filter naming which device to read, so there is no 'all devices' value and it cannot be left out. One serial is all
+you need: Predbat asks for every device on the account in a single call and publishes each Zappi and Eddi it finds. If you have
+no hub, use the serial of the device acting as one, which is the Zappi or Eddi the API key was generated against.
+
 **Configuration options:**
 
 - **myenergi_auth_method** - `direct` (default, local digest API) or `oauth` (official cloud API)
-- **myenergi_hub_serial** - Hub serial number, printed on the hub and shown in the myenergi app - required when `myenergi_auth_method` is `direct`
+- **myenergi_hub_serial** - Hub serial number, printed on the hub and shown in the myenergi app - required when `myenergi_auth_method` is `direct`, and the serial of your Zappi or Eddi if you have no hub
 - **myenergi_api_key** - API key generated at [myaccount.myenergi.com](https://myaccount.myenergi.com) (Advanced → API Key) - required when `myenergi_auth_method` is `direct`
 - **myenergi_key** - OAuth access token, cloud transport
 - **myenergi_token_hash** - OAuth refresh token hash, used to refresh `myenergi_key` automatically - at least one of `myenergi_key` or `myenergi_token_hash` is required when `myenergi_auth_method` is `oauth`
