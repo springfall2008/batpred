@@ -140,6 +140,16 @@ COMPONENT_LIST = {
                 "default": False,
                 "config": "ge_cloud_automatic",
             },
+            "automatic_evc": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_automatic_evc",
+            },
+            "evc_control": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_evc_control",
+            },
         },
         "phase": 1,
     },

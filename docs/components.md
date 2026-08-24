@@ -218,10 +218,80 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
+| `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### EV chargers (gecloud)
+
+Every GivEnergy EV charger on the account is polled alongside the inverters and publishes
+its meter readings as `sensor.predbat_gecloud_<serial>_evc_*` entities, plus two entities
+describing the charger itself:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_gecloud_<serial>_evc_status` | The charger's status as GivEnergy reports it, e.g. `charging`, `idle`, `offline` |
+| `binary_sensor.predbat_gecloud_<serial>_evc_car_connected` | `on` while a car is plugged in, from the status above |
+
+Those two entities are published whatever your settings say — they are new entities and
+change nothing that already exists.
+
+Setting `ge_cloud_automatic_evc` to `true` additionally wires the chargers into Predbat's
+car planning, in serial order so charger N is car N:
+
+- **car_charging_energy** — each charger's `_evc_energy_active_import_register`, so
+  `car_charging_hold` subtracts the car charging from house load precisely instead of
+  falling back to the `car_charging_threshold` heuristic
+- **car_charging_planned** — each charger's `_evc_car_connected`, so Predbat only plans
+  car charging when there is actually a car on the cable
+- **num_cars** — raised to the number of chargers if it is currently lower, never reduced,
+  since another component may have registered cars of its own
+
+This is deliberately a separate setting from `ge_cloud_automatic` rather than part of it:
+it registers a car and moves `num_cars`, which would change the plan for existing users
+who had only ever asked for their inverter to be configured. It runs whether or not a
+GivEnergy battery is present, so a GivEnergy charger alongside another manufacturer's
+battery is configured too. Everything else about the car —
+**car_charging_battery_size**, **car_charging_limit** and **car_charging_soc** — still
+comes from `apps.yaml` as usual.
+
+`car_charging_planned` is wired to a binary sensor rather than to the status sensor on
+purpose: it answers `on`, which the default **car_charging_planned_response** already
+matches, so this works without you having to add GivEnergy's status words to that list.
+If your charger reports a status Predbat does not recognise it is treated as no car
+connected and logged once, so please report the value from the log so it can be added.
+
+#### Charger control (gecloud)
+
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
+plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+follows car N, in the same serial order the automatic configuration uses, so the two cannot
+disagree about which charger is which car.
+
+`ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
+the charger to car mapping. Predbat says so in the log and leaves control off rather than
+guessing if you enable control without it.
+
+- A command is only sent when the wanted state actually changes, so a charger already
+  charging inside a window is left alone rather than commanded every minute
+- A charger with no car plugged in is never commanded — Predbat waits for
+  `_evc_car_connected` to go `on`
+- Nothing is commanded until Predbat has published a car plan, so a restart cannot stop a
+  charge that is already running
+
+A `switch.predbat_gecloud_evc_control` entity appears when control is enabled, on by
+default, so you can hand the charger back without editing `apps.yaml`. Turning it off — or
+putting Predbat into read only mode — **releases** rather than just going quiet: if Predbat
+had stopped the charger it sends `start-charge` once on the way out, so a car is never left
+stranded by a charger Predbat walked away from. The switch state is saved, so an off
+survives a restart.
+
+Unlike a Zappi, there is no previous mode to restore on release: `start-charge` and
+`stop-charge` are commands rather than modes, so your charger's own mode (Grid, Hybrid,
+Solar) still decides what happens once Predbat lets go.
 
 #### How to get your API key (gecloud)
 

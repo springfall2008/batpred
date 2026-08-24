@@ -25,7 +25,6 @@ can configure today, and a bearer-token transport for the official 3rd party API
 
 import argparse
 import asyncio
-import datetime
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ from component_base import ComponentBase
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 from predbat_metrics import record_api_call
+from utils import parse_car_plan_windows, in_car_plan_window
 
 MYENERGI_DIRECTOR_URL = "https://director.myenergi.net"
 MYENERGI_CLOUD_URL = "https://api.s18.myenergi.net"
@@ -111,10 +111,6 @@ BOOST_MINUTES_MAX = 240
 
 # Boosting a Zappi is only accepted while it is in one of the green-energy modes.
 ZAPPI_BOOSTABLE_MODES = ("Eco", "Eco+")
-
-# How output.py formats the start/end of each planned car charging window. It carries no
-# year, so a parsed window has to be rebuilt around the current time.
-PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
 
 # The two modes Predbat-led charge control drives a Zappi between, and the mode a
 # released Zappi falls back to when nothing was saved to restore.
@@ -884,26 +880,11 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
 
     def _parse_plan_windows(self, planned, now):
         """Turn one car's published plan into a list of localised (start, end) pairs."""
-        parsed = []
-        for window in planned:
-            try:
-                start = self.local_tz.localize(datetime.datetime.strptime(window["start"], PLAN_TIME_FORMAT).replace(year=now.year))
-                end = self.local_tz.localize(datetime.datetime.strptime(window["end"], PLAN_TIME_FORMAT).replace(year=now.year))
-            except (KeyError, TypeError, ValueError):
-                # One malformed entry must not cost the rest of the plan
-                continue
-            # The plan carries no year, so rebuild it around now for windows crossing New Year
-            if start < now - datetime.timedelta(hours=23):
-                start = start.replace(year=start.year + 1)
-                end = end.replace(year=end.year + 1)
-            elif end < start:
-                end = end.replace(year=end.year + 1)
-            parsed.append((start, end))
-        return parsed
+        return parse_car_plan_windows(planned, now, self.local_tz)
 
     def should_charge_now(self, car_n, now):
         """Is now inside one of the planned charging windows for this car."""
-        return any(start <= now < end for start, end in self.control_windows.get(car_n, []))
+        return in_car_plan_window(self.control_windows.get(car_n, []), now)
 
     def enable_control(self):
         """Decide whether Predbat-led Zappi control should run, and say why when it will not.

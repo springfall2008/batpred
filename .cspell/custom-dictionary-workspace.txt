@@ -554,6 +554,8 @@ substep
 sunspec
 sunsynk
 supabase
+suspendedev
+suspendedevse
 synkctl
 syscmd
 sysdn

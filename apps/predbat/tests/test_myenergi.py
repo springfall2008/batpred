@@ -974,6 +974,39 @@ def test_control_window_parsing():
     print("  ✓ Planned car charging windows are parsed and matched against the clock")
 
 
+def test_control_windows_across_new_year():
+    """A window spanning New Year is still matched, read from either side of midnight.
+
+    The plan carries no year, so a window read just after midnight on 1 January parses
+    its 31 December start as this year - eleven months in the future - unless the year is
+    rebuilt around the clock. Getting this wrong stops a car mid-charge once a year.
+    """
+    crossing = _plan_window(datetime.datetime(2026, 12, 31, 23, 0), datetime.datetime(2027, 1, 1, 5, 0))
+    component = _control_component(plans={0: [crossing]})
+
+    before_midnight = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 30))
+    assert component.refresh_car_windows(before_midnight) is True
+    assert component.should_charge_now(0, before_midnight) is True, "The window is active before midnight"
+
+    after_midnight = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 0, 30))
+    assert component.refresh_car_windows(after_midnight) is True
+    assert component.should_charge_now(0, after_midnight) is True, "The same window is still active after midnight"
+
+    ended = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 6, 0))
+    assert component.refresh_car_windows(ended) is True
+    assert component.should_charge_now(0, ended) is False, "The window has ended by 06:00"
+
+    # A window genuinely far ahead must not be dragged back a year by the rebuild - the
+    # plan reaches 48 hours, well beyond the 23 hour margin the first version allowed
+    ahead = _plan_window(datetime.datetime(2026, 8, 23, 20, 0), datetime.datetime(2026, 8, 24, 2, 0))
+    component = _control_component(plans={0: [ahead]})
+    now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 10, 0))
+    assert component.refresh_car_windows(now) is True
+    assert component.should_charge_now(0, now) is False, "A window 34 hours ahead has not started"
+    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
+    print("  ✓ Windows spanning New Year are matched from both sides of midnight")
+
+
 def test_control_windows_are_per_car():
     """Each car's own slot sensor drives its own Zappi, so car 1 does not follow car 0."""
     car0 = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
@@ -2350,6 +2383,7 @@ def test_myenergi(my_predbat=None):
     test_cloud_one_bad_device_does_not_lose_the_others()
     test_cloud_auth_error_still_aborts_the_poll()
     test_control_window_parsing()
+    test_control_windows_across_new_year()
     test_control_windows_are_per_car()
     test_control_windows_tolerate_a_bad_entry_and_a_missing_plan()
     test_control_windows_cross_the_year_boundary()
