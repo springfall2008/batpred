@@ -454,7 +454,7 @@ If there are any gaps in the 24-hour period then a zero rate will be assumed.
 **utc** can be set to `true` on a rate band to say that its start and end times are given in UTC
 rather than local time. Predbat then shifts the band by the local offset, so it stays aligned with
 your meter through British Summer Time instead of running an hour early. Use this when your meter's
-schedule is fixed to UTC - Octopus fix the Economy 7 smart-meter off-peak period to 00:30-07:30 UTC,
+schedule is fixed to UTC - Octopus fixes the Economy 7 smart-meter off-peak period to 00:30-07:30 UTC,
 which falls at 01:30-08:30 local during BST.
 
 ```yaml
