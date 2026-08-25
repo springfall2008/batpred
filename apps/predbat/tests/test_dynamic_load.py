@@ -7,6 +7,8 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
+import copy
+
 from const import PREDICT_STEP
 from tests.test_infra import reset_inverter
 
@@ -173,6 +175,33 @@ def test_dynamic_load_car_slot_cancellation(my_predbat):
 
 def test_dynamic_load_high_load_baseline(my_predbat):
     """
+    Test the high-load baseline scenarios without leaking car state into later tests.
+    """
+    state_fields = (
+        "num_cars",
+        "minutes_now",
+        "battery_rate_max_discharge",
+        "car_charging_threshold",
+        "car_charging_slots",
+        "car_energy_reported_load",
+        "car_charging_hold",
+        "car_charging_energy",
+        "load_last_period",
+        "load_last_status",
+        "load_last_car_slot",
+        "metric_dynamic_load_adjust",
+        "dynamic_load_baseline",
+    )
+    saved_state = {field: copy.deepcopy(getattr(my_predbat, field)) for field in state_fields}
+    try:
+        return _run_dynamic_load_high_load_baseline(my_predbat)
+    finally:
+        for field, value in saved_state.items():
+            setattr(my_predbat, field, value)
+
+
+def _run_dynamic_load_high_load_baseline(my_predbat):
+    """
     Test the dynamic_load high-load branch which raises the near-term load forecast
     (dynamic_load_baseline) to match an observed load spike, e.g. a car charging
     outside any known/planned (including Octopus dispatch) slot.
@@ -216,7 +245,7 @@ def test_dynamic_load_high_load_baseline(my_predbat):
     # floor is needed.
     print("Test 2: High load, car recognised in a fully-covering slot")
     my_predbat.load_last_status = "baseline"
-    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 3.0}]
+    my_predbat.car_charging_slots[0] = [{"start": my_predbat.minutes_now - PREDICT_STEP, "end": minutes_end_slot, "kwh": 3.5}]
     my_predbat.car_energy_reported_load = True
 
     my_predbat.dynamic_load()
@@ -277,7 +306,7 @@ def test_dynamic_load_high_load_baseline(my_predbat):
     my_predbat.car_energy_reported_load = True
     my_predbat.car_charging_hold = True
     my_predbat.car_charging_energy = {0: 0.5}  # 0.5kWh measured in the latest 5-minute period
-    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 3.0}], [], [], []]
+    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now - PREDICT_STEP, "end": minutes_end_slot, "kwh": 3.5}], [], [], []]
 
     my_predbat.dynamic_load()
 
@@ -288,12 +317,12 @@ def test_dynamic_load_high_load_baseline(my_predbat):
         failed = True
 
     # Test 6: When the car-energy sensor has no current increment, the planned-slot fallback is
-    # converted from kW to kWh before it is removed from the measured load.
-    print("Test 6: Planned car power fallback uses kWh per prediction step")
+    # converted from kW to kWh over the trailing period before it is removed from the measured load.
+    print("Test 6: Planned car power fallback uses trailing-period kWh")
     my_predbat.load_last_period = 6.0  # 4.8kW car plus 1.2kW house load
     my_predbat.load_last_status = "high"
     my_predbat.car_charging_energy = {}
-    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 2.4}], [], [], []]
+    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now - 30, "end": my_predbat.minutes_now, "kwh": 2.4}], [], [], []]
 
     my_predbat.dynamic_load()
 
@@ -309,11 +338,11 @@ def test_dynamic_load_high_load_baseline(my_predbat):
     my_predbat.load_last_period = 7.2  # 6kW car plus 1.2kW house load
     my_predbat.load_last_status = "high"
     my_predbat.car_charging_energy = {0: 0.1}  # Sensor has only caught up with part of the 0.5kWh
-    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now, "end": minutes_end_slot, "kwh": 3.0}], [], [], []]
+    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now - PREDICT_STEP, "end": minutes_end_slot, "kwh": 3.5}], [], [], []]
 
     my_predbat.dynamic_load()
 
-    expected_residual = 0.1  # 0.6kWh measured load - planned 3.0kWh / 30min * 5min = 0.1kWh
+    expected_residual = 0.1  # 0.6kWh measured load - planned 3.5kWh / 35min * 5min = 0.1kWh
     next_slot_value = my_predbat.dynamic_load_baseline.get(minutes_end_slot)
     if next_slot_value is None or abs(next_slot_value - expected_residual) > 0.001:
         print(f"ERROR: Expected lagging-sensor next-slot baseline to be {expected_residual}, got {next_slot_value}")

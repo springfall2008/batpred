@@ -190,11 +190,13 @@ class Plan:
         # load_last_period. If the sensor has no current increment, retain the planned-slot fallback
         # below for a charger whose energy sensor is lagging.
         load_last_period_energy = self.load_last_period / 60 * PREDICT_STEP
-        # The planned current-slot power is also an upper-bound estimate for a sensor that has
-        # not caught up yet. Convert kW to kWh for the same prediction step as the load baseline.
-        car_load_planned = 0
+        # Planned car energy is also an upper-bound estimate for a sensor that has not caught up
+        # yet. Calculate it over the same trailing period as load_last_period, including partial
+        # slot overlaps, then convert the per-minute kW values to kWh.
+        car_load_planned = 0.0
         if self.car_energy_reported_load:
-            car_load_planned = sum(in_car_slot(self.minutes_now, self.num_cars, self.car_charging_slots)[0]) * PREDICT_STEP / 60
+            for minute in range(self.minutes_now - PREDICT_STEP, self.minutes_now):
+                car_load_planned += sum(in_car_slot(minute, self.num_cars, self.car_charging_slots)[0]) / 60
 
         car_energy_sensor_used = False
         if self.car_energy_reported_load and self.car_charging_hold and self.car_charging_energy:
@@ -207,7 +209,7 @@ class Plan:
                 if car_load_planned > car_energy_last_period:
                     self.log("Dynamic load adjust used planned car energy {:.2f}kWh because the sensor reported only {:.2f}kWh".format(car_load_planned, car_energy_last_period))
 
-        # If measured car energy was unavailable, use the planned current-slot power as a fallback.
+        # If measured car energy was unavailable, use the planned trailing-period energy as a fallback.
         if self.car_energy_reported_load and not car_energy_sensor_used:
             load_last_period_energy = max(load_last_period_energy - car_load_planned, 0)
 
