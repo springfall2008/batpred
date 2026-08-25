@@ -15,6 +15,7 @@ methods: a real StorageComponent/StorageLocalFiles backend wrapped in a minimal
 _MockComponents shim, rather than mocking the storage calls themselves.
 """
 
+import os
 import shutil
 import tempfile
 from datetime import timedelta
@@ -72,6 +73,11 @@ def test_debug_history_capture(my_predbat):
             failed += 1
         if my_predbat.debug_history_last_capture != my_predbat.now_utc:
             print("  FAILED: debug_history_last_capture should be updated to now_utc")
+            failed += 1
+        debug_dir = os.path.join(tmpdir, "debug")
+        mirrored = [f for f in os.listdir(debug_dir)] if os.path.isdir(debug_dir) else []
+        if len(mirrored) != 1:
+            print("  FAILED: expected _capture_debug_history() to also write one file into config_root/debug/ (#4720), got {}".format(mirrored))
             failed += 1
 
         print("Test 2: a second call well within the interval is skipped")
