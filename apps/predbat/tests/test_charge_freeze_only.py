@@ -42,6 +42,8 @@ def run_charge_freeze_only_tests(my_predbat):
         failed |= test_freeze_only_search_drops_an_incoming_grid_charge(my_predbat)
         failed |= test_price_threads_returns_no_grid_charge(my_predbat)
         failed |= test_price_threads_does_not_simulate_forbidden_charges(my_predbat)
+        failed |= test_windows_can_still_be_turned_off_with_best_soc_min_set(my_predbat)
+        failed |= test_both_permitted_outcomes_considered_with_best_soc_min_set(my_predbat)
     finally:
         my_predbat.__dict__.clear()
         my_predbat.__dict__.update(saved_state)
@@ -102,7 +104,7 @@ def test_reset_defaults_to_off():
     return False
 
 
-def setup_scenario(my_predbat, set_charge_freeze_only, set_charge_freeze=True):
+def setup_scenario(my_predbat, set_charge_freeze_only, set_charge_freeze=True, best_soc_min=0.0):
     """
     Build a day of half-hourly windows whose prices cycle 0..15p with a small constant load and a
     nearly empty battery. Without any restriction the optimiser grid charges in the cheap windows
@@ -132,6 +134,7 @@ def setup_scenario(my_predbat, set_charge_freeze_only, set_charge_freeze=True):
     my_predbat.best_soc_keep_weight = 0.5
     my_predbat.set_charge_freeze = set_charge_freeze
     my_predbat.set_charge_freeze_only = set_charge_freeze_only
+    my_predbat.best_soc_min = best_soc_min
     my_predbat.debug_enable = False
 
     reset_rates(my_predbat, 10.0, 5.5)
@@ -157,10 +160,10 @@ def setup_scenario(my_predbat, set_charge_freeze_only, set_charge_freeze=True):
     return charge_window_best
 
 
-def run_plan(my_predbat, name, set_charge_freeze_only, set_charge_freeze=True):
+def run_plan(my_predbat, name, set_charge_freeze_only, set_charge_freeze=True, best_soc_min=0.0):
     """Set up the scenario and run a full optimisation over it, returning the resulting limits"""
     print("**** {} ****".format(name))
-    charge_window_best = setup_scenario(my_predbat, set_charge_freeze_only, set_charge_freeze)
+    charge_window_best = setup_scenario(my_predbat, set_charge_freeze_only, set_charge_freeze, best_soc_min)
     metric, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
         my_predbat.charge_limit_best, charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, False, end_record=my_predbat.end_record
     )
@@ -405,3 +408,63 @@ def test_price_threads_does_not_simulate_forbidden_charges(my_predbat):
         print("ERROR: set_charge_freeze_only simulated {} scenarios vs {} with the switch off - forbidden charges are still being searched".format(simulations_on, simulations_off))
         return True
     return False
+
+
+def candidates_considered(my_predbat, set_charge_freeze_only, best_soc_min):
+    """The SoC candidates optimise_charge_limit actually simulates for the first charge window"""
+    charge_window_best = setup_scenario(my_predbat, set_charge_freeze_only, best_soc_min=best_soc_min)
+    seen = []
+    original = my_predbat.launch_run_prediction_charge
+
+    def spy(loop_soc, *args, **kwargs):
+        seen.append(loop_soc)
+        return original(loop_soc, *args, **kwargs)
+
+    my_predbat.launch_run_prediction_charge = spy
+    try:
+        my_predbat.optimise_charge_limit(0, len(charge_window_best), my_predbat.charge_limit_best, charge_window_best, my_predbat.export_window_best, my_predbat.export_limits_best, end_record=my_predbat.end_record)
+    finally:
+        my_predbat.launch_run_prediction_charge = original
+    return sorted(set(seen))
+
+
+def test_windows_can_still_be_turned_off_with_best_soc_min_set(my_predbat):
+    """
+    optimise_charge_limit's "off" candidate is best_soc_min_setting, which is max(reserve,
+    best_soc_min) - so with best_soc_min above the reserve it is a real charge target that would
+    import, and the switch has to drop it. Dropping it without putting a genuine off candidate back
+    leaves the freeze as the window's only option, forcing a freeze on every window even where
+    turning it off is cheaper. Both permitted outcomes must survive.
+    """
+    print("**** test_windows_can_still_be_turned_off_with_best_soc_min_set ****")
+    charge_limit_best = run_plan(my_predbat, "best_soc_min_above_reserve", set_charge_freeze_only=True, best_soc_min=2.0)
+    above_reserve = [(n, limit) for n, limit in enumerate(charge_limit_best) if limit > my_predbat.reserve]
+    if above_reserve:
+        print("ERROR: planned grid charges at windows {}".format(above_reserve))
+        return True
+    if not [limit for limit in charge_limit_best if limit == 0]:
+        print("ERROR: every window was forced to a freeze, none could be turned off - limits {}".format(charge_limit_best))
+        return True
+    return False
+
+
+def test_both_permitted_outcomes_considered_with_best_soc_min_set(my_predbat):
+    """
+    The switch permits exactly two outcomes for a charge window - off, and a freeze at the reserve -
+    and the optimiser has to be able to weigh both. The "off" candidate it would otherwise use is
+    best_soc_min_setting, which is max(reserve, best_soc_min) and so is a real charge target once
+    best_soc_min is above the reserve; dropping that as a forbidden import must not leave the freeze
+    as the window's only candidate, or the search becomes a foregone conclusion.
+
+    best_soc_min changes neither permitted outcome, so the candidate set must not depend on it. Note
+    the unrestricted optimiser does not offer 0.0 here at all - its low candidate is
+    best_soc_min_setting - so this is specific to the switch.
+    """
+    print("**** test_both_permitted_outcomes_considered_with_best_soc_min_set ****")
+    failed = False
+    for best_soc_min in (0.0, 2.0):
+        candidates = candidates_considered(my_predbat, True, best_soc_min)
+        if candidates != [0.0, my_predbat.reserve]:
+            print("ERROR: with best_soc_min {} the candidates should be off and freeze [0.0, {}] but got {}".format(best_soc_min, my_predbat.reserve, candidates))
+            failed = True
+    return failed

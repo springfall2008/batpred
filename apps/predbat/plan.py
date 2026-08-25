@@ -2007,12 +2007,18 @@ class Plan:
                 try_socs.remove(self.reserve)
 
         if charge_freeze_only:
-            # The freeze_only branch above seeds the candidates with the window's existing limit, so
-            # a plan built before the switch was turned on could carry a grid charge back into the
-            # new plan. Nothing above the reserve may survive the search.
-            try_socs = [try_soc for try_soc in try_socs if try_soc <= self.reserve]
-            if not try_socs:
-                try_socs = [self.reserve if allow_freeze else 0.0]
+            # Grid charging is forbidden, so the window has exactly two permitted outcomes: off, and
+            # a freeze at the reserve. Build them rather than filter the candidates assembled above,
+            # because those can be forbidden in two different ways - best_soc_min_setting is
+            # max(reserve, best_soc_min) and so is a real charge target whenever best_soc_min is
+            # above the reserve, and the freeze_only branch seeds the list with the window's existing
+            # limit, which a plan built before the switch was turned on can leave as a grid charge.
+            # Filtering those out alone would leave the freeze as the only candidate whenever
+            # best_soc_min is set, making the search a foregone conclusion. Off goes first to keep
+            # the priority the branches above give it.
+            try_socs = [0.0]
+            if allow_freeze and self.reserve not in try_socs:
+                try_socs.append(self.reserve)
 
         # Run the simulations in parallel
         results = []
