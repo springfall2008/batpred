@@ -8,6 +8,7 @@ mocked - nothing here touches a real repo, GitHub, or Claude Code session.
 """
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -320,6 +321,81 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
         self.patches["mark_pr_failed"].assert_called_once_with(4720)
         self.patches["mark_pr_opened"].assert_not_called()
+
+
+class FetchBotReviewIssuesTests(unittest.TestCase):
+    """Tests for fetch_bot_review_issues(), new in the BOT_REVIEW flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_queries_open_issues_labelled_bot_review(self, mock_run):
+        """Calls gh issue list scoped to the BOT_REVIEW label and returns the parsed issues."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 3100, "labels": [{"name": "BOT_REVIEW"}]}]))
+        result = triage_daemon.fetch_bot_review_issues()
+        self.assertEqual(result, [{"number": 3100, "labels": [{"name": "BOT_REVIEW"}]}])
+        args = mock_run.call_args[0][0]
+        self.assertIn("--label", args)
+        self.assertEqual(args[args.index("--label") + 1], "BOT_REVIEW")
+
+
+class RemoveReviewLabelTests(unittest.TestCase):
+    """Tests for remove_review_label(), new in the BOT_REVIEW flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_removes_bot_review_label(self, mock_run):
+        """Removes BOT_REVIEW, adds nothing."""
+        triage_daemon.remove_review_label(3100)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "issue", "edit", "3100", "--remove-label", "BOT_REVIEW"])
+
+
+class MarkReviewFailedTests(unittest.TestCase):
+    """Tests for mark_review_failed(), new in the BOT_REVIEW flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_comments_then_swaps_labels(self, mock_run):
+        """Posts an explanatory comment, then swaps BOT_REVIEW for BOT_FAILED."""
+        triage_daemon.mark_review_failed(3100)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertEqual(calls[0][:3], ["gh", "issue", "comment"])
+        self.assertEqual(calls[1], ["gh", "issue", "edit", "3100", "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"])
+
+
+class ProcessBotReviewIssueTests(unittest.TestCase):
+    """Tests for process_bot_review_issue(), new in the BOT_REVIEW flow."""
+
+    def setUp(self):
+        """Patch every collaborator process_bot_review_issue() calls."""
+        self.patches = {}
+        for name in ["ensure_triaged", "sync_repo", "reset_scratch", "triage", "remove_review_label", "mark_review_failed"]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_already_triaged_just_removes_the_label(self):
+        """An already-triaged issue skips triage() entirely."""
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}]})
+        self.patches["triage"].assert_not_called()
+        self.patches["remove_review_label"].assert_called_once_with(3100)
+        self.patches["mark_review_failed"].assert_not_called()
+
+    def test_not_triaged_runs_triage_then_removes_the_label(self):
+        """An untriaged issue is synced, triaged, then the trigger label is removed."""
+        self.patches["ensure_triaged"].return_value = False
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": []})
+        self.patches["sync_repo"].assert_called_once()
+        self.patches["reset_scratch"].assert_called_once()
+        self.patches["triage"].assert_called_once_with(3100)
+        self.patches["remove_review_label"].assert_called_once_with(3100)
+        self.patches["mark_review_failed"].assert_not_called()
+
+    def test_failed_triage_marks_failed_instead_of_removing_the_label(self):
+        """A triage() failure swaps to BOT_FAILED rather than retrying next poll."""
+        self.patches["ensure_triaged"].return_value = False
+        self.patches["triage"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": []})
+        self.patches["mark_review_failed"].assert_called_once_with(3100)
+        self.patches["remove_review_label"].assert_not_called()
 
 
 if __name__ == "__main__":

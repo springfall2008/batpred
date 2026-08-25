@@ -415,6 +415,68 @@ def process_bot_pr_issue(issue):
         mark_pr_failed(issue_number)
 
 
+def fetch_bot_review_issues():
+    """Return open issues currently labelled BOT_REVIEW, each with its full label list."""
+    result = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,labels"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def remove_review_label(issue_number):
+    """Remove BOT_REVIEW once the issue is confirmed triaged, so it isn't reprocessed."""
+    subprocess.run(["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_REVIEW"], check=True)
+
+
+def mark_review_failed(issue_number):
+    """Post a note and swap BOT_REVIEW for BOT_FAILED, so a failing triage isn't
+    retried (and re-billed) every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW
+    to retry once the underlying issue is fixed.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "comment",
+            str(issue_number),
+            "--body",
+            "Automated triage failed to complete for this issue - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
+def process_bot_review_issue(issue):
+    """Run /issue-triage on an issue tagged BOT_REVIEW if it isn't already triaged,
+    then remove the trigger label. Exists for issues older than the daemon's
+    last_processed pointer, which the new-issue poll never sees.
+
+    A failed triage swaps BOT_REVIEW for BOT_FAILED instead of leaving BOT_REVIEW in
+    place, so a persistently failing issue isn't retried every poll cycle.
+    """
+    issue_number = issue["number"]
+    labels = issue.get("labels", [])
+    if ensure_triaged(issue_number, labels):
+        remove_review_label(issue_number)
+        return
+    sync_repo()
+    reset_scratch()
+    try:
+        triage(issue_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review] issue #{issue_number}: triage failed: {exc}", flush=True)
+        mark_review_failed(issue_number)
+        return
+    remove_review_label(issue_number)
+
+
 def main():
     if not CLONE_DIR.exists():
         raise SystemExit(f"Expected a git clone at {CLONE_DIR} - see setup steps before running this daemon.")
@@ -430,6 +492,8 @@ def main():
                 save_state(state)
             for issue in fetch_bot_pr_issues():
                 process_bot_pr_issue(issue)
+            for issue in fetch_bot_review_issues():
+                process_bot_review_issue(issue)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)
