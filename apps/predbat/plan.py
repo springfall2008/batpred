@@ -5301,11 +5301,7 @@ class Plan:
         iboost_soc = [0.0 for _ in range(total_days)]
         iboost_soc[0] = self.iboost_today
 
-        self.log(
-            "Create iBoost forecast plan, demand {} kWh, stored {} kWh, capacity {} kWh, reserve {} kWh, max {} kWh/day, power {} kW".format(
-                dp2(sum(demand)), dp2(stored_start), capacity, reserve, iboost_max, dp2(self.iboost_max_power * 60)
-            )
-        )
+        self.log("Create iBoost forecast plan, demand {} kWh, stored {} kWh, capacity {} kWh, reserve {} kWh, max {} kWh/day, power {} kW".format(dp2(sum(demand)), dp2(stored_start), capacity, reserve, iboost_max, dp2(self.iboost_max_power * 60)))
 
         # Earliest-deadline, cheapest-first booking: cover each draw from the cheapest eligible
         # earlier interval, preferring intervals adjacent to already-booked ones on price ties so
