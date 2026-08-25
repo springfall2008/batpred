@@ -142,6 +142,18 @@ class Execute:
         in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
         in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
 
+        # Safeguard for set_charge_freeze_only: the planner never selects a charge target above the
+        # reserve while the switch is on, but a plan computed before it was turned on can still be
+        # in play (plans are only recomputed every few minutes, and are held across cycles by
+        # metric_min_improvement_plan), and with calculate_best_charge off the limits come from the
+        # inverter's own settings rather than the planner at all. Clamp here so the battery can
+        # never be charged from the grid, whatever the plan says.
+        if self.set_charge_freeze_only:
+            for window_n in range(len(self.charge_limit_best)):
+                if self.charge_limit_best[window_n] > self.reserve and not self.is_freeze_charge(self.charge_limit_best[window_n]):
+                    self.log("Warn: Charge limit {}kWh for window {} clamped to freeze charge as set_charge_freeze_only is enabled".format(self.charge_limit_best[window_n], window_n))
+                    self.charge_limit_best[window_n] = self.reserve
+
         if self.holiday_days_left > 0:
             status = "Demand (Holiday)"
         else:
@@ -624,10 +636,11 @@ class Execute:
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
                 if isExporting:
+                    export_target_percent = self.export_target_soc_percent()
                     if not disabled_export and not self.set_reserve_enable:
                         # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                         # as some inverters can use this as a target for discharge
-                        self.adjust_battery_target_multi(inverter, int(self.export_limits_best[0]), isCharging, isExporting)
+                        self.adjust_battery_target_multi(inverter, export_target_percent, isCharging, isExporting)
                     elif not inverter.inv_has_discharge_enable_time:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                     elif not self.inverter_hybrid and self.inverter_soc_reset and inverter.inv_has_target_soc:
@@ -642,7 +655,7 @@ class Execute:
                     if self.set_export_freeze and self.export_limits_best[0] == EXPORT_LIMIT_FREEZE:
                         inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                     elif not disabled_export:
-                        inverter.adjust_export_immediate(int(self.export_limits_best[0]))
+                        inverter.adjust_export_immediate(export_target_percent)
                     else:
                         inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))  # Dead code right, but kept in case other logic changes
 
@@ -798,6 +811,27 @@ class Execute:
         if not check:
             inverter.adjust_battery_target(new_soc_percent, is_charging, is_exporting)
         return new_soc_percent
+
+    def export_target_soc_percent(self):
+        """
+        Work out the SoC % to hand to the inverter as the export target
+
+        Normally this is just the planned export limit. Where Predbat does not own a reserve register
+        (set_reserve_enable off) the target is the only thing carrying the floor, so it is raised to the
+        reserve. A planned limit of 0 means "empty it as far as you are allowed" - discharge_soc resolves
+        that against the reserve when deciding how far to actually export, but an inverter whose service
+        maps this target onto a device reserve would be told to drain the battery flat instead.
+
+        Left alone when Predbat does own the reserve: adjust_reserve enforces the floor there and the two
+        registers are independent, so raising the target would change behaviour for no benefit.
+
+        Returns:
+        - int: export target as a percentage of the battery
+        """
+        target = int(self.export_limits_best[0])
+        if not self.set_reserve_enable:
+            target = max(target, calc_percent_limit(max(self.reserve, self.best_soc_min), self.soc_max))
+        return target
 
     def is_freeze_charge(self, charge_limit_kwh):
         """
@@ -996,6 +1030,8 @@ class Execute:
                     except (TypeError, ValueError):
                         self.log("Warn: Invalid PV power value for sensor {}".format(pv_power_sensors[idx]))
 
+        self.update_car_charging_power()
+
         self.soc_percent = calc_percent_limit(self.soc_kw, self.soc_max)
         self.reserve_percent = calc_percent_limit(self.reserve, self.soc_max)
         self.reserve_current_percent = calc_percent_limit(self.reserve_current, self.soc_max)
@@ -1043,6 +1079,54 @@ class Execute:
             self.publish_inverter_data()
             return True
         return False
+
+    def update_car_charging_power(self):
+        """
+        Read the live car charging power (W) from the optional car_charging_power sensors
+
+        This is a monitoring input only - the plan still models car charging from
+        car_charging_energy - so it is kept apart from the inverter totals above. Several
+        chargers can be listed and are summed, as car_charging_energy allows. A charger that
+        is configured but reading zero is not the same as no charger at all, so whether the
+        key is set at all is recorded separately: that is what decides if the car appears on
+        the power flow diagram and is published as a sensor.
+        """
+        sensors = self.get_arg("car_charging_power", None, indirect=False)
+        if not isinstance(sensors, list):
+            sensors = [sensors] if sensors else []
+
+        # The apps.yaml templates ship this as a regular expression matching the common chargers.
+        # auto_config(final=True) deletes the key when nothing matched, but until it has run the
+        # literal "re:" string is still here - treat it as unconfigured so a household with no
+        # charger never gets a car drawn on the power flow diagram.
+        sensors = [sensor for sensor in sensors if sensor and not (isinstance(sensor, str) and sensor.startswith("re:"))]
+
+        if not sensors:
+            self.car_charging_power_configured = False
+            self.car_charging_power = 0
+            return
+
+        car_charging_power = 0.0
+        for sensor in sensors:
+            # Resolved one entity at a time rather than by index, as auto_config() leaves a None
+            # in place of a list entry whose regular expression found nothing and an index-based
+            # read would then stop at the hole instead of the chargers after it.
+            #
+            # No numeric default is passed, and the conversion happens here, because get_arg would
+            # report a charger sitting at 'unavailable' with nothing plugged in as an error and
+            # leave the whole run flagged with errors - which is normal for a charger, not a fault.
+            value = self.resolve_arg("car_charging_power", sensor, default=None, required_unit="W")
+            try:
+                car_charging_power += float(value)
+            except (ValueError, TypeError):
+                pass
+
+        # Published together, after every sensor has been read, so the web server - which runs in
+        # its own thread and reads the pair independently - can never see a car declared but its
+        # power still left over from the previous cycle. Same reason fetch_inverter_data publishes
+        # its accumulated totals in one go rather than as it sums them.
+        self.car_charging_power = car_charging_power
+        self.car_charging_power_configured = True
 
     def publish_inverter_data(self):
         """
@@ -1092,6 +1176,21 @@ class Execute:
                 "icon": "mdi:battery",
             },
         )
+        if self.car_charging_power_configured:
+            # Only published when a charger sensor is actually configured - a sensor pinned at
+            # zero for everyone else is noise, and its absence is how upstream consumers tell
+            # "no car charger" from "car charger idle"
+            self.dashboard_item(
+                self.prefix + ".car_charging_power",
+                state=dp3(self.car_charging_power / 1000.0),
+                attributes={
+                    "friendly_name": "Current Car Charging Power",
+                    "state_class": "measurement",
+                    "unit_of_measurement": "kW",
+                    "device_class": "power",
+                    "icon": "mdi:ev-station",
+                },
+            )
 
     def publish_inverter_config(self):
         """

@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from ohme import (
     ENERGY_TODAY_ENTITY,
     MAX_ENERGY_GAP_SECONDS,
+    POWER_WATTS_ENTITY,
     OhmeAPI,
     OhmeApiClient,
     ChargerStatus,
@@ -289,6 +290,7 @@ def test_ohme(my_predbat=None):
         ("control_read_only_src", _test_ohme_control_read_only_effective, "read only uses the effective state"),
         ("control_target_restore", _test_ohme_control_restores_target, "release restores the charger target"),
         ("auto_config_keeps", _test_ohme_auto_config_keeps_existing_car_charging_energy, "auto config keeps a real charger sensor"),
+        ("auto_config_power", _test_ohme_auto_config_wires_car_charging_power, "auto config wires car_charging_power"),
         ("publish_data", _test_ohme_publish_data, "OhmeAPI publish_data"),
         ("publish_disconnected", _test_ohme_publish_data_disconnected, "OhmeAPI publish_data disconnected"),
         ("run_first", _test_ohme_run_first_call, "OhmeAPI run first call"),
@@ -773,7 +775,7 @@ def _test_ohme_client_async_max_charge_enable(my_predbat=None):
     # Check request was logged
     last_request = client.request_log[-1]
     assert last_request["method"] == "PUT", f"Expected PUT, got {last_request['method']}"
-    assert "maxCharge=true" in last_request["url"], f"Expected maxCharge=true in URL, got {last_request['url']}"
+    assert "enabled=true" in last_request["url"], f"Expected enabled=true in URL, got {last_request['url']}"
 
     print("PASS: async_max_charge enables max charge")
     return 0
@@ -792,7 +794,7 @@ def _test_ohme_client_async_max_charge_disable(my_predbat=None):
 
     # Check request was logged
     last_request = client.request_log[-1]
-    assert "maxCharge=false" in last_request["url"], f"Expected maxCharge=false in URL, got {last_request['url']}"
+    assert "enabled=false" in last_request["url"], f"Expected enabled=false in URL, got {last_request['url']}"
 
     print("PASS: async_max_charge disables max charge")
     return 0
@@ -809,16 +811,20 @@ def _test_ohme_client_async_set_target(my_predbat=None):
         "power": {"watt": 7200},
         "appliedRule": {"targetPercent": 80}
     }
-    client._last_rule = {"targetPercent": 80, "targetTime": 25200, "preconditioningEnabled": False}
+    client._last_rule = {"id": "RULE-456", "targetPercent": 80, "targetTime": 25200, "preconditioningEnabled": False}
 
     result = run_async(client.async_set_target(target_percent=90, target_time=(8, 30)))
 
     assert result == True, f"Expected True, got {result}"
 
-    # Check request was logged
+    # Check request was logged - a PATCH against the rule id from _last_rule, with the changed
+    # fields in the JSON body rather than the URL (#4719: the old PUT-with-query-params rule
+    # endpoint was withdrawn upstream)
     last_request = client.request_log[-1]
-    assert last_request["method"] == "PUT", f"Expected PUT, got {last_request['method']}"
-    assert "toPercent=90" in last_request["url"], f"Expected toPercent=90 in URL, got {last_request['url']}"
+    assert last_request["method"] == "PATCH", f"Expected PATCH, got {last_request['method']}"
+    assert "/v2/users/me/charge-rules/RULE-456" in last_request["url"], f"Expected the rule id in the URL, got {last_request['url']}"
+    assert last_request["data"]["targetPercent"] == 90, f"Expected targetPercent=90 in the body, got {last_request['data']}"
+    assert last_request["data"]["targetTime"] == 30600, f"Expected targetTime=30600 in the body, got {last_request['data']}"
 
     print("PASS: async_set_target sets target for active session")
     return 0
@@ -1336,7 +1342,7 @@ def _test_ohme_client_async_set_mode_max_charge(my_predbat=None):
     # Check request was made to enable max charge
     last_request = client.request_log[-1]
     assert last_request["method"] == "PUT", f"Expected PUT, got {last_request['method']}"
-    assert "maxCharge=true" in last_request["url"], f"Expected maxCharge=true in URL, got {last_request['url']}"
+    assert "enabled=true" in last_request["url"], f"Expected enabled=true in URL, got {last_request['url']}"
 
     print("PASS: async_set_mode correctly enables MAX_CHARGE")
     return 0
@@ -1355,7 +1361,7 @@ def _test_ohme_client_async_set_mode_smart_charge(my_predbat=None):
     # Check request was made to disable max charge
     last_request = client.request_log[-1]
     assert last_request["method"] == "PUT", f"Expected PUT, got {last_request['method']}"
-    assert "maxCharge=false" in last_request["url"], f"Expected maxCharge=false in URL, got {last_request['url']}"
+    assert "enabled=false" in last_request["url"], f"Expected enabled=false in URL, got {last_request['url']}"
 
     print("PASS: async_set_mode correctly enables SMART_CHARGE")
     return 0
@@ -1393,7 +1399,7 @@ def _test_ohme_client_async_set_mode_string(my_predbat=None):
     # Check request was made to disable max charge
     last_request = client.request_log[-1]
     assert last_request["method"] == "PUT", f"Expected PUT, got {last_request['method']}"
-    assert "maxCharge=false" in last_request["url"], f"Expected maxCharge=false in URL, got {last_request['url']}"
+    assert "enabled=false" in last_request["url"], f"Expected enabled=false in URL, got {last_request['url']}"
 
     print("PASS: async_set_mode correctly handles string mode")
     return 0
@@ -1779,7 +1785,7 @@ def _test_ohme_control_edge_triggered(my_predbat=None):
     # Entering the window sets max charge once
     run_async(api.control_charge())
     assert len(api.client.request_log) == 1, f"Expected one command, got {api.client.request_log}"
-    assert "maxCharge=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
+    assert "enabled=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
 
     # Still inside it, and the charger already agrees - no repeat command
     api.client._charge_session = {"mode": "MAX_CHARGE"}
@@ -1819,7 +1825,7 @@ def _test_ohme_control_reapplies_on_drift(my_predbat=None):
     run_async(api.control_charge())
 
     assert len(api.client.request_log) == 2, f"Expected the change to be corrected, got {api.client.request_log}"
-    assert "maxCharge=true" in api.client.request_log[1]["url"], f"Expected max charge re-applied, got {api.client.request_log[1]['url']}"
+    assert "enabled=true" in api.client.request_log[1]["url"], f"Expected max charge re-applied, got {api.client.request_log[1]['url']}"
     assert any("changed away from what Predbat set" in msg for msg in api.log_messages), f"Expected a drift log, got {api.log_messages}"
 
     # An unplugged charger has nothing to correct
@@ -1846,7 +1852,7 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     api.base.set_read_only = True
     run_async(api.control_charge())
     assert any("releasing the charger back to Ohme" in msg for msg in api.log_messages), f"Expected a release log, got {api.log_messages}"
-    assert "maxCharge=false" in api.client.request_log[-1]["url"], f"Expected max charge cleared, got {api.client.request_log[-1]['url']}"
+    assert "enabled=false" in api.client.request_log[-1]["url"], f"Expected max charge cleared, got {api.client.request_log[-1]['url']}"
     assert api.control_charging is None, "Expected tracked state cleared after releasing"
 
     # Staying in read only must not keep sending commands
@@ -1859,7 +1865,7 @@ def _test_ohme_control_read_only_release(my_predbat=None):
     api.base.set_read_only = False
     run_async(api.control_charge())
     assert len(api.client.request_log) == count + 1, f"Expected control to resume, got {api.client.request_log}"
-    assert "maxCharge=true" in api.client.request_log[-1]["url"], f"Expected max charge re-applied, got {api.client.request_log[-1]['url']}"
+    assert "enabled=true" in api.client.request_log[-1]["url"], f"Expected max charge re-applied, got {api.client.request_log[-1]['url']}"
     assert any("Read only mode cleared" in msg for msg in api.log_messages), f"Expected a resume log, got {api.log_messages}"
 
     print("PASS: read only released and resumed the charger")
@@ -1875,20 +1881,20 @@ def _test_ohme_control_restores_target(my_predbat=None):
     api = _ohme_control_api(windows=[window], now=tz.localize(datetime.datetime(2026, 8, 22, 23, 30)))
     # The user's own target, which max charge overrides while Predbat is in control
     api.client._charge_session = {"mode": "SMART_CHARGE", "power": {"watt": 0}, "appliedRule": {"targetPercent": 70, "targetTime": 25200}}
-    api.client._last_rule = {"targetPercent": 70}
+    api.client._last_rule = {"id": "RULE-70", "targetPercent": 70}
 
     run_async(api.control_charge())
     assert api.control_saved_target == 70, f"Expected the target to be snapshotted before max charge, got {api.control_saved_target}"
 
     # Snapshot must be taken before the max charge command, not after it
-    assert "maxCharge=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
+    assert "enabled=true" in api.client.request_log[0]["url"], f"Expected max charge, got {api.client.request_log[0]['url']}"
 
     # Releasing puts the user's target back so Ohme's own schedule is left correct
     api.base.set_read_only = True
     run_async(api.control_charge())
 
-    urls = [request["url"] for request in api.client.request_log]
-    assert any("toPercent=70" in url for url in urls), f"Expected the target to be restored, got {urls}"
+    restore_requests = [request for request in api.client.request_log if request["method"] == "PATCH"]
+    assert any(request["data"].get("targetPercent") == 70 for request in restore_requests), f"Expected the target to be restored, got {restore_requests}"
     assert api.control_saved_target is None, "Expected the saved target to be cleared after restoring"
     assert any("Restored the charger target to 70%" in msg for msg in api.log_messages), f"Expected a restore log, got {api.log_messages}"
 
@@ -2305,6 +2311,38 @@ def _test_ohme_auto_config_keeps_existing_car_charging_energy(my_predbat=None):
     assert any("Leaving car_charging_energy" in msg for msg in api.log_messages), f"Expected a note about keeping it, got {api.log_messages}"
 
     print("PASS: auto config kept the existing car_charging_energy sensor")
+    return 0
+
+
+def _test_ohme_auto_config_wires_car_charging_power(my_predbat=None):
+    """Test car registration points car_charging_power at the live charge power sensor"""
+    print("**** Running test_ohme_auto_config_wires_car_charging_power ****")
+
+    api = MockOhmeAPI()
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected {POWER_WATTS_ENTITY}, got {api.args.get('car_charging_power')}"
+
+    # The energy and power sensors have to describe the same charger, so when a real third-party
+    # energy sensor is kept, Ohme's own power figure must not be wired in beside it
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = "sensor.myenergi_zappi_1234_charge_added_session"
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") is None, f"Expected no power wiring when another charger owns the energy sensor, got {api.args.get('car_charging_power')}"
+
+    # ...but Ohme's own energy entity, set explicitly in apps.yaml or left behind by an earlier
+    # run, is still Ohme's charger, so the power sensor belongs with it (#4715 review)
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = ENERGY_TODAY_ENTITY
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected power wiring alongside Ohme's own energy entity, got {api.args.get('car_charging_power')}"
+
+    # The same entity handed over as a single-item list, which is how it round-trips through apps.yaml
+    api = MockOhmeAPI()
+    api.args["car_charging_energy"] = [ENERGY_TODAY_ENTITY]
+    run_async(api.automatic_config())
+    assert api.args.get("car_charging_power") == POWER_WATTS_ENTITY, f"Expected power wiring for the list form, got {api.args.get('car_charging_power')}"
+
+    print("PASS: auto config wired car_charging_power")
     return 0
 
 
@@ -2783,7 +2821,7 @@ def _test_ohme_select_event_handler_target_time(my_predbat=None):
 
     # Setup client with test data
     api.client._charge_session = {"mode": "SMART_CHARGE"}
-    api.client._last_rule = {"targetTime": 25200}  # 07:00
+    api.client._last_rule = {"id": "RULE-TIME", "targetTime": 25200}  # 07:00
 
     # Call select_event_handler with valid target time
     run_async(api.select_event_handler("select.predbat_ohme_target_time", "08:30"))
@@ -2791,9 +2829,9 @@ def _test_ohme_select_event_handler_target_time(my_predbat=None):
     # Verify request was made
     assert len(api.client.request_log) == 1, f"Expected 1 request, got {len(api.client.request_log)}"
     request = api.client.request_log[0]
-    assert request["method"] == "PUT", f"Expected PUT request, got {request['method']}"
-    assert "/v1/chargeSessions/" in request["url"], f"Expected chargeSessions URL, got {request['url']}"
-    assert "targetTs=" in request["url"], f"Expected targetTs in URL, got {request['url']}"
+    assert request["method"] == "PATCH", f"Expected PATCH request, got {request['method']}"
+    assert "/v2/users/me/charge-rules/RULE-TIME" in request["url"], f"Expected charge-rules URL, got {request['url']}"
+    assert request["data"]["targetTime"] == 30600, f"Expected targetTime=30600 (08:30) in the body, got {request['data']}"
 
     # Verify log message
     assert len(api.log_messages) == 1, f"Expected 1 log message, got {len(api.log_messages)}"
@@ -2837,7 +2875,7 @@ def _test_ohme_number_event_handler_target_soc(my_predbat=None):
 
     # Setup client with test data
     api.client._charge_session = {"mode": "SMART_CHARGE"}
-    api.client._last_rule = {"targetPercent": 80}
+    api.client._last_rule = {"id": "RULE-80", "targetPercent": 80}
 
     # Call number_event_handler with valid target SoC
     run_async(api.number_event_handler("number.predbat_ohme_target_percent", 90))
@@ -2845,8 +2883,8 @@ def _test_ohme_number_event_handler_target_soc(my_predbat=None):
     # Verify request was made
     assert len(api.client.request_log) == 1, f"Expected 1 request, got {len(api.client.request_log)}"
     request = api.client.request_log[0]
-    assert request["method"] == "PUT", f"Expected PUT request, got {request['method']}"
-    assert "toPercent=90" in request["url"], f"Expected toPercent=90 in URL, got {request['url']}"
+    assert request["method"] == "PATCH", f"Expected PATCH request, got {request['method']}"
+    assert request["data"]["targetPercent"] == 90, f"Expected targetPercent=90 in the body, got {request['data']}"
 
     print("PASS: number_event_handler correctly handles target_soc")
     return 0
@@ -2867,8 +2905,8 @@ def _test_ohme_number_event_handler_matches_published_entities(my_predbat=None):
         "batterySoc": {"wh": 15000, "percent": 75},
         "allSessionSlots": [],
     }
-    api.client._next_session = {"targetPercent": 80, "targetTime": 25200}
-    api.client._last_rule = {"targetPercent": 80, "preconditioningEnabled": True, "preconditionLengthMins": 30}
+    api.client._next_session = {"id": "NEXT-80", "targetPercent": 80, "targetTime": 25200}
+    api.client._last_rule = {"id": "RULE-80", "targetPercent": 80, "preconditioningEnabled": True, "preconditionLengthMins": 30}
     api.client._cars = [{"name": "Tesla Model 3"}]
     run_async(api.publish_data())
 
@@ -2885,7 +2923,7 @@ def _test_ohme_number_event_handler_matches_published_entities(my_predbat=None):
     # Specifically check the target percent value reaches the rule
     api.client.request_log = []
     run_async(api.number_event_handler("number.predbat_ohme_target_percent", 65))
-    assert "toPercent=65" in api.client.request_log[0]["url"], f"Expected toPercent=65, got {api.client.request_log[0]['url']}"
+    assert api.client.request_log[0]["data"]["targetPercent"] == 65, f"Expected targetPercent=65 in the body, got {api.client.request_log[0]}"
 
     print(f"PASS: all {len(published)} published number entities are handled")
     return 0
@@ -2925,7 +2963,7 @@ def _test_ohme_number_event_handler_preconditioning(my_predbat=None):
 
     # Setup client with test data
     api.client._charge_session = {"mode": "SMART_CHARGE"}
-    api.client._last_rule = {"preconditioningEnabled": False, "preconditionLengthMins": 30}
+    api.client._last_rule = {"id": "RULE-9", "preconditioningEnabled": False, "preconditionLengthMins": 30}
 
     # Call number_event_handler with preconditioning length
     run_async(api.number_event_handler("number.predbat_ohme_preconditioning", 45))
@@ -2933,9 +2971,9 @@ def _test_ohme_number_event_handler_preconditioning(my_predbat=None):
     # Verify request was made
     assert len(api.client.request_log) == 1, f"Expected 1 request, got {len(api.client.request_log)}"
     request = api.client.request_log[0]
-    assert request["method"] == "PUT", f"Expected PUT request, got {request['method']}"
-    assert "preconditionLengthMins=45" in request["url"], f"Expected preconditionLengthMins=45, got {request['url']}"
-    assert "enablePreconditioning=true" in request["url"], f"Expected enablePreconditioning=true, got {request['url']}"
+    assert request["method"] == "PATCH", f"Expected PATCH request, got {request['method']}"
+    assert request["data"]["preconditioning"]["lengthMins"] == 45, f"Expected preconditioning lengthMins=45, got {request['data']}"
+    assert request["data"]["preconditioning"]["enabled"] is True, f"Expected preconditioning enabled=True, got {request['data']}"
 
     # Verify log message
     assert len(api.log_messages) == 1, f"Expected 1 log message, got {len(api.log_messages)}"
@@ -3012,7 +3050,7 @@ def _test_ohme_switch_event_handler_max_charge_on(my_predbat=None):
     assert len(api.client.request_log) == 1, f"Expected 1 request, got {len(api.client.request_log)}"
     request = api.client.request_log[0]
     assert request["method"] == "PUT", f"Expected PUT request, got {request['method']}"
-    assert "maxCharge=true" in request["url"], f"Expected maxCharge=true, got {request['url']}"
+    assert "enabled=true" in request["url"], f"Expected enabled=true, got {request['url']}"
 
     print("PASS: switch_event_handler correctly handles max_charge turn_on")
     return 0
@@ -3035,7 +3073,7 @@ def _test_ohme_switch_event_handler_max_charge_off(my_predbat=None):
     assert len(api.client.request_log) == 1, f"Expected 1 request, got {len(api.client.request_log)}"
     request = api.client.request_log[0]
     assert request["method"] == "PUT", f"Expected PUT request, got {request['method']}"
-    assert "maxCharge=false" in request["url"], f"Expected maxCharge=false, got {request['url']}"
+    assert "enabled=false" in request["url"], f"Expected enabled=false, got {request['url']}"
 
     print("PASS: switch_event_handler correctly handles max_charge turn_off")
     return 0

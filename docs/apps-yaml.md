@@ -410,24 +410,36 @@ there are gaps in your history or when your usage pattern has changed (for examp
 holiday), because it no longer depends on a small number of specific days all being present and
 representative.
 
-Each historical 5-minute sample is combined into a weighted average for the matching time-of-day, where the
-weight of every sample is the product of three factors:
+Each historical 5-minute sample is combined into a weighted average for the matching time-of-day. Only samples
+whose [holiday mode](customisation.md#holiday-mode) state matches that of the day being predicted are averaged
+at all - a sample recorded while you were away tells you nothing about a day you are at home, and vice versa.
+The historical holiday state is reconstructed from the recorded history of `holiday_days_left`, and is matched
+per 5-minute sample rather than per whole day, so switching holiday mode on or off mid-day is handled correctly.
+
+The weight of each matching sample is the product of two factors:
 
 - **Weekday** - 1.0 if the historical day is the same day of the week as today; 0.7 if it is a different day
-  but both are weekdays or both are weekend days; 0.5 if one is a weekday and the other a weekend day.
-- **Holiday** - reduced by 50% if that historical day's [holiday mode](customisation.md#holiday-mode) state
-  does not match today's holiday mode state. The historical holiday state is reconstructed from the recorded
-  history of `holiday_days_left`.
+  but both are weekdays or both are weekend days; 0.5 if one is a weekday and the other a weekend day. This
+  is held at 1.0 between two holiday days, as holiday load has no weekday pattern to match.
 - **Age** - 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1 (reached after about a
   month), so recent days count for more.
+
+The holiday state is evaluated for the day each forecast slot falls on, not just for today, so the day you
+travel home is planned against your normal load even while you are still away.
+
+If a time-of-day has no matching history at all - the first 24 hours of a holiday, or a return from a holiday
+longer than the search window - Predbat falls back to the weighted average of every day, scaled by
+[**input_number.predbat_holiday_load_scaling**](customisation.md#holiday-mode) (or divided by it when you are
+back home). This is what makes holiday mode act from the moment you switch it on, rather than waiting a day
+for holiday history to accumulate.
 
 Buckets with no recorded data (zero) are ignored entirely so gaps in the history do not drag the estimate
 down. As with Load ML, this replaces the normal days_previous averaging; if [Load ML](load-ml.md) is enabled
 it takes precedence over `days_previous_auto`.
 
-Because the Holiday weighting factor above already accounts for [holiday mode](customisation.md#holiday-mode)
-when `days_previous_auto` is enabled, Predbat does not separately force days_previous to `1` while holiday
-mode is active (unlike when `days_previous_auto` is disabled).
+Because the holiday matching above already accounts for [holiday mode](customisation.md#holiday-mode) when
+`days_previous_auto` is enabled, Predbat does not separately force days_previous to `1` while holiday mode is
+active (unlike when `days_previous_auto` is disabled).
 
 Do keep in mind that Home Assistant only keeps 10 days of history by default, so if you want to access more than this for Predbat you might need to increase the number of days of history
 kept in HA before it is purged by editing and adding the following to the `/homeassistant/configuration.yaml` configuration file and restarting Home Assistant afterwards:
@@ -1896,6 +1908,7 @@ Details of configuring `apps.yaml` for EV charging are described in [Configure a
 - **car_charging_exclusive** for multiple EV's to indicate if they can be charged independently or not
 - **car_energy_reported_load** - Set to False if your EV charger is wired outside the inverter's CT clamp (see [car charging documentation](car-charging.md#filtering-car-charging-energy-from-house-load))
 - **car_charging_energy** - Energy consumed by your EV charger
+- **car_charging_power** - Live power drawn by your EV charger, used for display only
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by

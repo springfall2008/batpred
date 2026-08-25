@@ -451,7 +451,60 @@ start and end can be omitted and Predbat will assume that you are on a single fl
 
 If there are any gaps in the 24-hour period then a zero rate will be assumed.
 
+**utc** can be set to `true` on a rate band to say that its start and end times are given in UTC
+rather than local time. Predbat then shifts the band by the local offset, so it stays aligned with
+your meter through British Summer Time instead of running an hour early. Use this when your meter's
+schedule is fixed to UTC - Octopus fixes the Economy 7 smart-meter off-peak period to 00:30-07:30 UTC,
+which falls at 01:30-08:30 local during BST.
+
+```yaml
+  rates_import:
+    - start: "00:30:00"
+      end: "07:30:00"
+      rate: 13.04
+      utc: true
+    - start: "07:30:00"
+      end: "00:30:00"
+      rate: 29.26
+      utc: true
+```
+
 The gas rates are only required if you have a gas boiler, or an iBoost, and are using Predbat to determine whether it's cheaper to heat your hot water with the iBoost or via gas.
+
+## Manually configuring Octopus off-peak times
+
+Predbat works out the off-peak period of a day/night (two-register) Octopus tariff from the meter's
+own time-of-use labels, and falls back to the standard window for the tariff type if those are not
+available. If neither matches the bands your meter actually switches on, set `octopus_night_times`
+in apps.yaml to state them by hand. The **times** come from this setting while the **rates**
+continue to come from the Octopus integration, so you do not have to maintain the prices yourself:
+
+```yaml
+  octopus_night_times:
+    - start: "01:00:00"
+      end: "05:00:00"
+    - start: "13:00:00"
+      end: "16:00:00"
+    - start: "20:00:00"
+      end: "22:00:00"
+```
+
+Entries use the same start/end format as the rate bands above, and any number of off-peak blocks a
+day can be given - useful for an Economy 10 style meter with several off-peak periods. Every period
+not covered by an entry is charged at the day rate.
+
+As with the rate bands, `utc: true` marks an entry as being given in UTC rather than local time:
+
+```yaml
+  octopus_night_times:
+    - start: "00:30:00"
+      end: "07:30:00"
+      utc: true
+```
+
+This setting takes precedence over both the meter's reported schedule and the built-in defaults, so
+only set it if you have confirmed the real switching times - your bills, rather than the cost
+estimates in the Octopus account area, are the thing to check against.
 
 ## Manually over-riding energy rates
 

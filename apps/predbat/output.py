@@ -2770,13 +2770,10 @@ class Output:
             # Make a ratio only if we have enough data to consider the outcome
             difference = 1.0 + ((actual_total_today - load_total_pred) / actual_total_today)
 
-        # Calculate blending weight for yesterday vs today adjustment
-        if minutes_now < 180:
-            # Use 100% yesterday's adjustment for first 3 hours
-            yesterday_weight = 1.0
-        else:
-            # Linear blend between yesterday and today over the day
-            yesterday_weight = (24 * 60 - minutes_now) / (24 * 60)
+        # Calculate blending weight for yesterday vs today adjustment: 100% yesterday for the first 3 hours,
+        # then a linear blend across the day. Shared with step_data_history(), which carries the adjustment
+        # past midnight on this same curve so the plan matches what will actually be applied tomorrow.
+        yesterday_weight = self.inday_yesterday_weight(minutes_now)
 
         # Work out divergence
         using_load_ml_forecast = self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False)
@@ -3542,6 +3539,7 @@ class Output:
         opts += "calculate_export_oncharge({}), ".format(self.calculate_export_oncharge)
         opts += "calculate_export_on_pv({}), ".format(self.calculate_export_on_pv)
         opts += "set_export_freeze_only({}), ".format(self.set_export_freeze_only)
+        opts += "set_charge_freeze_only({}), ".format(self.set_charge_freeze_only)
         opts += "set_discharge_during_charge({}), ".format(self.set_discharge_during_charge)
         opts += "combine_charge_slots({}), ".format(self.combine_charge_slots)
         opts += "combine_export_slots({}), ".format(self.combine_export_slots)
