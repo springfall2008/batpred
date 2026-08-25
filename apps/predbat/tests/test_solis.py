@@ -798,7 +798,7 @@ class _GatingBase:
     def __init__(self, config):
         self._config = config
         self.prefix = "predbat"
-        self.args = {}
+        self.args = config.copy()
         self.local_tz = datetime.now().astimezone().tzinfo
         self.log_messages = []
 
@@ -842,6 +842,27 @@ def test_solis_not_activated_without_credentials():
     if not failed:
         print("PASSED: Solis not activated without credentials")
     return failed
+
+
+def test_solis_skipped_component_logging():
+    """Solis logs missing credential alternatives only when partly configured."""
+    import components as components_module
+
+    unconfigured_base = _GatingBase({})
+    components_module.Components(unconfigured_base).initialize(only="solis", phase=1)
+    if any("Skipping Solis Cloud API interface" in message for message in unconfigured_base.log_messages):
+        print("ERROR: Unconfigured Solis component should be skipped without a warning")
+        return True
+
+    configured_base = _GatingBase({"solis_auth_method": "oauth"})
+    components_module.Components(configured_base).initialize(only="solis", phase=1)
+    expected = "Warn: Skipping Solis Cloud API interface, needs at least one of: solis_api_key, solis_access_token"
+    if expected not in configured_base.log_messages:
+        print("ERROR: Partly configured Solis component should log missing credential alternatives")
+        return True
+
+    print("PASSED: Solis skipped component logging")
+    return False
 
 
 def test_solis_activated_with_api_key():
@@ -1305,6 +1326,7 @@ def run_solis_tests(my_predbat):
         # Run tests
         failed |= test_oauth_bearer_headers()
         failed |= test_solis_not_activated_without_credentials()
+        failed |= test_solis_skipped_component_logging()
         failed |= test_solis_activated_with_api_key()
         failed |= test_solis_activated_with_oauth_token()
         failed |= test_initialize_attribute_parity_with_mock()
