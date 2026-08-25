@@ -1170,6 +1170,34 @@ class Execute:
                 },
             )
 
+        # Power a flexible load could take right now without importing or draining the battery.
+        #
+        # A car charger sits behind the grid meter, so once a car is charging the export collapses
+        # towards zero - car_charging_power is added back to recover what the export would be with
+        # the car off, which is what makes this stable enough to drive a charger from. Any other
+        # load reading this while a car charges wants the car's share left out, so it can subtract
+        # the car_charging_power attribute. Battery discharge is subtracted so battery power is
+        # never offered up as if it were solar: if cloud cover arrives mid-charge the battery starts
+        # covering the load, and without the subtraction the sensor would keep reporting a surplus
+        # that is really coming out of the battery. Battery charging is deliberately not added -
+        # what gets the surplus is the user's policy, and the components are in the attributes.
+        solar_surplus = max(0.0, self.grid_power + self.car_charging_power - max(0.0, self.battery_power))
+        self.dashboard_item(
+            self.prefix + ".solar_surplus_power",
+            state=dp3(solar_surplus / 1000.0),
+            attributes={
+                "friendly_name": "Current solar surplus power",
+                "state_class": "measurement",
+                "unit_of_measurement": "kW",
+                "device_class": "power",
+                "icon": "mdi:solar-power",
+                "grid_power": dp3(self.grid_power / 1000.0),
+                "battery_power": dp3(self.battery_power / 1000.0),
+                "car_charging_power": dp3(self.car_charging_power / 1000.0),
+                "car_charging_power_configured": self.car_charging_power_configured,
+            },
+        )
+
     def publish_inverter_config(self):
         """
         Publish the static configuration the prediction runs from, aggregated over all the inverters
