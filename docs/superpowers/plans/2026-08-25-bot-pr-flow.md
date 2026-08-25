@@ -1074,7 +1074,7 @@ Never push to `main`, and never force-push.
 ## 6. Open the draft PR
 
 ```bash
-gh pr create --draft --reviewer springfall2008 \
+gh pr create --draft --assignee springfall2008 \
   --title "<one-line summary>" \
   --body "$(cat <<'EOF'
 This is an automated draft PR generated from issue #<issue-number> — a maintainer should review it before merging.
@@ -1204,7 +1204,7 @@ Expected: all four labels listed.
 
 - [ ] **Step 3: Confirm the daemon's `gh auth` identity has push access**
 
-Per the spec (Section 6.1): whatever GitHub identity `tools/triage_daemon.py` runs as needs push access to `springfall2008/batpred`, and must not be `springfall2008` itself (it sets you as reviewer, and GitHub disallows self-review). Confirm this on whichever machine runs the daemon before enabling `BOT_PR` for real use:
+Per the spec (Section 6.1): whatever GitHub identity `tools/triage_daemon.py` runs as needs push access to `springfall2008/batpred`. No separate bot account is required — the PR uses `--assignee springfall2008` rather than `--reviewer`, and self-assignment is allowed, so the daemon can run as `springfall2008` itself. Confirm push access on whichever machine runs the daemon before enabling `BOT_PR` for real use:
 
 ```bash
 gh auth status
@@ -1230,7 +1230,7 @@ gh issue edit <number> --repo springfall2008/batpred --add-label BOT_PR
 tail -f ~/predbat-triage-bot/logs/issue-<number>-pr.log
 ```
 
-Confirm: the branch is created, the commit looks right, `./run_pre_commit` and the targeted test both pass in the log, the branch is pushed, and a draft PR appears on GitHub with `springfall2008` as reviewer, `Fixes #<number>` in the body, and the disclosure line.
+Confirm: the branch is created, the commit looks right, `./run_pre_commit` and the targeted test both pass in the log, the branch is pushed, and a draft PR appears on GitHub with `springfall2008` as assignee, `Fixes #<number>` in the body, and the disclosure line.
 
 - [ ] **Step 3: Confirm the label swap**
 

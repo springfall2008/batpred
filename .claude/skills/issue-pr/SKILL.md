@@ -64,7 +64,7 @@ Never push to `main`, and never force-push.
 ## 6. Open the draft PR
 
 ```bash
-gh pr create --draft --reviewer springfall2008 \
+gh pr create --draft --assignee springfall2008 \
   --title "<one-line summary>" \
   --body "$(cat <<'EOF'
 This is an automated draft PR generated from issue #<issue-number> — a maintainer should review it before merging.

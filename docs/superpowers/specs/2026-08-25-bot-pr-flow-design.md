@@ -8,7 +8,7 @@ Status: Approved for implementation planning
 Extend the existing issue-triage bot (`tools/triage_daemon.py` + `.claude/skills/issue-triage/`)
 with a second, opt-in flow: when a maintainer adds the `BOT_PR` label to an already-triaged
 issue, the bot implements the fix/feature described in the ticket and opens a **draft** PR
-referencing it, with `springfall2008` set as reviewer.
+referencing it, with `springfall2008` set as assignee.
 
 Today the bot is strictly read/comment-only — `DISALLOWED_TOOLS` explicitly blocks
 `git push`, `git commit`, and `gh pr create`. This adds a genuinely new capability
@@ -121,7 +121,7 @@ same convention as the triage skill.
    (prefix from the triage classification), matching existing repo convention (e.g.
    `fix/solis-tou-bit-refused-4707`).
 6. **Open the draft PR** —
-   `gh pr create --draft --reviewer springfall2008 --title "..." --body "..."`. Body
+   `gh pr create --draft --assignee springfall2008 --title "..." --body "..."`. Body
    includes: a disclosure line ("automated draft PR generated from issue #N — needs
    maintainer review before merging"), `Fixes #N`, a summary, what was run in step 4 and
    its result, and a debug-journal reference if one was used. Report success back to the
@@ -171,8 +171,12 @@ investigation. Starting values; tune after the first few real runs.
 Whatever GitHub identity the daemon's `gh auth` already uses needs **push access** to
 `springfall2008/batpred`. Today that identity only ever reads and comments, so this has
 never been exercised — confirm (or grant) push/write access before enabling the `BOT_PR`
-label in the repo. This identity must not be `springfall2008` itself, since it sets you
-as reviewer and GitHub does not allow self-review.
+label in the repo.
+
+No separate bot account is required: the PR uses `--assignee springfall2008` rather than
+`--reviewer springfall2008`. GitHub blocks requesting a review from a PR's own author
+(so `--reviewer` would need a distinct identity from whichever account authors the PR),
+but self-assignment is allowed, so the daemon can run as `springfall2008` itself.
 
 ## 7. Testing
 
