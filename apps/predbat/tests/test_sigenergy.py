@@ -1506,6 +1506,60 @@ def test_sigenergy_handle_mqtt_period_partial_update(my_predbat):
     return failed
 
 
+def test_sigenergy_handle_mqtt_period_never_reported_field(my_predbat):
+    """Regression test for #4663: a field the broker has never sent must not zero the REST value.
+
+    The partial-update merge above only helps once a field has been seen at least once. A system
+    whose period messages carry just "PV power" leaves storageSOC% absent from the merged state
+    forever, and defaulting it to 0 overwrote the SoC the REST poll had already fetched.
+
+    Live effect: the reporter's battery read 30.84kWh/85% from REST, a period message arrived
+    carrying only PV, and Predbat immediately replanned against a 0% battery in the middle of an
+    export window.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+
+    # REST poll has populated a good, complete picture
+    api.energy_flow["SYS1"] = {
+        "batterySoc": 85.0,
+        "batteryPower": -4.127,
+        "pvPower": 4.42,
+        "gridPower": -0.27,
+        "loadPower": 3.857,
+        "evPower": 0.0,
+        "inverterPower": 2.5,
+    }
+
+    # The only period message this system ever sends carries PV power and nothing else
+    api._handle_mqtt_period("SYS1", {"PV power": "4420.0"})
+
+    flow = api.energy_flow.get("SYS1", {})
+    if abs(flow["batterySoc"] - 85.0) > 0.01:
+        print("ERROR: batterySoc should be retained from the REST poll, got {}".format(flow["batterySoc"]))
+        failed = True
+    if abs(flow["batteryPower"] - (-4.127)) > 0.001:
+        print("ERROR: batteryPower should be retained from the REST poll, got {}".format(flow["batteryPower"]))
+        failed = True
+    if abs(flow["gridPower"] - (-0.27)) > 0.001:
+        print("ERROR: gridPower should be retained from the REST poll, got {}".format(flow["gridPower"]))
+        failed = True
+    # The field the message did carry must still be applied
+    if abs(flow["pvPower"] - 4.42) > 0.001:
+        print("ERROR: pvPower should come from the period message, got {}".format(flow["pvPower"]))
+        failed = True
+
+    # With nothing previously known either, an absent field is still 0 rather than raising
+    api2 = MockSigenergyAPI()
+    api2._handle_mqtt_period("SYS2", {"PV power": "1000.0"})
+    flow2 = api2.energy_flow.get("SYS2", {})
+    if flow2["batterySoc"] != 0.0:
+        print("ERROR: batterySoc with no prior value should default to 0, got {}".format(flow2["batterySoc"]))
+        failed = True
+
+    return failed
+
+
 def test_sigenergy_handle_mqtt_change(my_predbat):
     """Test _handle_mqtt_change updates controls and systems from a change message."""
     failed = False
@@ -2951,6 +3005,7 @@ def run_sigenergy_tests(my_predbat):
         ("send_battery_command_no_token", test_sigenergy_send_battery_command_no_token),
         ("handle_mqtt_period", test_sigenergy_handle_mqtt_period),
         ("handle_mqtt_period_partial_update", test_sigenergy_handle_mqtt_period_partial_update),
+        ("handle_mqtt_period_never_reported_field", test_sigenergy_handle_mqtt_period_never_reported_field),
         ("handle_mqtt_change", test_sigenergy_handle_mqtt_change),
         ("handle_mqtt_alarm", test_sigenergy_handle_mqtt_alarm),
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
