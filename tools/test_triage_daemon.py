@@ -83,9 +83,7 @@ class FetchBotPrIssuesTests(unittest.TestCase):
     @patch("triage_daemon.subprocess.run")
     def test_queries_open_issues_labelled_bot_pr(self, mock_run):
         """Calls gh issue list scoped to the BOT_PR label and returns the parsed issues."""
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps([{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}])
-        )
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}]))
         result = triage_daemon.fetch_bot_pr_issues()
         self.assertEqual(result, [{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}])
         args = mock_run.call_args[0][0]
@@ -107,9 +105,7 @@ class EnsureTriagedTests(unittest.TestCase):
     @patch("triage_daemon.subprocess.run")
     def test_find_triage_comment_true_when_disclosure_present(self, mock_run):
         """A comment containing the triage disclosure line counts as already triaged."""
-        mock_run.return_value = MagicMock(
-            stdout=json.dumps({"comments": [{"body": "This is an automated first-pass triage of..."}]})
-        )
+        mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": "This is an automated first-pass triage of..."}]}))
         self.assertTrue(triage_daemon.find_triage_comment(4720))
 
     @patch("triage_daemon.subprocess.run")
