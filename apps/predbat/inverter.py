@@ -137,6 +137,21 @@ class Inverter:
         if (arg not in self.base.args) or (not isinstance(self.base.args[arg], list)):
             self.base.args[arg] = [default, default, default, default]
 
+    def is_real_entity_configured(self, arg):
+        """
+        True if arg already resolves to a real HA entity id for this inverter (contains a domain,
+        e.g. 'time.foo'), as opposed to being unset or a bare placeholder value such as '23:59:00'
+        or '00:00:00' with no domain. Used to tell "the user configured this themselves" apart from
+        "nothing is there yet" before create_missing_arg's own value-vs-list check would conflate the
+        two - a config item that's present but not a real entity is exactly the case a dummy entity
+        still needs to be created for.
+        """
+        values = self.base.args.get(arg)
+        if not isinstance(values, list) or self.id >= len(values):
+            return False
+        value = values[self.id]
+        return isinstance(value, str) and "." in value
+
     def __init__(self, base, id=0, quiet=False, rest_postCommand=None, rest_getData=None):
         """
         Inverter class
@@ -565,11 +580,18 @@ class Inverter:
             self.base.args["inverter_mode"][id] = self.create_entity("inverter_mode", "Eco")
 
         if self.inv_charge_time_format != "HH:MM:SS":
+            # Some formats (H M) decompose the write into separate hour/minute entities and never
+            # expect the user to set this directly; others (no time window at all) ship a bare
+            # placeholder string. Either way Predbat needs somewhere to read/write for its own window
+            # bookkeeping. But if the user has genuinely pointed this at a real entity - a custom
+            # inverter definition using a non-HH:MM:SS format together with a real time window, e.g.
+            # #4738 - that's the one to use, not a self-created dummy that silently discards it.
             for x in ["charge", "discharge"]:
                 for y in ["start", "end"]:
                     entity_name = f"{x}_{y}_time"
                     self.create_missing_arg(entity_name, "23:59:00")
-                    self.base.args[entity_name][id] = self.create_entity(entity_name, "23:59:00")
+                    if not self.is_real_entity_configured(entity_name):
+                        self.base.args[entity_name][id] = self.create_entity(entity_name, "23:59:00")
 
         # Create dummy idle time entities
         if not self.inv_has_idle_time:
