@@ -406,11 +406,46 @@ class PermissionModelTests(unittest.TestCase):
         review = set(triage_daemon.DISALLOWED_TOOLS_REVIEW.split(","))
         self.assertEqual(base - review, {"Bash(gh api*)"})
 
-    def test_review_allowed_tools_adds_only_the_scoped_api_grant(self):
-        """The review flow adds nothing but gh api scoped to this repo - no write/push/commit access."""
-        base = set(triage_daemon.ALLOWED_TOOLS.split(","))
+    def test_review_allowed_tools_does_not_inherit_the_broad_gh_grant(self):
+        """Regression test for the actual bug: with "Bash(gh *)" present, removing the
+        blanket gh api denial would un-restrict gh api entirely (any repo, any
+        endpoint, including merge/close via REST) - a narrower allow gets no
+        precedence over a broader one, only deny-wins-over-allow is a real rule.
+        The scoped gh api grant only means something if this entry is absent."""
+        review = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        self.assertNotIn("Bash(gh *)", review)
+
+    def test_review_allowed_tools_does_not_grant_formal_review_actions(self):
+        """No "gh pr review*": that would also allow --approve/--request-changes,
+        a governance action beyond "post a comment"."""
+        review = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        self.assertNotIn("Bash(gh pr review*)", review)
+
+    def test_review_allowed_tools_still_covers_the_read_only_base(self):
+        """Dropping the broad gh grant must not drop the non-gh read tools (git
+        history, file reads, the scoped Edit rules) every other flow still has."""
+        non_gh = set(triage_daemon._ALLOWED_TOOLS_NON_GH)
         review = set(triage_daemon.ALLOWED_TOOLS_REVIEW.split(","))
-        self.assertEqual(review - base, {"Bash(gh api repos/springfall2008/batpred/*)"})
+        self.assertTrue(non_gh.issubset(review))
+
+    def test_review_allowed_tools_grants_exactly_the_expected_gh_entries(self):
+        """The complete, curated gh surface for the review flow - specific
+        subcommands plus the scoped api grant, nothing broader."""
+        review = set(triage_daemon.ALLOWED_TOOLS_REVIEW.split(","))
+        gh_entries = {entry for entry in review if entry.startswith("Bash(gh")}
+        self.assertEqual(
+            gh_entries,
+            {
+                "Bash(gh pr view*)",
+                "Bash(gh pr diff*)",
+                "Bash(gh pr list*)",
+                "Bash(gh pr comment*)",
+                "Bash(gh issue view*)",
+                "Bash(gh issue list*)",
+                "Bash(gh search*)",
+                "Bash(gh api repos/springfall2008/batpred/*)",
+            },
+        )
 
     def test_cleanup_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
         """The BOT_CLEANUP flow keeps every dangerous gh subcommand denied."""
@@ -434,12 +469,61 @@ class PermissionModelTests(unittest.TestCase):
         self.assertTrue(any("force" in entry for entry in cleanup_denied), cleanup_denied)
         self.assertTrue(any("-f" in entry for entry in cleanup_denied), cleanup_denied)
 
-    def test_cleanup_allowed_tools_matches_pr_flow_plus_scoped_api(self):
-        """Cleanup gets exactly the PR flow's write access plus the scoped gh api grant - nothing more."""
-        pr = set(triage_daemon.ALLOWED_TOOLS_PR.split(","))
+    def test_cleanup_allowed_tools_does_not_inherit_the_broad_gh_grant(self):
+        """Same regression as the review flow: "Bash(gh *)" must be absent, or the
+        scoped gh api grant would do nothing once the blanket gh api denial is lifted."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        self.assertNotIn("Bash(gh *)", cleanup)
+
+    def test_cleanup_allowed_tools_does_not_grant_pr_create(self):
+        """Cleanup pushes to the existing PR's branch - it never opens a new one, so
+        it must not inherit "gh pr create*" the way the BOT_PR flow does."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        self.assertNotIn("Bash(gh pr create*)", cleanup)
+        self.assertIn("Bash(gh pr create*)", triage_daemon.DISALLOWED_TOOLS_CLEANUP.split(","))
+
+    def test_cleanup_allowed_tools_still_covers_the_read_only_base(self):
+        """Dropping the broad gh grant must not drop the non-gh read tools (git
+        history, file reads, the scoped Edit rules) every other flow still has."""
+        non_gh = set(triage_daemon._ALLOWED_TOOLS_NON_GH)
         cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
-        self.assertEqual(cleanup - pr, {"Bash(gh api repos/springfall2008/batpred/*)"})
-        self.assertEqual(pr - cleanup, set())
+        self.assertTrue(non_gh.issubset(cleanup))
+
+    def test_cleanup_allowed_tools_grants_exactly_the_expected_gh_entries(self):
+        """The complete, curated gh surface for the cleanup flow: the review flow's
+        read access, plus checkout/checks/run-log access and the scoped api grant."""
+        cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        gh_entries = {entry for entry in cleanup if entry.startswith("Bash(gh")}
+        self.assertEqual(
+            gh_entries,
+            {
+                "Bash(gh pr view*)",
+                "Bash(gh pr diff*)",
+                "Bash(gh pr list*)",
+                "Bash(gh pr comment*)",
+                "Bash(gh issue view*)",
+                "Bash(gh issue list*)",
+                "Bash(gh search*)",
+                "Bash(gh pr checkout*)",
+                "Bash(gh pr checks*)",
+                "Bash(gh run view*)",
+                "Bash(gh run list*)",
+                "Bash(gh api repos/springfall2008/batpred/*)",
+            },
+        )
+
+    def test_cleanup_allowed_tools_grants_write_access(self):
+        """Commit/push/pre-commit, matching the PR flow's write capability."""
+        cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        self.assertTrue(
+            {
+                "Bash(git add*)",
+                "Bash(git commit*)",
+                "Bash(git push*)",
+                "Bash(./run_pre_commit*)",
+                "Bash(./run_pre_commit)",
+            }.issubset(cleanup)
+        )
 
 
 class SyncRepoTests(unittest.TestCase):

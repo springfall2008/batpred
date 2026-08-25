@@ -82,9 +82,7 @@ POLL_SECONDS = 300
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
-_ALLOWED_TOOLS_BASE = [
-    # Read the issue, search for duplicates, post the triage comment
-    "Bash(gh *)",
+_ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
     "Bash(git diff*)",
@@ -150,6 +148,8 @@ _ALLOWED_TOOLS_BASE = [
     "Grep",
     "Glob",
 ]
+# Read the issue, search for duplicates, post the triage comment
+_ALLOWED_TOOLS_BASE = ["Bash(gh *)"] + _ALLOWED_TOOLS_NON_GH
 ALLOWED_TOOLS = ",".join(_ALLOWED_TOOLS_BASE)
 # The /issue-pr invocation needs everything the read-only triage flow has, plus
 # committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
@@ -190,18 +190,44 @@ _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr creat
 # matching can't parse flags, so this is a heuristic, not a guarantee.
 _PR_FORCE_PUSH_DENIALS = ["Bash(git push*--force*)", "Bash(git push*-f*)"]
 DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# The review and cleanup flows do NOT inherit the broad "Bash(gh *)" grant: with it
+# present, carving a scoped exception out of the gh api denial below would do nothing,
+# since "Bash(gh *)" already allows every gh api call once that denial is lifted, and
+# a narrower allow gets no precedence over a broader one - only "deny wins over allow"
+# is a real rule here. Instead, list the specific gh subcommands actually needed, so
+# there is no catch-all for the scoped gh api grant to hide behind.
+_ALLOWED_GH_PR_READ = [
+    "Bash(gh pr view*)",
+    "Bash(gh pr diff*)",
+    "Bash(gh pr list*)",
+    "Bash(gh pr comment*)",
+    "Bash(gh issue view*)",
+    "Bash(gh issue list*)",
+    "Bash(gh search*)",
+]
 # /code-review posts findings as inline PR comments, which needs gh api against the
-# PR-comments endpoint - carve just that back out, scoped to this repo only. No
-# write/push/commit access at all: BOT_REVIEW-on-PR is comment-only.
+# PR-comments endpoint - scoped to this repo only. No write/push/commit access, and
+# deliberately no "gh pr review*" either: that would also allow --approve/
+# --request-changes, a governance action beyond "post a comment."
 _REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
 _REVIEW_EXTRA_ALLOWED = [f"Bash(gh api repos/{REPO}/*)"]
-ALLOWED_TOOLS_REVIEW = ",".join(_ALLOWED_TOOLS_BASE + _REVIEW_EXTRA_ALLOWED)
+ALLOWED_TOOLS_REVIEW = ",".join(_ALLOWED_GH_PR_READ + _ALLOWED_TOOLS_NON_GH + _REVIEW_EXTRA_ALLOWED)
 DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if item not in _REVIEW_REMOVED_DENIALS)
-# BOT_CLEANUP needs everything the PR flow has (commit/push/pre-commit) plus the same
-# scoped gh api access as the review flow - to read inline review-thread comments
-# (gh pr view only surfaces top-level comments) and reply in-thread.
-ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_TOOLS_BASE + _ALLOWED_TOOLS_PR_EXTRA + _REVIEW_EXTRA_ALLOWED)
-_CLEANUP_REMOVED_DENIALS = _PR_REMOVED_DENIALS | _REVIEW_REMOVED_DENIALS
+# BOT_CLEANUP needs the review flow's read access and scoped gh api grant, plus
+# committing/pushing/pre-commit and checking out the PR's own branch (the review flow
+# never needs a local checkout, and never gh pr checks/run view - it doesn't touch CI).
+# Deliberately not the full _ALLOWED_TOOLS_PR_EXTRA: no "gh pr create*" - cleanup
+# pushes to the existing PR's branch, it never opens a new one.
+_CLEANUP_EXTRA_GH = ["Bash(gh pr checkout*)", "Bash(gh pr checks*)", "Bash(gh run view*)", "Bash(gh run list*)"]
+_CLEANUP_EXTRA_WRITE = [
+    "Bash(git add*)",
+    "Bash(git commit*)",
+    "Bash(git push*)",
+    "Bash(./run_pre_commit*)",
+    "Bash(./run_pre_commit)",
+]
+ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
+_CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
 DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
 
 
