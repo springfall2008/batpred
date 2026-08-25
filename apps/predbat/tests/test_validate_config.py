@@ -362,6 +362,34 @@ def test_validate_config(my_predbat):
         expect_clean=["car_charging_now"],
     )
 
+    # ==========================================================================
+    # transient_ok  (car_charging_energy, car_charging_power)
+    #
+    # An EV charger routinely reports 'unavailable' or 'unknown' with nothing
+    # plugged into it. minute_data() already skips those samples (utils.py), and
+    # update_car_charging_power() reads them as zero, so the reading being absent
+    # right now is normal rather than a misconfiguration - but validate_config
+    # reads the same entity by its own path and required the state to parse as a
+    # float, leaving the whole run reporting errors for a car sitting on the
+    # driveway. transient_ok on those two schema entries allows the placeholder
+    # states without loosening anything else.
+    # ==========================================================================
+    for name in ("car_charging_energy", "car_charging_power"):
+        print(f"  [transient_ok] {name} reading 'unavailable' passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "unavailable"}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading 'unknown' passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "unknown"}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading a real number still passes")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": 4.2}, expect_clean=[name])
+
+        print(f"  [transient_ok] {name} reading a non-numeric value still fails")
+        _run(my_predbat, {name: "sensor.test_charger_energy"}, extra_states={"sensor.test_charger_energy": "banana"}, expect_errors=[name])
+
+        print(f"  [transient_ok] {name} pointing at an entity that does not exist still fails")
+        _run(my_predbat, {name: "sensor.test_charger_typo"}, expect_errors=[name])
+
     print("**** test_validate_config PASSED ****")
     return False
 

@@ -110,6 +110,7 @@ from tests.test_web_debug_history_routes import test_web_debug_history_routes
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests
+from tests.test_web_power_flow import run_web_power_flow_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
@@ -452,6 +453,7 @@ def main():
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
+        ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
         ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),

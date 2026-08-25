@@ -80,6 +80,8 @@ Chrg
 citem
 cloudfront
 cobat
+codepoint
+codepoints
 Codespaces
 COEFF
 collaps

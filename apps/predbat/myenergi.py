@@ -835,14 +835,19 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
         An intervening zero reading does not rescue it, because the dip is smoothed away
         first. That loss is in the shared cumulative series, so it affects
         car_charging_energy and iboost_today alike. Documented in docs/components.md.
+
+        The Zappi live power sensors go to car_charging_power, which is display-only: it feeds
+        the web power flow diagram and the predbat.car_charging_power sensor, never the plan.
         """
         zappi_energy_entities = []
+        zappi_power_entities = []
         zappi_plug_entities = []
         eddi_entity = None
         for device in sorted(self.devices.values(), key=lambda item: item.serial):
             prefix = self.entity_prefix(device)
             if device.kind == DEVICE_KIND_ZAPPI:
                 zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
+                zappi_power_entities.append("sensor.{}_power".format(prefix))
                 zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
             elif device.kind == DEVICE_KIND_EDDI and eddi_entity is None:
                 eddi_entity = "sensor.{}_session_energy".format(prefix)
@@ -852,6 +857,8 @@ class MyEnergiAPI(ComponentBase, OAuthMixin):
             self.set_arg_auto("car_charging_energy", zappi_energy_entities)
             self.log("Info: myenergi: setting car_charging_planned to {}".format(zappi_plug_entities))
             self.set_arg_auto("car_charging_planned", zappi_plug_entities)
+            self.log("Info: myenergi: setting car_charging_power to {}".format(zappi_power_entities))
+            self.set_arg_auto("car_charging_power", zappi_power_entities)
         if eddi_entity:
             self.log("Info: myenergi: setting iboost_energy_today to {}".format(eddi_entity))
             self.set_arg_auto("iboost_energy_today", eddi_entity)

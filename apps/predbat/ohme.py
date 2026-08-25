@@ -61,6 +61,7 @@ ohme_attribute_table = {
 # Delivered-energy sensor built by OhmeAPI.update_energy_today() - see that method for why
 # Ohme's own energy figure cannot be used for this
 ENERGY_TODAY_ENTITY = "sensor.predbat_ohme_energy_today"
+POWER_WATTS_ENTITY = "sensor.predbat_ohme_power_watts"
 
 # How often the Predbat-led control loop re-evaluates the plan. The plan is minute-granular so a
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
@@ -475,9 +476,20 @@ class OhmeAPI(ComponentBase):
         # before auto_config(final=True), so an unmatched regex from the apps.yaml default is
         # still present as its literal "re:" string rather than having been removed yet - treat
         # that as unconfigured, but leave a real charger (Zappi, Wallbox, hand-set sensor) alone.
+        # A list of one is how several components hand over a single entity, so unwrap it before
+        # comparing - otherwise an explicit ["sensor.predbat_ohme_energy_today"] looks third-party
         existing = self.get_arg("car_charging_energy", default=None, indirect=False)
-        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")):
+        if isinstance(existing, list) and len(existing) == 1:
+            existing = existing[0]
+        # Ohme already owns the energy figure when the entity configured is its own, whether that
+        # was set here on a previous run or written into apps.yaml by hand (#4715 review)
+        if (not existing) or (isinstance(existing, str) and existing.startswith("re:")) or existing == ENERGY_TODAY_ENTITY:
             self.set_arg_auto("car_charging_energy", ENERGY_TODAY_ENTITY)
+            # Live charge power, for the web power flow diagram and the predbat.car_charging_power
+            # sensor. Deliberately tied to the same decision as the energy sensor above: the two
+            # have to describe the same charger, so when another charger owns the energy figure
+            # Ohme's own power reading is left out rather than reported beside it.
+            self.set_arg_auto("car_charging_power", POWER_WATTS_ENTITY)
         else:
             self.log("Info: Ohme API: Leaving car_charging_energy set to {} rather than using {}".format(existing, ENERGY_TODAY_ENTITY))
 
@@ -607,7 +619,7 @@ class OhmeAPI(ComponentBase):
 
         # Publish power data
         if power:
-            self.dashboard_item(entity_name_sensor + "_power_watts", state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
+            self.dashboard_item(POWER_WATTS_ENTITY, state=power.watts, attributes=ohme_attribute_table.get("power_watts", {}), app="ohme")
             self.dashboard_item(entity_name_sensor + "_power_amps", state=power.amps, attributes=ohme_attribute_table.get("power_amps", {}), app="ohme")
             self.dashboard_item(entity_name_sensor + "_power_volts", state=power.volts, attributes=ohme_attribute_table.get("power_volts", {}), app="ohme")
             # self.dashboard_item(entity_name_sensor + "_ct_amps", state=power.ct_amps, attributes=ohme_attribute_table.get("ct_amps", {}), app="ohme")
