@@ -165,6 +165,41 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
     return failed
 
 
+def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, expect_slots=None):
+    """
+    Run a single iBoost forecast planner test case and compare the exact slots produced
+
+    forecast is a dict of interval start (absolute minute) -> demand kWh; max_power is in kW.
+    expect_slots is the exact expected plan (list of slot dicts).
+    """
+    failed = False
+    print("**** Running Test: {} ****".format(test_name))
+
+    my_predbat.iboost_smart = True
+    my_predbat.iboost_today = today
+    my_predbat.iboost_max_energy = max_energy
+    my_predbat.iboost_max_power = max_power / 60
+    my_predbat.iboost_smart_min_length = 30
+    my_predbat.iboost_tank_capacity = capacity
+    my_predbat.iboost_tank_reserve = reserve
+    my_predbat.iboost_tank_soc_percent = tank_soc_percent
+    my_predbat.iboost_forecast = forecast
+
+    slots = my_predbat.plan_iboost_smart()
+
+    if slots != expect_slots:
+        print("ERROR: {} expected slots {} got {}".format(test_name, expect_slots, slots))
+        failed = True
+    failed |= check_slot_invariants(test_name, slots)
+
+    my_predbat.iboost_forecast = {}
+    my_predbat.iboost_tank_soc_percent = None
+    my_predbat.iboost_smart = False
+    my_predbat.iboost_today = 0
+
+    return failed
+
+
 def run_iboost_forecast_tests(my_predbat):
     """
     Tests for the iBoost demand forecast planner and its forecast ingestion
@@ -214,5 +249,78 @@ def run_iboost_forecast_tests(my_predbat):
         {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(100, 0.0), (200, 1.0)])}},
         expect_empty=True,
     )
+
+    # A draw at 14:00 with a cheap window before it and an even cheaper one after it: the energy
+    # must be booked before the draw, never in the cheaper slot after it
+    set_rate_profile(my_predbat, [(780, 810, 5.0), (900, 930, 2.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_after_cheap", my_predbat, {840: 1.0}, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+
+    # A draw before any cheap slot books the cheapest slot preceding it even though cheaper
+    # slots exist later
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_draw_before_cheap", my_predbat, {750: 1.0}, expect_slots=[{"start": 720, "end": 750, "kwh": 1.0, "average": 20.0, "cost": 20.0}])
+
+    # A full tank already covers the whole forecast: no slots are booked
+    failed |= run_iboost_forecast_plan_test("iboost_plan_tank_full", my_predbat, {840: 1.0, 900: 2.0}, tank_soc_percent=100.0, expect_slots=[])
+
+    # The reserve is held before the draw: only the shortfall over (reserve + demand) is booked
+    failed |= run_iboost_forecast_plan_test("iboost_plan_reserve", my_predbat, {840: 1.5}, tank_soc_percent=20.0, reserve=1.0, expect_slots=[{"start": 780, "end": 800, "kwh": 0.5, "average": 5.0, "cost": 2.5}])
+
+    # Two draws share one cheap interval up to the capacity: the level trajectory peaks exactly
+    # at the 1 kWh capacity and never above it
+    set_rate_profile(my_predbat, [(780, 810, 5.0), (810, 840, 6.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_capacity", my_predbat, {840: 0.5, 900: 0.5}, capacity=1.0, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+
+    # A large cheap window cannot overfill the tank: only the headroom over the stored energy is
+    # booked even though the slot could take far more
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_headroom", my_predbat, {840: 0.8}, tank_soc_percent=50.0, capacity=1.0, expect_slots=[{"start": 780, "end": 790, "kwh": 0.3, "average": 5.0, "cost": 1.5}])
+
+    # The calendar-day cap holds alongside the forecast: day 0 has only 0.2 kWh left so the rest
+    # of that draw goes uncovered (warning, no exception) while day 1 demand is still planned
+    set_rate_profile(my_predbat, [(780, 810, 5.0), (810, 840, 6.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_day_cap",
+        my_predbat,
+        {840: 1.0, 1500: 0.4},
+        today=0.3,
+        max_energy=0.5,
+        expect_slots=[{"start": 780, "end": 790, "kwh": 0.2, "average": 5.0, "cost": 1.0}, {"start": 1440, "end": 1455, "kwh": 0.4, "average": 20.0, "cost": 8.0}],
+    )
+
+    # A draw in the very first interval has no earlier slot to book: warn and keep planning the
+    # remaining draws
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_uncovered_first", my_predbat, {720: 1.0, 840: 1.0}, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+
+    # Regression: with no forecast loaded the legacy planner runs and produces identical output
+    # before and after a forecast plan has been made, and the forecast plan itself differs
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
+    my_predbat.iboost_smart = True
+    my_predbat.iboost_today = 0
+    my_predbat.iboost_max_energy = 1
+    my_predbat.iboost_max_power = 1 / 60
+    my_predbat.iboost_smart_min_length = 0
+    my_predbat.iboost_forecast = {}
+    legacy_before = my_predbat.plan_iboost_smart()
+    my_predbat.iboost_tank_capacity = 10.0
+    my_predbat.iboost_tank_reserve = 0.0
+    my_predbat.iboost_tank_soc_percent = None
+    my_predbat.iboost_forecast = {840: 1.0}
+    forecast_plan = my_predbat.plan_iboost_smart()
+    my_predbat.iboost_forecast = {}
+    legacy_after = my_predbat.plan_iboost_smart()
+    print("**** Running Test: iboost_plan_regression ****")
+    if legacy_before != legacy_after:
+        print("ERROR: iboost_plan_regression legacy plan changed after running the forecast planner: {} vs {}".format(legacy_before, legacy_after))
+        failed = True
+    if not legacy_before:
+        print("ERROR: iboost_plan_regression legacy plan is unexpectedly empty")
+        failed = True
+    if forecast_plan == legacy_before:
+        print("ERROR: iboost_plan_regression forecast plan did not diverge from the legacy plan: {}".format(forecast_plan))
+        failed = True
+    my_predbat.iboost_smart = False
+    my_predbat.iboost_today = 0
 
     return failed
