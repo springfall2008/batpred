@@ -5122,8 +5122,8 @@ class Plan:
             slot_length = 0
             slot_count = 0
             for slot_start in range(minute, minute + iboost_min_length, self.plan_interval_minutes):
-                import_rate += self.rate_import.get(minute, self.rate_min)
-                export_rate += self.rate_export.get(minute, 0)
+                import_rate += self.rate_import.get(slot_start, self.rate_min)
+                export_rate += self.rate_export.get(slot_start, 0)
                 slot_length += self.plan_interval_minutes
                 slot_count += 1
             if slot_count:
@@ -5163,7 +5163,7 @@ class Plan:
                         end = min(start + self.plan_interval_minutes, slot_end)
 
                         # Avoid duplicate slots
-                        if minute in used_slots:
+                        if start in used_slots:
                             rate_okay = False
 
                         # Boost on import/export rate
