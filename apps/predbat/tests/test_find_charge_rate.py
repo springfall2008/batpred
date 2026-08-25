@@ -104,7 +104,7 @@ def test_find_charge_rate_pv_overlap(my_predbat):
         0.96,
         log_to,
     ]
-    kwargs = {"battery_temperature": 17.0, "battery_temperature_curve": battery_temperature_curve, "current_charge_rate": max_rate / MINUTE_WATT}
+    kwargs = {"battery_temperature": 17.0, "battery_temperature_curve": battery_temperature_curve, "current_charge_rate": max_rate / MINUTE_WATT, "low_power_pv_threshold_w": my_predbat.low_power_pv_threshold_w}
 
     # Without PV low power mode should slow the charge down below the max rate
     dark_rate, dark_rate_real = find_charge_rate(*args, **kwargs)

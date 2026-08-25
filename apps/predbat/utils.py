@@ -20,7 +20,7 @@ import array
 import os
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -1368,13 +1368,18 @@ def find_charge_rate(
     battery_temperature_curve={},
     current_charge_rate=None,
     pv_window_kwh=0.0,
+    low_power_pv_threshold_w=0.0,
 ):
     """
     Find the lowest charge rate that fits the charge slow
 
-    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window
-    overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
-    window and would push the PV out of the battery, raising the cost above the planned full rate charge
+    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window's
+    own average power over that remainder exceeds low_power_pv_threshold_w, low power charging is
+    abandoned - the throttled rate applies for the whole window and would push that PV out of the
+    battery, raising the cost above the planned full rate charge. Comparing an average rather than
+    pv_window_kwh directly against a fixed energy figure keeps the decision independent of how long the
+    remaining window happens to be - a long window at a low constant trickle should not accumulate its
+    way past a threshold sized for "is this bright enough to matter" (#4699 follow-up).
     """
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
@@ -1391,15 +1396,17 @@ def find_charge_rate(
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
-        # If the charge window overlaps with PV production then charge at max rate, a throttled rate would
-        # cap the PV going into the battery, exporting the surplus and importing to make the target up later
-        if pv_window_kwh > LOW_POWER_PV_THRESHOLD:
-            if log_to:
-                log_to("Low power mode: PV forecast in window {}kWh > {}kWh, default to max rate".format(dp2(pv_window_kwh), LOW_POWER_PV_THRESHOLD))
-            return max_rate, max_rate_real
-
         minutes_left = window["end"] - minutes_now - margin
         abs_minutes_left = window["end"] - minutes_now
+
+        # If the charge window's own average PV power over its remainder is above the threshold, charge
+        # at max rate instead - a throttled rate would cap the PV going into the battery, exporting the
+        # surplus and importing to make the target up later
+        low_power_pv_threshold_kwh = (low_power_pv_threshold_w / MINUTE_WATT) * max(abs_minutes_left, 0)
+        if pv_window_kwh > low_power_pv_threshold_kwh:
+            if log_to:
+                log_to("Low power mode: PV forecast in window {}kWh > {}kWh ({}W over {} minutes), default to max rate".format(dp2(pv_window_kwh), dp2(low_power_pv_threshold_kwh), low_power_pv_threshold_w, abs_minutes_left))
+            return max_rate, max_rate_real
 
         # If we don't have enough minutes left go to max
         if abs_minutes_left < 0:

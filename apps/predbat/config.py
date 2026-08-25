@@ -1076,6 +1076,18 @@ CONFIG_ITEMS = [
         "default": 10,
     },
     {
+        "name": "low_power_pv_threshold_w",
+        "friendly_name": "Low power mode PV threshold",
+        "type": "input_number",
+        "min": 0,
+        "max": 2000,
+        "step": 10,
+        "unit": "W",
+        "icon": "mdi:weather-sunny",
+        "enable": "set_charge_low_power",
+        "default": 150,
+    },
+    {
         "name": "set_reserve_enable",
         "friendly_name": "Set Reserve Enable",
         "type": "switch",

@@ -360,12 +360,15 @@ def test_find_charge_window(my_predbat):
 
 def test_calc_dawn(my_predbat):
     """
-    Tests for calc_dawn (#4557): classifies pv_forecast_minute into light/dark buckets of
-    plan_interval_minutes, used to split a charge window at the light/dark boundary. Dawn is the first
-    bucket that crosses LOW_POWER_PV_LIGHT_FRACTION of the peak PV forecast anywhere in the dict.
+    Tests for calc_dawn (#4557, absolute threshold #4699 follow-up): classifies pv_forecast_minute into
+    light/dark buckets of plan_interval_minutes, used to split a charge window at the light/dark
+    boundary. Dawn is the first bucket whose average power crosses the user-configured
+    low_power_pv_threshold_w - an absolute Watts figure, not a fraction of this forecast's own peak (a
+    fraction-of-peak threshold would call a trickle of PV "light" on a heavily overcast day, since that
+    day's own peak is low too - see calc_dawn's docstring).
 
       - no PV forecast at all -> empty dict
-      - no PV output at all (every value zero) -> all dark, no divide-by-zero on a zero peak
+      - no PV output at all (every value zero) -> all dark
       - noise straddling the threshold within a single bucket does not flip that bucket's
         classification (regression: a raw per-minute threshold would chop the window into several
         small pieces on a noisy forecast)
@@ -373,15 +376,17 @@ def test_calc_dawn(my_predbat):
       - once confirmed, a later cloud dip (dark again) does not revert the latch - a dawn detector,
         not a rise/fall tracker
       - the latch resets at each calendar day boundary so the next day's dawn is found independently
-      - the same absolute PV value classifies differently depending on the peak elsewhere in the
-        forecast - the threshold is a fraction of that peak, not an absolute figure
+      - the same absolute PV value classifies the same regardless of what else (a much higher peak
+        elsewhere) is in the forecast - the whole point of an absolute threshold
     """
     failed = 0
     old_pv_forecast_minute = my_predbat.pv_forecast_minute
     old_plan_interval = my_predbat.plan_interval_minutes
     old_low_power = my_predbat.set_charge_low_power
+    old_threshold_w = my_predbat.low_power_pv_threshold_w
     my_predbat.plan_interval_minutes = 30
     my_predbat.set_charge_low_power = True
+    my_predbat.low_power_pv_threshold_w = 150
 
     def set_buckets(bucket_values):
         """Fill pv_forecast_minute with one value per plan_interval_minutes bucket, from minute 0."""
@@ -391,9 +396,10 @@ def test_calc_dawn(my_predbat):
             for m in range(bucket_index * interval, bucket_index * interval + interval, 5):
                 my_predbat.pv_forecast_minute[m] = value
 
-    peak = 1.0  # an arbitrary "midday" peak somewhere in the forecast - threshold is 10% of this
-    light = peak * 0.15  # above the 10% threshold
-    dark = peak * 0.05  # below it
+    threshold = my_predbat.low_power_pv_threshold_w / 60000  # kWh/min equivalent of low_power_pv_threshold_w
+    peak = threshold * 20  # an arbitrary "midday" peak, well above the threshold
+    light = threshold * 1.5  # above the threshold
+    dark = threshold * 0.5  # below it
     dawn_bucket_index = 2  # bucket where dawn happens in most scenarios below; peak sits after it
 
     print("Test calc_dawn: no PV forecast")
@@ -472,24 +478,25 @@ def test_calc_dawn(my_predbat):
         print("ERROR: calc_dawn: day 2 should reach its own dawn at minute 90, got {}".format(result.get(day_minutes + 90)))
         failed = 1
 
-    print("Test calc_dawn: threshold scales with the forecast's own peak, not an absolute figure")
-    fixed_pv_value = 0.5
-    # Against a high peak, fixed_pv_value is well under 10% and should stay dark.
+    print("Test calc_dawn: threshold is absolute, independent of the forecast's own peak elsewhere (#4699 follow-up)")
+    fixed_pv_value = dark
+    # A heavily overcast day's own peak is low too, but the same absolute fixed_pv_value must still
+    # classify dark against it, exactly as it does against a much higher clear-sky peak.
+    set_buckets([fixed_pv_value, threshold * 1.1])
+    result = my_predbat.calc_dawn()
+    if result.get(0) != 0:
+        print("ERROR: calc_dawn: {}kWh/min should be dark against a low (overcast-day) peak, got {}".format(fixed_pv_value, result.get(0)))
+        failed = 1
     set_buckets([fixed_pv_value, 10.0])
     result = my_predbat.calc_dawn()
     if result.get(0) != 0:
-        print("ERROR: calc_dawn: {}kWh/min should be dark against a peak of 10.0, got {}".format(fixed_pv_value, result.get(0)))
-        failed = 1
-    # Against a low peak, the same fixed_pv_value comfortably exceeds 10% and should be light.
-    set_buckets([fixed_pv_value, 1.0])
-    result = my_predbat.calc_dawn()
-    if result.get(0) != 1:
-        print("ERROR: calc_dawn: {}kWh/min should be light against a peak of 1.0, got {}".format(fixed_pv_value, result.get(0)))
+        print("ERROR: calc_dawn: {}kWh/min should be dark against a high (clear-sky) peak, got {}".format(fixed_pv_value, result.get(0)))
         failed = 1
 
     my_predbat.pv_forecast_minute = old_pv_forecast_minute
     my_predbat.plan_interval_minutes = old_plan_interval
     my_predbat.set_charge_low_power = old_low_power
+    my_predbat.low_power_pv_threshold_w = old_threshold_w
     return failed
 
 

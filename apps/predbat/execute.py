@@ -277,6 +277,7 @@ class Execute:
                             self.battery_temperature_charge_curve,
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
                             pv_window_kwh=pv_window_kwh,
+                            low_power_pv_threshold_w=self.low_power_pv_threshold_w,
                         )
                         new_charge_rate = int(new_charge_rate * MINUTE_WATT)
 

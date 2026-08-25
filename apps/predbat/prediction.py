@@ -105,6 +105,7 @@ class Prediction(PredictionBatch):
             self.set_export_window = base.set_export_window
             self.calculate_export_on_pv = base.calculate_export_on_pv
             self.charge_low_power_margin = base.charge_low_power_margin
+            self.low_power_pv_threshold_w = base.low_power_pv_threshold_w
             self.car_charging_slots = base.car_charging_slots
             self.car_charging_limit = base.car_charging_limit
             self.car_charging_from_battery = base.car_charging_from_battery
@@ -1038,6 +1039,7 @@ class Prediction(PredictionBatch):
                     battery_temperature,
                     self.battery_temperature_charge_curve,
                     pv_window_kwh=pv_window_kwh,
+                    low_power_pv_threshold_w=self.low_power_pv_threshold_w,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 

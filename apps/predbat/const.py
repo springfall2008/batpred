@@ -47,22 +47,6 @@ DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after thi
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
 
-# PV production (kWh) forecast across the remainder of a charge window above which low power charging is
-# abandoned in favour of the max charge rate. Throttling the charge rate while the sun is shining stops the
-# PV reaching the battery, the surplus is exported cheaply and the target is then made up with grid import,
-# which increases the cost of the plan over the full rate charge the planner costed the window at.
-LOW_POWER_PV_THRESHOLD = 0.1
-
-# Fraction of the peak forecast PV power above which a plan_interval_minutes bucket is classed as
-# "light" rather than "dark" when deciding where to split a charge window (calc_dawn). A charge window
-# otherwise built from a single long cheap-rate period spanning sunrise would apply LOW_POWER_PV_THRESHOLD
-# across the whole thing and abandon low power charging even for the still-dark hours before the sun is
-# up (#4557) - splitting at dawn keeps the dark portion as its own window, genuinely PV-free, so it stays
-# throttled. A fraction of that forecast's own peak, rather than a fixed Watts figure, scales with the
-# site - a fixed threshold picked for a typical system would be noise-level for a large array and
-# unreachable for a small one.
-LOW_POWER_PV_LIGHT_FRACTION = 0.1
-
 INVERTER_TEST = False  # Run inverter control self test
 
 # Sentinel values for an export window's target SoC/limit (export_limits_best and friends).
