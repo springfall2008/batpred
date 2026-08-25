@@ -395,6 +395,26 @@ def create_pr(issue_number):
     print(f"[pr] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
+def process_bot_pr_issue(issue):
+    """Run the full BOT_PR flow for one issue: guard against duplicate work, ensure it's
+    triaged, run the PR flow, then swap the label based on whether a PR now exists.
+    """
+    issue_number = issue["number"]
+    labels = issue.get("labels", [])
+    if has_existing_pr(issue_number):
+        print(f"[pr] issue #{issue_number}: a PR already references this issue, skipping", flush=True)
+        return
+    sync_repo()
+    reset_scratch()
+    if not ensure_triaged(issue_number, labels):
+        triage(issue_number)
+    create_pr(issue_number)
+    if has_existing_pr(issue_number):
+        mark_pr_opened(issue_number)
+    else:
+        mark_pr_failed(issue_number)
+
+
 def main():
     if not CLONE_DIR.exists():
         raise SystemExit(f"Expected a git clone at {CLONE_DIR} - see setup steps before running this daemon.")
@@ -408,6 +428,8 @@ def main():
                 triage(issue["number"])
                 state["last_processed"] = issue["number"]
                 save_state(state)
+            for issue in fetch_bot_pr_issues():
+                process_bot_pr_issue(issue)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)

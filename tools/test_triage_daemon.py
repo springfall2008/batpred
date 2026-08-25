@@ -265,5 +265,66 @@ class CreatePrTests(DaemonPathsTestCase):
         self.assertTrue((self.log_dir / "issue-4720-pr.log").exists())
 
 
+class ProcessBotPrIssueTests(unittest.TestCase):
+    """Tests for process_bot_pr_issue(), the orchestrator wiring the whole BOT_PR flow
+    together - new in the bot PR flow."""
+
+    def setUp(self):
+        """Patch every collaborator process_bot_pr_issue() calls."""
+        self.patches = {}
+        for name in [
+            "has_existing_pr",
+            "sync_repo",
+            "reset_scratch",
+            "ensure_triaged",
+            "triage",
+            "create_pr",
+            "mark_pr_opened",
+            "mark_pr_failed",
+        ]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_skips_entirely_when_pr_already_exists(self):
+        """An issue that already has a referencing PR is left alone."""
+        self.patches["has_existing_pr"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        self.patches["sync_repo"].assert_not_called()
+        self.patches["create_pr"].assert_not_called()
+
+    def test_runs_triage_first_when_not_yet_triaged(self):
+        """An untriaged issue is triaged before the PR flow runs."""
+        self.patches["has_existing_pr"].side_effect = [False, True]  # entry guard, then post-hoc check
+        self.patches["ensure_triaged"].return_value = False
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        self.patches["triage"].assert_called_once_with(4720)
+        self.patches["create_pr"].assert_called_once_with(4720)
+
+    def test_skips_triage_when_already_triaged(self):
+        """An already-triaged issue goes straight to the PR flow."""
+        self.patches["has_existing_pr"].side_effect = [False, True]
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [{"name": "BOT_TRIAGED"}]})
+        self.patches["triage"].assert_not_called()
+        self.patches["create_pr"].assert_called_once_with(4720)
+
+    def test_marks_opened_when_a_pr_exists_afterwards(self):
+        """If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED."""
+        self.patches["has_existing_pr"].side_effect = [False, True]
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        self.patches["mark_pr_opened"].assert_called_once_with(4720)
+        self.patches["mark_pr_failed"].assert_not_called()
+
+    def test_marks_failed_when_no_pr_exists_afterwards(self):
+        """If no PR exists after create_pr() runs (quality gate failed), swap to BOT_PR_FAILED."""
+        self.patches["has_existing_pr"].side_effect = [False, False]
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        self.patches["mark_pr_failed"].assert_called_once_with(4720)
+        self.patches["mark_pr_opened"].assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
