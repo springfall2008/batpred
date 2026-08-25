@@ -1492,7 +1492,7 @@ class Inverter:
                 # will resolve on its own. Retrying every cycle forever would be misleading, so
                 # don't pretend to make a plan Predbat can't actually deliver (maintainer call on
                 # #4288/#4179 - see PR review discussion).
-                message = "Error: Inverter {} unable to read charge window time as neither REST, charge_start_time or charge_start_hour are set".format(self.id)
+                message = "Error: Inverter {} unable to read charge window time - no source is configured (set givtcp_rest, ge_cloud_direct, or charge_start_time/charge_start_hour in apps.yaml)".format(self.id)
                 self.log(message)
                 self.base.record_status(message, had_errors=True)
                 raise ValueError(message)
