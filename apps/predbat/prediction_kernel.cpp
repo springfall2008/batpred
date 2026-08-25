@@ -43,7 +43,7 @@
 // falling back. Bumping makes the loader reject it and use the Python engine, which is the whole
 // point of the check.
 #define PK_ABI_VERSION 5
-#define PK_PARITY_REVISION 10
+#define PK_PARITY_REVISION 11
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_EXPORT_LIMIT_FREEZE 99.0 // const.py EXPORT_LIMIT_FREEZE
@@ -199,6 +199,7 @@ struct PkContext {
     double iboost_min_soc;
     double iboost_rate_threshold;
     double iboost_rate_threshold_export;
+    double battery_soc_full_hysteresis; // % SoC must drop below 100 before charging resumes; 0 = feature off
 
     int32_t n_steps;
     int32_t minutes_now;
@@ -229,6 +230,7 @@ struct PkContext {
     int32_t iboost_on_export;
     int32_t has_rate_gas;
     int32_t has_iboost_plan;
+    int32_t battery_full_hysteresis_active; // seed state: 1 if the real battery is currently within the hysteresis band
 };
 
 // Per-scenario inputs; field order MUST match the ctypes Structure in prediction_kernel.py.
@@ -698,6 +700,11 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     int32_t iboost_running = 0;
     int32_t iboost_running_solar = 0;
     int32_t iboost_running_full = 0;
+    // Battery full hysteresis - prediction.py: "Simulate each forward minute" pre-loop init. Seeded from
+    // the live state on the base object, then re-evaluated every step as soc moves, mirroring utils.py
+    // find_charge_rate's early-return clamp to battery_rate_min while active.
+    const double battery_soc_full_hysteresis = c->battery_soc_full_hysteresis;
+    bool full_hysteresis_active = battery_soc_full_hysteresis > 0.0 && c->battery_full_hysteresis_active != 0;
 
     // Battery behaviour - prediction.py:501-521
     const double inverter_loss = c->inverter_loss;
@@ -730,6 +737,18 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         const int32_t minute = k * step;
         const int32_t minute_absolute = minute + c->minutes_now;
         double reserve_expected = reserve;
+
+        // Battery full hysteresis - mirrors prediction.py's per-minute update, evaluated before the
+        // step's own charge-rate computation so it applies to this step immediately if it is the one
+        // where soc first reaches (or drops below) the threshold.
+        if (battery_soc_full_hysteresis > 0.0) {
+            const int32_t soc_percent_now = calc_percent_limit(soc, soc_max);
+            if (soc_percent_now >= 100) {
+                full_hysteresis_active = true;
+            } else if (static_cast<double>(soc_percent_now) <= (100.0 - battery_soc_full_hysteresis)) {
+                full_hysteresis_active = false;
+            }
+        }
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
@@ -1034,8 +1053,15 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             }
             // find_charge_rate with set_charge_low_power off (always the case for scenario runs)
             // reduces to the max rate and its curve value - utils.py:1145,1237-1238
-            charge_rate_now = battery_rate_max_charge_combined;
-            charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
+            // Battery full hysteresis short-circuits find_charge_rate to battery_rate_min before that -
+            // utils.py find_charge_rate's early return when full_hysteresis_active.
+            if (full_hysteresis_active) {
+                charge_rate_now = battery_rate_min;
+                charge_rate_now_curve = battery_rate_min;
+            } else {
+                charge_rate_now = battery_rate_max_charge_combined;
+                charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
+            }
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
             battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});

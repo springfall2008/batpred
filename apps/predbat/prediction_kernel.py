@@ -32,7 +32,7 @@ from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 KERNEL_ABI_VERSION = 5
-KERNEL_PARITY_REVISION = 10
+KERNEL_PARITY_REVISION = 11
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -106,6 +106,7 @@ class PkContext(ctypes.Structure):
         ("iboost_min_soc", ctypes.c_double),
         ("iboost_rate_threshold", ctypes.c_double),
         ("iboost_rate_threshold_export", ctypes.c_double),
+        ("battery_soc_full_hysteresis", ctypes.c_double),
         ("n_steps", ctypes.c_int32),
         ("minutes_now", ctypes.c_int32),
         ("forecast_minutes", ctypes.c_int32),
@@ -135,6 +136,7 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("battery_full_hysteresis_active", ctypes.c_int32),
     ]
 
 
@@ -689,6 +691,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_min_soc = pred.iboost_min_soc
         ctx.iboost_rate_threshold = pred.iboost_rate_threshold
         ctx.iboost_rate_threshold_export = pred.iboost_rate_threshold_export
+        ctx.battery_soc_full_hysteresis = pred.battery_soc_full_hysteresis
 
         ctx.n_steps = n_steps
         ctx.minutes_now = minutes_now
@@ -719,6 +722,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.battery_full_hysteresis_active = 1 if pred.battery_full_hysteresis_active else 0
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:

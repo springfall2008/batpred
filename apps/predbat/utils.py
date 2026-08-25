@@ -1242,6 +1242,7 @@ def find_charge_rate(
     battery_temperature_curve={},
     current_charge_rate=None,
     pv_window_kwh=0.0,
+    full_hysteresis_active=False,
 ):
     """
     Find the lowest charge rate that fits the charge slow
@@ -1249,6 +1250,12 @@ def find_charge_rate(
     pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window
     overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
     window and would push the PV out of the battery, raising the cost above the planned full rate charge
+
+    full_hysteresis_active is True when the battery has recently reached 100% SoC and has not yet dropped
+    below the user's configured battery_soc_full_hysteresis band. Some inverters clamp their real max
+    charge current to (near) zero for the whole of this band regardless of the target SoC or charge rate
+    setting requested, so Predbat holds off issuing charge current itself rather than commanding a rate
+    the inverter will not deliver and planning around charging that will not actually happen.
     """
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
@@ -1256,6 +1263,11 @@ def find_charge_rate(
     # Current charge rate
     if current_charge_rate is None:
         current_charge_rate = max_rate
+
+    if full_hysteresis_active:
+        if log_to:
+            log_to("Battery full hysteresis active: SoC recently reached 100%, holding charge current at minimum until it drops through the hysteresis band")
+        return battery_rate_min, battery_rate_min
 
     battery_temperature_curve_tuple = charge_curve_to_tuple(battery_temperature_curve)
     battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)

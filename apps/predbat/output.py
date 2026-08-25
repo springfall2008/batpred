@@ -1028,6 +1028,10 @@ class Output:
             self.battery_temperature,
             self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
+            # Cosmetic best-effort for this single display snapshot: the plan's own simulation already
+            # suppresses charging (and so the soc trajectory) while hysteresis is genuinely active, this
+            # only catches the leading edge where soc is already sitting at 100% for this window.
+            full_hysteresis_active=(calc_percent_limit(soc, self.soc_max) >= 100.0),
         )
         return dp2(charge_rate_now_curve * MINUTE_WATT / 1000.0)
 
@@ -2593,6 +2597,7 @@ class Output:
                 "version": THIS_VERSION_DISPLAY,
                 "error": (had_errors or self.had_errors),
                 "error_count": error_count,
+                "battery_full_hysteresis_active": self.battery_full_hysteresis_active,
             },
         )
 
