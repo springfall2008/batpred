@@ -157,7 +157,7 @@ async def capture_snapshot(storage, yaml_text, now_utc, max_count, max_age=None)
     # what makes it reachable by a HA Companion-app user, whose embedded webview cannot save the
     # tgz/single-file download routes (it ignores Content-Disposition: attachment) but can still
     # browse to a real file there with File Editor/Samba.
-filename = snapshot_filename(snapshot_id)
+    filename = snapshot_filename(snapshot_id)
     if not await storage.save_debug_copy(filename, yaml_text):
         raise IOError("Failed to save debug snapshot {}".format(filename))
 
