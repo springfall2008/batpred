@@ -686,7 +686,7 @@ class Components:
                     continue
                 elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
                     have_all_args = False
-                    missing_config.append(arg_info["config"])
+                    missing_config.append(f"{arg_info['config']} (must be true)")
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
                     missing_config.append(arg_info["config"])
