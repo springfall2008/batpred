@@ -577,9 +577,8 @@ class TriageFollowupTests(DaemonPathsTestCase):
 
     @patch("triage_daemon.subprocess.run")
     def test_invokes_claude_with_the_read_only_triage_permission_set(self, mock_run):
-        """Runs /issue-triage-followup with the same read-only allow/deny lists as
-        first-pass triage - a follow-up never writes code or opens a PR."""
-        mock_run.return_value = MagicMock(returncode=0)
+        """Runs /issue-triage-followup with the same triage allow/deny lists as
+        first-pass triage (no commits, pushes, or PR creation)."""
         triage_daemon.triage_followup(4720)
         cmd = mock_run.call_args[0][0]
         self.assertIn("/issue-triage-followup 4720", cmd[2])
