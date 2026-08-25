@@ -618,6 +618,7 @@ unpickles
 unpushed
 unsmoothed
 unstaged
+untriaged
 urandom
 urlsafe
 uscapacity
