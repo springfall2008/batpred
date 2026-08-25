@@ -2708,11 +2708,18 @@ class Inverter:
         # adjust_inverter_mode. Tracking what we last committed keeps a stable window quiet while still
         # committing once after a restart, when nothing has been committed yet (#4000).
         export_schedule = (new_start, new_end, force_export)
-        schedule_changed = (new_end != old_end) or (new_start != old_start) or (force_export != old_discharge_enable)
+        # Separately, whether the start/end times themselves actually moved - used below to gate the
+        # GivTCP settle sleep, which exists for the window write specifically ("start/end of discharge
+        # window was just adjusted"). schedule_changed alone is too broad for that: it also goes True on
+        # a bare scheduled_discharge_enable flip with the window untouched, which doesn't need settling.
+        times_changed = (new_end != old_end) or (new_start != old_start)
+        schedule_changed = times_changed or (force_export != old_discharge_enable)
         if is_hm_format and export_schedule != self.last_export_schedule_committed:
             # Only the H M path rewrites unconditionally, so only it needs the extra commit-once-per-run
-            # safety net; every other format already commits on a real change alone.
+            # safety net; every other format already commits on a real change alone. Treat it as a real
+            # window write too, so the settle sleep still runs on this first post-restart commit.
             schedule_changed = True
+            times_changed = True
 
         if schedule_changed:
             committed = True
@@ -2725,7 +2732,7 @@ class Inverter:
 
         # Force export, turn it on after we change the window
         if force_export:
-            self.adjust_inverter_mode(force_export, changed_start_end=schedule_changed)
+            self.adjust_inverter_mode(force_export, changed_start_end=times_changed)
             if not self.inv_has_charge_enable_time and (self.inv_output_charge_control == "current"):
                 if self.inv_charge_control_immediate:
                     self.enable_charge_discharge_with_time_current("discharge", True)

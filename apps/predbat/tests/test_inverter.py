@@ -2501,6 +2501,82 @@ def test_force_export_stable_window_presses_button_once(test_name, ha, inv):
     return failed
 
 
+def test_force_export_enable_only_flip_skips_settle_sleep(test_name, ha, inv):
+    """
+    Regression test: turning scheduled export on/off with the window's start/end times unchanged
+    must not trigger the 30 second GivTCP settle sleep in adjust_inverter_mode.
+
+    That sleep exists specifically for "start/end of discharge window was just adjusted" (its own log
+    message) - a HH:MM:SS-format inverter (e.g. Fox, GE) whose scheduled_discharge_enable flips while
+    new_start/new_end already match what's on the inverter has not written any time register at all,
+    so there is nothing for GivTCP to settle. schedule_changed alone is too broad a gate for this - it
+    is also True on a bare enable flip - so adjust_force_export must gate the sleep on times_changed
+    (start/end actually differing) instead, while still pressing the update button and recording the
+    commit via the broader schedule_changed (the enable state genuinely did change and does need
+    committing).
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    inv.rest_data = None
+    inv.inv_charge_time_format = "HH:MM:SS"
+    inv.inv_time_button_press = True
+    inv.last_export_schedule_committed = None
+
+    export_time = "18:00:00"
+    export_end = "19:00:00"
+
+    # Window already on the inverter matches what we're about to request - only the enable flag differs.
+    ha.dummy_items["select.discharge_start_time"] = export_time
+    ha.dummy_items["select.discharge_end_time"] = export_end
+    ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+    ha.dummy_items["number.discharge_target_soc"] = inv.reserve_percent
+    ha.dummy_items["select.inverter_mode"] = "Timed Export"
+    ha.dummy_items["switch.inverter_button"] = "off"
+
+    inv.base.args["discharge_start_time"] = "select.discharge_start_time"
+    inv.base.args["discharge_end_time"] = "select.discharge_end_time"
+    inv.base.args.pop("discharge_start_hour", None)
+    inv.base.args.pop("discharge_end_hour", None)
+    inv.base.args["scheduled_discharge_enable"] = "switch.scheduled_discharge_enable"
+
+    ts = datetime.strptime(export_time, "%H:%M:%S")
+    te = datetime.strptime(export_end, "%H:%M:%S")
+
+    saved_sleep = inv.sleep
+    sleep_calls = []
+    inv.sleep = lambda seconds, _c=sleep_calls: _c.append(seconds)
+
+    try:
+        inv.adjust_force_export(True, ts, te)
+
+        if ha.dummy_items.get("switch.inverter_button") != "on":
+            print(f"ERROR: {test_name}: enable flip must still commit (button pressed), got {ha.dummy_items.get('switch.inverter_button')}")
+            failed = True
+
+        # Other writes (the enable switch itself, the target SoC) legitimately sleep briefly to poll for
+        # confirmation - inv_write_and_poll_sleep, not the 30s GivTCP settle sleep. Only that specific
+        # 30-second value is what this test cares about.
+        if 30 in sleep_calls:
+            print(f"ERROR: {test_name}: enable-only flip with unchanged times should not trigger the 30s GivTCP settle sleep, got sleep({sleep_calls})")
+            failed = True
+
+        # Sanity check the sleep gate still fires when the times genuinely do change alongside the flip
+        ha.dummy_items["switch.scheduled_discharge_enable"] = "off"
+        ha.dummy_items["switch.inverter_button"] = "off"
+        sleep_calls.clear()
+        inv.adjust_force_export(True, ts, datetime.strptime("20:00:00", "%H:%M:%S"))
+
+        if 30 not in sleep_calls:
+            print(f"ERROR: {test_name}: a genuine window time change must still trigger the 30s settle sleep, got sleep({sleep_calls})")
+            failed = True
+    finally:
+        inv.sleep = saved_sleep
+        inv.last_export_schedule_committed = None
+
+    return failed
+
+
 def test_time_entity_hour_write(test_name, ha, inv, dummy_rest, direction, new_start, new_end):
     """
     Test that when *_start_hour / *_end_hour args resolve to time.* entities the full
@@ -3632,6 +3708,11 @@ charge_start_service:
 
     # Regression test for issue #4709: a stable export window must be committed once, not every cycle
     failed |= test_force_export_stable_window_presses_button_once("force_export_stable_window_button_once", ha, inv)
+    if failed:
+        return failed
+
+    # Regression test: an enable-only flip (times unchanged) must not trigger the GivTCP settle sleep
+    failed |= test_force_export_enable_only_flip_skips_settle_sleep("force_export_enable_only_flip_skips_settle_sleep", ha, inv)
     if failed:
         return failed
 
