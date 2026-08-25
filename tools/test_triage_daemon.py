@@ -571,38 +571,111 @@ class MarkReviewFailedTests(unittest.TestCase):
         )
 
 
+class TriageFollowupTests(DaemonPathsTestCase):
+    """Tests for triage_followup(), new - the BOT_REVIEW follow-up flow for issues
+    that already carry BOT_TRIAGED."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_read_only_triage_permission_set(self, mock_run):
+        """Runs /issue-triage-followup with the same triage allow/deny lists as
+        first-pass triage (no commits, pushes, or PR creation)."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/issue-triage-followup 4720", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_raises_on_a_non_zero_exit(self, mock_run):
+        """Unlike create_pr(), a follow-up failure raises - process_bot_review_issue()
+        treats this the same way as a first-pass triage failure."""
+        mock_run.return_value = MagicMock(returncode=1)
+        with self.assertRaises(subprocess.CalledProcessError):
+            triage_daemon.triage_followup(4720)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-issue follow-up log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        self.assertTrue((self.log_dir / "issue-4720-followup.log").exists())
+
+
 class ProcessBotReviewIssueTests(unittest.TestCase):
-    """Tests for process_bot_review_issue(), new in the BOT_REVIEW flow."""
+    """Tests for process_bot_review_issue(), covering all three BOT_REVIEW paths:
+    first-pass triage, follow-up review, and old pre-label-ticket backfill."""
 
     def setUp(self):
         """Patch every collaborator process_bot_review_issue() calls."""
         self.patches = {}
-        for name in ["ensure_triaged", "sync_repo", "reset_scratch", "triage", "remove_review_label", "mark_review_failed"]:
+        for name in [
+            "is_already_triaged",
+            "find_triage_comment",
+            "backfill_triaged_label",
+            "sync_repo",
+            "reset_scratch",
+            "triage",
+            "triage_followup",
+            "remove_review_label",
+            "mark_review_failed",
+        ]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_already_triaged_just_removes_the_label(self):
-        """An already-triaged issue skips triage() entirely."""
-        self.patches["ensure_triaged"].return_value = True
+    def test_already_triaged_runs_a_follow_up_review(self):
+        """An issue already carrying BOT_TRIAGED gets a follow-up review, not a fresh
+        first-pass triage, and not the old-ticket backfill path."""
+        self.patches["is_already_triaged"].return_value = True
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}], "title": "Old ticket needing review"})
+        self.patches["find_triage_comment"].assert_not_called()
         self.patches["triage"].assert_not_called()
+        self.patches["sync_repo"].assert_called_once()
+        self.patches["reset_scratch"].assert_called_once()
+        self.patches["triage_followup"].assert_called_once_with(3100)
         self.patches["remove_review_label"].assert_called_once_with(3100)
         self.patches["mark_review_failed"].assert_not_called()
 
-    def test_not_triaged_runs_triage_then_removes_the_label(self):
-        """An untriaged issue is synced, triaged, then the trigger label is removed."""
-        self.patches["ensure_triaged"].return_value = False
+    def test_old_pre_label_ticket_backfills_without_a_follow_up(self):
+        """A pre-BOT_TRIAGED-label ticket with an existing comment is backfilled and
+        left alone - catching up on backlog is not the same as new information having
+        arrived, so no follow-up runs."""
+        self.patches["is_already_triaged"].return_value = False
+        self.patches["find_triage_comment"].return_value = True
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
+        self.patches["backfill_triaged_label"].assert_called_once_with(3100)
+        self.patches["triage"].assert_not_called()
+        self.patches["triage_followup"].assert_not_called()
+        self.patches["sync_repo"].assert_not_called()
+        self.patches["reset_scratch"].assert_not_called()
+        self.patches["remove_review_label"].assert_called_once_with(3100)
+        self.patches["mark_review_failed"].assert_not_called()
+
+    def test_never_triaged_runs_first_pass_triage(self):
+        """An issue with neither the label nor an existing comment gets a first-pass triage."""
+        self.patches["is_already_triaged"].return_value = False
+        self.patches["find_triage_comment"].return_value = False
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         self.patches["sync_repo"].assert_called_once()
         self.patches["reset_scratch"].assert_called_once()
         self.patches["triage"].assert_called_once_with(3100)
+        self.patches["triage_followup"].assert_not_called()
         self.patches["remove_review_label"].assert_called_once_with(3100)
         self.patches["mark_review_failed"].assert_not_called()
 
-    def test_failed_triage_marks_failed_instead_of_removing_the_label(self):
-        """A triage() failure swaps to BOT_FAILED rather than retrying next poll."""
-        self.patches["ensure_triaged"].return_value = False
+    def test_failed_follow_up_marks_failed_instead_of_removing_the_label(self):
+        """A triage_followup() failure swaps to BOT_FAILED rather than retrying next poll."""
+        self.patches["is_already_triaged"].return_value = True
+        self.patches["triage_followup"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}], "title": "Old ticket needing review"})
+        self.patches["mark_review_failed"].assert_called_once_with(3100)
+        self.patches["remove_review_label"].assert_not_called()
+
+    def test_failed_first_pass_triage_marks_failed_instead_of_removing_the_label(self):
+        """A triage() failure (first-pass path) also swaps to BOT_FAILED."""
+        self.patches["is_already_triaged"].return_value = False
+        self.patches["find_triage_comment"].return_value = False
         self.patches["triage"].side_effect = subprocess.CalledProcessError(1, ["claude"])
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         self.patches["mark_review_failed"].assert_called_once_with(3100)
@@ -611,7 +684,7 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
     @patch("builtins.print")
     def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
         """Prints the issue's title and an openable GitHub link as soon as work starts."""
-        self.patches["ensure_triaged"].return_value = True
+        self.patches["is_already_triaged"].return_value = True
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("Old ticket needing review", printed)
