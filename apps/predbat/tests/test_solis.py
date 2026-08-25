@@ -848,13 +848,17 @@ def test_solis_skipped_component_logging():
     """Solis logs missing credential alternatives only when partly configured."""
     import components as components_module
 
-    unconfigured_base = _GatingBase({})
+    # Nothing about solis supplied at all, plus an unrelated shared setting that must
+    # not be mistaken for solis configuration.
+    unconfigured_base = _GatingBase({"days_previous": [7]})
     components_module.Components(unconfigured_base).initialize(only="solis", phase=1)
     if any("Skipping Solis Cloud API interface" in message for message in unconfigured_base.log_messages):
         print("ERROR: Unconfigured Solis component should be skipped without a warning")
         return True
 
-    configured_base = _GatingBase({"solis_auth_method": "oauth"})
+    # An empty credential is supplied: the component is still skipped, but the user
+    # clearly intended to configure it, so the warning must fire.
+    configured_base = _GatingBase({"solis_api_key": ""})
     components_module.Components(configured_base).initialize(only="solis", phase=1)
     expected = "Warn: Skipping Solis Cloud API interface, needs at least one of: solis_api_key, solis_access_token"
     if expected not in configured_base.log_messages:
