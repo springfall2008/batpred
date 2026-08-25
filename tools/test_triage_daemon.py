@@ -59,8 +59,17 @@ class LoadSaveStateTests(DaemonPathsTestCase):
         self.assertEqual(triage_daemon.load_state(), {"last_processed": 0})
 
 
+class IssueUrlTests(unittest.TestCase):
+    """Tests for issue_url(), new - used to print an openable link when work starts."""
+
+    def test_builds_the_github_issue_url(self):
+        """Returns the standard GitHub issue URL for the configured repo."""
+        self.assertEqual(triage_daemon.issue_url(4720), "https://github.com/springfall2008/batpred/issues/4720")
+
+
 class FetchNewIssuesTests(unittest.TestCase):
-    """Characterisation tests for fetch_new_issues() - pre-existing, unchanged."""
+    """Characterisation tests for fetch_new_issues() - pre-existing, except for also
+    requesting the title field (used to print an openable link when work starts)."""
 
     @patch("triage_daemon.subprocess.run")
     def test_filters_and_sorts_by_issue_number(self, mock_run):
@@ -68,14 +77,23 @@ class FetchNewIssuesTests(unittest.TestCase):
         mock_run.return_value = MagicMock(
             stdout=json.dumps(
                 [
-                    {"number": 10, "createdAt": "2026-01-01T00:00:00Z"},
-                    {"number": 8, "createdAt": "2025-12-01T00:00:00Z"},
-                    {"number": 12, "createdAt": "2026-02-01T00:00:00Z"},
+                    {"number": 10, "createdAt": "2026-01-01T00:00:00Z", "title": "Ten"},
+                    {"number": 8, "createdAt": "2025-12-01T00:00:00Z", "title": "Eight"},
+                    {"number": 12, "createdAt": "2026-02-01T00:00:00Z", "title": "Twelve"},
                 ]
             )
         )
         result = triage_daemon.fetch_new_issues(9)
         self.assertEqual([issue["number"] for issue in result], [10, 12])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_requests_the_title_field(self, mock_run):
+        """Requests title alongside number/createdAt, so it's available to print without a second call."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        triage_daemon.fetch_new_issues(0)
+        args = mock_run.call_args[0][0]
+        json_fields = args[args.index("--json") + 1]
+        self.assertIn("title", json_fields.split(","))
 
 
 class FetchBotPrIssuesTests(unittest.TestCase):
@@ -84,12 +102,17 @@ class FetchBotPrIssuesTests(unittest.TestCase):
     @patch("triage_daemon.subprocess.run")
     def test_queries_open_issues_labelled_bot_pr(self, mock_run):
         """Calls gh issue list scoped to the BOT_PR label and returns the parsed issues."""
-        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}]))
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}], "title": "Solis TOU bit refused"}]))
         result = triage_daemon.fetch_bot_pr_issues()
-        self.assertEqual(result, [{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}])
+        self.assertEqual(
+            result,
+            [{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}], "title": "Solis TOU bit refused"}],
+        )
         args = mock_run.call_args[0][0]
         self.assertIn("--label", args)
         self.assertEqual(args[args.index("--label") + 1], "BOT_PR")
+        json_fields = args[args.index("--json") + 1]
+        self.assertIn("title", json_fields.split(","))
 
 
 class EnsureTriagedTests(unittest.TestCase):
@@ -286,7 +309,7 @@ class ProcessBotPrIssueTests(unittest.TestCase):
     def test_skips_entirely_when_pr_already_exists(self):
         """An issue that already has a referencing PR is left alone."""
         self.patches["has_existing_pr"].return_value = True
-        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
         self.patches["sync_repo"].assert_not_called()
         self.patches["create_pr"].assert_not_called()
 
@@ -294,7 +317,7 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         """An untriaged issue is triaged before the PR flow runs."""
         self.patches["has_existing_pr"].side_effect = [False, True]  # entry guard, then post-hoc check
         self.patches["ensure_triaged"].return_value = False
-        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
         self.patches["triage"].assert_called_once_with(4720)
         self.patches["create_pr"].assert_called_once_with(4720)
 
@@ -302,7 +325,7 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         """An already-triaged issue goes straight to the PR flow."""
         self.patches["has_existing_pr"].side_effect = [False, True]
         self.patches["ensure_triaged"].return_value = True
-        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [{"name": "BOT_TRIAGED"}]})
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [{"name": "BOT_TRIAGED"}], "title": "Solis TOU bit refused"})
         self.patches["triage"].assert_not_called()
         self.patches["create_pr"].assert_called_once_with(4720)
 
@@ -310,7 +333,7 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         """If a PR references the issue after create_pr() runs, swap to BOT_PR_OPENED."""
         self.patches["has_existing_pr"].side_effect = [False, True]
         self.patches["ensure_triaged"].return_value = True
-        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
         self.patches["mark_pr_opened"].assert_called_once_with(4720)
         self.patches["mark_pr_failed"].assert_not_called()
 
@@ -318,9 +341,18 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         """If no PR exists after create_pr() runs (quality gate failed), swap to BOT_PR_FAILED."""
         self.patches["has_existing_pr"].side_effect = [False, False]
         self.patches["ensure_triaged"].return_value = True
-        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": []})
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
         self.patches["mark_pr_failed"].assert_called_once_with(4720)
         self.patches["mark_pr_opened"].assert_not_called()
+
+    @patch("builtins.print")
+    def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
+        """Prints the issue's title and an openable GitHub link as soon as work starts."""
+        self.patches["has_existing_pr"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("Solis TOU bit refused", printed)
+        self.assertIn("https://github.com/springfall2008/batpred/issues/4720", printed)
 
 
 class FetchBotReviewIssuesTests(unittest.TestCase):
@@ -329,12 +361,14 @@ class FetchBotReviewIssuesTests(unittest.TestCase):
     @patch("triage_daemon.subprocess.run")
     def test_queries_open_issues_labelled_bot_review(self, mock_run):
         """Calls gh issue list scoped to the BOT_REVIEW label and returns the parsed issues."""
-        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 3100, "labels": [{"name": "BOT_REVIEW"}]}]))
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 3100, "labels": [{"name": "BOT_REVIEW"}], "title": "Old ticket needing review"}]))
         result = triage_daemon.fetch_bot_review_issues()
-        self.assertEqual(result, [{"number": 3100, "labels": [{"name": "BOT_REVIEW"}]}])
+        self.assertEqual(result, [{"number": 3100, "labels": [{"name": "BOT_REVIEW"}], "title": "Old ticket needing review"}])
         args = mock_run.call_args[0][0]
         self.assertIn("--label", args)
         self.assertEqual(args[args.index("--label") + 1], "BOT_REVIEW")
+        json_fields = args[args.index("--json") + 1]
+        self.assertIn("title", json_fields.split(","))
 
 
 class RemoveReviewLabelTests(unittest.TestCase):
@@ -374,7 +408,7 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
     def test_already_triaged_just_removes_the_label(self):
         """An already-triaged issue skips triage() entirely."""
         self.patches["ensure_triaged"].return_value = True
-        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}]})
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}], "title": "Old ticket needing review"})
         self.patches["triage"].assert_not_called()
         self.patches["remove_review_label"].assert_called_once_with(3100)
         self.patches["mark_review_failed"].assert_not_called()
@@ -382,7 +416,7 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
     def test_not_triaged_runs_triage_then_removes_the_label(self):
         """An untriaged issue is synced, triaged, then the trigger label is removed."""
         self.patches["ensure_triaged"].return_value = False
-        triage_daemon.process_bot_review_issue({"number": 3100, "labels": []})
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         self.patches["sync_repo"].assert_called_once()
         self.patches["reset_scratch"].assert_called_once()
         self.patches["triage"].assert_called_once_with(3100)
@@ -393,9 +427,18 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
         """A triage() failure swaps to BOT_FAILED rather than retrying next poll."""
         self.patches["ensure_triaged"].return_value = False
         self.patches["triage"].side_effect = subprocess.CalledProcessError(1, ["claude"])
-        triage_daemon.process_bot_review_issue({"number": 3100, "labels": []})
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         self.patches["mark_review_failed"].assert_called_once_with(3100)
         self.patches["remove_review_label"].assert_not_called()
+
+    @patch("builtins.print")
+    def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
+        """Prints the issue's title and an openable GitHub link as soon as work starts."""
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("Old ticket needing review", printed)
+        self.assertIn("https://github.com/springfall2008/batpred/issues/3100", printed)
 
 
 if __name__ == "__main__":

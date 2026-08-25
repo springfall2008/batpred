@@ -204,9 +204,14 @@ def save_state(state):
     tmp_path.replace(STATE_FILE)
 
 
+def issue_url(issue_number):
+    """Return the GitHub URL for an issue, for easy opening from the daemon's log."""
+    return f"https://github.com/{REPO}/issues/{issue_number}"
+
+
 def fetch_new_issues(since_number):
     result = subprocess.run(
-        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--json", "number,createdAt", "--limit", "100"],
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--json", "number,createdAt,title", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
@@ -219,7 +224,7 @@ def fetch_new_issues(since_number):
 def fetch_bot_pr_issues():
     """Return open issues currently labelled BOT_PR, each with its full label list."""
     result = subprocess.run(
-        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_PR", "--json", "number,labels"],
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_PR", "--json", "number,labels,title"],
         capture_output=True,
         text=True,
         check=True,
@@ -401,6 +406,7 @@ def process_bot_pr_issue(issue):
     """
     issue_number = issue["number"]
     labels = issue.get("labels", [])
+    print(f'[pr] issue #{issue_number}: "{issue["title"]}" - {issue_url(issue_number)}', flush=True)
     if has_existing_pr(issue_number):
         print(f"[pr] issue #{issue_number}: a PR already references this issue, skipping", flush=True)
         return
@@ -418,7 +424,7 @@ def process_bot_pr_issue(issue):
 def fetch_bot_review_issues():
     """Return open issues currently labelled BOT_REVIEW, each with its full label list."""
     result = subprocess.run(
-        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,labels"],
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,labels,title"],
         capture_output=True,
         text=True,
         check=True,
@@ -463,6 +469,7 @@ def process_bot_review_issue(issue):
     """
     issue_number = issue["number"]
     labels = issue.get("labels", [])
+    print(f'[review] issue #{issue_number}: "{issue["title"]}" - {issue_url(issue_number)}', flush=True)
     if ensure_triaged(issue_number, labels):
         remove_review_label(issue_number)
         return
@@ -485,6 +492,7 @@ def main():
     while True:
         try:
             for issue in fetch_new_issues(state["last_processed"]):
+                print(f'[triage] issue #{issue["number"]}: "{issue["title"]}" - {issue_url(issue["number"])}', flush=True)
                 sync_repo()
                 reset_scratch()
                 triage(issue["number"])
