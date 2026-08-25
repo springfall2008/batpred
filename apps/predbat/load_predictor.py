@@ -1187,6 +1187,7 @@ class LoadPredictor:
         lr_decay="cosine",
         ema_smoothing_alpha=0.3,
         huber_delta=1.35,
+        progress_callback=None,
     ):
         """
         Train or fine-tune the model.
@@ -1211,6 +1212,9 @@ class LoadPredictor:
             huber_delta: Huber loss transition point in normalised target units (default 1.35; errors within
                          this threshold are penalised quadratically, beyond it linearly)
             ema_smoothing_alpha: EMA alpha for smoothing the early-stopping metric across epochs (0=no smoothing, 0.3=moderate)
+            progress_callback: Called with no arguments once per epoch, so a caller whose liveness is
+                               judged on how recently it reported success can stay alive through a
+                               training run longer than that window. Exceptions are logged and swallowed
 
         Returns:
             Validation MAE or None if training failed
@@ -1376,6 +1380,17 @@ class LoadPredictor:
                 )
             )
 
+            # Heartbeat. A curriculum run is many passes of many epochs and routinely takes over an
+            # hour, but the caller only gets to mark itself healthy once the whole thing returns - so
+            # a component that is training perfectly well trips the liveness timeout and is reported
+            # dead. One call per epoch is a fine enough pulse and costs nothing. Guarded because a
+            # progress hook must never be able to abort an hour of training.
+            if progress_callback:
+                try:
+                    progress_callback()
+                except Exception as e:
+                    self.log("Warn: ML Predictor: progress callback raised {}, continuing training".format(e))
+
             # Early stopping uses EMA-smoothed combined metric so a single noisy epoch
             # cannot prematurely checkpoint a suboptimal set of weights.
             # Weight checkpointing uses the raw epoch weights (not a smoothed version).
@@ -1478,6 +1493,7 @@ class LoadPredictor:
         curriculum_step_days=7,
         max_intermediate_passes=0,
         huber_delta=1.35,
+        progress_callback=None,
     ):
         """
                 Train using curriculum learning: progressively expand the training window
@@ -1508,6 +1524,9 @@ class LoadPredictor:
                     patience: Early-stopping patience per pass
                     validation_holdout_hours: Holdout window for the final pass
                     norm_ema_alpha: Normalisation EMA alpha for passes after the first
+                    progress_callback: Called with no arguments once per epoch across every pass, so a
+                                       run that lasts longer than the caller's liveness timeout can
+                                       still report itself alive
                     curriculum_window_days: Initial training window size in days (default 7)
                     curriculum_step_days: Days added per subsequent pass (default 7)
                     max_intermediate_passes: Maximum number of intermediate passes to run;
@@ -1562,6 +1581,7 @@ class LoadPredictor:
                 validation_holdout_hours=validation_holdout_hours,
                 norm_ema_alpha=norm_ema_alpha,
                 huber_delta=huber_delta,
+                progress_callback=progress_callback,
             )
 
         total_passes = len(window_sizes) + 1  # intermediate passes + final full pass
@@ -1598,6 +1618,7 @@ class LoadPredictor:
                 validation_holdout_hours=validation_holdout_hours,
                 norm_ema_alpha=norm_ema_alpha,
                 huber_delta=huber_delta,
+                progress_callback=progress_callback,
             )
 
             if pass_mae is None:
@@ -1622,6 +1643,7 @@ class LoadPredictor:
             validation_holdout_hours=validation_holdout_hours,
             norm_ema_alpha=norm_ema_alpha,
             huber_delta=huber_delta,
+            progress_callback=progress_callback,
         )
 
         if final_mae is not None:
