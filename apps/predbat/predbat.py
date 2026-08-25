@@ -512,6 +512,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
+        self.holiday_load_scaling = 0.7
         self.set_read_only = True
         self.set_read_only_axle = False
         self.set_reserve_enable = False

@@ -296,6 +296,7 @@ class MockConfigProvider:
             "calculate_plan_every": 10,
             "calculate_savings_max_charge_slots": 2,
             "holiday_days_left": 0,
+            "holiday_load_scaling": 0.7,
             "load_forecast_only": False,
             "days_previous": [7, 14],
             "days_previous_weight": [1.0, 0.5],

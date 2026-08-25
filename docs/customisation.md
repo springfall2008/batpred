@@ -419,6 +419,10 @@ If you set this to a negative value then Predbat will assume unpublished export 
 **switch.predbat_calculate_inday_adjustment** Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
+The adjustment is carried across midnight into the plan for tomorrow rather than being reset, decaying from its full value
+at midnight to no adjustment by the following midnight - the same curve Predbat itself applies when it seeds tomorrow's
+adjustment from today's final value. This keeps the overnight charge sized against the load Predbat will actually predict
+in the morning, which matters most when the divergence is systematic rather than a one-off (a holiday, for example).
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
 you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
@@ -671,10 +675,20 @@ Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
 
 When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
 
-With `days_previous_auto` enabled (the default), holiday mode is instead accounted for automatically by the
-weighted-bucket forecast, which down-weights historical days whose holiday mode state doesn't match today's.
+With `days_previous_auto` enabled (the default), holiday mode is accounted for automatically by the
+[weighted-bucket forecast](apps-yaml.md#days_previous_auto-weighted-historical-load-forecast), which predicts each
+day from historical days in the same holiday state - while you are away only your holiday days are used, and once
+you are home only your non-holiday days are. The holiday state is worked out for each day of the plan separately,
+so the day you travel home is already planned against your normal load.
 
-In this case just set holiday mode for the days you are away and Predbat does the rest.
+For the first 24 hours of a holiday there is no holiday history to learn from yet. Until there is, Predbat scales
+your normal predicted load by **input_number.predbat_holiday_load_scaling** (default 0.7, i.e. it assumes you will
+use 70% of normal while away). Lower it if your house draws very little while you are away, raise it towards 1.0 if
+your usage barely changes. The setting only applies while there is no matching holiday history for that time of day,
+so it retires itself automatically once the first holiday day has been recorded.
+
+Just set holiday mode for the days you are away and Predbat does the rest - **turn it off as soon as you are back**,
+so that the plan switches straight back to your normal load history.
 
 ### Holiday mode with days_previous_auto off
 
@@ -686,6 +700,10 @@ to take longer for the historical data to catch up, you could then enable holida
 
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
+
+Note that this last piece of advice applies only when `days_previous_auto` is off. With it on (the default), leaving
+holiday mode enabled after you get home would keep Predbat predicting from your holiday days and under-estimate your
+load, so turn it off on your return instead.
 
 ## Manual Control
 
