@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
-from const import MINUTE_WATT
 from inverter import Inverter
 from config import INVERTER_DEF
 
@@ -721,73 +720,6 @@ def test_inverter_self_test(test_name, my_predbat):
     if json.dumps(expected) != json.dumps(rest):
         print("ERROR: Self test should be {} got {}".format(expected, rest))
         failed = True
-    return failed
-
-
-def test_inverter_rest_template(
-    test_name,
-    my_predbat,
-    filename,
-    assert_soc_max=9.52,
-    assert_inverter_limit=3600,
-    assert_battery_rate_max=2600,
-    assert_serial_number="Unknown",
-    assert_nominal_capacity=9.52,
-    assert_battery_temperature=0,
-):
-    """
-    SoC, power, battery voltage and charge/discharge window/enable state are no longer parsed
-    from raw REST data by Inverter (that now goes via entities, published in production by
-    GivTCPComponent - see test_givtcp_component.py, and exercised here via test_inverter_update).
-    This template only still exercises what Inverter.__init__ genuinely discovers from raw REST
-    data: battery/capacity discovery, calibration, and inverter limits/model info - the REST
-    exceptions documented in inverter.py's Inverter.__init__.
-    """
-    failed = False
-    print("**** Running Test: {} ****".format(test_name))
-    dummy_rest = DummyRestAPI()
-    my_predbat.args["givtcp_rest"] = "dummy"
-
-    # Remove inverter_limit and export_limit from config to test REST data parsing
-    if "inverter_limit" in my_predbat.args:
-        del my_predbat.args["inverter_limit"]
-    if "export_limit" in my_predbat.args:
-        del my_predbat.args["export_limit"]
-
-    dummy_rest.rest_data = {}
-    with open(filename, "r") as file:
-        dummy_rest.rest_data = json.load(file)
-
-    my_predbat.restart_active = True
-    inv = Inverter(my_predbat, 0, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData, quiet=False)
-    inv.sleep = dummy_sleep
-
-    inv.update_status(my_predbat.minutes_now)
-    my_predbat.restart_active = False
-
-    if assert_soc_max != inv.soc_max:
-        print("ERROR: SOC Max should be {} got {}".format(assert_soc_max, inv.soc_max))
-        failed = True
-    if assert_inverter_limit != inv.inverter_limit * MINUTE_WATT:
-        print("ERROR: Inverter limit should be {} got {}".format(assert_inverter_limit, inv.inverter_limit * MINUTE_WATT))
-        failed = True
-    # Verify export_limit defaults correctly from REST data when config unset (should be 99999.0 / MINUTE_WATT = 1.66665)
-    if inv.export_limit * MINUTE_WATT < 99999.0:
-        print("ERROR: Export limit should default to 99999 W (1.66665 kW/min) when unset, got {} W ({} kW/min)".format(inv.export_limit * MINUTE_WATT, inv.export_limit))
-        failed = True
-    if assert_battery_rate_max != inv.battery_rate_max_raw:
-        print("ERROR: Battery rate max should be {} got {}".format(assert_battery_rate_max, inv.battery_rate_max_raw))
-        failed = True
-    if assert_serial_number != inv.serial_number:
-        print("ERROR: Serial number should be {} got {}".format(assert_serial_number, inv.serial_number))
-        failed = True
-    if assert_nominal_capacity != inv.nominal_capacity:
-        print("ERROR: Nominal capacity should be {} got {}".format(assert_nominal_capacity, inv.nominal_capacity))
-        failed = True
-    if assert_battery_temperature != inv.battery_temperature:
-        print("ERROR: Battery temperature should be {} got {}".format(assert_battery_temperature, inv.battery_temperature))
-        failed = True
-
     return failed
 
 
@@ -2589,28 +2521,6 @@ def run_inverter_tests(my_predbat_dummy):
         expect_soc_kwh=6.6,
         has_charge_enable_time=False,
         has_discharge_enable_time=False,
-    )
-    if failed:
-        return failed
-
-    failed |= test_inverter_rest_template(
-        "rest1",
-        my_predbat,
-        filename="cases/rest_v2.json",
-        assert_soc_max=9.523,
-        assert_nominal_capacity=9.5232,
-        assert_battery_temperature=15.3,
-    )
-    if failed:
-        return failed
-    failed |= test_inverter_rest_template(
-        "rest2",
-        my_predbat,
-        filename="cases/rest_v3.json",
-        assert_battery_rate_max=3600,
-        assert_serial_number="EA2303G082",
-        assert_nominal_capacity=9.52,
-        assert_battery_temperature=25.0,
     )
     if failed:
         return failed

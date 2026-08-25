@@ -292,119 +292,29 @@ class Inverter:
                 self.inv_has_timed_pause = False
                 self.log("Inverter {} does not have timed pause support enabled".format(self.id))
 
-        # Battery size, charge and discharge rates
-        ivtime = None
-        if self.rest_data and ("Battery_Details" in self.rest_data):
-            average_temp = 0
-            battery_count = 0
-            battery_capacity = 0
-            battery_voltage = 0
-            for battery in self.rest_data["Battery_Details"]:
-                battery_details = self.rest_data["Battery_Details"][battery]
-                if "BMS_Temperature" in battery_details:
-                    average_temp += float(battery_details["BMS_Temperature"])
-                    battery_count += 1
-                elif "Battery_Temperature" in battery_details:
-                    average_temp += float(battery_details["Battery_Temperature"])
-                    battery_count += 1
-                else:
-                    for item in battery_details.values():
-                        if type(item) is dict:
-                            if "Battery_Temperature" in item:
-                                average_temp += float(item["Battery_Temperature"])
-                                battery_count += 1
-            if battery_count > 0:
-                average_temp /= battery_count
-                self.battery_temperature = dp2(average_temp)
+        # Battery/capacity discovery is an ordinary entity read for every inverter type now. For
+        # GivTCP these entities are published by GivTCPComponent, which does the REST reading and
+        # the version normalisation (v2's Invertor_Details vs v3's serial-named block, the nominal
+        # capacity scaling, the per-pack temperature averaging) - see givtcp.py.
+        self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="\u00b0C")
+        self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
+        self.soc_max = self.nominal_capacity * self.battery_scaling
 
-        if self.rest_data and ("Invertor_Details" in self.rest_data):
-            idetails = self.rest_data["Invertor_Details"]
-            if "Battery_Capacity_kWh" in idetails:
-                self.soc_max = float(idetails["Battery_Capacity_kWh"])
-                self.nominal_capacity = self.soc_max
-                self.soc_max *= self.battery_scaling
-                self.soc_max = dp3(self.soc_max)
-
-        if self.rest_data and ("raw" in self.rest_data):
-            raw_data = self.rest_data["raw"]
-
-            # for V3 the inverter details is now named after the serial number
-            if self.serial_number in self.rest_data:
-                idetails = self.rest_data[self.serial_number]
-                if "Battery_Capacity_kWh" in idetails:
-                    self.soc_max = float(idetails["Battery_Capacity_kWh"])
-                    self.nominal_capacity = self.soc_max
-                    self.soc_max *= self.battery_scaling
-                    self.soc_max = dp3(self.soc_max)
-
-            # Battery capacity nominal
-            battery_capacity_nominal = raw_data.get("invertor", {}).get("battery_nominal_capacity", None)
-            if battery_capacity_nominal:
-                if self.rest_v3:
-                    self.nominal_capacity = float(battery_capacity_nominal)
-                else:
-                    self.nominal_capacity = float(battery_capacity_nominal) / 19.53125  # XXX: Where does 19.53125 come from? I back calculated but why that number...
-
-                if self.base.battery_capacity_nominal:
-                    if abs(self.soc_max - self.nominal_capacity) > 1.0:
-                        # XXX: Weird workaround for battery reporting wrong capacity issue
-                        self.base.log("Warn: REST data reports Battery Capacity kWh as {} but nominal indicates {} - using nominal".format(self.soc_max, self.nominal_capacity))
-                    self.soc_max = self.nominal_capacity * self.battery_scaling
-
-            # Rest fails to return battery capacity
-            if not self.nominal_capacity:
-                self.log("Warn: REST data does not report Battery Capacity kWh, attempting to use soc_max apps.yaml instead as fallback for nominal capacity")
-                self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
-                self.soc_max = self.nominal_capacity * self.battery_scaling
-
-            if self.rest_v3:
-                # GivTCP v3 indicates battery is being calibrated via [Control][Battery_Calibration]
-                if ("Control" in self.rest_data) and ("Battery_Calibration" in self.rest_data["Control"]):
-                    soc_force_adjust = self.rest_data["Control"]["Battery_Calibration"]
-                    if soc_force_adjust != "Off":
-                        self.in_calibration = True
-            else:
-                # older GivTCP uses soc_force_adjust to indicate battery calibration
-                soc_force_adjust = raw_data.get("invertor", {}).get("soc_force_adjust", None)
-                if soc_force_adjust:
-                    try:
-                        soc_force_adjust = int(soc_force_adjust)
-                    except ValueError:
-                        soc_force_adjust = 0
-                    if (soc_force_adjust > 0) and (soc_force_adjust < 7):
-                        self.in_calibration = True
-
-            if self.in_calibration:
-                self.log("Warn: Inverter {} is in calibration mode '{}', Predbat will not function correctly and will be disabled".format(self.id, soc_force_adjust))
-
-            # Max battery rate
-            if "Invertor_Max_Bat_Rate" in idetails:
-                self.battery_rate_max_raw = idetails["Invertor_Max_Bat_Rate"]
-            elif "Invertor_Max_Rate" in idetails:
-                self.battery_rate_max_raw = idetails["Invertor_Max_Rate"]
-            else:
-                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
-
-            # Max invertor rate
-            if "Invertor_Max_Inv_Rate" in idetails:
-                self.inverter_limit = idetails["Invertor_Max_Inv_Rate"] / MINUTE_WATT
-
-            # Inverter time
-            if "Invertor_Time" in idetails:
-                ivtime = idetails["Invertor_Time"]
+        if self.inverter_type in ["GE", "GEC", "GEE"]:
+            self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
+        elif "battery_rate_max" in self.base.args:
+            self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
         else:
-            self.battery_temperature = self.base.get_arg("battery_temperature", default=20, index=self.id, required_unit="°C")
-            self.nominal_capacity = self.base.get_arg("soc_max", default=0.0, index=self.id)
-            self.soc_max = self.nominal_capacity * self.battery_scaling
+            self.battery_rate_max_raw = 2600.0
 
-            if self.inverter_type in ["GE", "GEC", "GEE"]:
-                self.battery_rate_max_raw = self.base.get_arg("charge_rate", attribute="max", index=self.id, default=2600.0, required_unit="W")
-            elif "battery_rate_max" in self.base.args:
-                self.battery_rate_max_raw = self.base.get_arg("battery_rate_max", index=self.id, default=2600.0, required_unit="W")
-            else:
-                self.battery_rate_max_raw = 2600.0
+        ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
 
-            ivtime = self.base.get_arg("inverter_time", index=self.id, default=None)
+        # A calibration cycle deliberately drives the battery outside its normal SoC range, so any
+        # plan made during one is wrong - Predbat disables itself for this inverter until it ends.
+        # Only inverters that report it configure battery_calibration; absent means never calibrating.
+        if self.base.get_arg("battery_calibration", default=None, index=self.id) in ("on", "On", "true", "True", True):
+            self.in_calibration = True
+            self.log("Warn: Inverter {} is in calibration mode, Predbat will not function correctly and will be disabled".format(self.id))
 
         # Battery rate max charge, discharge (all converted to kW/min)
         inverter_limit_charge = self.base.get_arg("inverter_limit_charge", self.battery_rate_max_raw, index=self.id, required_unit="W")

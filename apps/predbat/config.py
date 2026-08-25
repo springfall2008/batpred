@@ -2512,6 +2512,10 @@ APPS_SCHEMA = {
     "discharge_start_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "discharge_end_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "battery_temperature": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    # Optional. When the entity reports the battery is being calibrated, Predbat disables itself for
+    # that inverter - a calibration cycle deliberately drives the battery outside its normal SoC
+    # range, so any plan made during one is wrong. Absent (the default) means "never calibrating".
+    "battery_calibration": {"type": "sensor_list", "sensor_type": "none|string", "entries": "num_inverters"},
     "pause_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "pause_start_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},
     "pause_end_time": {"type": "sensor_list", "sensor_type": "none|string", "modify": True, "entries": "num_inverters"},

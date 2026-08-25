@@ -6,6 +6,8 @@ inverter status/controls as HA entities and points Inverter's standard
 apps.yaml entity keys at them via automatic_config().
 """
 
+import json
+
 from unittest.mock import MagicMock
 
 from tests.test_infra import run_async
@@ -384,6 +386,120 @@ def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
     return 0
 
 
+def _rest_from_fixture(filename):
+    """A component whose single inverter holds a real captured GivTCP /readData response."""
+    base, component = _make_component()
+    with open(filename, "r") as handle:
+        component.rest[0].inverter.rest_data = json.load(handle)
+    version = component.rest[0].inverter.rest_data.get("Stats", {}).get("GivTCP_Version", "Unknown")
+    component.rest[0].inverter.rest_v3 = version.startswith("3")
+    return base, component
+
+
+def test_discovery_parsing_against_real_captures(my_predbat=None):
+    """
+    Battery/capacity discovery parsed from real captured GivTCP responses, v2 and v3.
+
+    These assertions moved here with the parsing itself: Inverter.__init__ used to read the REST
+    blob directly and this pinned what it produced, but the version normalisation now lives in
+    GivTCPRest. v3 is the interesting case - it renames the Invertor_Details block to the inverter's
+    own serial number, and reports nominal capacity in kWh where v2 reports raw register units.
+    """
+    failed = 0
+
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    rest = component.rest[0]
+    checks_v2 = {
+        "battery_capacity_kwh": (rest.battery_capacity_kwh(), 9.523200000000001),
+        "nominal_capacity": (rest.nominal_capacity(), 9.5232),
+        "battery_temperature": (rest.battery_temperature(), 15.3),
+        "max_battery_rate": (rest.max_battery_rate(), 2600),
+        "max_inverter_rate": (rest.max_inverter_rate(), 3600),
+        "in_calibration": (rest.in_calibration(), False),
+    }
+    for name, (got, expected) in checks_v2.items():
+        if got != expected:
+            print(f"ERROR: v2 {name}: expected {expected}, got {got}")
+            failed = 1
+    if not rest.inverter_time():
+        print("ERROR: v2 inverter_time should be reported")
+        failed = 1
+
+    base, component = _rest_from_fixture("cases/rest_v3.json")
+    rest = component.rest[0]
+    # v3 keeps the detail block under the serial number, so an empty Invertor_Details is expected
+    checks_v3 = {
+        "battery_capacity_kwh": (rest.battery_capacity_kwh(), 9.52),
+        "battery_temperature": (rest.battery_temperature(), 25.0),
+        "max_battery_rate": (rest.max_battery_rate(), 3600),
+        "max_inverter_rate": (rest.max_inverter_rate(), 3600),
+        "in_calibration": (rest.in_calibration(), False),
+    }
+    for name, (got, expected) in checks_v3.items():
+        if got != expected:
+            print(f"ERROR: v3 {name}: expected {expected}, got {got}")
+            failed = 1
+    if not rest.inverter_time():
+        print("ERROR: v3 inverter_time should be reported")
+        failed = 1
+
+    if not failed:
+        print("PASS: discovery parses correctly from both real GivTCP captures")
+    return failed
+
+
+def test_calibration_detected_per_version(my_predbat=None):
+    """
+    Calibration is reported differently by version and must be detected either way.
+
+    A calibration cycle deliberately drives the battery outside its normal SoC range, so Predbat
+    disables itself while one runs - missing it means planning against a battery that is not
+    behaving normally. v3 exposes Control.Battery_Calibration directly; older GivTCP only has the
+    raw soc_force_adjust register, where 1-6 means in progress.
+    """
+    failed = 0
+
+    base, component = _make_component()
+    rest = component.rest[0]
+
+    rest.inverter.rest_v3 = True
+    for value, expected in [("Off", False), ("On", True), ("Calibrating", True)]:
+        rest.inverter.rest_data = {"Control": {"Battery_Calibration": value}}
+        if rest.in_calibration() != expected:
+            print(f"ERROR: v3 Battery_Calibration={value!r}: expected {expected}, got {rest.in_calibration()}")
+            failed = 1
+
+    rest.inverter.rest_v3 = False
+    for value, expected in [(0, False), (1, True), (6, True), (7, False), (None, False), ("bad", False)]:
+        rest.inverter.rest_data = {"raw": {"invertor": {"soc_force_adjust": value}}}
+        if rest.in_calibration() != expected:
+            print(f"ERROR: v2 soc_force_adjust={value!r}: expected {expected}, got {rest.in_calibration()}")
+            failed = 1
+
+    if not failed:
+        print("PASS: calibration is detected on both GivTCP versions")
+    return failed
+
+
+def test_rate_entities_carry_the_real_max(my_predbat=None):
+    """
+    The rate entities must advertise the inverter's own maximum, not the generic ceiling.
+
+    Inverter.__init__ derives battery_rate_max_raw for a GE inverter from the charge_rate entity's
+    "max" attribute. Publishing GIVTCP_CONTROLS' generic 20000 would tell Predbat the battery can
+    take 20kW - it only went unnoticed while REST discovery was still overriding it.
+    """
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    run_async(component.publish_data())
+
+    for entity_id in ("number.predbat_givtcp_0_charge_rate", "number.predbat_givtcp_0_discharge_rate"):
+        got = base.entities[entity_id]["attributes"]["max"]
+        assert got == 2600, f"{entity_id}: expected max 2600 from Invertor_Max_Bat_Rate, got {got}"
+
+    print("PASS: rate entities advertise the inverter's real maximum rate")
+    return 0
+
+
 def test_arbitrary_minute_time_is_a_valid_option(my_predbat=None):
     """
     The published select options must cover every minute, not a coarser step.
@@ -565,6 +681,9 @@ def test_givtcp_component(my_predbat=None):
         ("select_pause_start", test_select_event_pause_start_time_preserves_end, "select_event pause_start_time"),
         ("auto_config_pause", test_automatic_config_pause_keys_need_v3_everywhere, "pause keys need v3 everywhere"),
         ("discharge_target_models", test_discharge_target_not_published_for_unsupported_models, "discharge target withheld for unsupported models (#4517)"),
+        ("discovery_captures", test_discovery_parsing_against_real_captures, "discovery parsed from real GivTCP captures"),
+        ("calibration", test_calibration_detected_per_version, "calibration detected on both versions"),
+        ("rate_max_attr", test_rate_entities_carry_the_real_max, "rate entities carry the real max"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

@@ -22,16 +22,14 @@ this component's own job is purely the publish/subscribe/auto-config glue
 (dashboard_item calls, select/number/switch event handlers, automatic_config),
 matching the pattern already used by fox.py, ohme.py, solax.py etc.
 
-Known gaps in this first pass (deliberately out of scope, not forgotten):
-  - inverter_mode and pause_mode are not published. Inverter's existing
-    entity-path code for these auto-detects GE-Cloud-style naming ("Pause
-    Charge") vs local/REST-style naming ("PauseCharge") from the entity's
-    current value - getting that right needs closer attention than the other
-    controls, which are plain W/%/HH:MM:SS values with no such ambiguity.
-  - soc_max/battery capacity discovery (Inverter.__init__ reading
-    Battery_Details/Invertor_Details) is untouched - this component only
-    covers the live status/control surface read in update_status and written
-    by adjust_*, not one-time capacity discovery at startup.
+This now covers the whole surface Inverter used to read or write over REST:
+the live status/control entities, inverter_mode and pause_mode, the #4517
+discharge-target model check, and the one-time battery/capacity discovery
+(capacity, nominal capacity, temperature, inverter clock, max rates and
+calibration state) that Inverter.__init__ used to read off the REST blob.
+
+GivTCPRest itself is still the REST client underneath - it is this component
+that owns it now rather than Inverter.
 """
 
 import asyncio
@@ -98,7 +96,23 @@ GIVTCP_SENSORS = {
     "grid_power": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower"},
     "load_power": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:home-lightning-bolt"},
     "battery_voltage": {"unit_of_measurement": "V", "device_class": "voltage", "icon": "mdi:sine-wave"},
+    "soc_max": {"unit_of_measurement": "kWh", "device_class": "energy", "icon": "mdi:battery-high"},
+    "battery_temperature": {"unit_of_measurement": "°C", "device_class": "temperature", "icon": "mdi:thermometer"},
+    "inverter_time": {"icon": "mdi:clock-outline"},
+    "battery_rate_max": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:battery-arrow-up"},
+    "inverter_limit": {"unit_of_measurement": "W", "device_class": "power", "icon": "mdi:transmission-tower"},
+    "battery_calibration": {"icon": "mdi:battery-sync"},
 }
+
+# Discovery values Inverter.__init__ used to read straight off the REST blob. Published as sensors
+# and claimed below so that path becomes an ordinary entity read like every other inverter type.
+GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS = [
+    "soc_max",
+    "battery_temperature",
+    "inverter_time",
+    "inverter_limit",
+    "battery_calibration",
+]
 
 # apps.yaml keys automatic_config() points at the published entities - keys not listed here
 # (soc_max, battery_power_invert, ...) are left for the user/other discovery to configure.
@@ -204,8 +218,19 @@ class GivTCPComponent(ComponentBase):
             if not rest.inverter.rest_data:
                 continue
 
-            self.dashboard_item(self._entity_id("number", n, "charge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Charge_Rate", 0), attributes=GIVTCP_CONTROLS["charge_rate"][2], app="givtcp")
-            self.dashboard_item(self._entity_id("number", n, "discharge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Discharge_Rate", 0), attributes=GIVTCP_CONTROLS["discharge_rate"][2], app="givtcp")
+            # The rate entities carry the inverter's real maximum rate as their "max" attribute, not
+            # the generic ceiling in GIVTCP_CONTROLS. Inverter.__init__ derives battery_rate_max_raw
+            # for a GE inverter from exactly this attribute, so publishing the generic value would
+            # tell it the battery can take 20kW.
+            max_battery_rate = rest.max_battery_rate()
+            charge_rate_attributes = dict(GIVTCP_CONTROLS["charge_rate"][2])
+            discharge_rate_attributes = dict(GIVTCP_CONTROLS["discharge_rate"][2])
+            if max_battery_rate:
+                charge_rate_attributes["max"] = max_battery_rate
+                discharge_rate_attributes["max"] = max_battery_rate
+
+            self.dashboard_item(self._entity_id("number", n, "charge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Charge_Rate", 0), attributes=charge_rate_attributes, app="givtcp")
+            self.dashboard_item(self._entity_id("number", n, "discharge_rate"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Discharge_Rate", 0), attributes=discharge_rate_attributes, app="givtcp")
             target_soc = rest.target_soc
             if target_soc is not None:
                 self.dashboard_item(self._entity_id("number", n, "charge_limit"), state=target_soc, attributes=GIVTCP_CONTROLS["charge_limit"][2], app="givtcp")
@@ -250,6 +275,41 @@ class GivTCPComponent(ComponentBase):
             if soc_percent is not None:
                 self.dashboard_item(self._entity_id("sensor", n, "soc_percent"), state=soc_percent, attributes=GIVTCP_SENSORS["soc_percent"], app="givtcp")
 
+            # Discovery values - see GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS. Each is only published when
+            # GivTCP actually reports it, so a missing one falls back to the user's own apps.yaml
+            # value rather than being published as a zero that would look authoritative.
+            #
+            # soc_max carries the nominal (nameplate) capacity instead of the reported capacity when
+            # battery_capacity_nominal is on: Inverter multiplies whatever it reads here by
+            # battery_scaling, so choosing the source here reproduces both branches of the old code.
+            soc_max = rest.battery_capacity_kwh()
+            nominal_capacity = rest.nominal_capacity()
+            if self.get_arg("battery_capacity_nominal", default=False) and nominal_capacity:
+                if soc_max and abs(soc_max - nominal_capacity) > 1.0:
+                    self.log("Warn: GivTCP: inverter {} reports Battery Capacity {}kWh but nominal indicates {}kWh - using nominal".format(n, soc_max, nominal_capacity))
+                soc_max = nominal_capacity
+            if soc_max:
+                self.dashboard_item(self._entity_id("sensor", n, "soc_max"), state=soc_max, attributes=GIVTCP_SENSORS["soc_max"], app="givtcp")
+
+            battery_temperature = rest.battery_temperature()
+            if battery_temperature is not None:
+                self.dashboard_item(self._entity_id("sensor", n, "battery_temperature"), state=battery_temperature, attributes=GIVTCP_SENSORS["battery_temperature"], app="givtcp")
+
+            inverter_time = rest.inverter_time()
+            if inverter_time:
+                self.dashboard_item(self._entity_id("sensor", n, "inverter_time"), state=inverter_time, attributes=GIVTCP_SENSORS["inverter_time"], app="givtcp")
+
+            if max_battery_rate:
+                self.dashboard_item(self._entity_id("sensor", n, "battery_rate_max"), state=max_battery_rate, attributes=GIVTCP_SENSORS["battery_rate_max"], app="givtcp")
+
+            max_inverter_rate = rest.max_inverter_rate()
+            if max_inverter_rate:
+                self.dashboard_item(self._entity_id("sensor", n, "inverter_limit"), state=max_inverter_rate, attributes=GIVTCP_SENSORS["inverter_limit"], app="givtcp")
+
+            # Always published, unlike the values above: "not calibrating" is a real answer that
+            # Predbat needs, and an absent entity would be indistinguishable from one
+            self.dashboard_item(self._entity_id("sensor", n, "battery_calibration"), state="on" if rest.in_calibration() else "off", attributes=GIVTCP_SENSORS["battery_calibration"], app="givtcp")
+
             power = rest.power_readings()
             if power:
                 self.dashboard_item(self._entity_id("sensor", n, "battery_power"), state=power["battery_power"], attributes=GIVTCP_SENSORS["battery_power"], app="givtcp")
@@ -275,6 +335,8 @@ class GivTCPComponent(ComponentBase):
             self.log("Info: GivTCP: givtcp_rest_power_ignore is set - leaving power/voltage entities to your apps.yaml config")
         else:
             keys += GIVTCP_AUTO_CONFIG_POWER_KEYS
+
+        keys += GIVTCP_AUTO_CONFIG_DISCOVERY_KEYS
 
         if all(rest.inverter.rest_v3 for rest in self.rest):
             keys += GIVTCP_AUTO_CONFIG_PAUSE_KEYS

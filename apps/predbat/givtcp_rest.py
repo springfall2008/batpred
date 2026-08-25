@@ -32,7 +32,7 @@ import time
 import requests
 
 from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST, INVERTER_REST_TIMEOUT
-from utils import dp3, time_string_to_stamp
+from utils import dp2, dp3, time_string_to_stamp
 
 
 class InverterRestState:
@@ -133,6 +133,113 @@ class GivTCPRest:
             "load_power": float(ppdetails.get("Load_Power", 0.0)),
             "battery_voltage": battery_voltage,
         }
+
+    def inverter_details(self):
+        """
+        The inverter detail block, normalised across GivTCP versions.
+
+        v2 puts it under "Invertor_Details"; v3 renames it to the inverter's own serial number, so
+        an empty "Invertor_Details" on v3 is expected rather than a fault. Returns {} when neither
+        is present.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return {}
+        details = rest_data.get("Invertor_Details", {})
+        if details:
+            return details
+        serial = rest_data.get("raw", {}).get("invertor", {}).get("serial_number", None)
+        if serial and serial in rest_data:
+            return rest_data[serial]
+        return {}
+
+    def battery_capacity_kwh(self):
+        """Battery capacity in kWh as GivTCP reports it, or None if absent."""
+        value = self.inverter_details().get("Battery_Capacity_kWh", None)
+        return float(value) if value is not None else None
+
+    def nominal_capacity(self):
+        """
+        Nominal (nameplate) battery capacity in kWh, or None if GivTCP does not report it.
+
+        v2 reports this in raw register units and needs scaling; v3 already reports kWh. The 19.53125
+        divisor is carried over verbatim from Inverter.__init__, where it was back-calculated rather
+        than derived - see the XXX note this replaces.
+        """
+        raw_value = self.inverter.rest_data.get("raw", {}).get("invertor", {}).get("battery_nominal_capacity", None) if self.inverter.rest_data else None
+        if not raw_value:
+            return None
+        if self.inverter.rest_v3:
+            return float(raw_value)
+        return float(raw_value) / 19.53125
+
+    def battery_temperature(self):
+        """
+        Mean BMS temperature across the battery packs, or None if no pack reports one.
+
+        Packs report the field under different names depending on model/firmware, and some nest a
+        further dict per pack, so all three shapes are averaged together the way Inverter.__init__
+        did.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data or "Battery_Details" not in rest_data:
+            return None
+        total = 0.0
+        count = 0
+        for battery in rest_data["Battery_Details"]:
+            details = rest_data["Battery_Details"][battery]
+            if "BMS_Temperature" in details:
+                total += float(details["BMS_Temperature"])
+                count += 1
+            elif "Battery_Temperature" in details:
+                total += float(details["Battery_Temperature"])
+                count += 1
+            else:
+                for item in details.values():
+                    if isinstance(item, dict) and "Battery_Temperature" in item:
+                        total += float(item["Battery_Temperature"])
+                        count += 1
+        if not count:
+            return None
+        return dp2(total / count)
+
+    def inverter_time(self):
+        """The inverter's own clock as GivTCP reports it, or None if absent."""
+        return self.inverter_details().get("Invertor_Time", None)
+
+    def max_battery_rate(self):
+        """Maximum battery charge/discharge rate in W, or None if GivTCP does not report one."""
+        details = self.inverter_details()
+        for key in ("Invertor_Max_Bat_Rate", "Invertor_Max_Rate"):
+            if key in details:
+                return float(details[key])
+        return None
+
+    def max_inverter_rate(self):
+        """Maximum inverter throughput in W, or None if GivTCP does not report one."""
+        value = self.inverter_details().get("Invertor_Max_Inv_Rate", None)
+        return float(value) if value is not None else None
+
+    def in_calibration(self):
+        """
+        Whether the battery is currently being calibrated, during which Predbat cannot function.
+
+        v3 exposes this directly as Control.Battery_Calibration; older GivTCP only has the raw
+        soc_force_adjust register, where values 1-6 mean a calibration is in progress.
+        """
+        rest_data = self.inverter.rest_data
+        if not rest_data:
+            return False
+        if self.inverter.rest_v3:
+            return rest_data.get("Control", {}).get("Battery_Calibration", "Off") != "Off"
+        soc_force_adjust = rest_data.get("raw", {}).get("invertor", {}).get("soc_force_adjust", None)
+        if not soc_force_adjust:
+            return False
+        try:
+            soc_force_adjust = int(soc_force_adjust)
+        except (ValueError, TypeError):
+            return False
+        return 0 < soc_force_adjust < 7
 
     def charge_window_times(self):
         """Current charge window as (start, end) parsed timestamps, or None if no status has been
