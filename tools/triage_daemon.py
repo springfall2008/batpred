@@ -415,8 +415,8 @@ def triage(issue_number):
 
 def triage_followup(issue_number):
     """Run the /issue-triage-followup skill for one issue - a re-review incorporating
-    information added since the original triage, under the same read-only permission
-    set as first-pass /issue-triage (never writes code or opens a PR).
+    information added since the original triage, under the same triage permission
+    set as first-pass /issue-triage (no commits, pushes, or PR creation).
     """
     cmd = [
         "claude",
