@@ -162,5 +162,23 @@ class DuplicateGuardTests(unittest.TestCase):
         self.assertFalse(triage_daemon.has_existing_pr(4720))
 
 
+class LabelSwapTests(unittest.TestCase):
+    """Tests for mark_pr_opened/mark_pr_failed, new in the bot PR flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_opened_swaps_labels(self, mock_run):
+        """Removes BOT_PR and adds BOT_PR_OPENED."""
+        triage_daemon.mark_pr_opened(4720)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "issue", "edit", "4720", "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_failed_swaps_labels(self, mock_run):
+        """Removes BOT_PR and adds BOT_PR_FAILED."""
+        triage_daemon.mark_pr_failed(4720)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "issue", "edit", "4720", "--remove-label", "BOT_PR", "--add-label", "BOT_PR_FAILED"])
+
+
 if __name__ == "__main__":
     unittest.main()

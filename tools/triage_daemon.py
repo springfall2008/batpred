@@ -273,6 +273,22 @@ def has_existing_pr(issue_number):
     return len(json.loads(result.stdout)) > 0
 
 
+def mark_pr_opened(issue_number):
+    """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open."""
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
+        check=True,
+    )
+
+
+def mark_pr_failed(issue_number):
+    """Swap BOT_PR for BOT_PR_FAILED so a failed run isn't retried every poll cycle."""
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_PR", "--add-label", "BOT_PR_FAILED"],
+        check=True,
+    )
+
+
 def sync_repo():
     subprocess.run(["git", "-C", str(CLONE_DIR), "fetch", "origin", "main"], check=True)
     subprocess.run(["git", "-C", str(CLONE_DIR), "reset", "--hard", "origin/main"], check=True)
