@@ -45,6 +45,16 @@ from givtcp_rest import GivTCPRest, InverterRestState
 # would simply not contain the value the entity is actually holding.
 GIVTCP_TIME_OPTIONS = ["{:02d}:{:02d}:00".format(m // 60, m % 60) for m in range(0, 24 * 60)]
 
+# GivTCP's own pause-mode vocabulary, as written to /setBatteryPauseMode and read back from
+# Control.Battery_pause_mode. Deliberately not the GE Cloud spelling ("Pause Charge", "Not Paused",
+# ...) - Inverter.adjust_pause_mode picks between the two by looking at the value it reads back, so
+# publishing the native spelling is what keeps it on the GivTCP side of that branch.
+GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
+
+# Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
+# others, and an option list that omitted them could not represent the mode the inverter is in.
+GIVTCP_INVERTER_MODES = ["Eco", "Eco (Paused)", "Timed Export", "Timed Charge", "Timed Demand"]
+
 # Poll GivTCP's REST API this often (seconds). Matches the cadence other components use for a
 # background refresh (e.g. Ohme's device/session poll).
 GIVTCP_POLL_SECONDS = 60
@@ -62,6 +72,10 @@ GIVTCP_CONTROLS = {
     "charge_end_time": ("select", "_set_charge_slot", {"icon": "mdi:clock-end", "options": GIVTCP_TIME_OPTIONS}),
     "discharge_start_time": ("select", "_set_discharge_slot", {"icon": "mdi:clock-start", "options": GIVTCP_TIME_OPTIONS}),
     "discharge_end_time": ("select", "_set_discharge_slot", {"icon": "mdi:clock-end", "options": GIVTCP_TIME_OPTIONS}),
+    "inverter_mode": ("select", "set_battery_mode", {"icon": "mdi:home-battery", "options": GIVTCP_INVERTER_MODES}),
+    "pause_mode": ("select", "set_battery_pause_mode", {"icon": "mdi:pause-octagon", "options": GIVTCP_PAUSE_MODES}),
+    "pause_start_time": ("select", "_set_pause_slot", {"icon": "mdi:clock-start", "options": GIVTCP_TIME_OPTIONS}),
+    "pause_end_time": ("select", "_set_pause_slot", {"icon": "mdi:clock-end", "options": GIVTCP_TIME_OPTIONS}),
 }
 
 # sensor name -> HA entity attributes
@@ -94,7 +108,18 @@ GIVTCP_AUTO_CONFIG_KEYS = [
     "charge_end_time",
     "discharge_start_time",
     "discharge_end_time",
+    "inverter_mode",
     "soc_kw",
+]
+
+# Pause control is GivTCP v3 only - v2 has no /setBatteryPauseMode endpoint, and
+# Inverter.adjust_pause_mode's REST path was gated on rest_v3 for the same reason. Auto-configured
+# only when every configured inverter reports v3, so a mixed fleet leaves these to the user rather
+# than pointing half of them at entities that can never be written.
+GIVTCP_AUTO_CONFIG_PAUSE_KEYS = [
+    "pause_mode",
+    "pause_start_time",
+    "pause_end_time",
 ]
 
 # Power/voltage keys are auto-configured separately: givtcp_rest_power_ignore opts out of them.
@@ -178,7 +203,18 @@ class GivTCPComponent(ComponentBase):
             self.dashboard_item(self._entity_id("switch", n, "scheduled_charge_enable"), state="on" if rest.charge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_charge_enable"][2], app="givtcp")
             self.dashboard_item(self._entity_id("switch", n, "scheduled_discharge_enable"), state="on" if rest.discharge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_discharge_enable"][2], app="givtcp")
 
+            control = rest.inverter.rest_data.get("Control", {})
+            self.dashboard_item(self._entity_id("select", n, "inverter_mode"), state=control.get("Mode", "Eco"), attributes=GIVTCP_CONTROLS["inverter_mode"][2], app="givtcp")
+
+            # v3 only - see GIVTCP_AUTO_CONFIG_PAUSE_KEYS
+            if rest.inverter.rest_v3:
+                self.dashboard_item(self._entity_id("select", n, "pause_mode"), state=control.get("Battery_pause_mode", "Disabled"), attributes=GIVTCP_CONTROLS["pause_mode"][2], app="givtcp")
+
             timeslots = rest.inverter.rest_data.get("Timeslots", {})
+            if rest.inverter.rest_v3:
+                self.dashboard_item(self._entity_id("select", n, "pause_start_time"), state=timeslots.get("Battery_pause_start_time_slot", "00:00:00"), attributes=GIVTCP_CONTROLS["pause_start_time"][2], app="givtcp")
+                self.dashboard_item(self._entity_id("select", n, "pause_end_time"), state=timeslots.get("Battery_pause_end_time_slot", "00:00:00"), attributes=GIVTCP_CONTROLS["pause_end_time"][2], app="givtcp")
+
             self.dashboard_item(self._entity_id("select", n, "charge_start_time"), state=timeslots.get("Charge_start_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["charge_start_time"][2], app="givtcp")
             self.dashboard_item(self._entity_id("select", n, "charge_end_time"), state=timeslots.get("Charge_end_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["charge_end_time"][2], app="givtcp")
             self.dashboard_item(self._entity_id("select", n, "discharge_start_time"), state=timeslots.get("Discharge_start_time_slot_1", "00:00:00"), attributes=GIVTCP_CONTROLS["discharge_start_time"][2], app="givtcp")
@@ -217,6 +253,11 @@ class GivTCPComponent(ComponentBase):
         else:
             keys += GIVTCP_AUTO_CONFIG_POWER_KEYS
 
+        if all(rest.inverter.rest_v3 for rest in self.rest):
+            keys += GIVTCP_AUTO_CONFIG_PAUSE_KEYS
+        else:
+            self.log("Info: GivTCP: pause control needs GivTCP v3 on every inverter - leaving pause_mode/pause_start_time/pause_end_time to your apps.yaml config")
+
         for key in keys:
             domain, _, _ = GIVTCP_CONTROLS.get(key, (None, None, None))
             domain = domain or "sensor"
@@ -254,6 +295,14 @@ class GivTCPComponent(ComponentBase):
         end = value if control == "discharge_end_time" else timeslots.get("Discharge_end_time_slot_1", "00:00:00")
         await self._run_blocking(rest.set_discharge_slot1, start, end)
 
+    async def _set_pause_slot(self, entity_id, value):
+        n, control = self._parse_entity(entity_id)
+        rest = self.rest[n]
+        timeslots = rest.inverter.rest_data.get("Timeslots", {}) if rest.inverter.rest_data else {}
+        start = value if control == "pause_start_time" else timeslots.get("Battery_pause_start_time_slot", "00:00:00")
+        end = value if control == "pause_end_time" else timeslots.get("Battery_pause_end_time_slot", "00:00:00")
+        await self._run_blocking(rest.set_pause_slot, start, end)
+
     async def _handle_write(self, entity_id, value, is_switch=False, is_number=False):
         """
         Apply one entity write to the inverter, then immediately republish so the entity reflects it.
@@ -274,11 +323,15 @@ class GivTCPComponent(ComponentBase):
             rest = self.rest[n]
             _, method_name, _ = GIVTCP_CONTROLS[control]
 
-            if method_name in ("_set_charge_slot", "_set_discharge_slot"):
+            if method_name in ("_set_charge_slot", "_set_discharge_slot", "_set_pause_slot"):
                 await getattr(self, method_name)(entity_id, value)
             elif is_switch:
                 await self._run_blocking(getattr(rest, method_name), value == "on")
             elif is_number:
+                await self._run_blocking(getattr(rest, method_name), value)
+            else:
+                # Plain select (inverter_mode, pause_mode) - the chosen option is the value the
+                # write method takes, unlike the slot selects which need both ends of the window
                 await self._run_blocking(getattr(rest, method_name), value)
             await self.publish_data()
         except Exception as e:

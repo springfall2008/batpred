@@ -13,7 +13,22 @@ from mock_base import MockBase
 from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS
 
 
-def _rest_data_blob(charge_rate=1000, discharge_rate=2000, target_soc=80, reserve=10, soc_kwh=5.0, soc_percent=50, charge_start="00:30:00", charge_end="04:30:00", discharge_start="16:00:00", discharge_end="19:00:00"):
+def _rest_data_blob(
+    charge_rate=1000,
+    discharge_rate=2000,
+    target_soc=80,
+    reserve=10,
+    soc_kwh=5.0,
+    soc_percent=50,
+    charge_start="00:30:00",
+    charge_end="04:30:00",
+    discharge_start="16:00:00",
+    discharge_end="19:00:00",
+    mode="Eco",
+    pause_mode="Disabled",
+    pause_start="00:00:00",
+    pause_end="00:00:00",
+):
     """A realistic-shaped GivTCP /readData response, sized to what publish_data() reads."""
     return {
         "Control": {
@@ -24,6 +39,8 @@ def _rest_data_blob(charge_rate=1000, discharge_rate=2000, target_soc=80, reserv
             "Enable_Charge_Schedule": "enable",
             "Enable_Discharge_Schedule": "disable",
             "Discharge_Target_SOC_1": 20,
+            "Mode": mode,
+            "Battery_pause_mode": pause_mode,
         },
         "Power": {"Power": {"SOC_kWh": soc_kwh, "SOC": soc_percent, "Battery_Power": 100.0, "PV_Power": 200.0, "Grid_Power": -50.0, "Load_Power": 250.0, "Battery_Voltage": 51.2}},
         "Timeslots": {
@@ -31,6 +48,8 @@ def _rest_data_blob(charge_rate=1000, discharge_rate=2000, target_soc=80, reserv
             "Charge_end_time_slot_1": charge_end,
             "Discharge_start_time_slot_1": discharge_start,
             "Discharge_end_time_slot_1": discharge_end,
+            "Battery_pause_start_time_slot": pause_start,
+            "Battery_pause_end_time_slot": pause_end,
         },
     }
 
@@ -249,6 +268,87 @@ def test_select_event_discharge_end_time_preserves_start(my_predbat=None):
     return 0
 
 
+def test_publish_data_mode_entities(my_predbat=None):
+    """inverter_mode publishes on any version; the pause entities are v3 only."""
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob(mode="Timed Export", pause_mode="PauseCharge", pause_start="01:00:00", pause_end="02:00:00")
+
+    # v2: no /setBatteryPauseMode endpoint, so publishing a pause entity would offer a control that
+    # can never be written - Inverter.adjust_pause_mode's REST path was gated on v3 for the same reason
+    component.rest[0].inverter.rest_v3 = False
+    run_async(component.publish_data())
+    assert base.entities["select.predbat_givtcp_0_inverter_mode"]["state"] == "Timed Export", f"Expected inverter_mode published, got {base.entities['select.predbat_givtcp_0_inverter_mode']['state']}"
+    assert "select.predbat_givtcp_0_pause_mode" not in base.entities, "pause_mode must not be published for GivTCP v2"
+
+    component.rest[0].inverter.rest_v3 = True
+    run_async(component.publish_data())
+    assert base.entities["select.predbat_givtcp_0_pause_mode"]["state"] == "PauseCharge", f"Expected pause_mode published, got {base.entities['select.predbat_givtcp_0_pause_mode']['state']}"
+    assert base.entities["select.predbat_givtcp_0_pause_start_time"]["state"] == "01:00:00"
+    assert base.entities["select.predbat_givtcp_0_pause_end_time"]["state"] == "02:00:00"
+
+    print("PASS: inverter_mode publishes always, pause entities only on v3")
+    return 0
+
+
+def test_select_event_plain_selects_pass_the_value_through(my_predbat=None):
+    """
+    A select that is not a time slot passes its chosen option straight to the write method.
+
+    Regression: _handle_write only had branches for the slot selects, switches and numbers, so a
+    plain select silently did nothing - the write was dropped and the entity then republished with
+    the unchanged value, which reads as a successful no-op.
+    """
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    component.rest[0].set_battery_mode = MagicMock(return_value=True)
+    component.rest[0].set_battery_pause_mode = MagicMock(return_value=True)
+
+    run_async(component.select_event("select.predbat_givtcp_0_inverter_mode", "Timed Export"))
+    component.rest[0].set_battery_mode.assert_called_once_with("Timed Export")
+
+    run_async(component.select_event("select.predbat_givtcp_0_pause_mode", "PauseBoth"))
+    component.rest[0].set_battery_pause_mode.assert_called_once_with("PauseBoth")
+
+    print("PASS: plain selects pass their option through to the write method")
+    return 0
+
+
+def test_select_event_pause_start_time_preserves_end(my_predbat=None):
+    """Changing pause_start_time writes the new start alongside the existing end, like the charge slot."""
+    base, component = _make_component()
+    component.rest[0].inverter.rest_data = _rest_data_blob(pause_start="00:00:00", pause_end="23:59:00")
+    component.rest[0].set_pause_slot = MagicMock(return_value=True)
+
+    run_async(component.select_event("select.predbat_givtcp_0_pause_start_time", "01:00:00"))
+
+    component.rest[0].set_pause_slot.assert_called_once_with("01:00:00", "23:59:00")
+    print("PASS: select_event on pause_start_time preserves the existing end time")
+    return 0
+
+
+def test_automatic_config_pause_keys_need_v3_everywhere(my_predbat=None):
+    """Pause keys are only claimed when every inverter is v3, mirroring the power_ignore rule."""
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    for rest in component.rest:
+        rest.inverter.rest_data = _rest_data_blob()
+
+    # A mixed fleet must leave the pause keys alone rather than pointing the v2 inverter at an
+    # entity its GivTCP can never accept a write for
+    component.rest[0].inverter.rest_v3 = True
+    component.rest[1].inverter.rest_v3 = False
+    run_async(component.automatic_config())
+    assert "pause_mode" not in base.args, f"Expected pause_mode left unconfigured on a mixed fleet, got {base.args.get('pause_mode')}"
+    # inverter_mode is not version gated, so it is still claimed
+    assert "inverter_mode" in base.args, "Expected inverter_mode to be auto-configured regardless of version"
+
+    component.rest[1].inverter.rest_v3 = True
+    run_async(component.automatic_config())
+    assert base.args.get("pause_mode") == ["select.predbat_givtcp_0_pause_mode", "select.predbat_givtcp_1_pause_mode"], f"Expected pause_mode configured for both, got {base.args.get('pause_mode')}"
+
+    print("PASS: pause keys are auto-configured only when every inverter is v3")
+    return 0
+
+
 def test_arbitrary_minute_time_is_a_valid_option(my_predbat=None):
     """
     The published select options must cover every minute, not a coarser step.
@@ -425,6 +525,10 @@ def test_givtcp_component(my_predbat=None):
         ("switch_toggle_ignored", test_switch_event_toggle_ignored, "switch_event toggle ignored"),
         ("select_charge_start", test_select_event_charge_start_time_preserves_end, "select_event charge_start_time"),
         ("select_discharge_end", test_select_event_discharge_end_time_preserves_start, "select_event discharge_end_time"),
+        ("publish_modes", test_publish_data_mode_entities, "publish_data mode/pause entities"),
+        ("select_plain", test_select_event_plain_selects_pass_the_value_through, "plain select writes pass through"),
+        ("select_pause_start", test_select_event_pause_start_time_preserves_end, "select_event pause_start_time"),
+        ("auto_config_pause", test_automatic_config_pause_keys_need_v3_everywhere, "pause keys need v3 everywhere"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

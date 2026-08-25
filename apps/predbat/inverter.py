@@ -2204,45 +2204,40 @@ class Inverter:
         entity_start = self.base.get_arg("pause_start_time", indirect=False, index=self.id)
         entity_end = self.base.get_arg("pause_end_time", indirect=False, index=self.id)
 
-        if self.rest_data and self.rest_v3:
-            old_pause_mode = self.rest_data.get("Control", {}).get("Battery_pause_mode", "Disabled")
-            old_start_time = self.rest_data.get("Timeslots", {}).get("Battery_pause_start_time_slot", "00:00:00")
-            old_end_time = self.rest_data.get("Timeslots", {}).get("Battery_pause_end_time_slot", "00:00:00")
-        else:
-            entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
-            old_pause_mode = None
-            old_start_time = None
-            old_end_time = None
+        entity_mode = self.base.get_arg("pause_mode", indirect=False, index=self.id)
+        old_pause_mode = None
+        old_start_time = None
+        old_end_time = None
 
-            # As not all inverters have these options we need to gracefully give up if its missing
-            if entity_mode:
-                old_pause_mode = self.base.get_state_wrapper(entity_mode)
-                if old_pause_mode is None:
-                    entity_mode = None
+        # As not all inverters have these options we need to gracefully give up if its missing
+        if entity_mode:
+            old_pause_mode = self.base.get_state_wrapper(entity_mode)
+            if old_pause_mode is None:
+                entity_mode = None
 
-            if entity_start:
-                old_start_time = self.base.get_state_wrapper(entity_start)
-                if old_start_time is None:
-                    entity_start = None
-                    self.log("Note: Inverter {} does not have pause_start_time entity".format(self.id))
+        if entity_start:
+            old_start_time = self.base.get_state_wrapper(entity_start)
+            if old_start_time is None:
+                entity_start = None
+                self.log("Note: Inverter {} does not have pause_start_time entity".format(self.id))
 
-            if entity_end:
-                old_end_time = self.base.get_state_wrapper(entity_end)
-                if old_end_time is None:
-                    self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
-                    entity_end = None
+        if entity_end:
+            old_end_time = self.base.get_state_wrapper(entity_end)
+            if old_end_time is None:
+                self.log("Note: Inverter {} does not have pause_end_time entity".format(self.id))
+                entity_end = None
 
-            if not entity_mode:
-                self.log("Warn: Inverter {} does not have pause_mode entity configured correctly".format(self.id))
-                return
+        if not entity_mode:
+            self.log("Warn: Inverter {} does not have pause_mode entity configured correctly".format(self.id))
+            return
 
         # Some inverters have start/end time registers
         new_start_time = "00:00:00"
         new_end_time = "23:59:00"
 
-        # GE Cloud has different pause names
-        if self.rest_data and self.rest_v3:
-            pause_cloud = False
+        # GE Cloud has different pause names. GivTCP's own spelling (Disabled/PauseCharge/...) is
+        # what the GivTCPComponent publishes, so a GivTCP-backed entity lands on the False side here
+        # exactly as the old REST branch did.
         if old_pause_mode in ["Not Paused", "Pause Charge", "Pause Discharge", "Pause Charge & Discharge"]:
             pause_cloud = True
         else:
@@ -2258,27 +2253,19 @@ class Inverter:
         else:
             new_pause_mode = "Not Paused" if pause_cloud else "Disabled"
 
-        if self.rest_data and self.rest_v3:
-            if entity_start and ((old_start_time != new_start_time) or (old_end_time != new_end_time)):
-                self.base.log("Inverter {} set pause slot to {} - {}".format(self.id, new_start_time, new_end_time))
-                self.givtcp.set_pause_slot(new_start_time, new_end_time)
-        else:
-            if old_start_time and old_start_time != new_start_time:
-                # Don't poll as inverters with no registers will fail
-                self.write_and_poll_option("pause_start_time", entity_start, new_start_time, ignore_fail=True)
-                self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
+        if old_start_time and old_start_time != new_start_time:
+            # Don't poll as inverters with no registers will fail
+            self.write_and_poll_option("pause_start_time", entity_start, new_start_time, ignore_fail=True)
+            self.base.log("Inverter {} set pause start time to {}".format(self.id, new_start_time))
 
-            if old_end_time and old_end_time != new_end_time:
-                # Don't poll as inverters with no registers will fail
-                self.write_and_poll_option("pause_end_time", entity_end, new_end_time, ignore_fail=True)
-                self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
+        if old_end_time and old_end_time != new_end_time:
+            # Don't poll as inverters with no registers will fail
+            self.write_and_poll_option("pause_end_time", entity_end, new_end_time, ignore_fail=True)
+            self.base.log("Inverter {} set pause end time to {}".format(self.id, new_end_time))
 
         # Set the mode
         if new_pause_mode != old_pause_mode:
-            if self.rest_data and self.rest_v3:
-                self.givtcp.set_battery_pause_mode(new_pause_mode)
-            else:
-                self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
+            self.write_and_poll_option("pause_mode", entity_mode, new_pause_mode)
 
             if self.base.set_inverter_notify:
                 self.base.call_notify("Predbat: Inverter {} pause mode to set {} at time {}".format(self.id, new_pause_mode, self.base.time_now_str()))
@@ -2302,17 +2289,19 @@ class Inverter:
             inverter_mode                      string
 
         """
-        inverter_mode_configured = False
-        if self.rest_data:
-            old_inverter_mode = self.rest_data["Control"]["Mode"]
-        else:
-            inverter_mode_configured = "inverter_mode" in self.base.args
-            # Inverter mode
-            if changed_start_end and not self.rest_data:
-                # XXX: Workaround for GivTCP window state update time to take effort
-                self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
-                self.sleep(30)
-            old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
+        inverter_mode_configured = "inverter_mode" in self.base.args
+        # Inverter mode
+        #
+        # The sleep is a workaround for the lag between writing a window via GivTCP's own HA
+        # integration entities and GivTCP reflecting it back. It stays gated on rest_api because a
+        # GivTCP-REST inverter does not have that lag: GivTCPComponent applies the write and
+        # republishes the entity inline before the write call returns (see its _handle_write), the
+        # same way the direct REST path used to, so sleeping 30s every window change would be pure
+        # cost. Entities fed by anything else keep the workaround.
+        if changed_start_end and not self.rest_api:
+            self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
+            self.sleep(30)
+        old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
         if not self.inv_has_fox_inverter_mode and not self.inv_has_ge_eco_toggle:
             # For the purpose of this function consider Eco Paused as the same as Eco (it's a difference in reserve setting)
@@ -2337,20 +2326,17 @@ class Inverter:
         # Change inverter mode
         if old_inverter_mode != new_inverter_mode:
             self.log("Inverter {} current mode is {} and new target is {} has_ge_eco_toggle {}".format(self.id, old_inverter_mode, new_inverter_mode, self.inv_has_ge_eco_toggle))
-            if self.rest_data:
-                self.givtcp.set_battery_mode(new_inverter_mode)
-            else:
-                entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
-                if self.inv_has_ge_eco_toggle:
-                    # GE has an eco toggle rather than a mode, so we write the opposite of the force export to the eco toggle
-                    if entity_id:
-                        self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
-                    else:
-                        if not inverter_mode_configured:
-                            self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
-                        return
+            entity_id = self.base.get_arg("inverter_mode", indirect=False, index=self.id)
+            if self.inv_has_ge_eco_toggle:
+                # GE has an eco toggle rather than a mode, so we write the opposite of the force export to the eco toggle
+                if entity_id:
+                    self.write_and_poll_switch("inverter_mode", entity_id, new_inverter_mode == "on")
                 else:
-                    self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
+                    if not inverter_mode_configured:
+                        self.log("Warn: Inverter {} adjust_inverter_mode: No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode".format(self.id))
+                    return
+            else:
+                self.write_and_poll_option("inverter_mode", entity_id, new_inverter_mode)
 
             # Notify
             if self.base.set_inverter_notify:

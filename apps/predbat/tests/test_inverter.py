@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
-from const import MINUTE_WATT, INVERTER_MAX_RETRY_REST
+from const import MINUTE_WATT
 from inverter import Inverter, DISCHARGE_TARGET_UNSUPPORTED_MODELS
 from config import INVERTER_DEF
 
@@ -317,15 +317,19 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     if new_discharge_target != prev_discharge_target:
         dummy_rest.queue_rest_data(dummy1)
 
-    # Discharge start/end time is now written via entities (write_and_poll_option), not REST -
-    # only the target SoC and inverter mode below are still written via the direct REST client.
+    # Discharge start/end time and the inverter mode are now written via entities
+    # (write_and_poll_option), not REST - only the target SoC below is still written via the direct
+    # REST client. Reset the mode entity first so this phase asserts its own write rather than
+    # inheriting the value the non-REST phase above already left on it.
+    ha.set_state("select.inverter_mode", prev_mode)
+
     dummy1["Timeslots"]["Discharge_start_time_slot_1"] = new_start
     dummy1["Timeslots"]["Discharge_end_time_slot_1"] = new_end
 
     dummy1["Control"]["Mode"] = new_mode
     dummy1["Control"]["Enable_Discharge_Schedule"] = export_schedule_discharge
-    if prev_mode != new_mode:
-        dummy_rest.queue_rest_data(dummy1)
+    # No queue_rest_data for the mode change: it is an entity write now, so nothing consumes a
+    # queued REST read-back and an entry left here would leak into the next test's runAll
 
     dummy_rest.rest_data = copy.deepcopy(dummy1)
 
@@ -342,11 +346,13 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     if new_discharge_target != prev_discharge_target:
         expect_data.append(["dummy/setDischargeTarget", {"dischargeToPercent": int(new_discharge_target), "slot": 1}])
 
-    if prev_mode != new_mode:
-        expect_data.append(["dummy/setBatteryMode", {"mode": new_mode}])
-
     if json.dumps(expect_data) != json.dumps(rest_command):
         print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+        failed = True
+
+    # The mode write now lands on the entity even for a REST inverter
+    if ha.get_state("select.inverter_mode") != new_mode:
+        print("ERROR: REST inverter mode should be written via the entity as {} got {}".format(new_mode, ha.get_state("select.inverter_mode")))
         failed = True
 
     return failed
@@ -451,22 +457,23 @@ def test_adjust_inverter_mode(test_name, ha, inv, dummy_rest, prev_mode, mode, e
         print("ERROR: Inverter mode should be {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
 
-    # REST Mode
+    # REST Mode - the mode is written via the entity now (published by GivTCPComponent), so a REST
+    # inverter issues no setBatteryMode command and lands on the same entity as the path above
     inv.rest_api = "dummy"
     inv.rest_data = {}
     inv.rest_data["Control"] = {}
     inv.rest_data["Control"]["Mode"] = prev_mode
     dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
     dummy_rest.rest_data["Control"]["Mode"] = expect_mode
+    ha.dummy_items["select.inverter_mode"] = prev_mode
 
     inv.adjust_inverter_mode(True if mode == "Timed Export" else False, False)
     rest_command = dummy_rest.get_commands()
-    if prev_mode != expect_mode:
-        expect_data = [["dummy/setBatteryMode", {"mode": expect_mode}]]
-    else:
-        expect_data = []
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+    if json.dumps([]) != json.dumps(rest_command):
+        print("ERROR: Rest command should be [] got {}".format(rest_command))
+        failed = True
+    if ha.get_state("select.inverter_mode") != expect_mode:
+        print("ERROR: REST inverter mode should be written via the entity as {} got {}".format(expect_mode, ha.get_state("select.inverter_mode")))
         failed = True
 
     return failed
@@ -707,25 +714,13 @@ def test_inverter_self_test(test_name, my_predbat):
     inv.sleep = dummy_sleep
     inv.self_test(my_predbat.minutes_now)
     rest = dummy_rest.get_commands()
-    repeats = INVERTER_MAX_RETRY_REST  # configurable number of repeats
+
+    # Battery target/rate/reserve/charge & discharge window/schedule-enable, and now the inverter
+    # mode too, all write via entities regardless of REST config, so the self test issues no direct
+    # REST commands at all. The remaining direct-REST users (battery/capacity discovery, the #4517
+    # discharge-target model check) are reads or are not exercised here - see the "REST exceptions"
+    # note in inverter.py's Inverter.__init__.
     expected = []
-
-    # Define the command patterns (each repeated INVERTER_MAX_RETRY_REST times due to the retry loop).
-    # Battery target/rate/reserve/charge & discharge window/schedule-enable all now write via
-    # entities regardless of REST config, so they no longer show up as REST commands here - only
-    # adjust_inverter_mode's mode write remains REST-only (see the "REST exceptions" note in
-    # inverter.py's Inverter.__init__). old_inverter_mode is read once from the mocked rest_data's
-    # "Mode" ("Eco") and never mutated by the dummy POSTs, so only the Eco->Timed Export transition
-    # (mid self_test) ever produces a command; the return to Eco afterwards is a no-op against that
-    # same stale "Eco" reading.
-    commands = [
-        ["dummy/setBatteryMode", {"mode": "Timed Export"}],
-    ]
-
-    # Generate expected list with repeats
-    for command in commands:
-        for _ in range(repeats):
-            expected.append(command)
     if json.dumps(expected) != json.dumps(rest):
         print("ERROR: Self test should be {} got {}".format(expected, rest))
         failed = True
