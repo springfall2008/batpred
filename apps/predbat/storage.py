@@ -452,11 +452,11 @@ class StorageLocalFiles(StorageBase):
     async def save_debug_copy(self, filename, text):
         """Write a plain-text mirror of already-serialised text into config_root/debug/.
 
-        No metadata sidecar and no format envelope - this is a human-facing copy for
-        someone to find with File Editor/Samba and attach to a GitHub issue, not
-        something Predbat itself reads back, so it is written exactly as given under
-        its own real filename, sitting alongside the raw predbat_debug_*.yaml files
-        switch.predbat_debug_enable already writes to the same directory (see #4720).
+        No metadata sidecar and no format envelope - this is both a human-facing file for
+        someone to find with File Editor/Samba and the rolling history's primary stored
+        content, read back through load_debug_copy(). It is written exactly as given under
+        its real filename alongside the raw predbat_debug_*.yaml files that
+        switch.predbat_debug_enable already writes to this directory (see #4720).
 
         Args:
             filename: Name of the file to write, including its extension
