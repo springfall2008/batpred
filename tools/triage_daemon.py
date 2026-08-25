@@ -408,7 +408,8 @@ def process_bot_pr_issue(issue):
     labels = issue.get("labels", [])
     print(f'[pr] issue #{issue_number}: "{issue["title"]}" - {issue_url(issue_number)}', flush=True)
     if has_existing_pr(issue_number):
-        print(f"[pr] issue #{issue_number}: a PR already references this issue, skipping", flush=True)
+        print(f"[pr] issue #{issue_number}: a PR already references this issue, marking opened", flush=True)
+        mark_pr_opened(issue_number)
         return
     sync_repo()
     reset_scratch()
