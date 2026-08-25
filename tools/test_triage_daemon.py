@@ -77,5 +77,21 @@ class FetchNewIssuesTests(unittest.TestCase):
         self.assertEqual([issue["number"] for issue in result], [10, 12])
 
 
+class FetchBotPrIssuesTests(unittest.TestCase):
+    """Tests for fetch_bot_pr_issues(), new in the bot PR flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_queries_open_issues_labelled_bot_pr(self, mock_run):
+        """Calls gh issue list scoped to the BOT_PR label and returns the parsed issues."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps([{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}])
+        )
+        result = triage_daemon.fetch_bot_pr_issues()
+        self.assertEqual(result, [{"number": 4720, "labels": [{"name": "BOT_PR"}, {"name": "BOT_TRIAGED"}]}])
+        args = mock_run.call_args[0][0]
+        self.assertIn("--label", args)
+        self.assertEqual(args[args.index("--label") + 1], "BOT_PR")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -202,6 +202,17 @@ def fetch_new_issues(since_number):
     return sorted(new, key=lambda i: i["number"])
 
 
+def fetch_bot_pr_issues():
+    """Return open issues currently labelled BOT_PR, each with its full label list."""
+    result = subprocess.run(
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_PR", "--json", "number,labels"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 def sync_repo():
     subprocess.run(["git", "-C", str(CLONE_DIR), "fetch", "origin", "main"], check=True)
     subprocess.run(["git", "-C", str(CLONE_DIR), "reset", "--hard", "origin/main"], check=True)
