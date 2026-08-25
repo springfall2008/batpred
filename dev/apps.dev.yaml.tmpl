@@ -1,0 +1,76 @@
+# Predbat config for the dev container - points at the dummy entities defined in
+# dev/ha_config/packages/predbat_dummy.yaml. {{HA_URL}}/{{HA_KEY}} are substituted
+# by dev/predbat-entrypoint.sh once dev/shared/ha_token.json exists.
+
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+
+  ha_url: "{{HA_URL}}"
+  ha_key: "{{HA_KEY}}"
+
+  currency_symbols:
+    - "£"
+    - "p"
+
+  threads: auto
+
+  inverter_type: GE
+  num_inverters: 1
+
+  load_today:
+    - input_number.predbat_dummy_load_energy_today
+  import_today:
+    - input_number.predbat_dummy_import_energy_today
+  export_today:
+    - input_number.predbat_dummy_export_energy_today
+  pv_today:
+    - input_number.predbat_dummy_pv_energy_today
+
+  charge_rate:
+    - input_number.predbat_dummy_charge_rate
+  discharge_rate:
+    - input_number.predbat_dummy_discharge_rate
+  battery_power:
+    - input_number.predbat_dummy_battery_power
+  pv_power:
+    - input_number.predbat_dummy_pv_power
+  load_power:
+    - input_number.predbat_dummy_load_power
+  grid_power:
+    - input_number.predbat_dummy_grid_power
+  soc_kw:
+    - input_number.predbat_dummy_soc_kw
+  soc_max:
+    - input_number.predbat_dummy_soc_max
+  reserve:
+    - input_number.predbat_dummy_reserve
+  inverter_mode:
+    - select.predbat_dummy_inverter_mode
+  charge_start_time:
+    - select.predbat_dummy_charge_start_time
+  charge_end_time:
+    - select.predbat_dummy_charge_end_time
+  charge_limit:
+    - input_number.predbat_dummy_charge_limit
+  charge_limit_enable:
+    - input_boolean.predbat_dummy_charge_limit_enable
+  scheduled_charge_enable:
+    - switch.predbat_dummy_scheduled_charge_enable
+  scheduled_discharge_enable:
+    - switch.predbat_dummy_scheduled_discharge_enable
+  discharge_start_time:
+    - select.predbat_dummy_discharge_start_time
+  discharge_end_time:
+    - select.predbat_dummy_discharge_end_time
+
+  inverter_limit:
+    - 3600
+
+  # Flat rates - no Octopus/Kraken account needed for the dev container
+  rates_import:
+    - rate: 15
+  rates_export:
+    - rate: 5

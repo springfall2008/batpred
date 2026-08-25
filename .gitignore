@@ -12,6 +12,15 @@ Thumbs.db
 dev_code
 sigenergy_mqtt_key
 
+# Predbat dev container runtime state (dev/README.md) - Home Assistant writes a lot
+# more than just .storage/*.db into dev/ha_config at runtime (blueprints, .HA_VERSION,
+# .ha_run.lock, tts/, log files, ...), so ignore everything there except what we author.
+dev/ha_config/*
+!dev/ha_config/configuration.yaml
+!dev/ha_config/packages/
+dev/shared/*
+!dev/shared/.gitkeep
+
 # Python cache files
 __pycache__/
 *.py[cod]

@@ -1,0 +1,47 @@
+# Disposable dev environment: a throwaway Home Assistant instance pre-populated
+# with dummy inverter entities, auto-onboarded, and Predbat running against it.
+#
+# Usage: dev/up.py, or plain `docker compose -f docker-compose.dev.yml up`.
+# Reset to a clean instance with `docker compose -f docker-compose.dev.yml down -v`.
+
+services:
+  homeassistant:
+    image: homeassistant/home-assistant:stable
+    volumes:
+      - ./dev/ha_config:/config
+    ports:
+      - "8123:8123"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8123/')\" || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ha-bootstrap:
+    build:
+      context: .
+      dockerfile: dev/Dockerfile.bootstrap
+    environment:
+      HA_URL: "http://homeassistant:8123"
+    volumes:
+      - ./dev/shared:/shared
+    depends_on:
+      homeassistant:
+        condition: service_healthy
+
+  predbat:
+    build:
+      context: .
+      dockerfile: dev/Dockerfile.predbat
+    environment:
+      TOKEN_FILE: "/shared/ha_token.json"
+    volumes:
+      - ./dev/shared:/shared
+      - ./apps/predbat:/app/predbat
+    ports:
+      - "5052:5052"
+    restart: unless-stopped
+    depends_on:
+      ha-bootstrap:
+        condition: service_completed_successfully

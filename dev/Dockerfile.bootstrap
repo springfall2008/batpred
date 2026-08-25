@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+
+RUN pip install --no-cache-dir aiohttp
+
+COPY dev/bootstrap.py /bootstrap.py
+
+ENTRYPOINT ["python3", "/bootstrap.py"]

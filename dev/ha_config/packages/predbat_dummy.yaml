@@ -1,0 +1,270 @@
+# Dummy single-inverter "GivTCP-shaped" entities for the Predbat dev container.
+# Predbat is pointed at these via inverter_type: GE with no givtcp_rest set, so
+# every read/write goes through plain HA services - see dev/apps.dev.yaml.tmpl.
+#
+# Predbat only accepts entity_ids in the switch/select/input_number/number/time/
+# input_datetime domains for fields it writes to. So the writable time-slot/mode/
+# enable entities below are `select`/`switch` template entities (the same domains
+# a real GivTCP integration exposes) that wrap a hidden input_select/input_boolean
+# "_store" helper, which is what actually persists the value.
+
+input_number:
+  predbat_dummy_soc_kw:
+    name: Dummy Battery SOC
+    min: 0
+    max: 10
+    step: 0.1
+    initial: 5
+    unit_of_measurement: kWh
+  predbat_dummy_soc_max:
+    name: Dummy Battery Capacity
+    min: 0
+    max: 10
+    step: 0.1
+    initial: 10
+    unit_of_measurement: kWh
+  predbat_dummy_charge_rate:
+    name: Dummy Battery Charge Rate
+    min: 0
+    max: 3600
+    step: 100
+    initial: 3600
+    unit_of_measurement: W
+  predbat_dummy_discharge_rate:
+    name: Dummy Battery Discharge Rate
+    min: 0
+    max: 3600
+    step: 100
+    initial: 3600
+    unit_of_measurement: W
+  predbat_dummy_reserve:
+    name: Dummy Battery Reserve
+    min: 0
+    max: 100
+    step: 1
+    initial: 4
+    unit_of_measurement: "%"
+  predbat_dummy_charge_limit:
+    name: Dummy Charge Limit
+    min: 0
+    max: 100
+    step: 1
+    initial: 100
+    unit_of_measurement: "%"
+  predbat_dummy_battery_power:
+    name: Dummy Battery Power
+    min: -3600
+    max: 3600
+    step: 10
+    initial: 0
+    unit_of_measurement: W
+  predbat_dummy_pv_power:
+    name: Dummy PV Power
+    min: 0
+    max: 5000
+    step: 10
+    initial: 500
+    unit_of_measurement: W
+  predbat_dummy_load_power:
+    name: Dummy Load Power
+    min: 0
+    max: 5000
+    step: 10
+    initial: 300
+    unit_of_measurement: W
+  predbat_dummy_grid_power:
+    name: Dummy Grid Power
+    min: -5000
+    max: 5000
+    step: 10
+    initial: 0
+    unit_of_measurement: W
+  predbat_dummy_load_energy_today:
+    name: Dummy Load Energy Today
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 4
+    unit_of_measurement: kWh
+  predbat_dummy_import_energy_today:
+    name: Dummy Import Energy Today
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 2
+    unit_of_measurement: kWh
+  predbat_dummy_export_energy_today:
+    name: Dummy Export Energy Today
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 0.5
+    unit_of_measurement: kWh
+  predbat_dummy_pv_energy_today:
+    name: Dummy PV Energy Today
+    min: 0
+    max: 100
+    step: 0.01
+    initial: 3
+    unit_of_measurement: kWh
+
+input_select:
+  predbat_dummy_inverter_mode_store:
+    name: Dummy Inverter Mode Store
+    options:
+      - Eco
+      - Timed Export
+    initial: Eco
+  predbat_dummy_charge_start_time_store:
+    name: Dummy Charge Start Time Store
+    options: &time_slots
+      - "00:00:00"
+      - "00:30:00"
+      - "01:00:00"
+      - "01:30:00"
+      - "02:00:00"
+      - "02:30:00"
+      - "03:00:00"
+      - "03:30:00"
+      - "04:00:00"
+      - "04:30:00"
+      - "05:00:00"
+      - "05:30:00"
+      - "06:00:00"
+      - "06:30:00"
+      - "07:00:00"
+      - "07:30:00"
+      - "08:00:00"
+      - "08:30:00"
+      - "09:00:00"
+      - "09:30:00"
+      - "10:00:00"
+      - "10:30:00"
+      - "11:00:00"
+      - "11:30:00"
+      - "12:00:00"
+      - "12:30:00"
+      - "13:00:00"
+      - "13:30:00"
+      - "14:00:00"
+      - "14:30:00"
+      - "15:00:00"
+      - "15:30:00"
+      - "16:00:00"
+      - "16:30:00"
+      - "17:00:00"
+      - "17:30:00"
+      - "18:00:00"
+      - "18:30:00"
+      - "19:00:00"
+      - "19:30:00"
+      - "20:00:00"
+      - "20:30:00"
+      - "21:00:00"
+      - "21:30:00"
+      - "22:00:00"
+      - "22:30:00"
+      - "23:00:00"
+      - "23:30:00"
+    initial: "00:00:00"
+  predbat_dummy_charge_end_time_store:
+    name: Dummy Charge End Time Store
+    options: *time_slots
+    initial: "05:00:00"
+  predbat_dummy_discharge_start_time_store:
+    name: Dummy Discharge Start Time Store
+    options: *time_slots
+    initial: "16:00:00"
+  predbat_dummy_discharge_end_time_store:
+    name: Dummy Discharge End Time Store
+    options: *time_slots
+    initial: "19:00:00"
+
+input_boolean:
+  predbat_dummy_charge_limit_enable:
+    name: Dummy Enable Charge Target
+    initial: true
+  predbat_dummy_scheduled_charge_enable_store:
+    name: Dummy Enable Charge Schedule Store
+    initial: true
+  predbat_dummy_scheduled_discharge_enable_store:
+    name: Dummy Enable Discharge Schedule Store
+    initial: false
+
+# select/switch wrappers around the _store helpers above, in domains Predbat's
+# apps.yaml validator actually accepts for writable fields (see note at top).
+template:
+  - select:
+      - name: Predbat Dummy Inverter Mode
+        unique_id: predbat_dummy_inverter_mode
+        state: "{{ states('input_select.predbat_dummy_inverter_mode_store') }}"
+        options: "{{ state_attr('input_select.predbat_dummy_inverter_mode_store', 'options') }}"
+        select_option:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.predbat_dummy_inverter_mode_store
+            data:
+              option: "{{ option }}"
+      - name: Predbat Dummy Charge Start Time
+        unique_id: predbat_dummy_charge_start_time
+        state: "{{ states('input_select.predbat_dummy_charge_start_time_store') }}"
+        options: "{{ state_attr('input_select.predbat_dummy_charge_start_time_store', 'options') }}"
+        select_option:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.predbat_dummy_charge_start_time_store
+            data:
+              option: "{{ option }}"
+      - name: Predbat Dummy Charge End Time
+        unique_id: predbat_dummy_charge_end_time
+        state: "{{ states('input_select.predbat_dummy_charge_end_time_store') }}"
+        options: "{{ state_attr('input_select.predbat_dummy_charge_end_time_store', 'options') }}"
+        select_option:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.predbat_dummy_charge_end_time_store
+            data:
+              option: "{{ option }}"
+      - name: Predbat Dummy Discharge Start Time
+        unique_id: predbat_dummy_discharge_start_time
+        state: "{{ states('input_select.predbat_dummy_discharge_start_time_store') }}"
+        options: "{{ state_attr('input_select.predbat_dummy_discharge_start_time_store', 'options') }}"
+        select_option:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.predbat_dummy_discharge_start_time_store
+            data:
+              option: "{{ option }}"
+      - name: Predbat Dummy Discharge End Time
+        unique_id: predbat_dummy_discharge_end_time
+        state: "{{ states('input_select.predbat_dummy_discharge_end_time_store') }}"
+        options: "{{ state_attr('input_select.predbat_dummy_discharge_end_time_store', 'options') }}"
+        select_option:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.predbat_dummy_discharge_end_time_store
+            data:
+              option: "{{ option }}"
+  - switch:
+      - name: Predbat Dummy Scheduled Charge Enable
+        unique_id: predbat_dummy_scheduled_charge_enable
+        state: "{{ states('input_boolean.predbat_dummy_scheduled_charge_enable_store') }}"
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.predbat_dummy_scheduled_charge_enable_store
+        turn_off:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.predbat_dummy_scheduled_charge_enable_store
+      - name: Predbat Dummy Scheduled Discharge Enable
+        unique_id: predbat_dummy_scheduled_discharge_enable
+        state: "{{ states('input_boolean.predbat_dummy_scheduled_discharge_enable_store') }}"
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.predbat_dummy_scheduled_discharge_enable_store
+        turn_off:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.predbat_dummy_scheduled_discharge_enable_store

@@ -9,7 +9,7 @@ repos:
     args: [--markdown-linebreak-ext=md]
   - id: end-of-file-fixer
   - id: check-yaml
-    exclude: (example_chart.yml)
+    exclude: (example_chart.yml|dev/ha_config/configuration.yaml)
   - id: check-json
     exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
 - repo: https://gitlab.com/bmares/check-json5

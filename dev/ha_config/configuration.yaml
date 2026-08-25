@@ -1,0 +1,19 @@
+# Minimal Home Assistant config for the Predbat dev container.
+# Dummy inverter/entity definitions live in packages/predbat_dummy.yaml.
+
+default_config:
+
+homeassistant:
+  name: Predbat Dev
+  latitude: 51.5074
+  longitude: -0.1278
+  elevation: 20
+  unit_system: metric
+  time_zone: Europe/London
+  currency: GBP
+  packages: !include_dir_named packages
+
+# Onboarding is scripted by the ha-bootstrap container, not the browser wizard,
+# so it needs the frontend/API reachable on the container's default port.
+http:
+  server_port: 8123

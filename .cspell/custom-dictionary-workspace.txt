@@ -111,6 +111,7 @@ desync
 desynced
 devcontainer
 devcontainers
+devdevdev
 dexport
 deye
 deyecloud
@@ -215,6 +216,7 @@ hasattr
 hass
 hassapi
 hassio
+healthcheck
 heatingactive
 heatingtemp
 heatpump
@@ -304,6 +306,7 @@ minb
 minmax
 minsoc
 minsocongrid
+mintable
 minuteb
 misclick
 misdetect
@@ -531,6 +534,7 @@ timestep
 timestr
 timezone
 tmpfs
+tmpl
 tmrw
 tojson
 tottime
@@ -557,6 +561,8 @@ unpushed
 unsmoothed
 unstaged
 urandom
+urllib
+urlopen
 urlsafe
 useid
 userinterface
