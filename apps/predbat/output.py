@@ -2936,6 +2936,19 @@ class Output:
         )
         self.dashboard_item("binary_sensor." + self.prefix + "_demand", state="on" if isDemand else "off", attributes={"friendly_name": "Predbat is in demand mode", "icon": "mdi:battery-arrow-up"})
 
+        # Whether the plan has a force export window running now, taken from the plan rather than
+        # from isExporting above. That makes it stay on right through a slot, cover freeze export
+        # (where Predbat is selling the PV rather than the battery) and the Hold exporting phases,
+        # and still report in read only mode - all cases where an automation wants to leave the
+        # solar for Predbat to sell, but where the commanded state above is off.
+        export_window_n = self.in_charge_window(self.export_window_best, self.minutes_now)
+        in_export_slot = self.set_export_window and export_window_n >= 0 and self.export_limits_best[export_window_n] < EXPORT_LIMIT_IDLE
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_force_export_slot",
+            state="on" if in_export_slot else "off",
+            attributes={"friendly_name": "Predbat is in a force export slot", "icon": "mdi:transmission-tower-export"},
+        )
+
     def yesterday_reconstruct_car_slots(self, end_record, yesterday_load_step):
         # Normalize to list for multi-car support
         entity_id_config = self.get_arg("octopus_intelligent_slot", indirect=False)
