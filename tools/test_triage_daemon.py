@@ -180,5 +180,60 @@ class LabelSwapTests(unittest.TestCase):
         self.assertEqual(args, ["gh", "issue", "edit", "4720", "--remove-label", "BOT_PR", "--add-label", "BOT_PR_FAILED"])
 
 
+class PermissionModelTests(unittest.TestCase):
+    """Regression tests for the ALLOWED_TOOLS/DISALLOWED_TOOLS delta between the
+    read-only triage invocation and the push/PR-create-capable /issue-pr invocation.
+    This boundary should never drift silently."""
+
+    def test_triage_allowed_tools_still_contains_the_broad_gh_grant(self):
+        """Sanity check that the refactor didn't drop the base allowlist's core entry."""
+        self.assertIn("Bash(gh *)", triage_daemon.ALLOWED_TOOLS.split(","))
+
+    def test_pr_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
+        """Everything dangerous stays denied for the PR flow too."""
+        still_denied = [
+            "Bash(gh pr merge*)",
+            "Bash(gh pr close*)",
+            "Bash(gh repo*)",
+            "Bash(gh release*)",
+            "Bash(gh workflow*)",
+            "Bash(gh auth*)",
+            "Bash(gh secret*)",
+            "Bash(gh api*)",
+            "mcp__*",
+        ]
+        pr_denied = triage_daemon.DISALLOWED_TOOLS_PR.split(",")
+        for entry in still_denied:
+            self.assertIn(entry, pr_denied)
+
+    def test_pr_disallowed_tools_carves_out_exactly_three_entries(self):
+        """Only git push, git commit and gh pr create are removed from the denial list."""
+        base = set(triage_daemon.DISALLOWED_TOOLS.split(","))
+        pr = set(triage_daemon.DISALLOWED_TOOLS_PR.split(","))
+        self.assertEqual(base - pr, {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"})
+
+    def test_pr_allowed_tools_is_a_superset_of_the_triage_allowlist(self):
+        """The PR flow's allowlist only ever adds to the read-only allowlist, never removes."""
+        base = set(triage_daemon.ALLOWED_TOOLS.split(","))
+        pr = set(triage_daemon.ALLOWED_TOOLS_PR.split(","))
+        self.assertTrue(base.issubset(pr))
+
+    def test_pr_allowed_tools_adds_exactly_the_expected_entries(self):
+        """The only additions are add/commit/push/pr-create/pre-commit."""
+        base = set(triage_daemon.ALLOWED_TOOLS.split(","))
+        pr = set(triage_daemon.ALLOWED_TOOLS_PR.split(","))
+        self.assertEqual(
+            pr - base,
+            {
+                "Bash(git add*)",
+                "Bash(git commit*)",
+                "Bash(git push*)",
+                "Bash(gh pr create*)",
+                "Bash(./run_pre_commit*)",
+                "Bash(./run_pre_commit)",
+            },
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

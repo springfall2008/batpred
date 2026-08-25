@@ -82,96 +82,110 @@ POLL_SECONDS = 300
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
-ALLOWED_TOOLS = ",".join(
-    [
-        # Read the issue, search for duplicates, post the triage comment
-        "Bash(gh *)",
-        # Git history, and the re-sync/discard the skill does before investigating
-        "Bash(git log*)",
-        "Bash(git diff*)",
-        "Bash(git show*)",
-        "Bash(git blame*)",
-        "Bash(git grep*)",
-        "Bash(git status*)",
-        "Bash(git branch*)",
-        "Bash(git tag*)",
-        "Bash(git describe*)",
-        "Bash(git rev-parse*)",
-        "Bash(git remote -v*)",
-        "Bash(git remote show*)",
-        "Bash(git fetch*)",
-        "Bash(git reset*)",
-        "Bash(git checkout*)",
-        "Bash(git restore*)",
-        "Bash(git clean*)",
-        "Bash(git stash*)",
-        # Running one targeted test. tools/triage_test.sh keeps the cd into
-        # coverage/ and the output redirect inside the script, because Claude Code
-        # prompts on a cd combined with an output redirect - which is what the
-        # obvious "cd coverage && ./run_all --test X > log 2>&1" form is, so it is
-        # denied outright under dontAsk no matter what rules are listed here.
-        "Bash(tools/triage_test.sh *)",
-        "Bash(./tools/triage_test.sh *)",
-        "Bash(cd *)",
-        "Bash(./run_all *)",
-        "Bash(./run_all)",
-        "Bash(python3 *)",
-        # Pulling issue attachments down and picking them apart. A predbat.log
-        # is often tens of MB - too big for WebFetch and too big to read into
-        # context, so it gets downloaded and grepped instead.
-        "Bash(curl *)",
-        "Bash(mkdir *)",
-        "Bash(unzip *)",
-        "Bash(gunzip *)",
-        "Bash(zcat *)",
-        "Bash(tar *)",
-        "Bash(file *)",
-        "Bash(ls *)",
-        "Bash(find *)",
-        "Bash(wc *)",
-        "Bash(head *)",
-        "Bash(tail *)",
-        "Bash(cat *)",
-        "Bash(grep *)",
-        "Bash(rg *)",
-        "Bash(sed *)",
-        "Bash(awk *)",
-        "Bash(sort *)",
-        "Bash(uniq *)",
-        "Bash(cut *)",
-        "Bash(tr *)",
-        "Bash(tee *)",
-        "Bash(echo *)",
-        # Edit rules cover every file-editing tool (Write included) - a Write(path)
-        # rule is not matched by the file permission check, so don't add one.
-        f"Edit({EDIT_SCOPE})",
-        f"Edit({SCRATCH_SCOPE})",
-        "WebFetch",
-        "Read",
-        "Grep",
-        "Glob",
-    ]
-)
+_ALLOWED_TOOLS_BASE = [
+    # Read the issue, search for duplicates, post the triage comment
+    "Bash(gh *)",
+    # Git history, and the re-sync/discard the skill does before investigating
+    "Bash(git log*)",
+    "Bash(git diff*)",
+    "Bash(git show*)",
+    "Bash(git blame*)",
+    "Bash(git grep*)",
+    "Bash(git status*)",
+    "Bash(git branch*)",
+    "Bash(git tag*)",
+    "Bash(git describe*)",
+    "Bash(git rev-parse*)",
+    "Bash(git remote -v*)",
+    "Bash(git remote show*)",
+    "Bash(git fetch*)",
+    "Bash(git reset*)",
+    "Bash(git checkout*)",
+    "Bash(git restore*)",
+    "Bash(git clean*)",
+    "Bash(git stash*)",
+    # Running one targeted test. tools/triage_test.sh keeps the cd into
+    # coverage/ and the output redirect inside the script, because Claude Code
+    # prompts on a cd combined with an output redirect - which is what the
+    # obvious "cd coverage && ./run_all --test X > log 2>&1" form is, so it is
+    # denied outright under dontAsk no matter what rules are listed here.
+    "Bash(tools/triage_test.sh *)",
+    "Bash(./tools/triage_test.sh *)",
+    "Bash(cd *)",
+    "Bash(./run_all *)",
+    "Bash(./run_all)",
+    "Bash(python3 *)",
+    # Pulling issue attachments down and picking them apart. A predbat.log
+    # is often tens of MB - too big for WebFetch and too big to read into
+    # context, so it gets downloaded and grepped instead.
+    "Bash(curl *)",
+    "Bash(mkdir *)",
+    "Bash(unzip *)",
+    "Bash(gunzip *)",
+    "Bash(zcat *)",
+    "Bash(tar *)",
+    "Bash(file *)",
+    "Bash(ls *)",
+    "Bash(find *)",
+    "Bash(wc *)",
+    "Bash(head *)",
+    "Bash(tail *)",
+    "Bash(cat *)",
+    "Bash(grep *)",
+    "Bash(rg *)",
+    "Bash(sed *)",
+    "Bash(awk *)",
+    "Bash(sort *)",
+    "Bash(uniq *)",
+    "Bash(cut *)",
+    "Bash(tr *)",
+    "Bash(tee *)",
+    "Bash(echo *)",
+    # Edit rules cover every file-editing tool (Write included) - a Write(path)
+    # rule is not matched by the file permission check, so don't add one.
+    f"Edit({EDIT_SCOPE})",
+    f"Edit({SCRATCH_SCOPE})",
+    "WebFetch",
+    "Read",
+    "Grep",
+    "Glob",
+]
+ALLOWED_TOOLS = ",".join(_ALLOWED_TOOLS_BASE)
+# The /issue-pr invocation needs everything the read-only triage flow has, plus
+# committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
+_ALLOWED_TOOLS_PR_EXTRA = [
+    "Bash(git add*)",
+    "Bash(git commit*)",
+    "Bash(git push*)",
+    "Bash(gh pr create*)",
+    "Bash(./run_pre_commit*)",
+    "Bash(./run_pre_commit)",
+]
+ALLOWED_TOOLS_PR = ",".join(_ALLOWED_TOOLS_BASE + _ALLOWED_TOOLS_PR_EXTRA)
 # Deny wins over allow, so these carve the publishing commands back out of
 # the broad "Bash(gh *)" / "Bash(git ...)" entries above.
-DISALLOWED_TOOLS = ",".join(
-    [
-        "mcp__*",
-        "Bash(git push*)",
-        "Bash(git commit*)",
-        "Bash(git remote add*)",
-        "Bash(git remote set-url*)",
-        "Bash(gh pr create*)",
-        "Bash(gh pr merge*)",
-        "Bash(gh pr close*)",
-        "Bash(gh repo*)",
-        "Bash(gh release*)",
-        "Bash(gh workflow*)",
-        "Bash(gh auth*)",
-        "Bash(gh secret*)",
-        "Bash(gh api*)",
-    ]
-)
+_DISALLOWED_TOOLS_BASE = [
+    "mcp__*",
+    "Bash(git push*)",
+    "Bash(git commit*)",
+    "Bash(git remote add*)",
+    "Bash(git remote set-url*)",
+    "Bash(gh pr create*)",
+    "Bash(gh pr merge*)",
+    "Bash(gh pr close*)",
+    "Bash(gh repo*)",
+    "Bash(gh release*)",
+    "Bash(gh workflow*)",
+    "Bash(gh auth*)",
+    "Bash(gh secret*)",
+    "Bash(gh api*)",
+]
+DISALLOWED_TOOLS = ",".join(_DISALLOWED_TOOLS_BASE)
+# The PR flow needs to push its branch and open the PR - carve those three back out of
+# the base denial list. Everything else (merge, close, repo/release/workflow/auth/secret/
+# api admin, all mcp__*) stays denied.
+_PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
+DISALLOWED_TOOLS_PR = ",".join(item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS)
 
 
 def load_state():
