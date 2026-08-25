@@ -413,6 +413,42 @@ def triage(issue_number):
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
+def triage_followup(issue_number):
+    """Run the /issue-triage-followup skill for one issue - a re-review incorporating
+    information added since the original triage, under the same read-only permission
+    set as first-pass /issue-triage (never writes code or opens a PR).
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/issue-triage-followup {issue_number} scratch={SCRATCH_DIR}",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS,
+        "--disallowedTools",
+        DISALLOWED_TOOLS,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "60",
+        "--max-budget-usd",
+        "10.00",
+    ]
+    log_path = LOG_DIR / f"issue-{issue_number}-followup.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[review] issue #{issue_number}: starting follow-up, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== issue #{issue_number} follow-up started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== issue #{issue_number} follow-up exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print(f"[review] issue #{issue_number}: follow-up exited {result.returncode}", flush=True)
+
+
 def create_pr(issue_number):
     """Run the /issue-pr skill for one issue under the push/PR-create-capable permission set.
 
@@ -518,25 +554,38 @@ def mark_review_failed(issue_number):
 
 
 def process_bot_review_issue(issue):
-    """Run /issue-triage on an issue tagged BOT_REVIEW if it isn't already triaged,
-    then remove the trigger label. Exists for issues older than the daemon's
-    last_processed pointer, which the new-issue poll never sees.
+    """Run the right BOT_REVIEW action for one issue, then remove the trigger label.
 
-    A failed triage swaps BOT_REVIEW for BOT_FAILED instead of leaving BOT_REVIEW in
-    place, so a persistently failing issue isn't retried every poll cycle.
+    Three cases: an issue already carrying BOT_TRIAGED gets a follow-up review via
+    /issue-triage-followup, incorporating anything new since the original triage. An
+    old, pre-BOT_TRIAGED-label issue that already has a bot triage comment is just
+    backfilled with the label - catching up on backlog isn't the same as new
+    information having arrived, so no follow-up runs for it. Anything else gets a
+    first-pass /issue-triage, for issues older than the daemon's last_processed
+    pointer, which the new-issue poll never sees.
+
+    A failed triage or follow-up swaps BOT_REVIEW for BOT_FAILED instead of leaving
+    BOT_REVIEW in place, so a persistently failing issue isn't retried every poll cycle.
     """
     issue_number = issue["number"]
     labels = issue.get("labels", [])
     print(f'[review] issue #{issue_number}: "{issue["title"]}" - {issue_url(issue_number)}', flush=True)
-    if ensure_triaged(issue_number, labels):
+
+    if is_already_triaged(labels):
+        action_name, action = "follow-up", triage_followup
+    elif find_triage_comment(issue_number):
+        backfill_triaged_label(issue_number)
         remove_review_label(issue_number)
         return
+    else:
+        action_name, action = "first-pass triage", triage
+
     sync_repo()
     reset_scratch()
     try:
-        triage(issue_number)
+        action(issue_number)
     except subprocess.CalledProcessError as exc:
-        print(f"[review] issue #{issue_number}: triage failed: {exc}", flush=True)
+        print(f"[review] issue #{issue_number}: {action_name} failed: {exc}", flush=True)
         mark_review_failed(issue_number)
         return
     remove_review_label(issue_number)
