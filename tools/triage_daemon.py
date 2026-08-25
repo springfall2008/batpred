@@ -252,6 +252,27 @@ def ensure_triaged(issue_number, labels):
     return False
 
 
+def build_duplicate_search_query(issue_number):
+    """Build the gh pr list --search query used to detect an existing PR for an issue.
+
+    Matches the exact "Fixes #N" phrase the issue-pr skill always includes in its PR
+    body, rather than a bare issue number, which could match an unrelated PR.
+    """
+    return f'"Fixes #{issue_number}" in:body'
+
+
+def has_existing_pr(issue_number):
+    """Return True if a PR already references this issue, in any state."""
+    query = build_duplicate_search_query(issue_number)
+    result = subprocess.run(
+        ["gh", "pr", "list", "--search", query, "--state", "all", "--json", "number"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return len(json.loads(result.stdout)) > 0
+
+
 def sync_repo():
     subprocess.run(["git", "-C", str(CLONE_DIR), "fetch", "origin", "main"], check=True)
     subprocess.run(["git", "-C", str(CLONE_DIR), "reset", "--hard", "origin/main"], check=True)

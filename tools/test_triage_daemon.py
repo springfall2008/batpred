@@ -142,5 +142,25 @@ class EnsureTriagedTests(unittest.TestCase):
         mock_backfill.assert_not_called()
 
 
+class DuplicateGuardTests(unittest.TestCase):
+    """Tests for the duplicate-work guard, new in the bot PR flow."""
+
+    def test_search_query_uses_quoted_fixes_phrase(self):
+        """The query searches the exact quoted phrase, not a bare issue number."""
+        self.assertEqual(triage_daemon.build_duplicate_search_query(4720), '"Fixes #4720" in:body')
+
+    @patch("triage_daemon.subprocess.run")
+    def test_has_existing_pr_true_when_match_found(self, mock_run):
+        """A non-empty search result means a PR already exists for this issue."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 99}]))
+        self.assertTrue(triage_daemon.has_existing_pr(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_has_existing_pr_false_when_no_match(self, mock_run):
+        """An empty search result means no PR exists yet for this issue."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        self.assertFalse(triage_daemon.has_existing_pr(4720))
+
+
 if __name__ == "__main__":
     unittest.main()
