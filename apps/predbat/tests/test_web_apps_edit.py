@@ -35,6 +35,11 @@ APPS_YAML_FIXTURE = """pred_bat:
       id: three
   battery_charge_low:
     normal: 10
+  nested_matrix:
+    - - 1
+      - 2
+    - - 3
+      - 4
 """
 
 
@@ -141,6 +146,39 @@ def run_web_apps_edit_tests(my_predbat):
         ordered = sorted(["compare_list[2]", "compare_list[10]", "compare_list[2].name"], key=web_interface._yaml_path_sort_key, reverse=True)
         if ordered != ["compare_list[10]", "compare_list[2].name", "compare_list[2]"]:
             print("  ERROR: unexpected delete ordering: {}".format(ordered))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: a directly nested list tokenizes every bracket pair in a path component")
+        if web_interface._split_yaml_path("foo[0][1]") != ["foo", "[0]", "[1]"]:
+            print("  ERROR: expected foo[0][1] to split into foo, [0], [1], got: {}".format(web_interface._split_yaml_path("foo[0][1]")))
+            failed += 1
+        if web_interface._split_yaml_path("foo[0][]") != ["foo", "[0]", "[]"]:
+            print("  ERROR: expected foo[0][] to split into foo, [0], [], got: {}".format(web_interface._split_yaml_path("foo[0][]")))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: a directly nested list item can be deleted")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"nested_matrix[0][1]": _delete("nested_matrix[0][1]")})
+        if not result.get("success"):
+            print("  ERROR: expected the nested-list delete to succeed, got: {}".format(result))
+            failed += 1
+        saved = _load_yaml()
+        if list(saved["pred_bat"]["nested_matrix"][0]) != [1]:
+            print("  ERROR: expected nested_matrix[0] to be [1], got: {}".format(list(saved["pred_bat"]["nested_matrix"][0])))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: a directly nested list can have an item appended")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"nested_matrix[1][]#1": _add("nested_matrix[1][]", "5")})
+        if not result.get("success"):
+            print("  ERROR: expected the nested-list add to succeed, got: {}".format(result))
+            failed += 1
+        saved = _load_yaml()
+        if list(saved["pred_bat"]["nested_matrix"][1]) != [3, 4, 5]:
+            print("  ERROR: expected nested_matrix[1] to be [3, 4, 5], got: {}".format(list(saved["pred_bat"]["nested_matrix"][1])))
             failed += 1
 
         # ---------------------------------------------------------------------
@@ -259,11 +297,78 @@ def run_web_apps_edit_tests(my_predbat):
             failed += 1
 
         # ---------------------------------------------------------------------
+        print("Test: isNested cannot be spoofed true to delete a top-level argument")
+        web_interface = _reset_fixture(my_predbat)
+        spoofed_delete = {"rowId": 1, "originalValue": "", "newValue": "", "type": "delete", "isNested": True, "path": "compare_list"}
+        result = _post_changes(web_interface, {"compare_list": spoofed_delete})
+        if result.get("success"):
+            print("  ERROR: expected the spoofed top-level delete to be refused, got: {}".format(result))
+            failed += 1
+        saved = _load_yaml()
+        if "compare_list" not in saved["pred_bat"]:
+            print("  ERROR: the top-level compare_list was removed from apps.yaml by a spoofed isNested flag")
+            failed += 1
+
+        # ---------------------------------------------------------------------
         print("Test: an empty value is refused rather than written as null")
         web_interface = _reset_fixture(my_predbat)
         result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", "   ")})
         if result.get("success"):
             print("  ERROR: expected an empty added value to be refused, got: {}".format(result))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: adding a compare profile without an id is refused")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", "name: No Id\n")})
+        if result.get("success"):
+            print("  ERROR: expected the id-less profile to be refused, got: {}".format(result))
+            failed += 1
+        saved = _load_yaml()
+        if _names(saved["pred_bat"]["compare_list"]) != ["Tariff One", "Tariff Two", "Tariff Three"]:
+            print("  ERROR: expected apps.yaml to be unchanged, got: {}".format(_names(saved["pred_bat"]["compare_list"])))
+            failed += 1
+        if _names(web_interface.args["compare_list"]) != ["Tariff One", "Tariff Two", "Tariff Three"]:
+            print("  ERROR: expected the live args to be unchanged too, got: {}".format(_names(web_interface.args["compare_list"])))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: adding a compare profile with a duplicate id is refused")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"compare_list[]#1": _add("compare_list[]", "name: Clash\nid: one\n")})
+        if result.get("success"):
+            print("  ERROR: expected the duplicate id to be refused, got: {}".format(result))
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: deleting a compare profile's id is refused, since results are indexed by it")
+        web_interface = _reset_fixture(my_predbat)
+        result = _post_changes(web_interface, {"compare_list[0].id": _delete("compare_list[0].id")})
+        if result.get("success"):
+            print("  ERROR: expected removing a profile's id to be refused, got: {}".format(result))
+            failed += 1
+        saved = _load_yaml()
+        if "id" not in saved["pred_bat"]["compare_list"][0]:
+            print("  ERROR: apps.yaml was written with an id-less compare profile")
+            failed += 1
+
+        # ---------------------------------------------------------------------
+        print("Test: a batch that fails partway leaves apps.yaml and the live args untouched")
+        web_interface = _reset_fixture(my_predbat)
+        changes = {
+            "compare_list[]#1": _add("compare_list[]", "name: Should Not Land\nid: unsaved\n"),
+            "compare_list[9]": _delete("compare_list[9]"),
+        }
+        result = _post_changes(web_interface, changes)
+        if result.get("success"):
+            print("  ERROR: expected the batch to fail because of the out-of-range delete, got: {}".format(result))
+            failed += 1
+        saved = _load_yaml()
+        if _names(saved["pred_bat"]["compare_list"]) != ["Tariff One", "Tariff Two", "Tariff Three"]:
+            print("  ERROR: expected apps.yaml to be unaffected by the failed batch, got: {}".format(_names(saved["pred_bat"]["compare_list"])))
+            failed += 1
+        if _names(web_interface.args["compare_list"]) != ["Tariff One", "Tariff Two", "Tariff Three"]:
+            print("  ERROR: expected the live args to be unaffected by the failed batch too, got: {}".format(_names(web_interface.args["compare_list"])))
             failed += 1
 
         # ---------------------------------------------------------------------

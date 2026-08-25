@@ -3695,18 +3695,14 @@ chart.render();
         """
         Split a dot-notation path into keys, with each list index as its own '[n]' key
         """
-        pre_keys = path.split(".")
         keys = []
-        # Split out set of square brackets into a different key
-        for key in pre_keys:
-            if "[" in key and "]" in key:
-                # Handle keys with square brackets, e.g., "battery_charge_low[0]"
-                base_key, index = key.split("[")
-                index = index.rstrip("]")
-                keys.append(base_key)
-                keys.append(f"[{index}]")
-            else:
-                keys.append(key)
+        # Split out every set of square brackets into its own key, e.g. "battery_charge_low[0]"
+        # into "battery_charge_low", "[0]", and a directly nested list's "foo[0][1]" into
+        # "foo", "[0]", "[1]"
+        for component in path.split("."):
+            for token in re.split(r"(\[[^\[\]]*\])", component):
+                if token:
+                    keys.append(token)
         return keys
 
     def _yaml_path_index(self, key, path):
@@ -3827,6 +3823,27 @@ chart.render();
             else:
                 raise KeyError(f"Final key '{key}' not found in path '{path}'")
 
+    def _validate_compare_list(self, compare_list):
+        """
+        Check every compare_list profile still has the unique id and non-empty name that
+        compare.py indexes results by, raising ValueError if a batch has left one without
+        """
+        if not compare_list:
+            return
+
+        seen_ids = set()
+        for entry in compare_list:
+            if not isinstance(entry, dict):
+                raise ValueError("Each compare_list entry must be a dictionary with an id and a name")
+            entry_id = entry.get("id")
+            if not entry_id:
+                raise ValueError("Each compare_list entry requires a non-empty 'id'")
+            if entry_id in seen_ids:
+                raise ValueError(f"Duplicate compare_list id '{entry_id}'")
+            seen_ids.add(entry_id)
+            if not entry.get("name"):
+                raise ValueError(f"compare_list entry '{entry_id}' requires a non-empty 'name'")
+
     async def html_apps_post(self, request):
         """
         Handle POST request for apps page - batch edit values
@@ -3863,9 +3880,13 @@ chart.render();
                 return web.json_response({"success": False, "message": "pred_bat section not found in apps.yaml"})
 
             # Process each change - additions and updates are applied first, then deletions, as
-            # deleting a list item shifts the indices every other path was rendered against
+            # deleting a list item shifts the indices every other path was rendered against.
+            # Every mutation lands on live_args, a copy of self.args, rather than self.args
+            # itself - a batch that fails partway, or whose file write fails, must never leave
+            # self.args (which is the same object as self.base.args) reflecting only some of it
             updated_args = []
             deleted_paths = []
+            live_args = copy.deepcopy(self.args)
             for path_or_arg, change_info in changes.items():
                 change_type = change_info.get("type", "numerical")
                 is_nested = change_info.get("isNested", False)
@@ -3873,8 +3894,12 @@ chart.render();
                 # path is taken from the change itself rather than from the key
                 path_or_arg = change_info.get("path", path_or_arg) if is_nested else path_or_arg
 
-                if change_type in ("add", "delete") and not is_nested:
-                    return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
+                if change_type in ("add", "delete"):
+                    # Determine nesting from the parsed path itself, not the client-supplied
+                    # isNested flag, so a delete posted with isNested spoofed true still cannot
+                    # reach a bare top-level key
+                    if len(self._split_yaml_path(path_or_arg)) < 2:
+                        return web.json_response({"success": False, "message": f"Only nested values can be added or deleted, not {path_or_arg}"})
 
                 if change_type == "delete":
                     deleted_paths.append(path_or_arg)
@@ -3890,7 +3915,7 @@ chart.render();
                         return web.json_response({"success": False, "message": f"Invalid value format for {path_or_arg}: {str(e)}"})
                     try:
                         self._add_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, added_value)
-                        self._add_nested_yaml_value(self.args, path_or_arg, copy.deepcopy(added_value))
+                        self._add_nested_yaml_value(live_args, path_or_arg, copy.deepcopy(added_value))
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Could not add {path_or_arg}: {str(e)}"})
                     updated_args.append(f"added {path_or_arg}")
@@ -3917,7 +3942,7 @@ chart.render();
                     # Handle nested paths like "battery_charge_low.normal"
                     try:
                         self._update_nested_yaml_value(data[ROOT_YAML_KEY], path_or_arg, converted_value)
-                        self._update_nested_yaml_value(self.args, path_or_arg, converted_value)
+                        self._update_nested_yaml_value(live_args, path_or_arg, converted_value)
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     except (KeyError, TypeError) as e:
                         return web.json_response({"success": False, "message": f"Path {path_or_arg} not found or invalid: {str(e)}"})
@@ -3925,7 +3950,7 @@ chart.render();
                     # Handle top-level arguments
                     if path_or_arg in data[ROOT_YAML_KEY]:
                         data[ROOT_YAML_KEY][path_or_arg] = converted_value
-                        self.args[path_or_arg] = converted_value  # Update the base args as well
+                        live_args[path_or_arg] = converted_value
                         updated_args.append(f"{path_or_arg}={converted_value}")
                     else:
                         return web.json_response({"success": False, "message": f"Argument {path_or_arg} not found in apps.yaml"})
@@ -3935,15 +3960,28 @@ chart.render();
             for path in sorted(deleted_paths, key=self._yaml_path_sort_key, reverse=True):
                 try:
                     self._delete_nested_yaml_value(data[ROOT_YAML_KEY], path)
-                    self._delete_nested_yaml_value(self.args, path)
+                    self._delete_nested_yaml_value(live_args, path)
                 except (KeyError, TypeError) as e:
                     return web.json_response({"success": False, "message": f"Could not delete {path}: {str(e)}"})
                 updated_args.append(f"deleted {path}")
+
+            # Compare profiles are indexed by id elsewhere (e.g. compare.py), so a batch that
+            # leaves one without an id or name, or with a duplicate id, must be refused
+            try:
+                self._validate_compare_list(data[ROOT_YAML_KEY].get("compare_list"))
+            except ValueError as e:
+                return web.json_response({"success": False, "message": str(e)})
 
             # Write back to the file, preserving comments and formatting
             try:
                 with open(apps_yaml_path, "w") as f:
                     yaml.dump(data, f)
+
+                # Only now that the whole batch has validated and the file write has succeeded is
+                # the live config published - in place, so self.args (the same object as
+                # self.base.args) never reflects a partially applied batch
+                self.args.clear()
+                self.args.update(live_args)
 
                 change_count = len(updated_args)
                 self.log(f"Batch updated {change_count} arguments in apps.yaml: {', '.join(updated_args)}")
