@@ -93,5 +93,54 @@ class FetchBotPrIssuesTests(unittest.TestCase):
         self.assertEqual(args[args.index("--label") + 1], "BOT_PR")
 
 
+class EnsureTriagedTests(unittest.TestCase):
+    """Tests for the BOT_PR precondition check, new in the bot PR flow."""
+
+    def test_is_already_triaged_true_when_label_present(self):
+        """BOT_TRIAGED anywhere in the label list is detected."""
+        self.assertTrue(triage_daemon.is_already_triaged([{"name": "bug"}, {"name": "BOT_TRIAGED"}]))
+
+    def test_is_already_triaged_false_when_label_absent(self):
+        """A label list without BOT_TRIAGED is not mistaken for one."""
+        self.assertFalse(triage_daemon.is_already_triaged([{"name": "bug"}]))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_triage_comment_true_when_disclosure_present(self, mock_run):
+        """A comment containing the triage disclosure line counts as already triaged."""
+        mock_run.return_value = MagicMock(
+            stdout=json.dumps({"comments": [{"body": "This is an automated first-pass triage of..."}]})
+        )
+        self.assertTrue(triage_daemon.find_triage_comment(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_triage_comment_false_when_no_match(self, mock_run):
+        """Unrelated comments don't count as a triage comment."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": "thanks for the report"}]}))
+        self.assertFalse(triage_daemon.find_triage_comment(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_ensure_triaged_skips_lookup_when_label_present(self, mock_run):
+        """With BOT_TRIAGED already on the issue, no gh calls are made at all."""
+        result = triage_daemon.ensure_triaged(4720, [{"name": "BOT_TRIAGED"}])
+        self.assertTrue(result)
+        mock_run.assert_not_called()
+
+    @patch("triage_daemon.backfill_triaged_label")
+    @patch("triage_daemon.find_triage_comment", return_value=True)
+    def test_ensure_triaged_backfills_when_comment_found(self, mock_find, mock_backfill):
+        """An old issue with a triage comment but no label gets the label backfilled."""
+        result = triage_daemon.ensure_triaged(4720, [{"name": "bug"}])
+        self.assertTrue(result)
+        mock_backfill.assert_called_once_with(4720)
+
+    @patch("triage_daemon.backfill_triaged_label")
+    @patch("triage_daemon.find_triage_comment", return_value=False)
+    def test_ensure_triaged_false_when_neither_found(self, mock_find, mock_backfill):
+        """No label and no comment means /issue-triage still needs to run."""
+        result = triage_daemon.ensure_triaged(4720, [{"name": "bug"}])
+        self.assertFalse(result)
+        mock_backfill.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

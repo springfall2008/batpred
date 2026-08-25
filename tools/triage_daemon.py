@@ -213,6 +213,45 @@ def fetch_bot_pr_issues():
     return json.loads(result.stdout)
 
 
+TRIAGE_DISCLOSURE_MARKER = "automated first-pass triage"
+
+
+def is_already_triaged(labels):
+    """Return True if BOT_TRIAGED is present in a gh --json labels list."""
+    return any(label["name"] == "BOT_TRIAGED" for label in labels)
+
+
+def find_triage_comment(issue_number):
+    """Return True if the issue already carries a bot triage comment (pre-BOT_TRIAGED-label issues)."""
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--json", "comments"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    comments = json.loads(result.stdout).get("comments", [])
+    return any(TRIAGE_DISCLOSURE_MARKER in comment.get("body", "") for comment in comments)
+
+
+def backfill_triaged_label(issue_number):
+    """Apply BOT_TRIAGED to an issue found to already have a bot triage comment."""
+    subprocess.run(["gh", "issue", "edit", str(issue_number), "--add-label", "BOT_TRIAGED"], check=True)
+
+
+def ensure_triaged(issue_number, labels):
+    """Return True if the issue is (now) marked BOT_TRIAGED; False if /issue-triage still needs to run.
+
+    Checks the label first, then falls back to scanning comments for issues triaged
+    before BOT_TRIAGED existed, backfilling the label onto them when found.
+    """
+    if is_already_triaged(labels):
+        return True
+    if find_triage_comment(issue_number):
+        backfill_triaged_label(issue_number)
+        return True
+    return False
+
+
 def sync_repo():
     subprocess.run(["git", "-C", str(CLONE_DIR), "fetch", "origin", "main"], check=True)
     subprocess.run(["git", "-C", str(CLONE_DIR), "reset", "--hard", "origin/main"], check=True)
