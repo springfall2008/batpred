@@ -34,7 +34,7 @@ def day_back(minute_ago, minutes_now):
     return ((minute_ago - minutes_now - 1) // MINUTES_DAY) + 1
 
 
-def build_wallclock_load(day_rates, minutes_now, num_days, extra=MINUTES_DAY):
+def build_wall_clock_load(day_rates, minutes_now, num_days, extra=MINUTES_DAY):
     """
     Build a backwards-indexed cumulative load MinuteArray from per-wall-clock-day constant rates.
 
@@ -88,6 +88,47 @@ def weighted_mean(now_utc, day_rates, days, neutral_weekday=False):
     return num / den if den else 0.0
 
 
+# Everything this module writes onto the shared PredBat fixture, including the two mocked methods. unit_test.py
+# runs most modules against a single instance, so any of these left behind makes later modules order-dependent.
+# Snapshot and restore is done through __dict__ rather than getattr/setattr: get_holiday_minutes and
+# get_history_wrapper are class methods with no instance attribute, and assigning the bound method back would
+# leave the instance permanently shadowing the class.
+MUTATED_ATTRS = [
+    "get_holiday_minutes",
+    "get_history_wrapper",
+    "now_utc",
+    "minutes_now",
+    "forecast_minutes",
+    "plan_interval_minutes",
+    "holiday_days_left",
+    "holiday_load_scaling",
+    "base_load",
+    "car_charging_hold",
+    "car_charging_energy",
+    "iboost_energy_subtract",
+    "iboost_energy_today",
+    "max_days_previous",
+    "load_minutes",
+    "load_minutes_age",
+]
+
+_MISSING = object()
+
+
+def snapshot_attrs(my_predbat):
+    """Capture the instance-dict entry for every attribute this module overwrites."""
+    return {name: my_predbat.__dict__.get(name, _MISSING) for name in MUTATED_ATTRS}
+
+
+def restore_attrs(my_predbat, saved):
+    """Put back what snapshot_attrs() captured, removing entries that were not instance attributes before."""
+    for name, value in saved.items():
+        if value is _MISSING:
+            my_predbat.__dict__.pop(name, None)
+        else:
+            my_predbat.__dict__[name] = value
+
+
 def setup_holiday(my_predbat, now_utc, minutes_now, day_rates, num_days, holiday_days_left):
     """Configure my_predbat for a deterministic holiday forecast computation at a non-zero minutes_now."""
     my_predbat.now_utc = now_utc
@@ -102,7 +143,7 @@ def setup_holiday(my_predbat, now_utc, minutes_now, day_rates, num_days, holiday
     my_predbat.iboost_energy_subtract = False
     my_predbat.iboost_energy_today = None
     my_predbat.max_days_previous = 31
-    my_predbat.load_minutes = build_wallclock_load(day_rates, minutes_now, num_days)
+    my_predbat.load_minutes = build_wall_clock_load(day_rates, minutes_now, num_days)
     my_predbat.load_minutes_age = num_days
 
 
@@ -119,6 +160,7 @@ def test_holiday_mode(my_predbat):
     original_get_holiday_minutes = my_predbat.get_holiday_minutes
     original_history = my_predbat.get_history_wrapper
     original_args = dict(my_predbat.args)
+    original_attrs = snapshot_attrs(my_predbat)
 
     # ---------------------------------------------------------------
     # Test 1: the oldest day in the window is holiday-matched for every slot (off-by-one)
@@ -324,11 +366,10 @@ def test_holiday_mode(my_predbat):
     # ---------------------------------------------------------------
     # Restore mocks/state
     # ---------------------------------------------------------------
-    my_predbat.get_holiday_minutes = original_get_holiday_minutes
-    my_predbat.get_history_wrapper = original_history
-    my_predbat.holiday_days_left = 0
     my_predbat.args.clear()
     my_predbat.args.update(original_args)
     my_predbat.fetch_config_options()
+    # After fetch_config_options, so the config-derived values it rewrites do not clobber the snapshot
+    restore_attrs(my_predbat, original_attrs)
 
     return failed
