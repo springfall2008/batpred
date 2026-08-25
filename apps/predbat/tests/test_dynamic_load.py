@@ -306,7 +306,7 @@ def _run_dynamic_load_high_load_baseline(my_predbat):
     my_predbat.car_energy_reported_load = True
     my_predbat.car_charging_hold = True
     my_predbat.car_charging_energy = {0: 0.5}  # 0.5kWh measured in the latest 5-minute period
-    my_predbat.car_charging_slots = [[{"start": my_predbat.minutes_now - PREDICT_STEP, "end": minutes_end_slot, "kwh": 3.5}], [], [], []]
+    my_predbat.car_charging_slots = [[], [], [], []]
 
     my_predbat.dynamic_load()
 
