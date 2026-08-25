@@ -840,10 +840,10 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         genuine capture attempt is never skipped just because the warning was
         recently logged.
         """
-        count = int(self.get_arg("debug_history_count", 15))
-        interval_hours = max(1, int(self.get_arg("debug_history_interval", 3)))
-        enabled = self.get_arg("debug_history_enable", True)
-        forced = self.get_arg("debug_history_force_capture", False)
+        count = int(self.get_arg("debug_history_count"))
+        interval_hours = max(1, int(self.get_arg("debug_history_interval")))
+        enabled = self.get_arg("debug_history_enable")
+        forced = self.get_arg("debug_history_force_capture")
         if not enabled and not forced:
             return
         if not forced:

@@ -1213,7 +1213,7 @@ CONFIG_ITEMS = [
         "step": 1,
         "unit": "snapshots",
         "icon": "mdi:history",
-        "default": 15,
+        "default": 5,
     },
     {
         "name": "debug_history_interval",

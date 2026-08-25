@@ -854,8 +854,8 @@ mode: single
 Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
 
 - **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
-- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
-- **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 5, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 5 snapshots at 3-hourly intervals covers 15 hours.
 - **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
 
 Retained snapshots can all be downloaded together as a single `.tgz` archive from a link on the web interface's dashboard **Debug** panel, or individually from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
