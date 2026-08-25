@@ -1920,6 +1920,17 @@ class Fetch:
                 if end_minutes <= start_minutes:
                     end_minutes += 24 * 60
 
+                # A window flagged utc is given in UTC rather than local wall-clock time, so shift it
+                # by the local offset. That keeps a UTC-fixed schedule - an Economy 7 smart meter, for
+                # instance - aligned with the meter through British Summer Time instead of running an
+                # hour early. The offset is taken at local midnight, which is the reference the
+                # returned minute keys are relative to.
+                if this_rate.get("utc", False):
+                    utc_offset = self.midnight_utc.utcoffset()
+                    offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
+                    start_minutes += offset_minutes
+                    end_minutes += offset_minutes
+
                 # Adjust for date if specified
                 if date:
                     delta_minutes = minutes_to_time(date, self.midnight)

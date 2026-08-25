@@ -2673,6 +2673,7 @@ APPS_SCHEMA = {
     "octopus_saving_session_min_octopoints_per_kwh": {"type": "float"},
     "octopus_saving_session_rate": {"type": "float"},
     "octopus_free_url": {"type": "string", "empty": False},
+    "octopus_night_times": {"type": "dict_list"},
     "metric_octopus_import": {"type": "sensor", "sensor_type": "float"},
     "metric_octopus_export": {"type": "sensor", "sensor_type": "float"},
     "octopus_api_key": {"type": "string", "empty": False},

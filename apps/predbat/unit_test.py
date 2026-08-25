@@ -171,6 +171,8 @@ from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previo
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
 from tests.test_octopus_sensor_due import test_octopus_sensor_due_wrapper
 from tests.test_octopus_day_night_rates import test_octopus_day_night_rates_wrapper
+from tests.test_octopus_tou_windows import test_octopus_tou_windows_wrapper
+from tests.test_basic_rates_utc import test_basic_rates_utc
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
@@ -428,6 +430,8 @@ def main():
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
         ("octopus_sensor_due", test_octopus_sensor_due_wrapper, "Octopus intelligent sensor 2-minute update scheduling tests", False),
         ("octopus_day_night_rates", test_octopus_day_night_rates_wrapper, "Octopus day/night rate window selection tests (IOG TOU, GO, Economy 7)", False),
+        ("octopus_tou_windows", test_octopus_tou_windows_wrapper, "Octopus TOU window detection and UTC-anchored fallback window tests", False),
+        ("basic_rates_utc", test_basic_rates_utc, "basic_rates utc option tests", False),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
