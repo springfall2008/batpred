@@ -888,7 +888,20 @@ See [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk) fo
 
 **EXPERIMENTAL:** Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and from the Home Assistant AlphaESS integration, rather than confirmed against real inverters. Every request and response is traced to the log by default, so a tester's log is usable evidence for an issue report - please open one if anything here doesn't match what you see.
 
-Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required.
+Predbat includes support for AlphaESS hybrid inverters via the AlphaESS Open API, providing direct cloud-based monitoring and timed charge control - no local Modbus/RS485 access is required. It **cannot** control export, see below.
+
+#### AlphaESS cannot be used to control export
+
+**The AlphaESS Open API has no way to export your battery to the grid, so Predbat cannot make it do so.** This is a limitation of the API rather than of Predbat - see [issue #4701](https://github.com/springfall2008/batpred/issues/4701) for the field report and the evidence behind this section.
+
+The only battery controls the API offers are a grid-charge window with a target SoC (`updateChargeConfigInfo`) and a discharge window with an SoC floor (`updateDisChargeConfigInfo`), or both together on entitled systems (`setTimeChargeBySn`). There is no forced-export, working-mode or dispatch endpoint of any kind. In practice that means:
+
+- **Force Export does nothing.** AlphaESS's own documentation describes the discharge window as a *permission* window rather than a forced export: during the window the system runs in self-consumption mode, and outside it the battery is only allowed to charge. A programmed export window therefore has the battery cover house load and export nothing beyond genuine solar surplus, which is exactly what testers see.
+- **Freeze Export does nothing either.** Predbat implements Freeze Export by disabling charging while leaving the inverter in Demand mode, so that solar surplus reaches the grid instead of the battery. The API has no way to stop the battery charging from solar - `gridCharge` gates only *timed grid charging*, and with it off the system reverts to self-consumption, where surplus solar charges the battery as usual. The settings Predbat writes for Freeze Export come out identical to the ones it writes for Demand mode.
+
+**So set `select.predbat_mode` to `Control charge` on an AlphaESS system.** Predbat then plans and writes no export windows at all, and the plan contains only what the inverter can actually deliver: charging from the grid at cheap rates, and covering house load the rest of the time. Left in `Control charge & discharge`, Predbat builds a plan around exports that never happen, and it also programs the discharge window up to `plan_interval_minutes` ahead of each planned export slot - which, on the permission-window semantics above, bars the battery from covering house load until that window opens, so a load spike is met from the grid instead. That side effect has been reported separately, on leaving an Axle VPP event, in [issue #4723](https://github.com/springfall2008/batpred/issues/4723).
+
+Forced export *is* achievable on AlphaESS hardware over **local Modbus**, whose dispatch registers offer forced discharge, forced export and a solar-export-priority mode. None of that is reachable from the cloud API. If controlled export matters to you, a local Modbus integration feeding Predbat's standard inverter entities is the route to it, and the AlphaESS Cloud component is still useful for monitoring alongside.
 
 #### AlphaESS Cloud Configuration
 
@@ -925,7 +938,7 @@ AlphaESS's charge and discharge endpoints are whole-object replacements, and the
 
 Charge and discharge windows are snapped to the API's 15-minute grid (`:00`, `:15`, `:30`, `:45`) before being written. This is because off-grid values are accepted by the API without an error but then silently ignored by the device, which would otherwise look like a working configuration that quietly does nothing.
 
-Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals freeze charge or freeze export by writing a window with a zero rate, and both the legacy and periodic paths turn that into a disabled/held window rather than an open one.
+Charge/discharge rate handling differs by system entitlement. Systems entitled to AlphaESS's periodic schedule API get a genuine power setpoint alongside up to six windows; systems that are not fall back to the older two-window endpoints, which have no rate field at all, so a **non-zero** rate you configure is simply not honoured there - only the window times and the enable flag reach the inverter. A **zero** rate is meaningful on both paths, however, because there is no separate pause endpoint - Predbat signals a hold by writing a window with a zero rate, and both the legacy and periodic paths turn that into a held window (discharge time control on, with no permitted period) rather than an open one. That holds the battery out of *discharging*; nothing in the API can stop it charging from solar, which is why Freeze Export is not deliverable - see [AlphaESS cannot be used to control export](#alphaess-cannot-be-used-to-control-export).
 
 `battery_rate_max` is not reported by the API at all, so Predbat estimates it from the inverter's nominal AC power (`poinv`) rather than leave it unset - an unset value would silently fall back to a generic 2600W internal default instead. On a well-matched AlphaESS package `poinv` is close to the real battery rate, but where it isn't, correct it either with `battery_rate_max_scaling` (Predbat will suggest a value in the log once it has measured your actual achieved rate) or by setting `alphaess_battery_rate_max` directly to your pack's real limit in Watts.
 
@@ -1296,6 +1309,8 @@ Controls the way Predbat models your inverter, this does not change the way it i
 Freeze Export disables charging but leaves the inverter in Demand mode, so by default Predbat models the battery as still discharging to cover house load whenever load exceeds solar - only charging is prevented.
 
 Some inverters (observed on AlphaESS) do not behave that way: instead of covering house load they only leak a small fixed battery discharge during Freeze Export. If your inverter behaves this way, set this to the observed battery-side discharge rate in Watts so Predbat's prediction model matches reality.
+
+This does not apply to the built-in [AlphaESS Cloud](#alphaess-cloud-api) component, which cannot deliver Freeze Export at all - the observation above is necessarily from an AlphaESS controlled by some other means, since the Open API cannot disable charging.
 
 ```yaml
   inverter_freeze_export_discharge_rate: 269

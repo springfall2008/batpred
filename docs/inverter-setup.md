@@ -200,7 +200,9 @@ Launch Predbat with hass.py (from the Predbat-addon repository) either via a Doc
 
 **Experimental**
 
-Predbat has a built-in AlphaESS Cloud integration for AlphaESS hybrid inverters via the AlphaESS Open API, providing monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 Home Assistant integration is required.
+Predbat has a built-in AlphaESS Cloud integration for AlphaESS hybrid inverters via the AlphaESS Open API, providing monitoring and timed charge control - no local Modbus/RS485 Home Assistant integration is required.
+
+**It cannot control export.** The AlphaESS Open API has no forced-export, working-mode or dispatch endpoint, and its discharge window turns out to be a *permission* window rather than a forced export, so neither Force Export nor Freeze Export reaches the grid - see [AlphaESS cannot be used to control export](apps-yaml.md#alphaess-cannot-be-used-to-control-export) for the detail and for why you should set `select.predbat_mode` to `Control charge` on these systems. Forced export is available on the hardware over local Modbus, just not over the cloud API.
 
 Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters - every request and response is traced to the log by default so you can capture evidence for an issue report. A standalone diagnostics CLI (`apps/predbat/alphaess.py`) is included specifically so you can verify it against your own system, using the [diagnostics CLI](#verifying-with-the-alphaess-diagnostics-cli) below, before trusting Predbat with control.
 
@@ -250,7 +252,7 @@ python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind -
 
 **`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
 
-See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
+See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the export-control limitation above, and the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
 
 ## Canadian Solar EP Cube
 
