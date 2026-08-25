@@ -171,12 +171,56 @@ as reviewer and GitHub does not allow self-review.
 
 ## 7. Testing
 
-No unit-test coverage is added for `triage_daemon.py` or the new skill — consistent with
-today, where `triage_daemon.py` and `issue-triage` have none either (they're operational
-tooling, not `apps/predbat` app code covered by `TEST_REGISTRY`). Verification is a
-manual dry run against a real triaged issue: add `BOT_PR`, watch the daemon log, confirm
-the branch/commit/PR look right end-to-end, then confirm the `BOT_PR_FAILED` path separately
-by pointing it at a ticket engineered to fail the quality gate.
+### 7.1 `triage_daemon.py` unit tests
+
+New file `tools/test_triage_daemon.py`, stdlib `unittest` + `unittest.mock` (no new
+dependency — `triage_daemon.py` itself only imports stdlib). It does **not** go through
+`coverage/run_all`/`TEST_REGISTRY`: every existing entry there imports `PredBat`/
+`TestHAInterface` from `apps/predbat`, and `triage_daemon.py` has no dependency on that
+app — folding it in would be a layering violation. Run directly with
+`python3 tools/test_triage_daemon.py`.
+
+Covers, with `subprocess.run` mocked (no real `gh`/`git`/`claude` calls):
+
+- `load_state()`/`save_state()` round-trip, including the corrupt-JSON fallback.
+- `fetch_new_issues()` and `fetch_bot_pr_issues()` parsing of `gh` JSON output.
+- The `BOT_PR` precondition check (Section 4 step 3): label present → proceeds directly;
+  label absent + comment found → backfills `BOT_TRIAGED` and proceeds; neither → triggers
+  `/issue-triage` first.
+- The duplicate-work guard's search query construction (Section 4 step 2) — asserts it
+  searches the quoted `"Fixes #<N>"` phrase, not a bare number.
+- The success/failure label-swap calls (`BOT_PR` → `BOT_PR_OPENED` / `BOT_PR_FAILED`).
+- A regression test asserting the exact `ALLOWED_TOOLS`/`DISALLOWED_TOOLS` delta between
+  the triage invocation and the new `/issue-pr` invocation (Section 6) — specifically that
+  `gh pr merge`, `gh pr close`, `gh repo*`, `gh release*`, `gh workflow*`, `gh auth*`,
+  `gh secret*`, `gh api*`, and all `mcp__*` stay denied for the PR flow too. This is the
+  one test worth never letting rot silently, since it's the thing standing between "opens
+  a draft PR" and "can merge/close/administer the repo."
+
+### 7.2 Wiring into pre-commit
+
+A new local hook in `.pre-commit-config.yaml`, following the existing `cspell-dictionary-sorter`
+pattern, scoped to only run when the daemon or its tests change:
+
+```yaml
+- id: triage-daemon-tests
+  name: triage daemon unit tests
+  language: python
+  entry: python tools/test_triage_daemon.py
+  files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+  pass_filenames: false
+```
+
+This makes it run both via local `./run_pre_commit` and the existing `pre-commit/action`
+step in `code-quality.yml` — no new CI job needed.
+
+### 7.3 End-to-end verification
+
+Beyond the unit tests, a manual dry run against a real triaged issue: add `BOT_PR`, watch
+the daemon log, confirm the branch/commit/PR look right end-to-end, then confirm the
+`BOT_PR_FAILED` path separately by pointing it at a ticket engineered to fail the quality
+gate. Unit tests cover the daemon's decision logic; they can't substitute for seeing a
+real `gh pr create --draft` succeed.
 
 ## 8. Error handling summary
 
