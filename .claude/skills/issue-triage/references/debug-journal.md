@@ -55,6 +55,7 @@ Grep for the named symbol rather than trusting a line number.
 | History fetch / memory (`ha.py`) | History is fetched in `HISTORY_CHUNK_DAYS`-sized chunks with boundary dedup — records landing exactly on a chunk start inside a data gap corrupted smoothing before that was fixed. The largest memory peak in a run is ML load-predictor training (`load_predictor.py`), not the plan. | `history_chunking` |
 | Charge/discharge curve (`inverter.py`) | The curve is evaluated per target minute; tapering near ~93% SOC is expected behaviour, not a fault. | `find_charge_curve`, `battery_curve_keys` |
 | Standalone / Docker (non-HA) | GH#4601: a callback returning `None` instead of `True` broke the Octopus saving-session fallback in standalone mode. Anything that works under HA but not standalone is worth checking along the `ha.py` websocket and `userinterface.py` callback paths. | `trigger_callback_success_signal` |
+| Holiday mode (`fetch.py`) | GH#4732: under `days_previous_auto` (the default) holiday mode is handled entirely inside `compute_load_forecast_history()`, not by the `days_previous = [1]` branch, which is only reachable with `days_previous_auto: False`. Days whose holiday state does not match the *forecast day's* are now excluded outright rather than halved, and `get_holiday_minutes()` must span `num_days + 1` to cover the `minutes_now` overhang. A slot with no matching history falls back to `holiday_load_scaling` (default 0.7), which is what makes holiday mode act on day one - a normalised weighted mean cannot otherwise express "all of my data is wrong". | `holiday_mode` |
 | Predheat (`predheat.py`) | GH#4670: with `predheat_enable` set, Predheat still did not activate after startup because of lazy flag initialisation. There is no registered Predheat test module, so there is nothing to run here — investigate by reading. | none |
 
 ## Symptom → first place to look
@@ -72,6 +73,17 @@ Grep for the named symbol rather than trusting a line number.
 ## Traps when investigating
 
 - **Stale kernel binary.** The `prediction_kernel_lib_*.so` binaries are committed and CI has a job for them. The warning above means the checkout falls back to the Python engine, which is fine for triage. Never rebuild or commit binaries while triaging.
+- **`minutes_now = 0` hides time-of-day bugs.** The load-forecast tests set `minutes_now = 0` in their shared
+  setup, which made GH#4732's holiday off-by-one invisible for years: the faulty `tod <= minutes_now` was then
+  true only for the midnight slot. Anything indexing history as `(minutes_now - tod) + d * 1440` needs a test at
+  a non-zero `minutes_now`, and wall-clock-aligned fixture days (`test_holiday_mode.py`) rather than the
+  minutes-ago bucketing in `test_load_forecast_history.py`, which only lines up when `minutes_now` is 0.
+- **Golden plans move when load scaling changes.** Any change to `step_data_history`'s `scale_today` handling
+  shifts both `coverage/cases/*.expected.json` (regenerate by copying the `*.actual.json` the run writes) and
+  `coverage/cases/random_results.json` (regenerate with `./run_random`, then copy `random_results.json` over it).
+  `debug_cases` stops at the first failing case, so a second case can start failing only after you fix the first.
+  Before regenerating, confirm the shift is the intended one by temporarily restoring the old behaviour and
+  checking the golden files pass again.
 - **Test ordering.** Some tests share a `PredBat` instance, which is exactly why `run_debug_cases` builds a fresh one per case. A test that fails in a full run but passes alone is usually pollution, not the reporter's bug — another reason to run only the targeted test.
 - **Version drift.** Compare `git describe --tags` against the version in the first few lines of their log. A fair number of reports are already fixed on main, and that is a useful triage answer on its own.
 - **Log noise.** `predbat.log` carries routine `Warn:` lines (config clamps, kernel status, unsupported settings). Don't quote a warning as the root cause unless it lines up with the time the reporter describes.

@@ -1638,6 +1638,17 @@ CONFIG_ITEMS = [
         "restore": False,
     },
     {
+        "name": "holiday_load_scaling",
+        "friendly_name": "Holiday load scaling",
+        "type": "input_number",
+        "min": 0.1,
+        "max": 1.0,
+        "step": 0.05,
+        "unit": "*",
+        "icon": "mdi:multiplication",
+        "default": 0.7,
+    },
+    {
         "name": "forecast_plan_hours",
         "friendly_name": "Plan forecast hours",
         "type": "input_number",
