@@ -25,7 +25,7 @@ Same as `/issue-triage` step 2: if the new information links a log file, a `pred
 - Sync the clone first, so you are reading the code you think you are:
 
   ```bash
-  git fetch origin main && git reset --hard origin/main && git clean -fd
+  git fetch origin main && git checkout main && git reset --hard origin/main && git clean -fd
   git describe --tags
   ```
 
