@@ -87,10 +87,14 @@ For each issue returned:
    If neither, run `/issue-triage <number>` first (existing skill, existing permissions,
    unchanged).
 4. Run `/issue-pr <number>` under the new permission set (Section 6).
-5. On success: `gh issue edit <number> --remove-label BOT_PR --add-label BOT_PR_OPENED`.
-6. On failure: `gh issue edit <number> --remove-label BOT_PR --add-label BOT_PR_FAILED`.
-   The `issue-pr` skill itself posts the explanatory comment before returning failure
-   (Section 5, step 7) — the daemon only swaps the label.
+5. Check `has_existing_pr(<number>)` again afterwards — this is how success is judged,
+   *not* the invocation's exit code: a Claude Code session that completes normally still
+   exits 0 whether it opened a PR or decided the quality gate failed and posted a comment
+   instead, so the exit code alone can't distinguish the two outcomes.
+6. If a PR now exists: `gh issue edit <number> --remove-label BOT_PR --add-label BOT_PR_OPENED`.
+   If not: `gh issue edit <number> --remove-label BOT_PR --add-label BOT_PR_FAILED` — the
+   `issue-pr` skill itself posts the explanatory comment before stopping (Section 5, step 7);
+   the daemon only swaps the label.
 
 State tracking is entirely label-based; no new fields in `state.json`.
 
@@ -124,8 +128,9 @@ same convention as the triage skill.
    daemon.
 7. **On failure (from step 4, or any earlier step that can't proceed)** — post one comment
    on the issue via `gh issue comment` explaining what was attempted and what failed
-   (same "say plainly what you could not do" guardrail as the triage skill). Report
-   failure back to the daemon; no branch is pushed, no PR is opened.
+   (same "say plainly what you could not do" guardrail as the triage skill), then stop.
+   No branch is pushed, no PR is opened — the daemon detects this outcome itself by
+   checking for a PR afterwards, so there's nothing else this step needs to signal.
 
 ## 6. Permission model
 
@@ -189,7 +194,9 @@ Covers, with `subprocess.run` mocked (no real `gh`/`git`/`claude` calls):
   `/issue-triage` first.
 - The duplicate-work guard's search query construction (Section 4 step 2) — asserts it
   searches the quoted `"Fixes #<N>"` phrase, not a bare number.
-- The success/failure label-swap calls (`BOT_PR` → `BOT_PR_OPENED` / `BOT_PR_FAILED`).
+- The success/failure label-swap calls (`BOT_PR` → `BOT_PR_OPENED` / `BOT_PR_FAILED`),
+  driven by the post-hoc `has_existing_pr()` check described in Section 4 step 5, not by
+  the `/issue-pr` invocation's exit code.
 - A regression test asserting the exact `ALLOWED_TOOLS`/`DISALLOWED_TOOLS` delta between
   the triage invocation and the new `/issue-pr` invocation (Section 6) — specifically that
   `gh pr merge`, `gh pr close`, `gh repo*`, `gh release*`, `gh workflow*`, `gh auth*`,
@@ -230,4 +237,4 @@ real `gh pr create --draft` succeed.
 | `BOT_PR` added, old issue triaged before labels existed | Fallback comment-scan finds it, backfills `BOT_TRIAGED`, proceeds. |
 | Daemon crashes between push and label-swap | Next poll's `gh pr list` guard finds the existing PR and skips reprocessing. |
 | Implementation fails to pass pre-commit/tests | No push, no PR; one comment posted; label swapped to `BOT_PR_FAILED`. |
-| `issue-pr` invocation errors outright (crash, budget/turn cap) | Same as above — daemon treats non-zero exit as failure and swaps to `BOT_PR_FAILED`. |
+| `issue-pr` invocation errors outright (crash, budget/turn cap) | Same as above — no PR exists afterwards either way, so the daemon's post-hoc `has_existing_pr()` check swaps to `BOT_PR_FAILED` regardless of the invocation's exit code. |
