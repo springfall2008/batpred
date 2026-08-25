@@ -51,6 +51,17 @@ GIVTCP_TIME_OPTIONS = ["{:02d}:{:02d}:00".format(m // 60, m % 60) for m in range
 # publishing the native spelling is what keeps it on the GivTCP side of that branch.
 GIVTCP_PAUSE_MODES = ["Disabled", "PauseCharge", "PauseDischarge", "PauseBoth"]
 
+# GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
+# (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
+# reporter inverters, still repeating the write every cycle post-fix until added here.
+# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
+# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
+#
+# These inverters accept the write and report success, but it never persists, so the caller sees a
+# permanent mismatch and rewrites every cycle. Not publishing the entity at all is what stops that:
+# Inverter.adjust_force_export already leaves a target it cannot read alone.
+DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
+
 # Control.Mode values. Predbat only ever writes Eco or Timed Export, but the inverter reports the
 # others, and an option list that omitted them could not represent the mode the inverter is in.
 GIVTCP_INVERTER_MODES = ["Eco", "Eco (Paused)", "Timed Export", "Timed Charge", "Timed Demand"]
@@ -148,6 +159,9 @@ class GivTCPComponent(ComponentBase):
             state = InverterRestState(id=n, rest_api=url, battery_rate_max_charge=1.0, battery_rate_max_discharge=1.0)
             self.rest.append(GivTCPRest(self.base, state))
         self.automatic_config_done = False
+        # publish_data() runs every poll; the unsupported-model notice is per inverter and only
+        # worth saying once rather than every 60 seconds for the life of the process
+        self.discharge_target_warned = {}
 
     async def _run_blocking(self, func, *args):
         """Run one of GivTCPRest's blocking (requests + time.sleep) calls off the event loop."""
@@ -196,9 +210,18 @@ class GivTCPComponent(ComponentBase):
             if target_soc is not None:
                 self.dashboard_item(self._entity_id("number", n, "charge_limit"), state=target_soc, attributes=GIVTCP_CONTROLS["charge_limit"][2], app="givtcp")
             self.dashboard_item(self._entity_id("number", n, "reserve"), state=rest.inverter.rest_data.get("Control", {}).get("Battery_Power_Reserve", 0), attributes=GIVTCP_CONTROLS["reserve"][2], app="givtcp")
-            discharge_target = rest.read_discharge_target()
-            if discharge_target is not None:
-                self.dashboard_item(self._entity_id("number", n, "discharge_target_soc"), state=discharge_target, attributes=GIVTCP_CONTROLS["discharge_target_soc"][2], app="givtcp")
+            # An unsupported model gets no entity at all - see DISCHARGE_TARGET_UNSUPPORTED_MODELS.
+            # Publishing one would restart the every-cycle rewrite loop of #4517, because the write
+            # reports success and then silently fails to persist.
+            inverter_model = rest.inverter.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
+            if inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+                if not self.discharge_target_warned.get(n):
+                    self.log("Info: GivTCP: inverter {} is {}, which has no working discharge target register - export target will not be written".format(n, inverter_model))
+                    self.discharge_target_warned[n] = True
+            else:
+                discharge_target = rest.read_discharge_target()
+                if discharge_target is not None:
+                    self.dashboard_item(self._entity_id("number", n, "discharge_target_soc"), state=discharge_target, attributes=GIVTCP_CONTROLS["discharge_target_soc"][2], app="givtcp")
 
             self.dashboard_item(self._entity_id("switch", n, "scheduled_charge_enable"), state="on" if rest.charge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_charge_enable"][2], app="givtcp")
             self.dashboard_item(self._entity_id("switch", n, "scheduled_discharge_enable"), state="on" if rest.discharge_enable_time else "off", attributes=GIVTCP_CONTROLS["scheduled_discharge_enable"][2], app="givtcp")

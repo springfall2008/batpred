@@ -30,14 +30,6 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 TIME_FORMAT_HMS = "%H:%M:%S"
 
 
-# GivTCP raw.invertor.model values confirmed not to support the Discharge_Target_SOC_1 register
-# (#4517). "Ac" (AC Coupled) and "Hybrid_gen1" are confirmed live - the latter on two separate
-# reporter inverters, still repeating the write every cycle post-fix until added here.
-# "Hybrid_gen2" is inferred from the same GivEnergy firmware-archive generational split
-# (github.com/DJBenson/giv-firmware), not independently confirmed on real Gen2 hardware yet.
-DISCHARGE_TARGET_UNSUPPORTED_MODELS = ("Ac", "Hybrid_gen1", "Hybrid_gen2")
-
-
 class Inverter:
     """Unified inverter control abstraction for multiple brands.
 
@@ -2576,23 +2568,10 @@ class Inverter:
         # reads back as None, and writing to it every cycle just produces errors.
         if force_export:
             target_soc = int(self.reserve_percent)
-            if self.rest_data and self.rest_v3:
-                # Some GivTCP inverter models don't have a working Discharge_Target_SOC_1 register -
-                # GivTCP still reports a write as successful, but it never persists between cycles, so
-                # the caller sees a permanent mismatch and rewrites indefinitely (#4517). See
-                # DISCHARGE_TARGET_UNSUPPORTED_MODELS above for what's confirmed vs inferred.
-                inverter_model = self.rest_data.get("raw", {}).get("invertor", {}).get("model", "")
-                if inverter_model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
-                    self.log("Inverter {} is {}, discharge target register not supported, export target not written".format(self.id, inverter_model))
-                else:
-                    current = self.givtcp.read_discharge_target()
-                    if current is None:
-                        self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))
-                    elif current != target_soc:
-                        self.givtcp.set_discharge_target(target_soc)
-                    else:
-                        self.log("Inverter {} Current discharge target is already set to {}".format(self.id, current))
-            elif "discharge_target_soc" in self.base.args:
+            # A model with no working Discharge_Target_SOC_1 register (#4517) reaches here with no
+            # entity published for it, so the "cannot read it, leave it alone" branch below is what
+            # stops the every-cycle rewrite - see DISCHARGE_TARGET_UNSUPPORTED_MODELS in givtcp.py.
+            if "discharge_target_soc" in self.base.args:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
                     current = float(current)

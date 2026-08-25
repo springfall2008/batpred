@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 from tests.test_infra import run_async
 from mock_base import MockBase
-from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS
+from givtcp import GivTCPComponent, GIVTCP_POLL_SECONDS, DISCHARGE_TARGET_UNSUPPORTED_MODELS
 
 
 def _rest_data_blob(
@@ -349,6 +349,41 @@ def test_automatic_config_pause_keys_need_v3_everywhere(my_predbat=None):
     return 0
 
 
+def test_discharge_target_not_published_for_unsupported_models(my_predbat=None):
+    """
+    Regression test for issue #4517, moved here with the model check itself.
+
+    Some GivTCP inverter models have no working Discharge_Target_SOC_1 register - GivTCP reports a
+    write as successful, but it never persists between cycles, so the caller sees a permanent
+    mismatch and rewrites indefinitely. "Ac" (AC Coupled) was confirmed first; "Hybrid_gen1" was
+    added after a reporter confirmed live, post-fix, that two of his Gen1 inverters still repeated
+    the write every cycle while a third, genuinely AC Coupled, correctly stopped.
+
+    Not publishing the entity is now what stops it: Inverter.adjust_force_export leaves a target it
+    cannot read alone, so an absent entity means no write is ever attempted.
+    """
+    entity_id = "number.predbat_givtcp_0_discharge_target_soc"
+
+    for model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
+        base, component = _make_component()
+        component.rest[0].inverter.rest_data = _rest_data_blob()
+        component.rest[0].inverter.rest_data["raw"] = {"invertor": {"model": model, "discharge_target_soc_1": "4"}}
+        run_async(component.publish_data())
+        assert entity_id not in base.entities, f"model={model!r} must not publish a discharge target entity"
+
+    # A model not on the list (including a later Hybrid generation, or none reported at all) must
+    # still get the entity, so the write goes ahead exactly as before
+    for model in ["Hybrid", "Hybrid_gen3", ""]:
+        base, component = _make_component()
+        component.rest[0].inverter.rest_data = _rest_data_blob()
+        component.rest[0].inverter.rest_data["raw"] = {"invertor": {"model": model, "discharge_target_soc_1": "4"}}
+        run_async(component.publish_data())
+        assert entity_id in base.entities, f"model={model!r} should still publish a discharge target entity"
+
+    print("PASS: discharge target entity is withheld only for the unsupported models")
+    return 0
+
+
 def test_arbitrary_minute_time_is_a_valid_option(my_predbat=None):
     """
     The published select options must cover every minute, not a coarser step.
@@ -529,6 +564,7 @@ def test_givtcp_component(my_predbat=None):
         ("select_plain", test_select_event_plain_selects_pass_the_value_through, "plain select writes pass through"),
         ("select_pause_start", test_select_event_pause_start_time_preserves_end, "select_event pause_start_time"),
         ("auto_config_pause", test_automatic_config_pause_keys_need_v3_everywhere, "pause keys need v3 everywhere"),
+        ("discharge_target_models", test_discharge_target_not_published_for_unsupported_models, "discharge target withheld for unsupported models (#4517)"),
         ("time_options", test_arbitrary_minute_time_is_a_valid_option, "every minute is a valid time option"),
         ("unknown_control", test_unknown_entity_write_logged_not_crashed, "unknown control entity write"),
         ("unknown_inverter", test_unknown_inverter_index_write_logged_not_crashed, "out-of-range inverter index write"),

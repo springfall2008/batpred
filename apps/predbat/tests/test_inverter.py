@@ -17,7 +17,7 @@ from utils import calc_percent_limit
 from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from const import MINUTE_WATT
-from inverter import Inverter, DISCHARGE_TARGET_UNSUPPORTED_MODELS
+from inverter import Inverter
 from config import INVERTER_DEF
 
 
@@ -314,14 +314,12 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     dummy1 = copy.deepcopy(inv.rest_data)
 
     dummy1["raw"]["invertor"]["discharge_target_soc_1"] = inv.reserve_precent if new_force_export else prev_discharge_target
-    if new_discharge_target != prev_discharge_target:
-        dummy_rest.queue_rest_data(dummy1)
 
-    # Discharge start/end time and the inverter mode are now written via entities
-    # (write_and_poll_option), not REST - only the target SoC below is still written via the direct
-    # REST client. Reset the mode entity first so this phase asserts its own write rather than
-    # inheriting the value the non-REST phase above already left on it.
+    # Discharge start/end time, the inverter mode and the discharge target are all written via
+    # entities now, not REST, so this phase issues no REST commands at all. Reset the two entities
+    # first so it asserts its own writes rather than inheriting what the non-REST phase left.
     ha.set_state("select.inverter_mode", prev_mode)
+    ha.set_state("number.discharge_target_soc", prev_discharge_target)
 
     dummy1["Timeslots"]["Discharge_start_time_slot_1"] = new_start
     dummy1["Timeslots"]["Discharge_end_time_slot_1"] = new_end
@@ -342,17 +340,16 @@ def test_adjust_force_export(test_name, ha, inv, dummy_rest, prev_start, prev_en
     inv.adjust_force_export(new_force_export, new_start_timestamp, new_end_timestamp)
 
     rest_command = dummy_rest.get_commands()
-    expect_data = []
-    if new_discharge_target != prev_discharge_target:
-        expect_data.append(["dummy/setDischargeTarget", {"dischargeToPercent": int(new_discharge_target), "slot": 1}])
-
-    if json.dumps(expect_data) != json.dumps(rest_command):
-        print("ERROR: Rest command should be {} got {}".format(expect_data, rest_command))
+    if json.dumps([]) != json.dumps(rest_command):
+        print("ERROR: Rest command should be [] got {}".format(rest_command))
         failed = True
 
-    # The mode write now lands on the entity even for a REST inverter
+    # The mode and discharge target writes now land on entities even for a REST inverter
     if ha.get_state("select.inverter_mode") != new_mode:
         print("ERROR: REST inverter mode should be written via the entity as {} got {}".format(new_mode, ha.get_state("select.inverter_mode")))
+        failed = True
+    if ha.get_state("number.discharge_target_soc") != new_discharge_target:
+        print("ERROR: REST discharge target should be written via the entity as {} got {}".format(new_discharge_target, ha.get_state("number.discharge_target_soc")))
         failed = True
 
     return failed
@@ -1694,10 +1691,12 @@ def test_discharge_target_tracks_reserve(test_name, ha, inv, dummy_rest):
             print("ERROR: {}: export target above reserve should be lowered to 20, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
             failed = True
 
-        # Case 3: same correction on the REST v3 path
+        # Case 3: the same correction for an inverter that has REST configured. The target is
+        # written through the entity now (published by GivTCPComponent) rather than the direct REST
+        # client, so having rest_api set must no longer divert this to a REST command
+        setup_entity_case(current_target=4, reserve_percent=20)
         inv.rest_api = "dummy"
         inv.rest_v3 = True
-        inv.reserve_percent = 20
         inv.rest_data = {
             "Control": {"Enable_Discharge_Schedule": "on", "Mode": "Timed Export"},
             "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
@@ -1705,13 +1704,13 @@ def test_discharge_target_tracks_reserve(test_name, ha, inv, dummy_rest):
         }
         dummy_rest.clear_queue()
         dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-        polled = copy.deepcopy(inv.rest_data)
-        polled["raw"]["invertor"]["discharge_target_soc_1"] = 20
-        dummy_rest.queue_rest_data(polled)
 
         inv.adjust_force_export(True, ts, te)
-        if inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"] != 20:
-            print("ERROR: {}: REST export target below reserve should be raised to 20, got {}".format(test_name, inv.rest_data["raw"]["invertor"]["discharge_target_soc_1"]))
+        if float(ha.get_state("number.discharge_target_soc")) != 20:
+            print("ERROR: {}: REST export target below reserve should be raised to 20 via the entity, got {}".format(test_name, ha.get_state("number.discharge_target_soc")))
+            failed = True
+        if dummy_rest.get_commands():
+            print("ERROR: {}: REST inverter should issue no discharge-target REST command, got {}".format(test_name, dummy_rest.get_commands()))
             failed = True
     finally:
         inv.reserve_percent = saved_reserve_percent
@@ -1958,70 +1957,6 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
         if len(commands) != 1:
             print("ERROR: {}: Control signalling success on the first readback should need only 1 POST, got {}".format(test_name, len(commands)))
             failed = True
-    finally:
-        inv.rest_data = saved_rest_data
-        inv.rest_api = saved_rest_api
-        inv.rest_v3 = saved_rest_v3
-
-    return failed
-
-
-def test_discharge_target_skipped_for_ac_coupled(test_name, ha, inv, dummy_rest):
-    """
-    Regression test for issue #4517: some GivTCP inverter models (see
-    DISCHARGE_TARGET_UNSUPPORTED_MODELS) don't have a working Discharge_Target_SOC_1 register -
-    GivTCP reports a write as successful, but it never persists between cycles, so the caller sees a
-    permanent mismatch and rewrites indefinitely. "Ac" (AC Coupled) was confirmed first; "Hybrid_gen1"
-    was added after a reporter confirmed live, post-fix, that two of his Gen1 inverters still repeated
-    the write every cycle while a third, genuinely AC Coupled, correctly stopped. Skip outright rather
-    than attempting a write already known to be doomed.
-    """
-    failed = False
-    print("Test: {}".format(test_name))
-
-    saved_rest_data = inv.rest_data
-    saved_rest_api = inv.rest_api
-    saved_rest_v3 = inv.rest_v3
-
-    try:
-        inv.rest_api = "dummy"
-        inv.rest_v3 = True
-        inv.reserve_percent = 20
-
-        start_time = "03:33:00"
-        end_time = "04:44:00"
-        ts = datetime.strptime(start_time, "%H:%M:%S")
-        te = datetime.strptime(end_time, "%H:%M:%S")
-
-        inv.rest_data = {
-            "Control": {"Mode": "Timed Export", "Enable_Discharge_Schedule": "on"},
-            "Timeslots": {"Discharge_start_time_slot_1": start_time, "Discharge_end_time_slot_1": end_time},
-            "raw": {"invertor": {"discharge_target_soc_1": "4", "model": "Ac"}},
-        }
-
-        # Every model confirmed (or inferred - see the constant's own comment) unsupported must
-        # attempt no discharge-target REST commands at all.
-        for model in DISCHARGE_TARGET_UNSUPPORTED_MODELS:
-            inv.rest_data["raw"]["invertor"]["model"] = model
-            dummy_rest.clear_queue()
-            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-            inv.adjust_force_export(True, ts, te)
-            commands = dummy_rest.get_commands()
-            if commands:
-                print("ERROR: {}: model={!r} should attempt no discharge-target REST commands, got {}".format(test_name, model, commands))
-                failed = True
-
-        # A model not on the unsupported list (including a later Hybrid generation, or no model
-        # reported at all) must still attempt the write as before.
-        for model in ["Hybrid", "Hybrid_gen3", ""]:
-            inv.rest_data["raw"]["invertor"]["model"] = model
-            dummy_rest.clear_queue()
-            dummy_rest.rest_data = copy.deepcopy(inv.rest_data)
-            inv.adjust_force_export(True, ts, te)
-            commands = dummy_rest.get_commands()
-            if not any(c[0] == "dummy/setDischargeTarget" for c in commands):
-                print("ERROR: {}: model={!r} should still attempt setDischargeTarget, got {}".format(test_name, model, commands))
-                failed = True
     finally:
         inv.rest_data = saved_rest_data
         inv.rest_api = saved_rest_api
@@ -3276,7 +3211,6 @@ charge_start_service:
 
     # Regression test for issue #4517 (follow-up): AC Coupled inverters don't have a working
     # discharge target register, skip the write entirely rather than retrying it forever
-    failed |= test_discharge_target_skipped_for_ac_coupled("discharge_target_skipped_for_ac_coupled", ha, inv, dummy_rest)
     if failed:
         return failed
 
