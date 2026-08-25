@@ -647,6 +647,8 @@ The store model is controlled by two additional entities:
 
 - **input_number.predbat_iboost_tank_capacity** Sets the usable stored energy of the tank in kWh - default 10.
 - **input_number.predbat_iboost_tank_reserve** Sets the minimum stored energy in kWh to hold in the tank before each draw - default 0.
+- **input_number.predbat_iboost_fill_rate_threshold** When set, any slot with an import rate at or below this value (in pence) fills the remaining
+tank headroom regardless of the forecast, e.g. set it to 0 to heat fully on free or negative rates. The default of -99 disables filling.
 
 Note that **input_number.predbat_iboost_max_energy** remains a per-calendar-day cap on boost energy and should be set at or above the tank capacity
 when a demand forecast is used, otherwise the cap can prevent the forecast being covered.

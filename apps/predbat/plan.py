@@ -5353,6 +5353,33 @@ class Plan:
                 day = interval_starts[best] // (24 * 60)
                 iboost_soc[day] = dp3(iboost_soc[day] + amount)
 
+        # Optional fill pass: top the tank up to its capacity in any eligible interval whose
+        # import rate is at or below the fill threshold (default -99 disables this), then
+        # re-verify the level trajectory and trim later planned boosts the fill energy has made
+        # redundant so the level stays at or below the capacity everywhere
+        fill_threshold = self.iboost_fill_rate_threshold
+        if fill_threshold > -99.0:
+            for slot_n in range(num_intervals):
+                if (not eligible[slot_n]) or (import_rates[slot_n] > fill_threshold):
+                    continue
+                levels_pre, levels_post = self.iboost_tank_trajectory(stored_start, capacity, demand, boost)
+                day = interval_starts[slot_n] // (24 * 60)
+                amount = min(interval_energy - boost[slot_n], iboost_max - iboost_soc[day], capacity - levels_post[slot_n])
+                if amount <= 0.001:
+                    continue
+                boost[slot_n] += amount
+                iboost_soc[day] = dp3(iboost_soc[day] + amount)
+
+            level = stored_start
+            for slot_n in range(num_intervals):
+                level = max(level - demand[slot_n], 0.0)
+                if level + boost[slot_n] > capacity:
+                    overflow = level + boost[slot_n] - capacity
+                    boost[slot_n] = max(boost[slot_n] - overflow, 0.0)
+                    day = interval_starts[slot_n] // (24 * 60)
+                    iboost_soc[day] = dp3(max(iboost_soc[day] - overflow, 0.0))
+                level = min(level + boost[slot_n], capacity)
+
         return self.plan_iboost_forecast_slots(interval_starts, boost, import_rates, interval_energy, stored_start, capacity, demand, uncovered_kwh)
 
     def plan_iboost_forecast_slots(self, interval_starts, boost, import_rates, interval_energy, stored_start, capacity, demand, uncovered_kwh):

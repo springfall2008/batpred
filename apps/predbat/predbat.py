@@ -584,6 +584,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.iboost_tank_capacity = 10.0
         self.iboost_tank_reserve = 0.0
         self.iboost_tank_soc_percent = None
+        self.iboost_fill_rate_threshold = -99.0
         self.iboost_energy_subtract = True
         self.iboost_running = False
         self.iboost_running_full = False

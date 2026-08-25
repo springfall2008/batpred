@@ -1603,6 +1603,18 @@ CONFIG_ITEMS = [
         "default": 0.0,
     },
     {
+        "name": "iboost_fill_rate_threshold",
+        "friendly_name": "iBoost fill tank at or below rate",
+        "type": "input_number",
+        "min": -99,
+        "max": 1000,
+        "step": 0.1,
+        "unit": "p/kWh",
+        "icon": "mdi:currency-usd",
+        "enable": "iboost_enable",
+        "default": -99.0,
+    },
+    {
         "name": "iboost_max_power",
         "friendly_name": "iBoost max power",
         "type": "input_number",

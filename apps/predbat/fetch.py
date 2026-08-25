@@ -2989,6 +2989,7 @@ class Fetch:
         self.iboost_max_energy = self.get_arg("iboost_max_energy")
         self.iboost_tank_capacity = self.get_arg("iboost_tank_capacity")
         self.iboost_tank_reserve = self.get_arg("iboost_tank_reserve")
+        self.iboost_fill_rate_threshold = self.get_arg("iboost_fill_rate_threshold")
         self.iboost_max_power = self.get_arg("iboost_max_power") / MINUTE_WATT
         self.iboost_min_power = self.get_arg("iboost_min_power") / MINUTE_WATT
         self.iboost_min_soc = self.get_arg("iboost_min_soc")

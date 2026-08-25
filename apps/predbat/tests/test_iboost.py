@@ -165,7 +165,7 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
     return failed
 
 
-def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, expect_slots=None):
+def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, fill_rate_threshold=-99.0, expect_slots=None):
     """
     Run a single iBoost forecast planner test case and compare the exact slots produced
 
@@ -183,6 +183,7 @@ def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_perc
     my_predbat.iboost_tank_capacity = capacity
     my_predbat.iboost_tank_reserve = reserve
     my_predbat.iboost_tank_soc_percent = tank_soc_percent
+    my_predbat.iboost_fill_rate_threshold = fill_rate_threshold
     my_predbat.iboost_forecast = forecast
 
     slots = my_predbat.plan_iboost_smart()
@@ -194,6 +195,7 @@ def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_perc
 
     my_predbat.iboost_forecast = {}
     my_predbat.iboost_tank_soc_percent = None
+    my_predbat.iboost_fill_rate_threshold = -99.0
     my_predbat.iboost_smart = False
     my_predbat.iboost_today = 0
 
@@ -292,6 +294,30 @@ def run_iboost_forecast_tests(my_predbat):
     # remaining draws
     set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
     failed |= run_iboost_forecast_plan_test("iboost_plan_uncovered_first", my_predbat, {720: 1.0, 840: 1.0}, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+
+    # Fill threshold: a negative-rate slot qualifies for filling, so on top of the 0.5 kWh the
+    # draw needs, the remaining headroom is bought in the -2p slot up to the element power
+    set_rate_profile(my_predbat, [(780, 810, -2.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_fill", my_predbat, {840: 0.5}, capacity=2.0, fill_rate_threshold=0.0, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": -2.0, "cost": -2.0}])
+
+    # Fill threshold at or above the ambient rate fills from the start of the plan; the earlier
+    # fills carry forward to the draw, the trajectory is re-verified and the boosts booked in the
+    # 5p/6p slots are trimmed so the level never exceeds the 1 kWh capacity anywhere
+    set_rate_profile(my_predbat, [(780, 810, 5.0), (840, 870, 6.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_fill_trim",
+        my_predbat,
+        {900: 1.0},
+        capacity=1.0,
+        max_power=1,
+        fill_rate_threshold=25.0,
+        expect_slots=[
+            {"start": 720, "end": 750, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 750, "end": 780, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 900, "end": 930, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+            {"start": 930, "end": 960, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+        ],
+    )
 
     # Regression: with no forecast loaded the legacy planner runs and produces identical output
     # before and after a forecast plan has been made, and the forecast plan itself differs
