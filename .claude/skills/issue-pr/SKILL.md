@@ -40,7 +40,7 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bo
 Both of these must pass before you continue to step 5:
 
 ```bash
-./run_pre_commit
+cd coverage && ./run_pre_commit
 tools/triage_test.sh <name> <scratch>/test.log
 ```
 
