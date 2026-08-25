@@ -37,14 +37,16 @@ Fetch it with `gh issue view <number> --json title,body,labels,comments`. The bo
 
 ## 4. Quality gate
 
-Both of these must pass before you continue to step 5:
+Both of these must pass before you continue to step 5. `run_pre_commit` must run with `coverage/` as the working directory (it sources `coverage/setup.csh` internally); `tools/triage_test.sh` must run from the repo root. Change directory explicitly for each rather than assuming where you're left afterwards:
 
 ```bash
-cd coverage && ./run_pre_commit
+cd coverage
+./run_pre_commit
+cd ..
 tools/triage_test.sh <name> <scratch>/test.log
 ```
 
-Use the test module named in the triage comment, or the one `TEST_REGISTRY` maps to the area you changed. If there's no clean single-module mapping, run `./run_all --quick` instead (from `coverage/`) rather than guessing at a module name.
+Use the test module named in the triage comment, or the one `TEST_REGISTRY` maps to the area you changed. If there's no clean single-module mapping, run `./run_all --quick` instead (from `coverage/`, same as above) rather than guessing at a module name.
 
 If either fails, stop here — do not commit, push, or open a PR. Go to step 7 and report what failed.
 
@@ -53,11 +55,13 @@ If either fails, stop here — do not commit, push, or open a PR. Go to step 7 a
 Branch name: `fix/<slug>-<issue-number>` for a `bug` classification, `feat/<slug>-<issue-number>` for `enhancement` — matching this repo's existing convention (e.g. `fix/solis-tou-bit-refused-4707`). `<slug>` is a short kebab-case description of the change.
 
 ```bash
-git checkout -b fix/<slug>-<issue-number>
+git checkout -B fix/<slug>-<issue-number>
 git add <changed files>
 git commit -m "<one-line summary of the fix>"
 git push -u origin fix/<slug>-<issue-number>
 ```
+
+`-B` rather than `-b`: if a previous attempt reached branch creation and then failed on push or PR creation, the local branch is left behind, and a retry's plain `-b` would fail with "branch already exists." `-B` resets it to the current `HEAD` instead, so a retry always starts clean.
 
 Never push to `main`, and never force-push.
 

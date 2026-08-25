@@ -114,6 +114,14 @@ class FetchBotPrIssuesTests(unittest.TestCase):
         json_fields = args[args.index("--json") + 1]
         self.assertIn("title", json_fields.split(","))
 
+    @patch("triage_daemon.subprocess.run")
+    def test_requests_a_generous_limit(self, mock_run):
+        """gh issue list defaults to 30 results; request enough that BOT_PR issues aren't silently dropped."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        triage_daemon.fetch_bot_pr_issues()
+        args = mock_run.call_args[0][0]
+        self.assertIn("--limit", args)
+
 
 class EnsureTriagedTests(unittest.TestCase):
     """Tests for the BOT_PR precondition check, new in the bot PR flow."""
@@ -137,6 +145,23 @@ class EnsureTriagedTests(unittest.TestCase):
         """Unrelated comments don't count as a triage comment."""
         mock_run.return_value = MagicMock(stdout=json.dumps({"comments": [{"body": "thanks for the report"}]}))
         self.assertFalse(triage_daemon.find_triage_comment(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_find_triage_comment_scopes_to_repo(self, mock_run):
+        """Always passes --repo explicitly - the daemon's cwd isn't guaranteed to be the clone."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"comments": []}))
+        triage_daemon.find_triage_comment(4720)
+        args = mock_run.call_args[0][0]
+        self.assertIn("--repo", args)
+        self.assertEqual(args[args.index("--repo") + 1], "springfall2008/batpred")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_backfill_triaged_label_scopes_to_repo(self, mock_run):
+        """Always passes --repo explicitly - the daemon's cwd isn't guaranteed to be the clone."""
+        triage_daemon.backfill_triaged_label(4720)
+        args = mock_run.call_args[0][0]
+        self.assertIn("--repo", args)
+        self.assertEqual(args[args.index("--repo") + 1], "springfall2008/batpred")
 
     @patch("triage_daemon.subprocess.run")
     def test_ensure_triaged_skips_lookup_when_label_present(self, mock_run):
@@ -181,23 +206,111 @@ class DuplicateGuardTests(unittest.TestCase):
         mock_run.return_value = MagicMock(stdout=json.dumps([]))
         self.assertFalse(triage_daemon.has_existing_pr(4720))
 
+    @patch("triage_daemon.subprocess.run")
+    def test_has_existing_pr_scopes_to_repo(self, mock_run):
+        """Always passes --repo explicitly - the daemon's cwd isn't guaranteed to be the clone."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        triage_daemon.has_existing_pr(4720)
+        args = mock_run.call_args[0][0]
+        self.assertIn("--repo", args)
+        self.assertEqual(args[args.index("--repo") + 1], "springfall2008/batpred")
+
+
+class IsActionableTests(unittest.TestCase):
+    """Tests for is_actionable(), new - guards against implementing a closed,
+    duplicate, question, or configuration issue after an inline /issue-triage call."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_true_when_open_and_classified_bug(self, mock_run):
+        """An open issue classified bug is actionable."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"state": "OPEN", "labels": [{"name": "bug"}]}))
+        self.assertTrue(triage_daemon.is_actionable(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_true_when_open_and_classified_enhancement(self, mock_run):
+        """An open issue classified enhancement is actionable."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"state": "OPEN", "labels": [{"name": "enhancement"}]}))
+        self.assertTrue(triage_daemon.is_actionable(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_false_when_closed(self, mock_run):
+        """A closed issue (e.g. triaged as a duplicate and closed) is not actionable."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"state": "CLOSED", "labels": [{"name": "bug"}]}))
+        self.assertFalse(triage_daemon.is_actionable(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_false_when_classified_question(self, mock_run):
+        """A question isn't something to implement a PR for."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"state": "OPEN", "labels": [{"name": "question"}]}))
+        self.assertFalse(triage_daemon.is_actionable(4720))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_scopes_to_repo(self, mock_run):
+        """Always passes --repo explicitly - the daemon's cwd isn't guaranteed to be the clone."""
+        mock_run.return_value = MagicMock(stdout=json.dumps({"state": "OPEN", "labels": []}))
+        triage_daemon.is_actionable(4720)
+        args = mock_run.call_args[0][0]
+        self.assertIn("--repo", args)
+        self.assertEqual(args[args.index("--repo") + 1], "springfall2008/batpred")
+
+
+class MarkPrNotActionableTests(unittest.TestCase):
+    """Tests for mark_pr_not_actionable(), new - explains why no PR was attempted."""
+
+    @patch("triage_daemon.mark_pr_failed")
+    @patch("triage_daemon.subprocess.run")
+    def test_comments_then_delegates_to_mark_pr_failed(self, mock_run, mock_mark_failed):
+        """Posts an explanatory comment, then reuses mark_pr_failed for the label swap."""
+        triage_daemon.mark_pr_not_actionable(4720)
+        comment_args = mock_run.call_args[0][0]
+        self.assertEqual(comment_args[:3], ["gh", "issue", "comment"])
+        mock_mark_failed.assert_called_once_with(4720)
+
 
 class LabelSwapTests(unittest.TestCase):
     """Tests for mark_pr_opened/mark_pr_failed, new in the bot PR flow."""
 
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_opened_swaps_labels(self, mock_run):
-        """Removes BOT_PR and adds BOT_PR_OPENED."""
+        """Removes BOT_PR and adds BOT_PR_OPENED, scoped to the configured repo."""
         triage_daemon.mark_pr_opened(4720)
         args = mock_run.call_args[0][0]
-        self.assertEqual(args, ["gh", "issue", "edit", "4720", "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"])
+        self.assertEqual(
+            args,
+            [
+                "gh",
+                "issue",
+                "edit",
+                "4720",
+                "--repo",
+                "springfall2008/batpred",
+                "--remove-label",
+                "BOT_PR",
+                "--add-label",
+                "BOT_PR_OPENED",
+            ],
+        )
 
     @patch("triage_daemon.subprocess.run")
     def test_mark_pr_failed_swaps_labels(self, mock_run):
-        """Removes BOT_PR and adds BOT_PR_FAILED."""
+        """Removes BOT_PR and adds BOT_PR_FAILED, scoped to the configured repo."""
         triage_daemon.mark_pr_failed(4720)
         args = mock_run.call_args[0][0]
-        self.assertEqual(args, ["gh", "issue", "edit", "4720", "--remove-label", "BOT_PR", "--add-label", "BOT_PR_FAILED"])
+        self.assertEqual(
+            args,
+            [
+                "gh",
+                "issue",
+                "edit",
+                "4720",
+                "--repo",
+                "springfall2008/batpred",
+                "--remove-label",
+                "BOT_PR",
+                "--add-label",
+                "BOT_PR_FAILED",
+            ],
+        )
 
 
 class PermissionModelTests(unittest.TestCase):
@@ -254,6 +367,29 @@ class PermissionModelTests(unittest.TestCase):
             },
         )
 
+    def test_pr_disallowed_tools_still_blocks_force_push_variants(self):
+        """Even though the PR flow can push, force-push stays denied - defense in depth
+        against a prompt-injected instruction attempting to rewrite history."""
+        pr_denied = triage_daemon.DISALLOWED_TOOLS_PR.split(",")
+        self.assertTrue(any("force" in entry for entry in pr_denied), pr_denied)
+        self.assertTrue(any("-f" in entry for entry in pr_denied), pr_denied)
+
+
+class SyncRepoTests(unittest.TestCase):
+    """Tests for sync_repo(), modified to always return to main first."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_checks_out_main_before_resetting(self, mock_run):
+        """A previous crashed BOT_PR run can leave the clone on a fix/*|feat/* branch;
+        sync_repo must switch back to main before reset --hard, or it resets the wrong
+        branch and leaves the clone stuck off main."""
+        triage_daemon.sync_repo()
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        checkout_call = ["git", "-C", str(triage_daemon.CLONE_DIR), "checkout", "main"]
+        reset_call = ["git", "-C", str(triage_daemon.CLONE_DIR), "reset", "--hard", "origin/main"]
+        self.assertIn(checkout_call, calls)
+        self.assertLess(calls.index(checkout_call), calls.index(reset_call))
+
 
 class CreatePrTests(DaemonPathsTestCase):
     """Tests for create_pr(), new in the bot PR flow."""
@@ -298,20 +434,26 @@ class ProcessBotPrIssueTests(unittest.TestCase):
             "reset_scratch",
             "ensure_triaged",
             "triage",
+            "is_actionable",
             "create_pr",
             "mark_pr_opened",
             "mark_pr_failed",
+            "mark_pr_not_actionable",
         ]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
+        # Most tests don't exercise the actionable check; default it out of the way.
+        self.patches["is_actionable"].return_value = True
 
-    def test_skips_entirely_when_pr_already_exists(self):
-        """An issue that already has a referencing PR is left alone."""
+    def test_marks_opened_when_pr_already_exists_on_entry(self):
+        """A pre-existing PR (e.g. from a crashed prior run that never reached the
+        label swap) converges the label to BOT_PR_OPENED instead of skipping forever."""
         self.patches["has_existing_pr"].return_value = True
         triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
         self.patches["sync_repo"].assert_not_called()
         self.patches["create_pr"].assert_not_called()
+        self.patches["mark_pr_opened"].assert_called_once_with(4720)
 
     def test_runs_triage_first_when_not_yet_triaged(self):
         """An untriaged issue is triaged before the PR flow runs."""
@@ -345,6 +487,18 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         self.patches["mark_pr_failed"].assert_called_once_with(4720)
         self.patches["mark_pr_opened"].assert_not_called()
 
+    def test_not_actionable_after_triage_skips_create_pr(self):
+        """If an inline /issue-triage classifies the ticket as a duplicate (and closes
+        it), a question, or a configuration issue, the daemon must not implement it."""
+        self.patches["has_existing_pr"].return_value = False
+        self.patches["ensure_triaged"].return_value = False
+        self.patches["is_actionable"].return_value = False
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
+        self.patches["triage"].assert_called_once_with(4720)
+        self.patches["create_pr"].assert_not_called()
+        self.patches["mark_pr_not_actionable"].assert_called_once_with(4720)
+        self.patches["mark_pr_failed"].assert_not_called()
+
     @patch("builtins.print")
     def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
         """Prints the issue's title and an openable GitHub link as soon as work starts."""
@@ -370,16 +524,24 @@ class FetchBotReviewIssuesTests(unittest.TestCase):
         json_fields = args[args.index("--json") + 1]
         self.assertIn("title", json_fields.split(","))
 
+    @patch("triage_daemon.subprocess.run")
+    def test_requests_a_generous_limit(self, mock_run):
+        """gh issue list defaults to 30 results; request enough that BOT_REVIEW issues aren't silently dropped."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([]))
+        triage_daemon.fetch_bot_review_issues()
+        args = mock_run.call_args[0][0]
+        self.assertIn("--limit", args)
+
 
 class RemoveReviewLabelTests(unittest.TestCase):
     """Tests for remove_review_label(), new in the BOT_REVIEW flow."""
 
     @patch("triage_daemon.subprocess.run")
     def test_removes_bot_review_label(self, mock_run):
-        """Removes BOT_REVIEW, adds nothing."""
+        """Removes BOT_REVIEW, scoped to the configured repo."""
         triage_daemon.remove_review_label(3100)
         args = mock_run.call_args[0][0]
-        self.assertEqual(args, ["gh", "issue", "edit", "3100", "--remove-label", "BOT_REVIEW"])
+        self.assertEqual(args, ["gh", "issue", "edit", "3100", "--repo", "springfall2008/batpred", "--remove-label", "BOT_REVIEW"])
 
 
 class MarkReviewFailedTests(unittest.TestCase):
@@ -387,11 +549,26 @@ class MarkReviewFailedTests(unittest.TestCase):
 
     @patch("triage_daemon.subprocess.run")
     def test_comments_then_swaps_labels(self, mock_run):
-        """Posts an explanatory comment, then swaps BOT_REVIEW for BOT_FAILED."""
+        """Posts an explanatory comment, then swaps BOT_REVIEW for BOT_FAILED, both scoped to the configured repo."""
         triage_daemon.mark_review_failed(3100)
         calls = [call.args[0] for call in mock_run.call_args_list]
         self.assertEqual(calls[0][:3], ["gh", "issue", "comment"])
-        self.assertEqual(calls[1], ["gh", "issue", "edit", "3100", "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"])
+        self.assertIn("--repo", calls[0])
+        self.assertEqual(
+            calls[1],
+            [
+                "gh",
+                "issue",
+                "edit",
+                "3100",
+                "--repo",
+                "springfall2008/batpred",
+                "--remove-label",
+                "BOT_REVIEW",
+                "--add-label",
+                "BOT_FAILED",
+            ],
+        )
 
 
 class ProcessBotReviewIssueTests(unittest.TestCase):

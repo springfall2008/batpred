@@ -185,7 +185,11 @@ DISALLOWED_TOOLS = ",".join(_DISALLOWED_TOOLS_BASE)
 # the base denial list. Everything else (merge, close, repo/release/workflow/auth/secret/
 # api admin, all mcp__*) stays denied.
 _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr create*)"}
-DISALLOWED_TOOLS_PR = ",".join(item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS)
+# Even though the PR flow can push, force-push variants stay denied - defense in depth
+# against a prompt-injected instruction attempting to rewrite history. Prefix-glob
+# matching can't parse flags, so this is a heuristic, not a guarantee.
+_PR_FORCE_PUSH_DENIALS = ["Bash(git push*--force*)", "Bash(git push*-f*)"]
+DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
 
 
 def load_state():
@@ -224,7 +228,7 @@ def fetch_new_issues(since_number):
 def fetch_bot_pr_issues():
     """Return open issues currently labelled BOT_PR, each with its full label list."""
     result = subprocess.run(
-        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_PR", "--json", "number,labels,title"],
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_PR", "--json", "number,labels,title", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
@@ -243,7 +247,7 @@ def is_already_triaged(labels):
 def find_triage_comment(issue_number):
     """Return True if the issue already carries a bot triage comment (pre-BOT_TRIAGED-label issues)."""
     result = subprocess.run(
-        ["gh", "issue", "view", str(issue_number), "--json", "comments"],
+        ["gh", "issue", "view", str(issue_number), "--repo", REPO, "--json", "comments"],
         capture_output=True,
         text=True,
         check=True,
@@ -254,7 +258,7 @@ def find_triage_comment(issue_number):
 
 def backfill_triaged_label(issue_number):
     """Apply BOT_TRIAGED to an issue found to already have a bot triage comment."""
-    subprocess.run(["gh", "issue", "edit", str(issue_number), "--add-label", "BOT_TRIAGED"], check=True)
+    subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--add-label", "BOT_TRIAGED"], check=True)
 
 
 def ensure_triaged(issue_number, labels):
@@ -284,7 +288,7 @@ def has_existing_pr(issue_number):
     """Return True if a PR already references this issue, in any state."""
     query = build_duplicate_search_query(issue_number)
     result = subprocess.run(
-        ["gh", "pr", "list", "--search", query, "--state", "all", "--json", "number"],
+        ["gh", "pr", "list", "--repo", REPO, "--search", query, "--state", "all", "--json", "number"],
         capture_output=True,
         text=True,
         check=True,
@@ -292,10 +296,29 @@ def has_existing_pr(issue_number):
     return len(json.loads(result.stdout)) > 0
 
 
+def is_actionable(issue_number):
+    """Return True if the issue is open and classified bug or enhancement - the only
+    classifications /issue-pr should attempt to implement. Guards against an inline
+    /issue-triage call classifying the ticket as a duplicate (and closing it), a
+    question, or a configuration issue, which create_pr() must never run against.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--repo", REPO, "--json", "state,labels"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(result.stdout)
+    if data["state"] != "OPEN":
+        return False
+    label_names = {label["name"] for label in data["labels"]}
+    return bool(label_names & {"bug", "enhancement"})
+
+
 def mark_pr_opened(issue_number):
     """Swap BOT_PR for BOT_PR_OPENED once the draft PR has been confirmed open."""
     subprocess.run(
-        ["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_OPENED"],
         check=True,
     )
 
@@ -303,13 +326,40 @@ def mark_pr_opened(issue_number):
 def mark_pr_failed(issue_number):
     """Swap BOT_PR for BOT_PR_FAILED so a failed run isn't retried every poll cycle."""
     subprocess.run(
-        ["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_PR", "--add-label", "BOT_PR_FAILED"],
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_FAILED"],
         check=True,
     )
 
 
+def mark_pr_not_actionable(issue_number):
+    """Post a note explaining why no PR was attempted, then reuse mark_pr_failed for
+    the label swap - the issue turned out closed, or not classified bug/enhancement.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "issue",
+            "comment",
+            str(issue_number),
+            "--repo",
+            REPO,
+            "--body",
+            "`BOT_PR` was added but this issue isn't actionable for an automated implementation " "(closed, or not classified `bug`/`enhancement`) - not attempting a PR. Remove `BOT_PR_FAILED` " "and re-add `BOT_PR` once the classification changes.",
+        ],
+        check=True,
+    )
+    mark_pr_failed(issue_number)
+
+
 def sync_repo():
+    """Sync the clone to origin/main, always returning to main first.
+
+    A crashed BOT_PR run can leave the clone checked out on a fix/*|feat/* branch;
+    without an explicit checkout, reset --hard would reset that branch instead of
+    main, leaving the clone stuck off main for every subsequent operation.
+    """
     subprocess.run(["git", "-C", str(CLONE_DIR), "fetch", "origin", "main"], check=True)
+    subprocess.run(["git", "-C", str(CLONE_DIR), "checkout", "main"], check=True)
     subprocess.run(["git", "-C", str(CLONE_DIR), "reset", "--hard", "origin/main"], check=True)
     # Drop untracked leftovers from the previous run's investigation. Not -x:
     # coverage/venv/ is gitignored and expensive to rebuild every issue.
@@ -402,7 +452,8 @@ def create_pr(issue_number):
 
 def process_bot_pr_issue(issue):
     """Run the full BOT_PR flow for one issue: guard against duplicate work, ensure it's
-    triaged, run the PR flow, then swap the label based on whether a PR now exists.
+    triaged and actionable, run the PR flow, then swap the label based on whether a PR
+    now exists.
     """
     issue_number = issue["number"]
     labels = issue.get("labels", [])
@@ -415,6 +466,10 @@ def process_bot_pr_issue(issue):
     reset_scratch()
     if not ensure_triaged(issue_number, labels):
         triage(issue_number)
+    if not is_actionable(issue_number):
+        print(f"[pr] issue #{issue_number}: not actionable (closed, or not classified bug/enhancement), skipping", flush=True)
+        mark_pr_not_actionable(issue_number)
+        return
     create_pr(issue_number)
     if has_existing_pr(issue_number):
         mark_pr_opened(issue_number)
@@ -425,7 +480,7 @@ def process_bot_pr_issue(issue):
 def fetch_bot_review_issues():
     """Return open issues currently labelled BOT_REVIEW, each with its full label list."""
     result = subprocess.run(
-        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,labels,title"],
+        ["gh", "issue", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,labels,title", "--limit", "100"],
         capture_output=True,
         text=True,
         check=True,
@@ -435,7 +490,7 @@ def fetch_bot_review_issues():
 
 def remove_review_label(issue_number):
     """Remove BOT_REVIEW once the issue is confirmed triaged, so it isn't reprocessed."""
-    subprocess.run(["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_REVIEW"], check=True)
+    subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
 
 def mark_review_failed(issue_number):
@@ -449,13 +504,15 @@ def mark_review_failed(issue_number):
             "issue",
             "comment",
             str(issue_number),
+            "--repo",
+            REPO,
             "--body",
             "Automated triage failed to complete for this issue - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
         ],
         check=True,
     )
     subprocess.run(
-        ["gh", "issue", "edit", str(issue_number), "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
         check=True,
     )
 
