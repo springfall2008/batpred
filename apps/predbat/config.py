@@ -1042,6 +1042,14 @@ CONFIG_ITEMS = [
         "reset_inverter": True,
     },
     {
+        "name": "set_charge_freeze_only",
+        "friendly_name": "Set Charge Freeze Only",
+        "type": "switch",
+        "enable": "expert_mode",
+        "default": False,
+        "reset_inverter": True,
+    },
+    {
         "name": "set_charge_low_power",
         "friendly_name": "Set Charge Low Power Mode",
         "type": "switch",

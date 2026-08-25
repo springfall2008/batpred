@@ -516,6 +516,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.set_read_only = True
         self.set_read_only_axle = False
         self.set_reserve_enable = False
+        self.set_charge_freeze_only = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}

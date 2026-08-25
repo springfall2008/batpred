@@ -373,6 +373,7 @@ class MockConfigProvider:
             "set_status_notify": False,
             "set_inverter_notify": False,
             "set_export_freeze_only": False,
+            "set_charge_freeze_only": False,
             "set_discharge_during_charge": True,
             "set_freeze_export_during_demand": False,
             "mode": "Control charge & discharge",

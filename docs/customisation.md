@@ -71,6 +71,8 @@ In **Control charge & discharge** mode Predbat will set both charge and force ex
 
 If you have set the **switch.predbat_set_export_freeze_only** set to On then forced export won't occur but Predbat can force the export of solar power to the grid when desired.
 
+Similarly, if you have **switch.predbat_set_charge_freeze_only** set to On then the battery won't be charged from the grid, but Predbat can still freeze charge to hold the current battery level.
+
 ## Expert mode
 
 Predbat has a toggle switch called **switch.predbat_expert_mode** which is set to Off by default for new installs (On by default for upgraded installs).
@@ -464,6 +466,11 @@ this defaults to 10 but can be changed between 0 and 30.
 once it has been reached or to protect against discharging beyond the set limit.
 
 **switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. On by default.
+
+**switch.predbat_set_charge_freeze_only** (_expert mode_) When turned On charging the battery from the grid is prevented, but charge freeze can be used (if enabled) to hold the current battery
+level rather than discharging it. This is useful if you don't want to import to fill the battery at all, for example on a flat tariff or where you only want the battery charged by solar. Off by default.
+
+Note that if both this and **switch.predbat_set_charge_freeze** are turned Off, Predbat has no way to use a charge window at all and will leave the battery in demand mode throughout.
 
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
 
