@@ -142,6 +142,18 @@ class Execute:
         in_alert = self.alert_active_keep.get(self.minutes_now, 0) > 0
         in_manual_soc = self.manual_soc_keep.get(self.minutes_now, 0) > 0
 
+        # Safeguard for set_charge_freeze_only: the planner never selects a charge target above the
+        # reserve while the switch is on, but a plan computed before it was turned on can still be
+        # in play (plans are only recomputed every few minutes, and are held across cycles by
+        # metric_min_improvement_plan), and with calculate_best_charge off the limits come from the
+        # inverter's own settings rather than the planner at all. Clamp here so the battery can
+        # never be charged from the grid, whatever the plan says.
+        if self.set_charge_freeze_only:
+            for window_n in range(len(self.charge_limit_best)):
+                if self.charge_limit_best[window_n] > self.reserve and not self.is_freeze_charge(self.charge_limit_best[window_n]):
+                    self.log("Warn: Charge limit {}kWh for window {} clamped to freeze charge as set_charge_freeze_only is enabled".format(self.charge_limit_best[window_n], window_n))
+                    self.charge_limit_best[window_n] = self.reserve
+
         if self.holiday_days_left > 0:
             status = "Demand (Holiday)"
         else:

@@ -394,7 +394,16 @@ class Plan:
                 window_n = window_index[key]["id"]
                 typ = window_index[key]["type"]
                 if typ in ["c", "cf"]:
-                    if region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
+                    if self.set_charge_freeze_only and typ != "cf":
+                        # Grid charging is forbidden, so a window's plain charge entry is not a
+                        # candidate - only its freeze entry is. Dropping it here rather than letting
+                        # the sweep below simulate it and the levelling pass flatten it back to a
+                        # freeze keeps the search from spending simulations on, and picking its price
+                        # level from, plans that can never run. With set_charge_freeze off there are
+                        # no "cf" entries either, so no charge window is selected at all - correct,
+                        # as neither charge mode is usable then.
+                        pass
+                    elif region_start and (charge_window[window_n]["start"] >= region_end or charge_window[window_n]["end"] < region_start):
                         pass
                     elif charge_window[window_n]["start"] in self.manual_all_times:
                         pass
@@ -542,7 +551,14 @@ class Plan:
                     export_slot_choices = slots_around(best_max_export_slots, FINE_SLOT_LENGTHS)
 
                 pred_table = []
-                charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
+                if self.set_charge_freeze_only:
+                    # Only freeze entries survive the price_set_charge filter above, and allow_freeze
+                    # False would discard every one of them - so freeze is the option in each pass,
+                    # coarse included. "No charge windows" is still covered by charge_slot_choices,
+                    # which includes 0.
+                    charge_freeze_options = [True]
+                else:
+                    charge_freeze_options = [True, False] if (self.set_charge_freeze and not coarse) else [False]
                 export_freeze_options = [True, False] if (self.set_export_freeze and not coarse) else [False]
 
                 for max_charge_slots in charge_slot_choices:
@@ -1303,7 +1319,7 @@ class Plan:
                 self.export_window_best = clone_windows(self.export_window)
 
             # Pre-fill best charge limit with the current charge limit
-            self.charge_limit_best = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window_best))]
+            self.prefill_charge_limit_best()
 
             # Pre-fill best export enable with Off
             self.export_limits_best = [EXPORT_LIMIT_IDLE for i in range(len(self.export_window_best))]
@@ -1799,6 +1815,11 @@ class Plan:
         if not self.set_charge_freeze:
             allow_freeze = False
 
+        # set_charge_freeze_only forbids charging the battery from the grid, so the only candidates
+        # left are off and - when freeze is enabled - a freeze at the reserve. This is the charge
+        # side equivalent of optimise_export restricting loop_options under set_export_freeze_only.
+        charge_freeze_only = self.set_charge_freeze_only
+
         if all_n:
             window_n = all_n[0]
 
@@ -1817,7 +1838,7 @@ class Plan:
 
         # Create min/max SoC to avoid simulating SoC that are not going have any impact
         # Can't do this for anything but a single window as the winder SoC impact isn't known
-        if not all_n and not freeze_only:
+        if not all_n and not freeze_only and not charge_freeze_only:
             hans = []
             all_max_soc = 0
             all_min_soc = self.soc_max
@@ -1945,14 +1966,15 @@ class Plan:
                     ]
                 id += 1
 
-        # Assemble list of SoC's to try
-        try_socs = [loop_soc]
+        # Assemble list of SoC's to try - starting from a full charge, unless grid charging is
+        # forbidden in which case best_soc_min_setting below becomes the first (baseline) candidate
+        try_socs = [] if charge_freeze_only else [loop_soc]
         loop_step = max(best_soc_step, 0.1)
         best_soc_min_setting = self.best_soc_min
         if best_soc_min_setting > 0:
             best_soc_min_setting = max(self.reserve, best_soc_min_setting)
 
-        while loop_soc > self.reserve and not freeze_only:
+        while loop_soc > self.reserve and not freeze_only and not charge_freeze_only:
             skip = False
             try_soc = max(best_soc_min, loop_soc)
             try_soc = dp2(min(try_soc, self.soc_max))
@@ -1983,6 +2005,14 @@ class Plan:
                 try_socs.append(self.reserve)
             if not allow_freeze and (self.reserve in try_socs):
                 try_socs.remove(self.reserve)
+
+        if charge_freeze_only:
+            # The freeze_only branch above seeds the candidates with the window's existing limit, so
+            # a plan built before the switch was turned on could carry a grid charge back into the
+            # new plan. Nothing above the reserve may survive the search.
+            try_socs = [try_soc for try_soc in try_socs if try_soc <= self.reserve]
+            if not try_socs:
+                try_socs = [self.reserve if allow_freeze else 0.0]
 
         # Run the simulations in parallel
         results = []
@@ -2870,7 +2900,13 @@ class Plan:
                     # model whether the nominal plan changes without the slot, which subsumes the old
                     # never-reaches-limit and freeze-at-100% removal branches. What is left here narrows the
                     # limit to what the window can actually achieve, so adjacent windows share a limit and merge.
-                    if soc_max < (limit - charge_step):
+                    if self.set_charge_freeze_only:
+                        # Each branch below raises the limit to a full charge, which is exactly what
+                        # set_charge_freeze_only forbids - including turning a freeze into a charge
+                        # at 100% SoC, which imports nothing but still publishes a grid charge that
+                        # execute_plan's safeguard would immediately clamp back to a freeze.
+                        pass
+                    elif soc_max < (limit - charge_step):
                         # Work out what can be achieved in the window and set the target to match that
                         window["target"] = soc_max
                         charge_limit_best[window_n] = self.soc_max
@@ -4234,7 +4270,18 @@ class Plan:
                 elif self.charge_window_best[window_n]["start"] in self.manual_freeze_export_times:
                     self.charge_limit_best[window_n] = 0
                 elif self.charge_window_best[window_n]["start"] in self.manual_charge_times:
-                    self.charge_limit_best[window_n] = self.soc_max
+                    if self.set_charge_freeze_only:
+                        # A manual "charge now" request can't be honoured as a grid charge when the
+                        # user has said Predbat may only ever freeze charge - optimise_charge_limit's
+                        # own search already respects this, so a manual override doing otherwise
+                        # would be the one path where the plan assumes an import that execution
+                        # refuses to perform. Clamp to freeze charge, the closest available
+                        # approximation of "charge/hold what you can right now", rather than dropping
+                        # the override entirely (mirrors the manual export clamp for #4690).
+                        self.log("Warn: Manual charge time {} clamped to freeze charge as set_charge_freeze_only is enabled".format(self.time_abs_str(self.charge_window_best[window_n]["start"])))
+                        self.charge_limit_best[window_n] = self.reserve
+                    else:
+                        self.charge_limit_best[window_n] = self.soc_max
                 elif self.charge_window_best[window_n]["start"] in self.manual_freeze_charge_times:
                     self.charge_limit_best[window_n] = self.reserve
 
@@ -4260,6 +4307,19 @@ class Plan:
                 elif self.export_window_best[window_n]["start"] in self.manual_freeze_export_times:
                     self.export_limits_best[window_n] = EXPORT_LIMIT_FREEZE
 
+    def prefill_charge_limit_best(self):
+        """
+        Pre-fill the best charge limits from the inverter's current charge limit, one per charge
+        window. This is what the plan uses for any window Predbat is not optimising itself, so with
+        set_charge_freeze_only on the limit is clamped to a freeze here too - otherwise the plan and
+        the prediction would assume a grid charge that execute_plan's safeguard then refuses to
+        perform, and the plan would be scored against an import that never happens.
+        """
+        charge_limit = self.current_charge_limit * self.soc_max / 100.0
+        if self.set_charge_freeze_only:
+            charge_limit = min(charge_limit, self.reserve)
+        self.charge_limit_best = [charge_limit for i in range(len(self.charge_window_best))]
+
     def optimise_charge_windows_reset(self, reset_all):
         """
         Reset the charge windows to min
@@ -4277,7 +4337,10 @@ class Plan:
                     if reset_all:
                         self.charge_limit_best[window_n] = 0.0
                 else:
-                    self.charge_limit_best[window_n] = self.soc_max
+                    # Windows beyond the record window are parked at a full charge on the assumption
+                    # that Predbat can always charge later - which it can't when grid charging is
+                    # forbidden, so park them at a freeze instead
+                    self.charge_limit_best[window_n] = self.reserve if self.set_charge_freeze_only else self.soc_max
 
         if self.export_window_best and self.calculate_best_export:
             # Set all to max
