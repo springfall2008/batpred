@@ -358,6 +358,43 @@ def triage(issue_number):
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
+def create_pr(issue_number):
+    """Run the /issue-pr skill for one issue under the push/PR-create-capable permission set.
+
+    Whether it succeeded is judged by the caller re-checking has_existing_pr()
+    afterwards, not by this function's return value or the invocation's exit code -
+    a claude -p session that completes normally exits 0 whether it opened a PR or
+    decided the quality gate failed and posted a comment instead.
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/issue-pr {issue_number} scratch={SCRATCH_DIR}",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS_PR,
+        "--disallowedTools",
+        DISALLOWED_TOOLS_PR,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "150",
+        "--max-budget-usd",
+        "25.00",
+    ]
+    log_path = LOG_DIR / f"issue-{issue_number}-pr.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[pr] issue #{issue_number}: starting, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== issue #{issue_number} PR flow started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== issue #{issue_number} PR flow exited {result.returncode} ====\n")
+    print(f"[pr] issue #{issue_number}: exited {result.returncode}", flush=True)
+
+
 def main():
     if not CLONE_DIR.exists():
         raise SystemExit(f"Expected a git clone at {CLONE_DIR} - see setup steps before running this daemon.")

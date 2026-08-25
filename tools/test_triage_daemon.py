@@ -235,5 +235,35 @@ class PermissionModelTests(unittest.TestCase):
         )
 
 
+class CreatePrTests(DaemonPathsTestCase):
+    """Tests for create_pr(), new in the bot PR flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_pr_permission_set(self, mock_run):
+        """Runs the /issue-pr skill with the PR-flow allow/deny lists and budget caps."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/issue-pr 4720", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS_PR, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS_PR, cmd)
+        self.assertIn("150", cmd)
+        self.assertIn("25.00", cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_does_not_raise_on_a_non_zero_exit(self, mock_run):
+        """Unlike triage(), a non-zero exit is logged, not raised - the caller decides
+        success by checking for the PR afterwards, not from this function's return."""
+        mock_run.return_value = MagicMock(returncode=1)
+        triage_daemon.create_pr(4720)  # must not raise
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-issue PR-flow log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        self.assertTrue((self.log_dir / "issue-4720-pr.log").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
