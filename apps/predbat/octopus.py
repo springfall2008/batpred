@@ -434,6 +434,11 @@ def _slot_tou_label(node):
 def _night_time_to_minutes(value):
     """
     Parse an "HH:MM" or "HH:MM:SS" time into minutes from midnight, or None if it is not valid.
+
+    An hour of 24 is normalised to 0, matching how utils.time_string_to_stamp parses the same
+    strings, so that octopus_night_times really does accept the format the rate bands document. A
+    "24:00" end still closes out the day, since the caller pushes an end at or before the start
+    into the following day.
     """
     if not value:
         return None
@@ -445,6 +450,8 @@ def _night_time_to_minutes(value):
         return None
     if hour < 0 or hour > 24 or minute < 0 or minute > 59:
         return None
+    if hour == 24:
+        hour = 0
     return hour * 60 + minute
 
 

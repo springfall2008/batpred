@@ -19,7 +19,7 @@ from unittest.mock import patch, PropertyMock
 
 import pytz
 
-from octopus import OctopusAPI, DATE_TIME_STR_FORMAT
+from octopus import OctopusAPI, DATE_TIME_STR_FORMAT, _night_time_to_minutes, _windows_from_night_times
 
 
 LONDON = pytz.timezone("Europe/London")
@@ -152,6 +152,7 @@ async def test_octopus_tou_windows(my_predbat):
     - Test 8: octopus_night_times configures the windows manually, in local time
     - Test 9: a manually configured window may be given in UTC with utc: true
     - Test 10: manual configuration beats the meter's own TOU labels
+    - Test 11: an hour of 24 is normalised to 0, matching how basic_rates parses times
     """
     print("\n**** Running Octopus TOU window tests ****")
     failed = False
@@ -348,5 +349,21 @@ async def test_octopus_tou_windows(my_predbat):
         failed = True
     else:
         print("PASS: manual configuration takes precedence over the meter's TOU labels")
+
+    # ------------------------------------------------------------------
+    # Test 11: hour 24 normalises to hour 0, as time_string_to_stamp does
+    # ------------------------------------------------------------------
+    print("\n*** Test 11: 24:xx is normalised to 00:xx ***")
+    if _night_time_to_minutes("24:00:00") != 0 or _night_time_to_minutes("24:30:00") != 30:
+        print("ERROR: 24:00 should parse as 0 and 24:30 as 30, got {} and {}".format(_night_time_to_minutes("24:00:00"), _night_time_to_minutes("24:30:00")))
+        failed = True
+    elif _windows_from_night_times([{"start": "24:30:00", "end": "05:00:00"}]) != [(30, 300, False)]:
+        print("ERROR: a 24:30 start should behave as 00:30, got {}".format(_windows_from_night_times([{"start": "24:30:00", "end": "05:00:00"}])))
+        failed = True
+    elif _windows_from_night_times([{"start": "20:00:00", "end": "24:00:00"}]) != [(1200, 1440, False)]:
+        print("ERROR: a 24:00 end should still close the day at 1440, got {}".format(_windows_from_night_times([{"start": "20:00:00", "end": "24:00:00"}])))
+        failed = True
+    else:
+        print("PASS: hour 24 normalised to hour 0, and a 24:00 end still closes the day")
 
     return failed

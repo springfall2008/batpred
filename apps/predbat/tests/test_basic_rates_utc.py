@@ -34,7 +34,23 @@ def _window_of(rates, rate_value):
 
 def test_basic_rates_utc(my_predbat):
     """
-    Test the utc flag on basic_rates windows.
+    Test the utc flag on basic_rates windows, restoring the shared clock afterwards.
+
+    The whole suite runs against one PredBat instance, so the pinned clock these tests need must be
+    put back or every later test inherits a date five days in the past and becomes order-dependent.
+    """
+    original_midnight_utc = my_predbat.midnight_utc
+    original_midnight = my_predbat.midnight
+    try:
+        return _run_basic_rates_utc_tests(my_predbat)
+    finally:
+        my_predbat.midnight_utc = original_midnight_utc
+        my_predbat.midnight = original_midnight
+
+
+def _run_basic_rates_utc_tests(my_predbat):
+    """
+    Run the utc flag test cases against a clock the caller is responsible for restoring.
 
     Tests:
     - Test 1: utc:true during BST shifts a 00:30-07:30 window to 01:30-08:30 local
