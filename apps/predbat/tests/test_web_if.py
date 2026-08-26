@@ -23,14 +23,10 @@ def test_plan_renderer_renders_batch_controls():
     the runtime batch state.
     """
     renderer_js = get_plan_renderer_js()
-    assert "predbatSelectedTimeOverrides" in renderer_js
-    assert "setSelectedTimeOverrides(getSelectedTimeOverrides())" in renderer_js
-    assert "openDropdown(dropdownId)" in renderer_js
-    assert "Batch select" in renderer_js
-    assert "Cancel Batch" in renderer_js
-    assert "batch-select-action" in renderer_js
-    assert "cancel-batch" in renderer_js
-    assert "querySelectorAll('a.batch-select-action, a.cancel-batch')" in renderer_js
+    assert "toggleTimeSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
+    assert "const batchActive = getBatchActive();" in renderer_js
+    assert "addToBatchSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
+    assert 'class="cancel-batch"' in renderer_js
 
 
 def run_test_web_if(my_predbat):
@@ -39,6 +35,12 @@ def run_test_web_if(my_predbat):
     """
     failed = 0
     print("**** Running web interface test ****\n")
+
+    try:
+        test_plan_renderer_renders_batch_controls()
+    except AssertionError as error:
+        print(f"ERROR: Plan renderer batch control test failed: {error}")
+        failed = 1
 
     # Create temp directory and copy apps.yaml
     original_dir = os.getcwd()

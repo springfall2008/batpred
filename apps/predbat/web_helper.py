@@ -6357,7 +6357,7 @@ def get_plan_css():
         .then(data => {
             if (data.success) {
                 const messageElement = document.createElement('div');
-                const timesLabel = selectedTimes.length > 1 ? `${selectedTimes.length} slots` : time;
+                const timesLabel = selectedTimes.length > 1 ? `${selectedTimes.length} slots` : selectedTimes.length === 1 ? selectedTimes[0] : time;
                 messageElement.textContent = `${action} override set for ${timesLabel}`;
                 messageElement.style.position = 'fixed';
                 messageElement.style.top = '65px';
