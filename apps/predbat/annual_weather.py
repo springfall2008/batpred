@@ -12,6 +12,7 @@ would have been looking at). The gap between them is genuine day-ahead forecast
 error, from which each month's P10 ratio is derived.
 """
 
+import hashlib
 import math
 from datetime import timedelta
 
@@ -177,7 +178,13 @@ class AnnualWeather:
         totals = {}
         for index, array in enumerate(self.arrays):
             url = self._build_url(base, array, year)
-            cache_key = "weather_{}_{}_{}_{}_{}".format(cache_tag, year, index, self.latitude, self.longitude)
+            # Derived from the request URL, NOT from a hand-listed subset of its parameters.
+            # Listing them is how this drifted: the URL carries tilt and azimuth, the key did
+            # not, so two runs differing only in roof orientation collided and the second was
+            # served the first's irradiance - silently, since Open-Meteo computes the tilted
+            # irradiance server-side. Hashing the URL means any parameter added to
+            # _build_url from now on changes the key automatically.
+            cache_key = "weather_{}_{}_{}_{}".format(cache_tag, year, index, hashlib.sha256(url.encode()).hexdigest()[:16])
             data = None
             if self.storage:
                 cached = await self.storage.load("annual", cache_key)

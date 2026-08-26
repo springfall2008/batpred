@@ -320,3 +320,64 @@ def test_annual_weather(my_predbat):
         failed = True
 
     return failed
+
+
+def test_annual_weather_orientation_cache(my_predbat):
+    """Two runs differing only in orientation must not share a weather cache entry."""
+    failed = False
+
+    print("Test: a different azimuth produces a different cache key")
+    storage = FakeAnnualStorage()
+    urls = []
+
+    async def fake_fetch(url):
+        """Record the URL and return a payload whose value encodes which URL produced it."""
+        urls.append(url)
+        return {
+            "hourly": {
+                "time": ["2025-06-01T00:00", "2025-06-01T01:00"],
+                "global_tilted_irradiance": [float(len(urls)), float(len(urls))],
+                "temperature_2m": [15.0, 15.0],
+                "wind_speed_10m": [2.0, 2.0],
+            }
+        }
+
+    south = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    west = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 270, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+
+    asyncio.run(south._fetch_series("https://example.test/archive", 2025, "actual"))
+    downloads_after_south = len(urls)
+    asyncio.run(west._fetch_series("https://example.test/archive", 2025, "actual"))
+
+    if len(urls) == downloads_after_south:
+        print("  ERROR: the west-facing array was served the south-facing array's cached payload")
+        failed = True
+    if len(set(storage.saved_keys)) < 2:
+        print("  ERROR: expected two distinct cache keys, got {}".format(sorted(set(storage.saved_keys))))
+        failed = True
+
+    print("Test: a different declination also produces a different cache key")
+    storage = FakeAnnualStorage()
+    urls = []
+    flat = AnnualWeather([{"kwp": 5.0, "declination": 10, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    steep = AnnualWeather([{"kwp": 5.0, "declination": 60, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    asyncio.run(flat._fetch_series("https://example.test/archive", 2025, "actual"))
+    downloads_after_flat = len(urls)
+    asyncio.run(steep._fetch_series("https://example.test/archive", 2025, "actual"))
+    if len(urls) == downloads_after_flat:
+        print("  ERROR: the steep array was served the shallow array's cached payload")
+        failed = True
+
+    print("Test: an identical array still hits the cache")
+    storage = FakeAnnualStorage()
+    urls = []
+    first = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    second = AnnualWeather([{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}], latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    asyncio.run(first._fetch_series("https://example.test/archive", 2025, "actual"))
+    downloads_after_first = len(urls)
+    asyncio.run(second._fetch_series("https://example.test/archive", 2025, "actual"))
+    if len(urls) != downloads_after_first:
+        print("  ERROR: an identical array re-downloaded instead of hitting the cache")
+        failed = True
+
+    return failed
