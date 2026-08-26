@@ -2925,6 +2925,7 @@ class Fetch:
 
         iboost_forecast_scaling = self.get_arg("iboost_forecast_scaling", 1.0)
         demand_cumulative = {}
+        first_data_minute = None
         last_data_minute = None
         entity_ids = self.get_arg("iboost_forecast", indirect=False)
         if isinstance(entity_ids, str):
@@ -2951,9 +2952,12 @@ class Fetch:
                 for key, value in data.items():
                     data_array.append({"energy": value, "last_updated": key})
                 data = data_array
+            if (data is not None) and (not isinstance(data, list)):
+                self.log("Warn: iBoost demand forecast data from {} is not in a supported format. Skipping forecast source.".format(entity_id))
+                data = None
 
-            # Track how far into the future the raw data reaches; minute_data back-fills its output
-            # past the last data point, so staleness has to be judged from the raw timestamps.
+            # Track the extent of the raw data; minute_data back-fills its output past the last
+            # data point, so staleness has to be judged from the raw timestamps.
             for item in data or []:
                 try:
                     item_minute = int((str2time(item["last_updated"]) - self.midnight_utc).total_seconds() / 60)
@@ -2961,6 +2965,8 @@ class Fetch:
                     continue
                 if (last_data_minute is None) or (item_minute > last_data_minute):
                     last_data_minute = item_minute
+                if (first_data_minute is None) or (item_minute < first_data_minute):
+                    first_data_minute = item_minute
 
             # Load data
             forecast, _ = minute_data(
@@ -2990,18 +2996,25 @@ class Fetch:
         if (last_data_minute is None) or (last_data_minute <= self.minutes_now):
             self.log("Warn: iBoost demand forecast ends at minute {} which is not in the future, using the legacy iBoost smart plan".format(last_data_minute))
             return {}
+        if first_data_minute >= self.minutes_now + self.forecast_minutes:
+            self.log("Warn: iBoost demand forecast starts at minute {} which is beyond the planning horizon, using the legacy iBoost smart plan".format(first_data_minute))
+            return {}
 
         # Convert the cumulative series into demand per plan interval, aligned to the same interval
         # grid the planner books slots on. Per-minute deltas are clamped to zero individually (the
         # same reading get_from_incrementing gives the load forecast) so dips in the series and the
-        # region minute_data back-fills beyond the data both read as zero demand.
+        # region minute_data back-fills beyond the data both read as zero demand. Minutes already
+        # elapsed in the current interval are skipped: any draw there is in the tank SoC reading.
         demand = {}
         total = 0.0
         start_minute = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         for minute in range(start_minute, start_minute + self.forecast_minutes, self.plan_interval_minutes):
             kwh = 0.0
             for offset in range(self.plan_interval_minutes):
-                kwh += max(demand_cumulative.get(minute + offset + 1, 0) - demand_cumulative.get(minute + offset, 0), 0.0)
+                offset_minute = minute + offset
+                if offset_minute < self.minutes_now:
+                    continue
+                kwh += max(demand_cumulative.get(offset_minute + 1, 0) - demand_cumulative.get(offset_minute, 0), 0.0)
             demand[minute] = dp4(kwh)
             total += kwh
 
