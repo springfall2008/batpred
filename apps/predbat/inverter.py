@@ -1629,14 +1629,28 @@ class Inverter:
         elif "discharge_start_time" in self.base.args:
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
             discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
+        elif self.rest_api or self.base.get_arg("ge_cloud_direct", False, indirect=False):
+            # Same reasoning as the charge window above, and it has to be here too or that fix is
+            # defeated: on a cloud fetch failure the charge window degrades gracefully and then
+            # this branch crashes the whole update loop on the very same cycle, so the inverter
+            # never recovers either way. A configured-but-empty source is transient, so fall
+            # through to the safe-defaults/retry handling below.
+            discharge_start = None
+            discharge_end = None
         else:
-            self.log("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id))
-            self.base.record_status("Error: Inverter {} unable to read Export window as neither REST or discharge_start_time are set".format(self.id), had_errors=True)
-            raise ValueError
+            # No data source configured at all - a permanent setup gap, handled as such.
+            message = "Error: Inverter {} unable to read Export window - no source is configured (set givtcp_rest, ge_cloud_direct, or discharge_start_time in apps.yaml)".format(self.id)
+            self.log(message)
+            self.base.record_status(message, had_errors=True)
+            raise ValueError(message)
 
         if discharge_start is None or discharge_end is None:
-            self.log("Warn: Inverter {} unable to read Export window as discharge_start or discharge_end is None, will retry next update".format(self.id))
-            self.base.record_status("Warn: Inverter {} unable to read Export window, will retry next update".format(self.id), had_errors=True)
+            # Name the source that came back empty, as the charge window does - "discharge_start is
+            # None" sends users to apps.yaml, which is the one thing that is fine here.
+            source = "GE Cloud" if (not self.rest_api and self.base.get_arg("ge_cloud_direct", False, indirect=False)) else "REST"
+            hint = "check the {} credentials and that the account still has this inverter attached".format(source)
+            self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, source, hint))
+            self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
             # Set safe defaults to allow graceful recovery on next update
             self.discharge_enable_time = False
             self.discharge_start_time_minutes = 0
