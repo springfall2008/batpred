@@ -317,6 +317,10 @@ def validate_config(config, today=None):
 
     samples_per_month = _require_number(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH), "annual.samples_per_month", minimum=1, integer=True)
 
+    sampling = raw.get("sampling", "percentile")
+    if sampling not in ("percentile", "weekday_spread"):
+        raise AnnualConfigError("annual.sampling must be 'percentile' or 'weekday_spread', got '{}'".format(sampling))
+
     # An explicit month subset. Absent means the whole year, which is what every config
     # written before this existed means. Sorted and de-duplicated so the run order and the
     # results document are stable regardless of how the caller wrote it.
@@ -375,6 +379,7 @@ def validate_config(config, today=None):
         # understates what the system is worth. Defaults to the Ofgem price cap.
         "baseline_tariff": _validate_tariff(raw.get("baseline_tariff") or DEFAULT_BASELINE_TARIFF, path="annual.baseline_tariff"),
         "samples_per_month": samples_per_month,
+        "sampling": sampling,
         "costs": _validated_costs(raw.get("costs")),
         "debug": _coerce_bool(raw.get("debug", False)),
         # Plans four seasonal months and interpolates the rest - see annual_interpolate.py.
@@ -707,13 +712,56 @@ def _percentile_indices(count, samples):
     return chosen
 
 
-def select_samples(weather, year, month, samples_per_month, has_solar=True):
+def _weekday_spread_days(candidates, year, month, samples):
+    """Choose `samples` days covering distinct weekdays, spread across the weeks of the month.
+
+    Target weekday positions come from ``_percentile_indices(7, samples)`` - the same helper the
+    percentile sampler uses - so five samples target Mon/Wed/Thu/Fri/Sun: four weekdays to one
+    weekend day, against the month's true five to two. Each target then takes the day with that
+    weekday whose week block is least used, which spreads the samples across the month without
+    letting a short final week block (29-31, three days) force a duplicate weekday.
+
+    Weekday coverage takes priority over block spread because it is the point: the synthetic load
+    is identical every day, so what a weekday buys is RATE variation, and a half-hourly export
+    tariff's weekend prices differ systematically from its weekday ones.
+
+    Fully deterministic - dedup and caching upstream depend on the same inputs giving the same days.
+    """
+    available = set(candidates)
+    targets = _percentile_indices(7, samples)
+
+    chosen = []
+    used = set()
+    used_blocks = set()
+    for position in range(samples):
+        weekday = targets[position % len(targets)] if targets else 0
+        same_weekday = sorted(day for day in available if day.weekday() == weekday and day not in used)
+        # Prefer a week block nothing has been drawn from yet; fall back to any day with the
+        # target weekday, and only then to any unused candidate at all.
+        pool = [day for day in same_weekday if (day.day - 1) // 7 not in used_blocks] or same_weekday
+        if not pool:
+            pool = sorted(day for day in available if day not in used)
+        if not pool:
+            break
+        pick = pool[0]
+        chosen.append(pick)
+        used.add(pick)
+        used_blocks.add((pick.day - 1) // 7)
+    return sorted(chosen)
+
+
+def select_samples(weather, year, month, samples_per_month, has_solar=True, sampling="percentile"):
     """Choose the days to plan for one month, with the weight in days each represents.
 
     Days are ranked by their *actual* PV energy and sampled at even percentiles, so an
     unlucky sunny or dull draw cannot swing the month. Ranking uses actuals rather than
     the forecast: the aim is to represent what the month really contained, not what was
     predicted. Days without a following day are excluded because the 48 hour plan needs one.
+
+    ``sampling`` selects between two candidate-choosing strategies once the candidate list is
+    built: the default ``"percentile"`` (above), or ``"weekday_spread"`` (see
+    ``_weekday_spread_days``), which trades PV-percentile representativeness for weekday
+    coverage - worthwhile when the tariff varies by day of week and the load does not.
 
     Weights sum to the number of days in the month, up to ordinary floating-point
     rounding, so a month with fewer usable candidates than requested is scaled up
@@ -738,9 +786,14 @@ def select_samples(weather, year, month, samples_per_month, has_solar=True):
     if not candidates:
         return []
 
-    # _percentile_indices() already guarantees distinct indices, so no set() is needed here.
-    indices = _percentile_indices(len(candidates), samples_per_month)
-    chosen = sorted(candidates[index] for index in indices)
+    if sampling == "weekday_spread":
+        chosen = _weekday_spread_days(candidates, year, month, samples_per_month)
+    else:
+        # _percentile_indices() already guarantees distinct indices, so no set() is needed here.
+        indices = _percentile_indices(len(candidates), samples_per_month)
+        chosen = sorted(candidates[index] for index in indices)
+    if not chosen:
+        return []
     weight = days_in_month / float(len(chosen))
     return [(day, weight) for day in chosen]
 
@@ -1767,7 +1820,7 @@ class AnnualPredictor:
         samples_per_month = self.config["samples_per_month"]
         has_solar = bool(self.config["solar"])
 
-        samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar)
+        samples = select_samples(self.weather, year, month, samples_per_month, has_solar=has_solar, sampling=self.config["sampling"])
         if not samples:
             return {"month": month, "status": "unavailable", "reason": "no usable weather days", "days": days_in_month, "standing_charge_p": standing_charge_p}
 

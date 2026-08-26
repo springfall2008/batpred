@@ -269,6 +269,7 @@ from tests.test_load_today_comparison import test_load_today_comparison
 from tests.test_annual_config import test_annual_config
 from tests.test_annual_bootstrap import test_annual_bootstrap
 from tests.test_annual_sampling import test_annual_sampling
+from tests.test_annual_weekday_sampling import test_annual_weekday_sampling
 from tests.test_annual_interpolate import test_annual_fast_mode_assembly, test_annual_interpolate
 from tests.test_annual_curve_reference import test_annual_curve_reference
 from tests.test_annual_scenarios import test_annual_scenarios
@@ -647,6 +648,7 @@ def main():
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
         ("annual_sampling", test_annual_sampling, "Annual prediction sample selection tests", False),
+        ("annual_weekday_sampling", test_annual_weekday_sampling, "Annual weekday-spread sample selection tests", False),
         ("annual_scenarios", test_annual_scenarios, "Annual prediction scenario helper tests", False),
         ("annual_results", test_annual_results, "Annual prediction results assembly tests", False),
         ("annual_cli", test_annual_cli, "Annual prediction CLI output tests", False),
