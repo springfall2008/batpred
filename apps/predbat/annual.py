@@ -49,6 +49,13 @@ DEFAULT_PANEL_WATTS = 400.0
 # The Open-Meteo ERA5 archive, which the weather module draws on, starts in 1940.
 MINIMUM_YEAR = 1940
 
+# The Open-Meteo archive (archive-api.open-meteo.com) is ERA5T-backed and runs about five
+# days behind. A month whose end is closer than this has no complete actuals, and the
+# sampler would simply not see the missing days as candidates - costing the month on a
+# short sample with nothing to indicate anything was wrong. Six, not five, to leave a day
+# of margin.
+WEATHER_ARCHIVE_LAG_DAYS = 6
+
 # Substrings that mark a config value as secret and therefore scrubbable
 SECRET_MARKERS = ["_key", "password", "token", "secret"]
 
@@ -335,12 +342,22 @@ def validate_config(config, today=None):
 
     if today is None:
         today = date.today()
-    # Capped at the most recent COMPLETE calendar year, not the current (in-progress) one:
-    # Open-Meteo answers a mid-year request with short but internally-consistent arrays, so
-    # _payload_problem() cannot tell a truncated current-year download from a genuinely
-    # complete one, and it gets cached with no expiry - permanently pinning the remaining
-    # months as "unavailable" until the work dir is deleted by hand. See annual_weather.py.
-    year = _require_number(raw.get("year", today.year - 1), "annual.year", minimum=MINIMUM_YEAR, maximum=today.year - 1, integer=True)
+    # Without an explicit month subset the cap stays at the last COMPLETE calendar year:
+    # AnnualWeather fetches a whole year and cannot tell a truncated in-progress download
+    # from a finished one, and caches it with no expiry, permanently pinning the remaining
+    # months as unavailable. That reasoning does not apply to a bounded window, so an
+    # explicit subset may reach into the current year - provided each month it names is
+    # genuinely finished and past the archive lag, which is checked immediately below.
+    year_maximum = today.year if explicit_months else today.year - 1
+    year = _require_number(raw.get("year", today.year - 1), "annual.year", minimum=MINIMUM_YEAR, maximum=year_maximum, integer=True)
+
+    if explicit_months:
+        for month in months:
+            month_end = date(year, month, calendar.monthrange(year, month)[1])
+            if (today - month_end).days < WEATHER_ARCHIVE_LAG_DAYS:
+                raise AnnualConfigError(
+                    "annual.months includes {}-{:02d}, which is not complete enough to model: the Open-Meteo archive runs about {} days behind, so a month is only usable once it ended at least that long ago".format(year, month, WEATHER_ARCHIVE_LAG_DAYS)
+                )
 
     return {
         "location": dict(location),

@@ -561,4 +561,66 @@ def test_annual_config(my_predbat):
         print("  ERROR: fast_mode must be forced off when annual.months is set")
         failed = True
 
+    print("Test: the current year is rejected without an explicit annual.months")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    try:
+        validate_config(config, today=date(2026, 8, 26))
+        print("  ERROR: current year without annual.months should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "at most" not in str(error):
+            print("  ERROR: current year rejection raised '{}', expected it to mention 'at most'".format(error))
+            failed = True
+
+    print("Test: the current year is accepted for a month that is safely complete")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [7]
+    try:
+        result = validate_config(config, today=date(2026, 8, 26))
+        if result["year"] != 2026 or result["months"] != [7]:
+            print("  ERROR: July 2026 should be accepted on 26 August 2026")
+            failed = True
+    except AnnualConfigError as error:
+        print("  ERROR: July 2026 should be accepted on 26 August 2026, got '{}'".format(error))
+        failed = True
+
+    print("Test: a month still inside the archive lag is rejected")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [8]
+    # 2 September is 1 day past 31 August, well inside the 6 day ERA5 lag.
+    try:
+        validate_config(config, today=date(2026, 9, 2))
+        print("  ERROR: August 2026 should be rejected on 2 September 2026, inside the archive lag")
+        failed = True
+    except AnnualConfigError as error:
+        if "complete" not in str(error).lower():
+            print("  ERROR: the lag rejection should explain the month is not yet complete, got '{}'".format(error))
+            failed = True
+
+    print("Test: the lag boundary is inclusive at exactly six days")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [8]
+    try:
+        validate_config(config, today=date(2026, 9, 6))
+    except AnnualConfigError as error:
+        print("  ERROR: 6 September is exactly six days past 31 August and should be accepted, got '{}'".format(error))
+        failed = True
+
+    print("Test: an in-progress month is rejected")
+    config = base_config()
+    config["annual"]["year"] = 2026
+    config["annual"]["months"] = [9]
+    try:
+        validate_config(config, today=date(2026, 8, 26))
+        print("  ERROR: in-progress month should have raised AnnualConfigError")
+        failed = True
+    except AnnualConfigError as error:
+        if "complete" not in str(error).lower():
+            print("  ERROR: in-progress month rejection raised '{}', expected it to mention 'complete'".format(error))
+            failed = True
+
     return failed
