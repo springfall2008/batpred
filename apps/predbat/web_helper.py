@@ -155,22 +155,7 @@ def get_entity_detailed_row_js():
             timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
         }
     }
-        function toggleTimeSelection(time, dropdownId) {
-            // If batch mode is active, clicking toggles inclusion in the batch.
-                if (getBatchActive()) {
-                    const selectedTimes = getSelectedTimeOverrides();
-                    const updated = selectedTimes.includes(time)
-                        ? selectedTimes.filter(item => item !== time)
-                        : selectedTimes.concat(time);
-                    setSelectedTimeOverrides(updated);
-                    openDropdown(dropdownId);
-                } else {
-                    openDropdown(dropdownId);
-                }
-
-            // Not in batch mode: just open the dropdown. Do not select the slot yet.
-            openDropdown(dropdownId);
-        }
+    // toggleTimeSelection is defined in the plan override JS.
     </script>
     """
     return text
