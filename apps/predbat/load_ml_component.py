@@ -108,6 +108,10 @@ class LoadMLComponent(ComponentBase):
         self.data_lock = asyncio.Lock()
         self.last_data_fetch = None
         self.load_ml_calculating = False
+        # Cumulative load since local midnight, captured at fetch time along with the timestamp
+        # it refers to so a stale snapshot can be detected if publishing is delayed across midnight
+        self.load_minutes_now = 0
+        self.load_minutes_now_time = None
 
         # Model state
         self.predictor = None
@@ -405,7 +409,7 @@ class LoadMLComponent(ComponentBase):
                 energy = self.get_from_incrementing(pv_data_cumulative, m, PREDICT_STEP, backwards=True)
                 pv_data[m] = dp4(energy)
 
-            pv_forecast_minute, pv_forecast_minute10 = self.base.fetch_pv_forecast()
+            pv_forecast_minute, pv_forecast_minute10, _ = self.base.fetch_pv_forecast()
             # Add future PV forecast as per-5-min energy with negative keys (negative = future)
             # key -5 = first future step, -10 = second, etc.
             if pv_forecast_minute:
@@ -480,8 +484,10 @@ class LoadMLComponent(ComponentBase):
                 )
 
             # try to retrieve import and export rate history to detect rate-based load patterns
-            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False)
-            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False)
+            # This is optional - it only adds features to the model, and Home Assistant has no history
+            # for these entities unless its recorder is configured to store them
+            import_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, import_entity, scale=1.0, increment=False, smoothing=False, pad=False, required=False)
+            export_rates_history = self.base.minute_data_import_export(days_to_fetch, self.now_utc, export_entity, scale=1.0, increment=False, smoothing=False, pad=False, required=False)
 
             # Merge import_rates_history with import_rates_data
             if import_rates_history is None:
@@ -589,8 +595,26 @@ class LoadMLComponent(ComponentBase):
         self.export_rates_data = self._merge_channel(self.export_rates_data, export_rates_data) if export_rates_data else self.export_rates_data
         self._recompute_age_days()
         self.load_minutes_now = load_minutes_now
+        self.load_minutes_now_time = self.now_utc
         self.last_data_fetch = self.now_utc
         self.data_ready = True
+
+    async def _do_fetch(self):
+        """
+        Shift the in-memory data to 'now', fetch fresh sensor history and merge the two.
+
+        Re-anchors every channel plus the load_minutes_now baseline to the current time,
+        so anything computed afterwards (predictions, published entity) uses data that
+        belongs to the same moment as self.minutes_now.
+        """
+        async with self.data_lock:
+            self._shift_fetch_data()
+            load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data = await self._fetch_load_data()
+            if load_data:
+                self._merge_fetch_data(load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data)
+            else:
+                self.log("Warn: ML Component: Failed to fetch load data, no data was returned.")
+        self.log("ML Component: Data fetch completed, load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
 
     def get_current_prediction(self):
         """
@@ -655,7 +679,16 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: Generating predictions load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
             if 0:
                 self._log_prediction_input_table(now_utc)
-            predictions = self.predictor.predict(self.load_data, now_utc, midnight_utc, pv_minutes=self.pv_data, temp_minutes=self.temperature_data, import_rates=self.import_rates_data, export_rates=self.export_rates_data, exog_features=exog_features)
+            predictions = self.predictor.predict(
+                self.load_data,
+                now_utc,
+                midnight_utc,
+                pv_minutes=self.pv_data,
+                temp_minutes=self.temperature_data,
+                import_rates=self.import_rates_data,
+                export_rates=self.export_rates_data,
+                exog_features=exog_features,
+            )
 
             if predictions:
                 self.current_predictions = predictions
@@ -702,14 +735,7 @@ class LoadMLComponent(ComponentBase):
 
         if should_fetch:
             # Shift existing data to keep it anchored to 'minutes ago from now' before fetching new data, so that we can merge them and preserve historical depth even if the fetch returns limited history
-            async with self.data_lock:
-                self._shift_fetch_data()
-                load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data = await self._fetch_load_data()
-                if load_data:
-                    self._merge_fetch_data(load_data, age_days, load_minutes_now, pv_data, temperature_data, import_rates_data, export_rates_data)
-                else:
-                    self.log("Warn: ML Component: Failed to fetch load data, no data was returned.")
-            self.log("ML Component: Data fetch completed, load data age {:.1f} days, {} data points".format(self.load_data_age_days, len(self.load_data) if self.load_data else 0))
+            await self._do_fetch()
 
         # Check if we have data
         if not self.data_ready:
@@ -736,8 +762,10 @@ class LoadMLComponent(ComponentBase):
             self.log("ML Component: No training needed, model age is {} hours".format(dp2(retrain_age_seconds / 3600.0)))
 
         if should_train or should_fetch:
-            # Set load_ml_calculating across all NumPy-heavy work (training + predict + save)
-            # so that the plan's multiprocessing pool is never fork()ed while Numpy threads are active.
+            # Set load_ml_calculating across all NumPy-heavy work (training + predict + save). This used
+            # to gate the plan's multiprocessing pool off while NumPy threads were active (fork() is
+            # unsafe with live threads); the pool is gone, so this is now purely a status flag surfaced
+            # via is_calculating() and logged by calculate_plan().
             if self.base.prediction_started:
                 self.log("ML Component: Waiting for current prediction cycle to complete before running ML work")
                 while self.base.prediction_started:
@@ -748,6 +776,17 @@ class LoadMLComponent(ComponentBase):
                 if should_train:
                     self.log("ML Component: Doing training...")
                     await self._do_training(is_initial)
+
+                    # Training can run for many minutes, during which the data fetched above
+                    # goes stale - both the lookback window feeding the prediction and the
+                    # load_minutes_now baseline still refer to the pre-training time. Re-fetch
+                    # so everything is anchored to the current time again. Without this a
+                    # training run that straddles midnight publishes yesterday's daily total
+                    # as today's baseline, inflating the forecast by a whole day of load.
+                    stale_minutes = (self.now_utc - self.last_data_fetch).total_seconds() / 60.0 if self.last_data_fetch else 0
+                    if stale_minutes >= PREDICT_STEP:
+                        self.log("ML Component: Data is {:.0f} minutes stale after training, re-fetching before prediction".format(stale_minutes))
+                        await self._do_fetch()
 
                 # Update model validity status
                 self._update_model_status()
@@ -793,14 +832,20 @@ class LoadMLComponent(ComponentBase):
         max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
 
         def dict_to_array(data_dict):
-            arr = np.zeros(max_steps, dtype=np.float32)
+            """Convert sparse {minute: value} dictionary into a fixed-size numpy array."""
+            arr = np.full(max_steps, np.nan, dtype=np.float32)
             if data_dict:
                 for minute, value in data_dict.items():
                     # Only persist historical data (non-negative integer keys)
                     if isinstance(minute, int) and minute >= 0:
                         idx = minute // PREDICT_STEP
-                        if 0 <= idx < max_steps:
-                            arr[idx] = float(value)
+                        if 0 <= idx < max_steps and value is not None:
+                            try:
+                                val = float(value)
+                                if np.isfinite(val):
+                                    arr[idx] = val
+                            except (ValueError, TypeError):
+                                pass
             return arr
 
         total_steps = len(self.load_data) if self.load_data else 0
@@ -812,6 +857,7 @@ class LoadMLComponent(ComponentBase):
                 "step_minutes": PREDICT_STEP,
                 "n_steps": total_steps,
                 "age_days": float(self.load_data_age_days),
+                "nan_sentinel": True,
             }
         )
 
@@ -842,48 +888,52 @@ class LoadMLComponent(ComponentBase):
 
         try:
             # np.load is blocking disk IO - run in executor so the event loop stays alive
-            data = np.load(self.database_filepath, allow_pickle=False)
-            metadata = json.loads(str(data["metadata_json"]))
+            with np.load(self.database_filepath, allow_pickle=False) as data:
+                metadata = json.loads(str(data["metadata_json"]))
 
-            version = metadata.get("version", 0)
-            if version != DATABASE_VERSION:
-                self.log("Warn: ML Component: Database version mismatch (saved={}, current={}), discarding".format(version, DATABASE_VERSION))
-                return
+                version = metadata.get("version", 0)
+                if version != DATABASE_VERSION:
+                    self.log("Warn: ML Component: Database version mismatch (saved={}, current={}), discarding".format(version, DATABASE_VERSION))
+                    return
 
-            step_minutes = metadata.get("step_minutes", PREDICT_STEP)
-            if step_minutes != PREDICT_STEP:
-                self.log("Warn: ML Component: Database step size mismatch (saved={}min, current={}min), discarding".format(step_minutes, PREDICT_STEP))
-                return
+                step_minutes = metadata.get("step_minutes", PREDICT_STEP)
+                if step_minutes != PREDICT_STEP:
+                    self.log("Warn: ML Component: Database step size mismatch (saved={}min, current={}min), discarding".format(step_minutes, PREDICT_STEP))
+                    return
 
-            saved_utc = datetime.fromisoformat(metadata["saved_utc"])
-            age_days = float(metadata.get("age_days", 0))
+                saved_utc = datetime.fromisoformat(metadata["saved_utc"])
+                age_days = float(metadata.get("age_days", 0))
+                use_nan_sentinel = metadata.get("nan_sentinel", False)
 
-            max_steps = self.load_ml_database_days * 24 * 60 // PREDICT_STEP
+                def array_to_dict(arr):
+                    """Reconstruct a sparse {minute: value} dict with keys as stored"""
+                    result = {}
+                    nan_format = use_nan_sentinel or np.isnan(arr).any()
+                    for i in range(len(arr)):
+                        val = float(arr[i])
+                        if nan_format:
+                            if not np.isnan(val) and np.isfinite(val):
+                                result[i * PREDICT_STEP] = val
+                        else:
+                            if val != 0.0:
+                                result[i * PREDICT_STEP] = val
+                    return result
 
-            def array_to_dict(arr):
-                """Reconstruct a sparse {minute: value} dict with keys as stored"""
-                result = {}
-                for i in range(len(arr)):
-                    val = float(arr[i])
-                    if val != 0.0:
-                        result[i * PREDICT_STEP] = val
-                return result
+                self.load_data = array_to_dict(data["load"])
+                self.pv_data = array_to_dict(data["pv"])
+                self.temperature_data = array_to_dict(data["temp"])
+                self.import_rates_data = array_to_dict(data["import_rate"])
+                self.export_rates_data = array_to_dict(data["export_rate"])
+                self.load_data_age_days = age_days
+                # Restore last_data_fetch to the save time so that run()'s _shift() will
+                # compute the correct elapsed time and apply the shift exactly once.
+                self.last_data_fetch = saved_utc
 
-            self.load_data = array_to_dict(data["load"])
-            self.pv_data = array_to_dict(data["pv"])
-            self.temperature_data = array_to_dict(data["temp"])
-            self.import_rates_data = array_to_dict(data["import_rate"])
-            self.export_rates_data = array_to_dict(data["export_rate"])
-            self.load_data_age_days = age_days
-            # Restore last_data_fetch to the save time so that run()'s _shift() will
-            # compute the correct elapsed time and apply the shift exactly once.
-            self.last_data_fetch = saved_utc
+                if self.load_data:
+                    self.data_ready = True
 
-            if self.load_data:
-                self.data_ready = True
-
-            elapsed_minutes = (self.now_utc - saved_utc).total_seconds() / 60.0
-            self.log("ML Component: Loaded database history: {} load points, {:.1f}h elapsed since save, age {:.1f} days (shift will be applied on next fetch)".format(len(self.load_data), elapsed_minutes / 60.0, self.load_data_age_days))
+                elapsed_minutes = (self.now_utc - saved_utc).total_seconds() / 60.0
+                self.log("ML Component: Loaded database history: {} load points, {:.1f}h elapsed since save, age {:.1f} days (shift will be applied on next fetch)".format(len(self.load_data), elapsed_minutes / 60.0, self.load_data_age_days))
 
         except Exception as e:
             self.log("Warn: ML Component: Failed to load database history: {} - {}".format(e, traceback.format_exc()))
@@ -947,23 +997,25 @@ class LoadMLComponent(ComponentBase):
                     curriculum_window_days=window_days,
                     curriculum_step_days=5,
                     max_intermediate_passes=8,
+                    progress_callback=self.update_success_timestamp,
                 )
-            # Even if initial was done we need to do one fine tuned curriculum pass too.
-            val_mae = self.predictor.train_curriculum(
-                load_data_snap,
-                now_utc_snap,
-                pv_minutes=pv_data_snap,
-                temp_minutes=temp_data_snap,
-                import_rates=import_rates_snap,
-                export_rates=export_rates_snap,
-                epochs=epochs,
-                time_decay_days=time_decay,
-                validation_holdout_hours=holdout_hours,
-                patience=patience,
-                curriculum_window_days=window_days,
-                curriculum_step_days=step_days,
-                max_intermediate_passes=max_intermediate_passes,
-            )
+            else:
+                val_mae = self.predictor.train_curriculum(
+                    load_data_snap,
+                    now_utc_snap,
+                    pv_minutes=pv_data_snap,
+                    temp_minutes=temp_data_snap,
+                    import_rates=import_rates_snap,
+                    export_rates=export_rates_snap,
+                    epochs=epochs,
+                    time_decay_days=time_decay,
+                    validation_holdout_hours=holdout_hours,
+                    patience=patience,
+                    curriculum_window_days=window_days,
+                    curriculum_step_days=step_days,
+                    max_intermediate_passes=max_intermediate_passes,
+                    progress_callback=self.update_success_timestamp,
+                )
 
             if val_mae is not None:
                 self.last_train_time = datetime.now(timezone.utc)
@@ -1005,6 +1057,31 @@ class LoadMLComponent(ComponentBase):
             self.model_valid = False
             self.model_status = "fallback_" + reason
 
+    def _load_baseline_now(self):
+        """
+        Return the cumulative load since local midnight to use as the forecast baseline.
+
+        Normally this is the snapshot captured during the last data fetch. If that snapshot
+        was taken on a previous day then the daily counter has since reset, and carrying it
+        forward would add a whole day of load on top of every forecast point, so in that case
+        it is re-derived from the per-step load history instead.
+
+        Returns:
+            Cumulative load in kWh since local midnight
+        """
+        if self.load_minutes_now_time is None or self.load_minutes_now_time.date() == self.now_utc.date():
+            return self.load_minutes_now
+
+        derived_baseline = 0.0
+        if self.load_data:
+            for minute in range(0, self.minutes_now, PREDICT_STEP):
+                derived_baseline += self.load_data.get(minute, 0.0)
+        derived_baseline = dp4(derived_baseline)
+        self.log(
+            "Warn: ML Component: Load baseline of {} kWh was captured on {} which is a previous day, " "re-derived load so far today as {} kWh".format(dp2(self.load_minutes_now), self.load_minutes_now_time.strftime("%Y-%m-%d %H:%M"), dp2(derived_baseline))
+        )
+        return derived_baseline
+
     def _publish_entity(self):
         """Publish the load_forecast_ml entity with current predictions."""
         # Convert predictions to timestamp format for entity
@@ -1016,6 +1093,7 @@ class LoadMLComponent(ComponentBase):
         power_today_now = 0
         power_today_h1 = 0
         power_today_h8 = 0
+        load_minutes_now = self._load_baseline_now()
         # Future predictions
         if self.current_predictions:
             prev_value = 0
@@ -1024,8 +1102,8 @@ class LoadMLComponent(ComponentBase):
                 timestamp_str = timestamp.strftime(TIME_FORMAT)
                 # Reset at midnight
                 if minute > 0 and ((minute + self.minutes_now) % (24 * 60) == 0):
-                    reset_amount = value + self.load_minutes_now
-                output_value = round(value - reset_amount + self.load_minutes_now, 4)
+                    reset_amount = value + load_minutes_now
+                output_value = round(value - reset_amount + load_minutes_now, 4)
                 results[timestamp_str] = output_value
                 delta_value = (value - prev_value) / PREDICT_STEP * 60.0
                 if minute == 0:
@@ -1058,7 +1136,7 @@ class LoadMLComponent(ComponentBase):
             "sensor." + self.prefix + "_load_ml_stats",
             state=round(total_kwh, 2),
             attributes={
-                "load_today": dp2(self.load_minutes_now),
+                "load_today": dp2(load_minutes_now),
                 "load_today_h1": dp2(load_today_h1),
                 "load_today_h8": dp2(load_today_h8),
                 "load_total": dp2(total_kwh),
@@ -1066,6 +1144,10 @@ class LoadMLComponent(ComponentBase):
                 "power_today_h1": dp2(power_today_h1),
                 "power_today_h8": dp2(power_today_h8),
                 "mae_kwh": round(float(self.predictor.validation_mae), 4) if self.predictor and self.predictor.validation_mae is not None else None,
+                # Multi-step rollout error and the daily-pattern baseline it is scored against.
+                # mae_kwh above is teacher-forced and stays small even when the rollout collapses.
+                "rollout_mae_kwh": round(float(self.predictor.rollout_mae), 4) if self.predictor and self.predictor.rollout_mae is not None else None,
+                "pattern_mae_kwh": round(float(self.predictor.pattern_mae), 4) if self.predictor and self.predictor.pattern_mae is not None else None,
                 "bias_kwh": round(self.predictor.validation_bias, 4) if self.predictor and self.predictor.validation_bias is not None else None,
                 "last_trained": self.last_train_time.isoformat() if self.last_train_time else None,
                 "model_age_hours": round(model_age_hours, 1) if model_age_hours is not None else None,

@@ -93,6 +93,22 @@ class ComponentBase(ABC):
         """
         return self.base.set_arg(arg, value)
 
+    def set_arg_auto(self, arg, value):
+        """
+        Like set_arg(), but for auto-discovery code (typically automatic_config()) binding an
+        apps.yaml key to an auto-discovered entity/value. Auto-discovery still always wins - this
+        does not change that - but if the user had already set this key explicitly in apps.yaml,
+        silently discarding it left no way to notice (issue #4494 follow-up discussion, PR #4500).
+        Logs a one-time note per key when that happens, then behaves exactly like set_arg().
+        """
+        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
+        raw_value = raw_args.get(arg)
+        warned = getattr(self.base, "apps_yaml_override_warned", None)
+        if raw_value is not None and raw_value != value and warned is not None and arg not in warned:
+            warned.add(arg)
+            self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery always wins currently; remove the apps.yaml entry to avoid this message")
+        return self.set_arg(arg, value)
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.
@@ -158,6 +174,10 @@ class ComponentBase(ABC):
     def get_error_count(self):
         """Get the number of errors that have occurred in this component"""
         return self.count_errors
+
+    def is_calculating(self):
+        """Return whether the component is currently performing a long-running calculation."""
+        return False
 
     async def start(self):
         """
@@ -292,6 +312,16 @@ class ComponentBase(ABC):
 
     def set_state_wrapper(self, entity_id, state, attributes={}, required_unit=None):
         return self.base.set_state_wrapper(entity_id, state, attributes=attributes, required_unit=required_unit)
+
+    async def set_state_external(self, entity_id, state, attributes={}):
+        """Change one of Predbat's OWN entities as if a user had, updating its CONFIG_ITEMS value.
+
+        Distinct from set_state_wrapper, which only writes the entity state: components use this when
+        auto-discovery has to change a Predbat setting (e.g. teslemetry turning inverter_hybrid off
+        for an AC-coupled Powerwall), where writing the state alone would move the displayed entity
+        without changing the value the planner reads.
+        """
+        return await self.base.ha_interface.set_state_external(entity_id, state, attributes=attributes)
 
     def call_notify(self, message):
         return self.base.call_notify(message)

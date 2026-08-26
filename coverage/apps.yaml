@@ -330,10 +330,12 @@ pred_bat:
   # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
   #octopus_saving_session: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_saving_session(s|))'
   octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
 
   # Octopus free session points to the free session Sensor in the Octopus plugin
   # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
-  #octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  #octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
   octopus_free_url: 'http://octopus.energy/free-electricity'
 
   # Energy rates

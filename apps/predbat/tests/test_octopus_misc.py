@@ -26,6 +26,11 @@ async def test_octopus_misc(my_predbat):
     failed += test_octopus_get_intelligent_target_time(my_predbat)
     failed += test_octopus_get_intelligent_battery_size(my_predbat)
     failed += test_octopus_get_intelligent_vehicle(my_predbat)
+    failed += test_octopus_automatic_config_num_cars(my_predbat)
+    failed += test_octopus_automatic_config_slot_order(my_predbat)
+    failed += test_octopus_automatic_config_clears_removed_devices(my_predbat)
+    failed += await test_octopus_automatic_config_rewire(my_predbat)
+    failed += test_octopus_automatic_config_respects_slot_claim(my_predbat)
     failed += await test_octopus_run(my_predbat)
 
     if failed == 0:
@@ -440,6 +445,45 @@ async def test_octopus_join_saving_session(my_predbat):
             failed = True
         else:
             print("PASS: Multiple events can be joined sequentially")
+
+    # Test 6: A successful join sends the "joined" notification - deferred to here (not the
+    # select-entity caller in fetch_octopus_sessions()) because this is the only point where the
+    # real GraphQL result is known (issue #4593)
+    print("\n*** Test 6: Successful join sends the joined notification ***")
+    ha = my_predbat.ha_interface
+    ha.service_store_enable = True
+    ha.service_store = []
+    api6 = OctopusAPI(my_predbat, key="test-api-key-6", account_id="test-account-6", automatic=False)
+    api6.async_graphql_query = AsyncMock(return_value={"joinSavingSessionsEvent": {"joinedEventCodes": ["OCTOPLUS-SUCCESS"]}})
+    api6.async_get_saving_sessions = AsyncMock(return_value={"events": [], "account": {}})
+    await api6.async_join_saving_session_events("test-account-6", "OCTOPLUS-SUCCESS")
+    notify_calls = [svc for svc in ha.get_service_store() if svc[0] == "notify/notify"]
+    if len(notify_calls) != 1:
+        print(f"ERROR: Expected 1 notification on successful join, got {len(notify_calls)}")
+        failed = True
+    elif "OCTOPLUS-SUCCESS" not in notify_calls[0][1].get("message", ""):
+        print(f"ERROR: Notification message missing event code: {notify_calls[0][1]}")
+        failed = True
+    else:
+        print("PASS: Notification sent on successful join")
+    ha.service_store_enable = False
+
+    # Test 7: A failed join (async_graphql_query returns None, e.g. Octopus rejects the event -
+    # matches the real OE-1305 "event not found" case reported in #4593) sends no notification
+    print("\n*** Test 7: Failed join sends no notification ***")
+    ha.service_store_enable = True
+    ha.service_store = []
+    api7 = OctopusAPI(my_predbat, key="test-api-key-7", account_id="test-account-7", automatic=False)
+    api7.async_graphql_query = AsyncMock(return_value=None)
+    api7.async_get_saving_sessions = AsyncMock(return_value={"events": [], "account": {}})
+    await api7.async_join_saving_session_events("test-account-7", "OCTOPLUS-FAILED")
+    notify_calls = [svc for svc in ha.get_service_store() if svc[0] == "notify/notify"]
+    if len(notify_calls) != 0:
+        print(f"ERROR: Expected no notification on failed join, got {len(notify_calls)}: {notify_calls}")
+        failed = True
+    else:
+        print("PASS: No notification sent on failed join")
+    ha.service_store_enable = False
 
     if failed:
         print("\n**** ❌ Octopus async_join_saving_session_events tests FAILED ****")
@@ -1852,6 +1896,464 @@ def test_octopus_get_intelligent_vehicle(my_predbat):
         return 0
 
 
+def test_octopus_automatic_config_num_cars(my_predbat):
+    """
+    Test OctopusAPI automatic_config method's num_cars auto-discovery from Octopus Intelligent devices.
+
+    Tests:
+    - Test 1: Suspended devices (e.g. an old/decommissioned charger still linked to the account) are
+      excluded from the entity lists and don't count towards num_cars
+    - Test 2: num_cars auto-discovery only ever raises num_cars, never lowers an existing higher value
+    """
+    print("\n**** Running Octopus automatic_config num_cars tests ****")
+    failed = False
+
+    # automatic_config() writes several keys (num_cars, octopus_saving_session_join,
+    # octopus_intelligent_slot, metric_octopus_*, ...) directly into my_predbat.args, and
+    # my_predbat is a single shared instance reused across every test in the run - so without
+    # saving/restoring, those writes would leak into unrelated tests that run afterwards.
+    original_args = dict(my_predbat.args)
+
+    # Test 1: 5 registered devices, 2 suspended - only the 3 active devices should count towards
+    # num_cars and appear in the entity lists. A stale/decommissioned device left in an Octopus
+    # account should not be treated as a car needing a charging slot (and, before
+    # fetch_config_options' num_cars clamp existed, an inflated count could push num_cars past
+    # what Predbat supports and crash get_car_charging_planned() with TypeError: float() argument
+    # must be a string or a real number, not 'NoneType').
+    print("\n*** Test 1: Suspended devices are excluded from num_cars and entity lists ***")
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.intelligent_devices = {
+        "device-aaa1": {"suspended": False},
+        "device-bbb2": {"suspended": True},
+        "device-ccc3": {"suspended": False},
+        "device-ddd4": {"suspended": True},
+        "device-eee5": {"suspended": False},
+    }
+    my_predbat.args["num_cars"] = 0
+
+    api.automatic_config(["import", "export"])
+
+    if my_predbat.args.get("num_cars") != 3:
+        print(f"ERROR: Expected num_cars to be raised to 3 active devices, got {my_predbat.args.get('num_cars')}")
+        failed = True
+    else:
+        print("PASS: num_cars raised to the count of active (non-suspended) devices only")
+
+    slot_list = my_predbat.args.get("octopus_intelligent_slot", [])
+    if len(slot_list) != 3:
+        print(f"ERROR: Expected 3 entities in octopus_intelligent_slot, got {len(slot_list)}")
+        failed = True
+    else:
+        print("PASS: octopus_intelligent_slot only contains active devices")
+
+    # Test 2: num_cars auto-discovery never lowers an already-higher value
+    print("\n*** Test 2: num_cars is not lowered below an existing higher value ***")
+    my_predbat.args["num_cars"] = 4
+
+    api.automatic_config(["import", "export"])
+
+    if my_predbat.args.get("num_cars") != 4:
+        print(f"ERROR: Expected num_cars to remain at 4, got {my_predbat.args.get('num_cars')}")
+        failed = True
+    else:
+        print("PASS: num_cars left unchanged when already >= the active device count")
+
+    # Restore my_predbat.args so this test's auto-discovery writes don't leak into later tests
+    my_predbat.args.clear()
+    my_predbat.args.update(original_args)
+
+    if failed:
+        print("\n**** ❌ Octopus automatic_config num_cars tests FAILED ****")
+        return 1
+    else:
+        print("\n**** ✅ Octopus automatic_config num_cars tests PASSED ****")
+        return 0
+
+
+def test_octopus_automatic_config_slot_order(my_predbat):
+    """
+    Test that automatic_config assigns car slots to intelligent devices in a stable order.
+
+    Car-indexed settings (car_charging_battery_size, car_charging_limit, manual SoC, exclusive)
+    are keyed by slot number, so the device that occupies slot N must not change just because
+    the cache happened to be rebuilt in a different order. Before this was pinned, the slot list
+    followed self.intelligent_devices insertion order, so a device dropping out of the live list
+    and coming back re-ordered the slots and silently applied one car's settings to another.
+
+    Tests:
+    - Test 1: Slot order does not depend on the insertion order of intelligent_devices
+    """
+    print("\n**** Running Octopus automatic_config slot order tests ****")
+    failed = False
+
+    original_args = dict(my_predbat.args)
+
+    print("\n*** Test 1: Slot order is independent of intelligent_devices insertion order ***")
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+
+    api.intelligent_devices = {
+        "device-aaa1": {"suspended": False},
+        "device-bbb2": {"suspended": False},
+        "device-ccc3": {"suspended": False},
+    }
+    api.automatic_config(["import"])
+    first_order = list(my_predbat.args.get("octopus_intelligent_slot", []))
+
+    # Same three devices, but cached in a different order - e.g. device-aaa1 dropped out of the
+    # live devices() response for a poll and was re-added afterwards, putting it last.
+    api.intelligent_devices = {
+        "device-bbb2": {"suspended": False},
+        "device-ccc3": {"suspended": False},
+        "device-aaa1": {"suspended": False},
+    }
+    api.automatic_config(["import"])
+    second_order = list(my_predbat.args.get("octopus_intelligent_slot", []))
+
+    if first_order != second_order:
+        print(f"ERROR: Slot order changed with insertion order: {first_order} then {second_order}")
+        failed = True
+    elif len(first_order) != 3:
+        print(f"ERROR: Expected 3 slots, got {first_order}")
+        failed = True
+    else:
+        print("PASS: Slot order is stable regardless of cache insertion order")
+
+    # octopus_ready_time and octopus_charge_limit are indexed by the same slot number, so they
+    # must be ordered to match octopus_intelligent_slot device for device.
+    ready_list = my_predbat.args.get("octopus_ready_time", [])
+    limit_list = my_predbat.args.get("octopus_charge_limit", [])
+    suffixes_slot = [entity.split("_")[-1] for entity in second_order]
+    suffixes_ready = [entity.split("_")[-1] for entity in ready_list]
+    suffixes_limit = [entity.split("_")[-1] for entity in limit_list]
+    if suffixes_slot != suffixes_ready or suffixes_slot != suffixes_limit:
+        print(f"ERROR: Per-slot lists disagree on device order: slot {suffixes_slot}, ready {suffixes_ready}, limit {suffixes_limit}")
+        failed = True
+    else:
+        print("PASS: octopus_ready_time and octopus_charge_limit follow the same device order")
+
+    my_predbat.args.clear()
+    my_predbat.args.update(original_args)
+
+    if failed:
+        print("\n**** ❌ Octopus automatic_config slot order tests FAILED ****")
+        return 1
+    else:
+        print("\n**** ✅ Octopus automatic_config slot order tests PASSED ****")
+        return 0
+
+
+def test_octopus_automatic_config_clears_removed_devices(my_predbat):
+    """
+    Test that automatic_config clears the car slot args once the last intelligent device is gone.
+
+    The wiring block only ran when the device cache was non-empty, so deregistering the last EV
+    would leave octopus_intelligent_slot / octopus_ready_time / octopus_charge_limit pointed at a
+    device that no longer exists. It must not clear them before any device has ever been
+    discovered though, or it would wipe a hand-written apps.yaml config at startup.
+
+    Tests:
+    - Test 1: Slot args are cleared when the last discovered device disappears
+    - Test 2: Manually configured slot args are untouched when no device was ever discovered
+    - Test 3: Manually configured slot args survive repeated runs with no devices
+    """
+    print("\n**** Running Octopus automatic_config device removal tests ****")
+    failed = False
+
+    original_args = dict(my_predbat.args)
+
+    print("\n*** Test 1: Slot args cleared when the last discovered device disappears ***")
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api.automatic_config(["import"])
+
+    if not my_predbat.args.get("octopus_intelligent_slot"):
+        print("ERROR: Expected the device to be wired into a slot before it is removed")
+        failed = True
+
+    api.intelligent_devices = {}
+    api.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot"):
+        print(f"ERROR: Expected slot args to be cleared, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+    elif my_predbat.args.get("octopus_ready_time") or my_predbat.args.get("octopus_charge_limit"):
+        print(f"ERROR: Expected ready time and charge limit to be cleared, got {my_predbat.args.get('octopus_ready_time')} / {my_predbat.args.get('octopus_charge_limit')}")
+        failed = True
+    else:
+        print("PASS: Slot args cleared once the last discovered device disappears")
+
+    print("\n*** Test 2: Manual slot config untouched when no device was ever discovered ***")
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.manually_configured_dispatching"
+    api2 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api2.intelligent_devices = {}
+
+    api2.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.manually_configured_dispatching":
+        print(f"ERROR: Expected the manual slot config to be left alone, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+    else:
+        print("PASS: Manual slot config untouched when no device was ever discovered")
+
+    # Test 3: automatic_config() records the device set it wired on every call, including the calls
+    # where it wired nothing - so after one run with no devices the recorded set is [] rather than
+    # None. The "have we ever wired anything" guard therefore has to test that set for content, not
+    # merely for being set: an `is not None` check would pass here from the second call onwards and
+    # blank a manual apps.yaml config that auto-discovery never touched.
+    print("\n*** Test 3: Manual slot config survives repeated runs with no devices ***")
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.manually_configured_dispatching"
+    api3 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api3.intelligent_devices = {}
+
+    api3.automatic_config(["import"])
+    api3.automatic_config(["import"])
+    api3.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.manually_configured_dispatching":
+        print(f"ERROR: Repeated runs with no devices blanked the manual slot config, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+    else:
+        print("PASS: Manual slot config survives repeated runs with no devices")
+
+    my_predbat.args.clear()
+    my_predbat.args.update(original_args)
+
+    if failed:
+        print("\n**** ❌ Octopus automatic_config device removal tests FAILED ****")
+        return 1
+    else:
+        print("\n**** ✅ Octopus automatic_config device removal tests PASSED ****")
+        return 0
+
+
+def test_octopus_automatic_config_respects_slot_claim(my_predbat):
+    """
+    Test that automatic_config leaves the car slot args alone when another component owns them.
+
+    The Ohme component can be configured to take the Intelligent slots from the charger instead,
+    and claims the args when it does. automatic_config() re-runs whenever the tariff or the live
+    device set moves, so without honouring the claim it silently takes them back part way through
+    a run and the wiring flip-flops between the two components.
+
+    Tests:
+    - Test 1: A claim by another component leaves the slot args untouched
+    - Test 2: The rest of automatic_config still runs while claimed
+    - Test 3: No claim, or Octopus's own claim, wires the slots as normal
+    """
+    print("\n**** Running Octopus automatic_config slot claim tests ****")
+    failed = False
+
+    original_args = dict(my_predbat.args)
+    original_owner = getattr(my_predbat, "car_slot_owner", None)
+
+    print("\n*** Test 1: A claim by another component leaves the slot args untouched ***")
+    my_predbat.args["octopus_intelligent_slot"] = "binary_sensor.predbat_ohme_slot_active"
+    my_predbat.car_slot_owner = "ohme"
+    api = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") != "binary_sensor.predbat_ohme_slot_active":
+        print(f"ERROR: Expected the Ohme wiring to survive, got {my_predbat.args.get('octopus_intelligent_slot')}")
+        failed = True
+
+    print("\n*** Test 2: The rest of automatic_config still runs while claimed ***")
+    if not my_predbat.args.get("octopus_saving_session"):
+        print("ERROR: Expected saving session wiring to still happen while the slots are claimed")
+        failed = True
+
+    print("\n*** Test 3: No claim wires the slots as normal ***")
+    my_predbat.car_slot_owner = None
+    api2 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api2.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api2.automatic_config(["import"])
+
+    if my_predbat.args.get("octopus_intelligent_slot") == "binary_sensor.predbat_ohme_slot_active":
+        print("ERROR: Expected Octopus to wire its own slots when unclaimed")
+        failed = True
+
+    # And Octopus owning the claim itself is not treated as someone else's
+    my_predbat.args["octopus_intelligent_slot"] = None
+    my_predbat.car_slot_owner = "octopus"
+    api3 = OctopusAPI(my_predbat, key="test-api-key", account_id="test-account", automatic=False)
+    api3.intelligent_devices = {"device-aaa1": {"suspended": False}}
+    api3.automatic_config(["import"])
+
+    if not my_predbat.args.get("octopus_intelligent_slot"):
+        print("ERROR: Expected Octopus's own claim not to block its wiring")
+        failed = True
+
+    my_predbat.args = original_args
+    my_predbat.car_slot_owner = original_owner
+
+    if failed:
+        print("\n**** \u274c Octopus automatic_config slot claim tests FAILED ****")
+        return 1
+    print("\n**** \u2705 Octopus automatic_config slot claim tests PASSED ****")
+    return 0
+
+
+async def test_octopus_automatic_config_rewire(my_predbat):
+    """
+    Test that run() re-wires the car slots when the live/non-suspended intelligent device set changes.
+
+    Issue #4648: automatic_config() only ran on the first successful run() or when the tariff-code
+    set changed, so a second EV appearing on the account - or the customer suspending one device in
+    favour of another - left octopus_intelligent_slot pointing at the wrong device. Predbat then did
+    not recognise the live IOG dispatch window and discharged the home battery through it.
+
+    Tests:
+    - Test 1: No re-wire when a poll finds the active device set unchanged
+    - Test 2: Re-wire when a poll finds a newly registered device
+    - Test 3: Re-wire when suspension swaps between two devices, and slot 0 follows the live device
+    - Test 4: The dispatch sensor is published before the re-wire points args at it
+    - Test 5: No re-wire when automatic configuration is disabled
+    """
+    print("\n**** Running Octopus automatic_config re-wire tests ****")
+    failed = False
+
+    original_args = dict(my_predbat.args)
+
+    # Cycle times far enough apart that the second run is a real dispatch-sensor refresh, which is
+    # the only cycle on which the device set can actually move.
+    first_at = datetime(2025, 1, 1, 10, 0, 0)
+    second_at = datetime(2025, 1, 1, 10, 30, 0)
+
+    def make_api(devices, automatic=True):
+        """Create a run()-mocked API holding the given intelligent device cache."""
+        api = _mock_run_api(my_predbat, key="test-api-key", account_id="test-account", automatic=automatic)
+        api.tariffs = {"import": {}}
+        api.intelligent_devices = devices
+        return api
+
+    async def run_cycle(api, now, first=False, poll_finds=None):
+        """Run one run() cycle at the given time, applying what that cycle's device poll discovers."""
+        if poll_finds is not None:
+            api.async_update_intelligent_devices = AsyncMock(side_effect=lambda *args, **kwargs: poll_finds())
+        with patch("octopus.datetime") as mock_datetime:
+            mock_datetime.now.return_value = now
+            await api.run(seconds=0, first=first)
+
+    # Test 1: a poll that finds nothing new must not re-wire - automatic_config() overwrites
+    # user-visible args and logs, so it should only run when the wiring needs to change.
+    print("\n*** Test 1: No re-wire when a poll finds the active device set unchanged ***")
+    api = make_api({"device-aaa1": {"suspended": False}})
+    await run_cycle(api, first_at, first=True)
+    api.automatic_config = MagicMock()
+
+    await run_cycle(api, second_at)
+
+    if api.automatic_config.call_count != 0:
+        print(f"ERROR: Expected no re-wire when the device set is unchanged, got {api.automatic_config.call_count}")
+        failed = True
+    else:
+        print("PASS: No re-wire when a poll finds the active device set unchanged")
+
+    # Test 2: a second EV registered on the account must be picked up without a restart
+    print("\n*** Test 2: Re-wire when a poll finds a newly registered device ***")
+    api2 = make_api({"device-aaa1": {"suspended": False}})
+    await run_cycle(api2, first_at, first=True)
+
+    def register_second_car():
+        """Simulate the device poll returning a newly registered second EV."""
+        api2.intelligent_devices["device-bbb2"] = {"suspended": False}
+
+    await run_cycle(api2, second_at, poll_finds=register_second_car)
+
+    slot_list = my_predbat.args.get("octopus_intelligent_slot", [])
+    if len(slot_list) != 2:
+        print(f"ERROR: Expected the new device to be wired into a second slot, got {slot_list}")
+        failed = True
+    elif my_predbat.args.get("num_cars") != 2:
+        print(f"ERROR: Expected num_cars to be raised to 2, got {my_predbat.args.get('num_cars')}")
+        failed = True
+    else:
+        print("PASS: Newly registered device re-wired without a restart")
+
+    # Test 3: the observed failure - two EVs, suspension swaps from one to the other. Slot 0 must
+    # follow whichever device is live, otherwise Predbat watches a suspended device's dispatch
+    # sensor and never sees the real dispatch window.
+    print("\n*** Test 3: Re-wire when suspension swaps between two devices ***")
+    api3 = make_api({"device-tesla": {"suspended": False}, "device-vw": {"suspended": True}})
+    my_predbat.args["num_cars"] = 1
+    await run_cycle(api3, first_at, first=True)
+
+    slot_before = list(my_predbat.args.get("octopus_intelligent_slot", []))
+    if len(slot_before) != 1 or "tesla" not in slot_before[0]:
+        print(f"ERROR: Expected slot 0 wired to the live Tesla device, got {slot_before}")
+        failed = True
+
+    def swap_suspension():
+        """Simulate the device poll seeing the Tesla suspended and the VW resumed."""
+        api3.intelligent_devices["device-tesla"]["suspended"] = True
+        api3.intelligent_devices["device-vw"]["suspended"] = False
+
+    await run_cycle(api3, second_at, poll_finds=swap_suspension)
+
+    slot_after = list(my_predbat.args.get("octopus_intelligent_slot", []))
+    if len(slot_after) != 1:
+        print(f"ERROR: Expected exactly one active slot after the swap, got {slot_after}")
+        failed = True
+    elif "vw" not in slot_after[0]:
+        print(f"ERROR: Expected slot 0 to follow the now-live VW device, got {slot_after}")
+        failed = True
+    else:
+        print("PASS: Slot 0 follows the live device after a suspension swap")
+
+    # Test 4: the re-wire points octopus_intelligent_slot at a new device's dispatch entity, so that
+    # entity has to have been published first. Re-wiring before the sensor update would leave a
+    # cycle where fetch_sensor_data_cars() reads an entity that does not exist yet and reports
+    # "octopus_intelligent_slot not set correctly in apps.yaml" against the status sensor.
+    print("\n*** Test 4: Dispatch sensor is published before the re-wire points args at it ***")
+    api4 = make_api({"device-aaa1": {"suspended": False}})
+    await run_cycle(api4, first_at, first=True)
+
+    call_order = []
+    api4.async_intelligent_update_sensor = AsyncMock(side_effect=lambda *args, **kwargs: call_order.append("sensor"))
+    api4.automatic_config = MagicMock(side_effect=lambda *args, **kwargs: call_order.append("config"))
+
+    def register_another_car():
+        """Simulate the device poll returning an additional device."""
+        api4.intelligent_devices["device-bbb2"] = {"suspended": False}
+
+    await run_cycle(api4, second_at, poll_finds=register_another_car)
+
+    if call_order != ["sensor", "config"]:
+        print(f"ERROR: Expected the dispatch sensor to be published before the re-wire, got {call_order}")
+        failed = True
+    else:
+        print("PASS: Dispatch sensor published before the re-wire points args at it")
+
+    # Test 5: automatic=False means the user wired apps.yaml themselves - auto-discovery must never
+    # overwrite that, however the device set moves.
+    print("\n*** Test 5: No re-wire when automatic configuration is disabled ***")
+    api5 = make_api({"device-aaa1": {"suspended": False}}, automatic=False)
+    await run_cycle(api5, first_at, first=True)
+    api5.automatic_config = MagicMock()
+
+    def register_car_manual():
+        """Simulate the device poll returning an additional device on a manually configured setup."""
+        api5.intelligent_devices["device-bbb2"] = {"suspended": False}
+
+    await run_cycle(api5, second_at, poll_finds=register_car_manual)
+
+    if api5.automatic_config.call_count != 0:
+        print(f"ERROR: Expected no re-wire when automatic is disabled, got {api5.automatic_config.call_count}")
+        failed = True
+    else:
+        print("PASS: No re-wire when automatic configuration is disabled")
+
+    my_predbat.args.clear()
+    my_predbat.args.update(original_args)
+
+    if failed:
+        print("\n**** ❌ Octopus automatic_config re-wire tests FAILED ****")
+        return 1
+    else:
+        print("\n**** ✅ Octopus automatic_config re-wire tests PASSED ****")
+        return 0
+
+
 def _mock_run_api(my_predbat, key, account_id, automatic=False):
     """Create an OctopusAPI instance with all run() methods mocked."""
     api = OctopusAPI(my_predbat, key=key, account_id=account_id, automatic=automatic)
@@ -1875,11 +2377,11 @@ async def test_octopus_run(my_predbat):
 
     Tests:
     - Test 1: First run with no cache (both fetched_at=None) — all methods called
-    - Test 2: Tariff stale (35 min), device fresh (5 min) — only tariff refreshed
-    - Test 3: Device stale (15 min), tariff fresh (5 min) — only device refreshed
-    - Test 4: Both fresh (1 min) at 2-minute sensor mark — only sensor, no cache save
-    - Test 5: Commands processed forces device refresh even when recently fetched
-    - Test 6: Fast restart (first=True) with fresh timestamps — only sensor, no heavy fetches
+    - Test 2: Tariff stale (35 min), device fresh, sensor fresh — only tariff refreshed
+    - Test 3: Device stale (15 min), tariff and sensor fresh — only saving sessions refreshed (dispatches follow the sensor cadence)
+    - Test 4: Both fresh (1 min), sensor due — dispatch fetch and sensor update, no cache save
+    - Test 5: Commands processed forces device and dispatch refresh even when recently fetched
+    - Test 6: Fast restart (first=True) with fresh timestamps — dispatches and sensor refreshed, no heavy fetches
     - Test 7: Automatic config on first run
     """
     print("\n**** Running Octopus run method tests ****")
@@ -1925,11 +2427,12 @@ async def test_octopus_run(my_predbat):
     else:
         print("PASS: First run calls all expected methods")
 
-    # Test 2: Tariff stale (35 min old), device fresh (5 min old) — only tariff block runs
-    print("\n*** Test 2: Tariff stale, device fresh — only tariff refreshed ***")
+    # Test 2: Tariff stale (35 min old), device and sensor fresh — only tariff block runs
+    print("\n*** Test 2: Tariff stale, device and sensor fresh — only tariff refreshed ***")
     api2 = _mock_run_api(my_predbat, key="test-api-key-2", account_id="test-account-2")
     api2.tariff_fetched_at = datetime(2025, 1, 1, 9, 55, 0)  # 35 min before mock now
     api2.device_fetched_at = datetime(2025, 1, 1, 10, 25, 0)  # 5 min before mock now
+    api2.sensor_updated_at = datetime(2025, 1, 1, 10, 29, 0)  # 1 min before mock now
 
     with patch("octopus.datetime") as mock_datetime:
         mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 30, 0)
@@ -1945,19 +2448,23 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected async_find_tariffs called (tariff stale), got {api2.async_find_tariffs.call_count}")
         failed = True
     elif api2.async_update_intelligent_devices.call_count != 0:
-        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device fresh), got {api2.async_update_intelligent_devices.call_count}")
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (sensor fresh), got {api2.async_update_intelligent_devices.call_count}")
+        failed = True
+    elif api2.async_intelligent_update_sensor.call_count != 0:
+        print(f"ERROR: Expected async_intelligent_update_sensor NOT called (sensor fresh), got {api2.async_intelligent_update_sensor.call_count}")
         failed = True
     elif api2.save_octopus_cache.call_count != 1:
         print(f"ERROR: Expected save_octopus_cache called (tariff_due=True), got {api2.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Tariff stale, device fresh — only tariff refreshed")
+        print("PASS: Tariff stale, device and sensor fresh — only tariff refreshed")
 
-    # Test 3: Device stale (15 min old), tariff fresh (5 min old) — only device block runs
-    print("\n*** Test 3: Device stale, tariff fresh — only device refreshed ***")
+    # Test 3: Device stale (15 min old), tariff and sensor fresh — only saving sessions refreshed
+    print("\n*** Test 3: Device stale, tariff and sensor fresh — only saving sessions refreshed ***")
     api3 = _mock_run_api(my_predbat, key="test-api-key-3", account_id="test-account-3")
     api3.tariff_fetched_at = datetime(2025, 1, 1, 10, 5, 0)  # 5 min before mock now
     api3.device_fetched_at = datetime(2025, 1, 1, 9, 55, 0)  # 15 min before mock now
+    api3.sensor_updated_at = datetime(2025, 1, 1, 10, 9, 0)  # 1 min before mock now
     api3.tariffs = {}
 
     with patch("octopus.datetime") as mock_datetime:
@@ -1967,8 +2474,8 @@ async def test_octopus_run(my_predbat):
     if api3.async_get_account.call_count != 0:
         print(f"ERROR: Expected async_get_account NOT called (tariff fresh), got {api3.async_get_account.call_count}")
         failed = True
-    elif api3.async_update_intelligent_devices.call_count != 1:
-        print(f"ERROR: Expected async_update_intelligent_devices called (device stale), got {api3.async_update_intelligent_devices.call_count}")
+    elif api3.async_update_intelligent_devices.call_count != 0:
+        print(f"ERROR: Expected async_update_intelligent_devices NOT called (dispatches follow the sensor cadence), got {api3.async_update_intelligent_devices.call_count}")
         failed = True
     elif api3.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs called (device stale), got {api3.fetch_tariffs.call_count}")
@@ -1983,23 +2490,24 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected save_octopus_cache called (device_due=True), got {api3.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Device stale, tariff fresh — only device refreshed")
+        print("PASS: Device stale, tariff and sensor fresh — only saving sessions refreshed")
 
-    # Test 4: Both fresh (1 min) at 2-minute sensor mark — only sensor fires, no cache save
-    print("\n*** Test 4: Both fresh — only sensor update, no cache save ***")
+    # Test 4: Both fresh (1 min), sensor due — dispatch fetch and sensor fire, no cache save
+    print("\n*** Test 4: Both fresh, sensor due — dispatch fetch and sensor update, no cache save ***")
     api4 = _mock_run_api(my_predbat, key="test-api-key-4", account_id="test-account-4")
     api4.tariff_fetched_at = datetime(2025, 1, 1, 10, 1, 0)  # 1 min before mock now
     api4.device_fetched_at = datetime(2025, 1, 1, 10, 1, 0)  # 1 min before mock now
+    api4.sensor_updated_at = datetime(2025, 1, 1, 10, 0, 0)  # 2 min before mock now
 
     with patch("octopus.datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 2, 0)  # 10:02 — even minute
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 2, 0)
         result = await api4.run(seconds=0, first=False)
 
     if api4.async_get_account.call_count != 0:
         print(f"ERROR: Expected async_get_account NOT called (tariff fresh), got {api4.async_get_account.call_count}")
         failed = True
-    elif api4.async_update_intelligent_devices.call_count != 0:
-        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device fresh), got {api4.async_update_intelligent_devices.call_count}")
+    elif api4.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices called at 2-min mark, got {api4.async_update_intelligent_devices.call_count}")
         failed = True
     elif api4.async_intelligent_update_sensor.call_count != 1:
         print(f"ERROR: Expected async_intelligent_update_sensor called at 2-min mark, got {api4.async_intelligent_update_sensor.call_count}")
@@ -2008,7 +2516,7 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected save_octopus_cache NOT called (no data refreshed), got {api4.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Both fresh — only sensor update, no cache save")
+        print("PASS: Both fresh, sensor due — dispatch fetch and sensor update, no cache save")
 
     # Test 5: Commands processed forces device refresh even when recently fetched
     print("\n*** Test 5: Processing commands triggers device refresh regardless of age ***")
@@ -2016,10 +2524,11 @@ async def test_octopus_run(my_predbat):
     api5.process_commands = AsyncMock(return_value=True)
     api5.tariff_fetched_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now
     api5.device_fetched_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now (fresh)
+    api5.sensor_updated_at = datetime(2025, 1, 1, 10, 4, 0)  # 1 min before mock now (fresh)
     api5.tariffs = {}
 
     with patch("octopus.datetime") as mock_datetime:
-        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 5, 0)  # odd minute — sensor not due
+        mock_datetime.now.return_value = datetime(2025, 1, 1, 10, 5, 0)
         result = await api5.run(seconds=0, first=False)
 
     if api5.async_get_account.call_count != 0:
@@ -2037,9 +2546,10 @@ async def test_octopus_run(my_predbat):
     else:
         print("PASS: Processing commands triggers refresh of intelligent device data")
 
-    # Test 6: Fast restart (first=True) with fresh timestamps — API calls skipped but
-    # async_find_tariffs and fetch_tariffs run to rebuild state from cached data
-    print("\n*** Test 6: Fast restart with fresh cache — tariff structure and rates rebuilt, API calls skipped ***")
+    # Test 6: Fast restart (first=True) with fresh timestamps — heavy account/saving-session fetches
+    # skipped but dispatches and sensor refresh, and async_find_tariffs and fetch_tariffs run to
+    # rebuild state from cached data
+    print("\n*** Test 6: Fast restart with fresh cache — tariffs rebuilt, dispatches refreshed, heavy fetches skipped ***")
     api6 = _mock_run_api(my_predbat, key="test-api-key-6", account_id="test-account-6")
     api6.tariff_fetched_at = datetime(2025, 1, 1, 10, 10, 0)  # 5 min before mock now
     api6.device_fetched_at = datetime(2025, 1, 1, 10, 12, 0)  # 3 min before mock now
@@ -2054,8 +2564,8 @@ async def test_octopus_run(my_predbat):
     elif api6.async_find_tariffs.call_count != 1:
         print(f"ERROR: Expected async_find_tariffs called (rebuilds tariff structure from cached account_data), got {api6.async_find_tariffs.call_count}")
         failed = True
-    elif api6.async_update_intelligent_devices.call_count != 0:
-        print(f"ERROR: Expected async_update_intelligent_devices NOT called (device 3 min old < 10), got {api6.async_update_intelligent_devices.call_count}")
+    elif api6.async_update_intelligent_devices.call_count != 1:
+        print(f"ERROR: Expected async_update_intelligent_devices called on first run (dispatches refreshed with the sensor), got {api6.async_update_intelligent_devices.call_count}")
         failed = True
     elif api6.fetch_tariffs.call_count != 1:
         print(f"ERROR: Expected fetch_tariffs called (loads rate data from cache on first run), got {api6.fetch_tariffs.call_count}")
@@ -2067,7 +2577,7 @@ async def test_octopus_run(my_predbat):
         print(f"ERROR: Expected save_octopus_cache NOT called (no API data refreshed), got {api6.save_octopus_cache.call_count}")
         failed = True
     else:
-        print("PASS: Fast restart with fresh cache — tariff structure and rates rebuilt, API calls skipped")
+        print("PASS: Fast restart with fresh cache — tariffs rebuilt, dispatches refreshed, heavy fetches skipped")
 
     # Test 7: Automatic config on first run when automatic=True
     print("\n*** Test 7: Automatic config on first run when automatic=True ***")

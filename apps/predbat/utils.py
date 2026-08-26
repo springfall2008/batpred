@@ -19,7 +19,7 @@ and historical data extraction from incrementing energy counters.
 import array
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
-from const import MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
+from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -81,6 +81,17 @@ class MinuteArray:
         new = MinuteArray.__new__(MinuteArray)
         new._data = array.array("d", self._data)
         return new
+
+
+def mask_secret_args(args):
+    """
+    Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
+    """
+    masked = copy.deepcopy(args)
+    for key in masked:
+        if ("_key" in key.lower()) or ("password" in key.lower()):
+            masked[key] = "xxx"
+    return masked
 
 
 # Helper to make dict hashable for caching
@@ -392,7 +403,11 @@ def minute_data(
     if not history:
         return mdata, io_adjusted
 
-    if not can_modify_history:
+    # The glitch filter below is the only code here that writes to history, and it only runs for
+    # backwards incrementing data, so that is the only case worth copying for. Copying regardless
+    # cost ~150k deepcopy calls on a plan cycle for the two calculate_yesterday calls alone, neither
+    # of which asks for the filter. can_modify_history stays the caller's explicit opt-out on top.
+    if clean_increment and backwards and not can_modify_history:
         history = copy.deepcopy(history)  # Copy to avoid modifying original history
 
     # Glitch filter, cleans glitches in the data and removes bad values, only for incrementing data
@@ -770,6 +785,63 @@ def format_time_ago(last_updated):
         return "Unknown ({})".format(last_updated)
 
 
+# The format Predbat publishes car charging plan windows in. No year, because a plan never
+# reaches more than 48 hours ahead - parse_car_plan_windows() puts one back.
+CAR_PLAN_TIME_FORMAT = "%m-%d %H:%M:%S"
+
+# How far from now a parsed window has to land before the year stamped on it is treated as
+# the wrong one. Comfortably beyond the 48 hours a plan covers, so a genuinely distant
+# window is never dragged into a different year, and far short of the ~12 months a
+# mis-stamped year produces.
+CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
+
+
+def parse_car_plan_windows(planned, now, local_tz):
+    """Turn one car's published charging plan into a list of localised (start, end) pairs.
+
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
+    so the awkward parts stay in one place: the plan carries no year, so each window is
+    rebuilt around now - without that, a plan read either side of New Year lands eleven
+    months out - and a malformed entry is skipped rather than costing the rest of the plan.
+
+    The rebuild is symmetric. A window read at 23:30 on 31 December whose end is stamped
+    01-01 parses as January of the year just ending, and needs shifting forward; the same
+    window read at 00:30 on 1 January has its 12-31 start parsed as December of the year
+    just started, and needs shifting back. Only the second case ever hides an active
+    window, which is why it is the one that stops a car mid-charge if it is missed.
+
+    Args:
+        planned: The 'planned' attribute of a car charging slot sensor, a list of dicts
+            with 'start' and 'end' keys.
+        now: The instant every window is judged against, localised.
+        local_tz: The timezone the plan's wall clock times are expressed in.
+    """
+    parsed = []
+    for window in planned or []:
+        try:
+            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Shift both ends together so their spacing survives, then close a window whose
+        # end is in January while its start is still in December
+        if start > now + CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year - 1)
+            end = end.replace(year=end.year - 1)
+        elif start < now - CAR_PLAN_YEAR_MARGIN:
+            start = start.replace(year=start.year + 1)
+            end = end.replace(year=end.year + 1)
+        if end < start:
+            end = end.replace(year=end.year + 1)
+        parsed.append((start, end))
+    return parsed
+
+
+def in_car_plan_window(windows, now):
+    """Is now inside one of the (start, end) pairs returned by parse_car_plan_windows."""
+    return any(start <= now < end for start, end in windows)
+
+
 def in_iboost_slot(minute, iboost_plan):
     """
     Is the given minute inside a car slot
@@ -989,67 +1061,86 @@ def calc_percent_limit(charge_limit, soc_max):
             return min(int((float(charge_limit) / soc_max * 100.0) + 0.5), 100)
 
 
+def clone_windows(windows):
+    """Shallow-copy a list of window dicts (start/end/average/... primitive fields only).
+
+    Window dicts never hold nested mutable values, so copying each dict is equivalent to
+    copy.deepcopy(windows) here but far cheaper - deepcopy's generic recursive walk measured
+    ~275us per call on a typical export_window, this is a few us.
+    """
+    return [w.copy() for w in windows]
+
+
 def remove_intersecting_windows(charge_limit_best, charge_window_best, export_limit_best, export_window_best):
     """
     Filters and removes intersecting charge windows
+
+    This runs on every simulation (see Prediction.run_prediction and run_prediction_kernel), so it
+    sits in front of the C++ kernel on the hot path and only does the work that can change something:
+
+    - only export windows that are enabled (limit < 100) can clip anything, so they are collected
+      once and the function returns immediately when there are none
+    - only charge windows that are enabled (limit > 0) can be clipped, so a disabled one
+      short-circuits instead of being scanned against every export window
+
+    Clipping is a single pass. Export windows are processed in start order, so when a charge window
+    is split the head segment it emits ends at the current export window's start and no later export
+    window can reach back into it - which is what the previous "clip again" pass over the whole
+    window list existed to catch. The sort is kept even though callers already provide sorted
+    windows, so correctness does not depend on that.
+
+    See run_intersect_window_tests, which pins this behaviour with hand-written cases and compares
+    the result against a naive reference implementation over randomised window layouts.
     """
-    clip_again = True
+    # Enabled export windows only - the sole candidates for clipping anything
+    export_active = sorted((export_window_best[n]["start"], export_window_best[n]["end"]) for n in range(len(export_limit_best)) if export_limit_best[n] < 100.0)
+    if not export_active:
+        # Rebuild the windows rather than passing the caller's dicts back, so the returned windows
+        # carry exactly the same keys (and are as freshly owned) as on the clipping path below
+        return list(charge_limit_best), [{"start": w["start"], "end": w["end"], "average": w["average"]} for w in charge_window_best]
+
+    new_limit_best = []
+    new_window_best = []
 
     # For each charge window
-    while clip_again:
-        clip_again = False
-        new_limit_best = []
-        new_window_best = []
-        for window_n in range(len(charge_limit_best)):
-            window = charge_window_best[window_n]
-            start = window["start"]
-            end = window["end"]
-            average = window["average"]
-            limit = charge_limit_best[window_n]
-            clipped = False
+    for window_n in range(len(charge_limit_best)):
+        window = charge_window_best[window_n]
+        start = window["start"]
+        end = window["end"]
+        average = window["average"]
+        limit = charge_limit_best[window_n]
+        clipped = False
 
-            # For each discharge window
-            for dwindow_n in range(len(export_limit_best)):
-                dwindow = export_window_best[dwindow_n]
-                dlimit = export_limit_best[dwindow_n]
-                dstart = dwindow["start"]
-                dend = dwindow["end"]
+        if limit <= 0.0:
+            # A disabled charge window can never be clipped; rebuild it exactly as the clipping
+            # path below would have done, so the returned dicts are equivalent either way
+            new_window_best.append({"start": start, "end": end, "average": average})
+            new_limit_best.append(limit)
+            continue
 
-                # Overlapping window with enabled discharge?
-                if (limit > 0.0) and (dlimit < 100.0) and (dstart < end) and (dend >= start):
-                    if dstart <= start:
-                        if start != dend:
-                            start = dend
-                            clipped = True
-                    elif dend >= end:
-                        if end != dstart:
-                            end = dstart
-                            clipped = True
-                    else:
-                        # Two segments
-                        if (dstart - start) >= 5:
-                            new_window = {}
-                            new_window["start"] = start
-                            new_window["end"] = dstart
-                            new_window["average"] = average
-                            new_window_best.append(new_window)
-                            new_limit_best.append(limit)
+        # For each enabled discharge window, in start order
+        for dstart, dend in export_active:
+            # Overlapping window?
+            if (dstart < end) and (dend >= start):
+                if dstart <= start:
+                    if start != dend:
                         start = dend
                         clipped = True
-                        if (end - start) >= 5:
-                            clip_again = True
+                elif dend >= end:
+                    if end != dstart:
+                        end = dstart
+                        clipped = True
+                else:
+                    # Two segments - emit the head now, carry on clipping the tail
+                    if (dstart - start) >= 5:
+                        new_window_best.append({"start": start, "end": dstart, "average": average})
+                        new_limit_best.append(limit)
+                    start = dend
+                    clipped = True
 
-            if not clipped or ((end - start) >= 5):
-                new_window = {}
-                new_window["start"] = start
-                new_window["end"] = end
-                new_window["average"] = average
-                new_window_best.append(new_window)
-                new_limit_best.append(limit)
-
-        if clip_again:
-            charge_window_best = new_window_best.copy()
-            charge_limit_best = new_limit_best.copy()
+        if not clipped or ((end - start) >= 5):
+            new_window_best.append({"start": start, "end": end, "average": average})
+            new_limit_best.append(limit)
 
     return new_limit_best, new_window_best
 
@@ -1150,9 +1241,14 @@ def find_charge_rate(
     battery_temperature=20,
     battery_temperature_curve={},
     current_charge_rate=None,
+    pv_window_kwh=0.0,
 ):
     """
     Find the lowest charge rate that fits the charge slow
+
+    pv_window_kwh is the PV forecast in kWh over the remainder of the charge window, when the window
+    overlaps PV production low power charging is abandoned as the throttled rate applies for the whole
+    window and would push the PV out of the battery, raising the cost above the planned full rate charge
     """
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
@@ -1169,6 +1265,13 @@ def find_charge_rate(
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
+        # If the charge window overlaps with PV production then charge at max rate, a throttled rate would
+        # cap the PV going into the battery, exporting the surplus and importing to make the target up later
+        if pv_window_kwh > LOW_POWER_PV_THRESHOLD:
+            if log_to:
+                log_to("Low power mode: PV forecast in window {}kWh > {}kWh, default to max rate".format(dp2(pv_window_kwh), LOW_POWER_PV_THRESHOLD))
+            return max_rate, max_rate_real
+
         minutes_left = window["end"] - minutes_now - margin
         abs_minutes_left = window["end"] - minutes_now
 

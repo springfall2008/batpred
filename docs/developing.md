@@ -29,6 +29,8 @@ Predbat now has some unit-level tests, to run them on your local machine:
 
 You can add --quick to run just the faster tests. If the tests fail then debug them.
 
+When a model scenario fails, a plot of its SoC and metric is written to `<scenario_name>.png` in the working directory. Add `--plot` to also open that plot on screen. It's off by default because displaying it blocks until you close the window, which would stall an unattended or CI run - a failing test would look like a hang rather than reporting the failure.
+
 For coverage analysis install the 'coverage' library with Python, or use the version installed from `requirements.txt`.
 
 1. ./run_cov --quick

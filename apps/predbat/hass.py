@@ -10,13 +10,38 @@ import io
 import yaml
 import sys
 import asyncio
+import os
+import subprocess
+
+
+def write_git_version_marker():
+    """
+    Best-effort: when running from a git checkout - directly, or via the symlinked
+    .py files that coverage/standalone_ha sets up for a live-HA dev run - record the
+    commit as git_version.txt next to this file (predbat.py resolves its own __file__
+    to the same directory) so predbat.py can show it instead of just the release tag.
+    Runs before predbat is imported, since that's when predbat.py reads the marker.
+    Silently does nothing if git isn't available or this isn't a checkout.
+    """
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    repo_dir = os.path.dirname(os.path.realpath(__file__))
+    try:
+        commit = subprocess.check_output(["git", "-C", repo_dir, "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        dirty = bool(subprocess.check_output(["git", "-C", repo_dir, "status", "--porcelain"], stderr=subprocess.DEVNULL).decode().strip())
+        with open(os.path.join(this_dir, "git_version.txt"), "w") as f:
+            f.write(commit + ("-dirty" if dirty else ""))
+    except Exception:
+        pass
+
+
+write_git_version_marker()
+
 import predbat
 import time
 from datetime import datetime, timedelta
 from multiprocessing import set_start_method
 import concurrent.futures
 import threading
-import os
 import traceback
 
 
@@ -37,6 +62,51 @@ def check_modified(py_files, start_time):
             print("File {} does not exist".format(file_path))
             return True
     return False
+
+
+def resolve_apps_yaml_path():
+    """
+    Resolve the one real apps.yaml path this instance is actually configured to use, using the
+    same PREDBAT_APPS_FILE resolution applied when the config itself is loaded.
+    """
+    return os.path.abspath(os.getenv("PREDBAT_APPS_FILE", "apps.yaml"))
+
+
+def collect_watch_files(roots, apps_file_path):
+    """
+    Build the list of files to watch for changes: every .py file under the given root
+    directories, plus the one real apps.yaml file this instance is actually configured to use.
+
+    Deliberately does NOT match a file just because it happens to be named "apps.yaml" -
+    tools that write their own scratch apps.yaml-shaped files elsewhere under the same tree
+    (e.g. the Annual prediction tool's isolated headless work directory, see annual.py's
+    write_minimal_apps_yaml()) would otherwise be indistinguishable from the real config file,
+    forcing an unwanted restart of the live instance whenever they run (#4397, #4396).
+    """
+    apps_file_path = os.path.abspath(apps_file_path)
+    py_files = []
+    seen_files = set()
+    for root_dir in roots:
+        for root, dirs, files in os.walk(root_dir):
+            for file in files:
+                if file.startswith("."):
+                    continue
+                full_path = os.path.abspath(os.path.join(root, file))
+                if full_path in seen_files:
+                    continue
+                if file.endswith(".py") or full_path == apps_file_path:
+                    py_files.append(full_path)
+                    seen_files.add(full_path)
+
+    # The real configured apps.yaml might not live under any of the walked roots at all
+    # (e.g. PREDBAT_APPS_FILE pointing somewhere the roots don't reach) - always include it
+    # explicitly if it exists, rather than silently dropping config-change watching entirely
+    # just because the walk never happened to encounter it (Copilot review on #4401).
+    if apps_file_path not in seen_files and os.path.exists(apps_file_path):
+        py_files.append(apps_file_path)
+        seen_files.add(apps_file_path)
+
+    return py_files
 
 
 async def main():
@@ -65,19 +135,10 @@ async def main():
     # List of root directories to search
     roots = [".", "/addon"]
 
-    # Find all .py files in the directory hierarchy
-    py_files = []
-    seen_files = set()
-
-    # Directories to walk through
-    for root_dir in roots:
-        for root, dirs, files in os.walk(root_dir):
-            for file in files:
-                if (file.endswith(".py") or file == "apps.yaml") and not file.startswith("."):
-                    full_path = os.path.abspath(os.path.join(root, file))
-                    if full_path not in seen_files:
-                        py_files.append(full_path)
-                        seen_files.add(full_path)
+    # Find all .py files in the directory hierarchy, plus the one real apps.yaml this
+    # instance is actually configured to use (not any file that merely happens to share
+    # that name elsewhere in the tree - see #4397/#4396)
+    py_files = collect_watch_files(roots, resolve_apps_yaml_path())
 
     print("Watching {} for changes".format(py_files))
 
@@ -128,9 +189,7 @@ class Hass:
         log_size = self.logfile.tell()
         if log_size > 10000000 and threading.current_thread() is threading.main_thread():
             # Only rotate from the main thread to avoid race conditions with
-            # component threads that also call log() — a Threading.Lock cannot
-            # be used here because the logfile object must survive pickle for
-            # the multiprocessing pool.
+            # component threads that also call log().
             for num_logs in range(max_logs - 1, 0, -1):
                 filename = "predbat." + format(num_logs) + ".log"
                 if os.path.isfile(filename):

@@ -1,0 +1,99 @@
+# Debug journal
+
+Notes distilled from maintainer debugging sessions on this repo (roughly June–August 2026), written for whoever is triaging an issue next.
+
+Every entry is an observation from a past investigation, not a statement about current main. The code moves. Use these as "look here first", confirm against the working tree before you put anything in a comment, and say what you actually confirmed rather than what this file says.
+
+## Replay the reporter's debug file
+
+The most useful attachment on a bug report is `predbat_debug.yaml` — a full state dump the test harness can replay against current main:
+
+```bash
+cd coverage
+./run_all --debug_file <scratch>/predbat_debug.yaml > <scratch>/replay.log 2>&1
+```
+
+What you get out of it:
+
+- **Every config item the reporter has changed from default**, printed as `- <item> = <value> (default <value>)`. Grep the replay log for that block before reading their yaml — it is where most "the plan is wrong" reports get settled.
+- A recalculated plan with a metric before and after, written to `plan_orig.html` and `plan_final.json` in `coverage/`. Both are gitignored, and `git clean -fd` clears them.
+- `--redo` recomputes rates, load model and Octopus slots instead of reusing the ones in the dump. Without it you are replaying the exact state they had, which is normally what you want.
+
+Committed examples of the same format live in `coverage/cases/*.yaml`; they run as golden regressions under `./run_all --test debug_cases`.
+
+Two lines in that output are normal and are not the reporter's bug:
+
+- `Prediction kernel stale binary ... - using Python engine` — the local C++ kernel is older than the Python side expects, so the pure-Python engine runs instead. The plan is still correct, just slower.
+- `Config item ... is below the minimum ... - clamping to ...` — routine clamping of an out-of-range setting.
+
+## Check configuration before code
+
+"The plan is wrong" has repeatedly turned out to be settings rather than a defect:
+
+- **GH#4222** (odd freeze-export windows) — traced to the reporter's own `combine_export_slots: True` plus a high `metric_min_improvement_export`, not a code regression. A stale local test file also produced a false kernel regression partway through that investigation.
+- **GH#4478** (exports scheduled late) — there *was* a real ordering bug (`optimise_swap_export` ran before the later plan passes, fixed in PR #4513), but the user-visible difference was dominated by `best_soc_keep: 4.0` in their config.
+
+So pull the non-default config list out of the replay first and look at `combine_export_slots`, `metric_min_improvement_export`, `best_soc_keep`, `metric_battery_value_export_scaling` and the `load_scaling*` family before concluding "code bug". Saying "this is configuration" is a legitimate triage outcome — that is what the `configuration` label is for.
+
+## Per-integration notes
+
+Grep for the named symbol rather than trusting a line number.
+
+| Area | What past debugging found | Targeted test |
+|------|---------------------------|---------------|
+| Fox (`fox.py`) | The cloud API returns errno 42015/44096 for settings a given device does not support (`FOX_SETTINGS_UNSUPPORTED_ERRNO`); those are marked unavailable and never polled or written again. Entity type matters — WorkMode is a select, ExportLimit a number. | `fox_api`, `fox_oauth` |
+| Solis (`solis.py`) | `SOLIS_CID_STORAGE_MODE = 636` is Modbus 43110, a bit mask. On firmware "4B and above" (what `is_tou_v2_mode()` detects: CID 6798 reads 43605) the timed charge/discharge enable moved to the per-slot registers — `SOLIS_CID_CHARGE_ENABLE_BASE`/`..._DISCHARGE_ENABLE_BASE`, Modbus 43707, six slots not three — and every mode value carrying TOU bit 1 (3/35/43/51/98) was dropped; 35 became 33, 98 became 96. Such an inverter answers a CID 636 write with code 0 and reads back without bit 1, so a log full of CID 636 verification warnings is a refused bit, not a failed write (GH#4707). `note_tou_bit_refused()` learns that from the read-back and re-probes every `SOLIS_TOU_BIT_REPROBE_HOURS`. GH#4239's "only retained while a window is configured" is not the whole story — it was refused with slot 1 enabled and its window in force. Separately, an inverter reporting `batteryType 'No Battery'` stays in `self.inverter_sn` for polling; `is_battery_inverter()` keeps control writes off it, which was most of the warning volume in GH#4707. That explanation doesn't cover every CID 636 report, though: a later GH#4707 comment showed zero `setting storage mode to` idle-mode log lines, and both V1 mode-decision idle paths always log that line — so a report with neither line cannot be coming from `write_time_windows_if_changed()` at all. The only remaining write path is the HA select handler, `set_storage_mode_value()` at `solis.py:2574`. Check which write path actually ran before assuming this entry's explanation applies. | `solis` |
+| SolaX (`solax.py`) | Code `10402` is a token/auth failure, retried in-request rather than waiting for the next cycle. SolaX clamps battery minimum SOC at 10% (`SOLAX_MIN_RESERVE_PERCENT`), so `battery_min_soc` is auto-configured to stop Predbat writing limits the inverter will reject. | `solax` |
+| Sigenergy (`sigenergy.py`) | Lifetime/history totals are cumulative server-side and reset around EU midnight, which showed up as an overnight dip; `fetch_history_totals` applies a monotonic clamp. "Energy totals went backwards overnight" starts here. Separately, a user `apps.yaml` override of `inverter.has_reserve_soc: true` (stock `SIG` default is `False`, deliberately — reverted in `5bfc5c80` after #2873/#3124) bypasses two guards that normally make reserve writes inert for Sigenergy (`execute.py:947-950`, `inverter.py:547-549`), so `adjust_reserve()` writes straight to `number.sigen_plant_ess_discharge_cut_off_state_of_charge`. Confirmed from a reporter's log: zero occurrences of the "Inverter does not support reserve" disable message the first guard would normally log, plus 56 reserve writes landing on that register (GH#4728). The stock template's `reserve:` line also points at that same entity rather than `ess_backup_state_of_charge`, which is what makes the override immediately destructive rather than merely inert. | `sigenergy` |
+| AlphaESS (`alphaess.py`) | Once any discharge window is configured (`ctrDis=1`), AlphaESS firmware allows discharge *only* inside that window — outside it the battery is charge-from-PV-only, with no self-consumption fallback (AlphaESS's own documented behaviour, per GH#4701). Predbat's generic handling of what happens outside a configured discharge window (`execute.py`) has no AlphaESS-specific case and assumes normal demand mode resumes there, which holds for other brands but not this one — the next best export window Predbat schedules can be hours away, leaving the battery locked out of discharge until then (GH#4723). | `alphaess_control` |
+| Solcast (`solcast.py`) | `max_kwh` — the array-capacity ceiling used to sanity-check the forecast — is initialised to `9999` (`solcast.py:1339`) and is only ever reassigned on the Forecast.Solar and Open-Meteo branches. On the direct-API and HA-sensor Solcast paths it stays `9999`, so the "Raw forecast exceeds the array ceiling" warning (`solcast.py:1191`) can never fire for Solcast users — confirmed by reading the assignments (GH#4730). That warning is exactly the diagnostic an "impossible PV predicted" report needs, so its absence isn't evidence the ceiling wasn't exceeded. Branch order at `solcast.py:1368` also means a configured `solcast_api_key` always wins over `pv_forecast_*` HA sensors, so comparing Predbat's number against the HA entity compares against the wrong source when both are set. | `solcast` |
+| HA write/verify (`ha.py`, `inverter.py`) | `get_state(refresh=True)` is a no-op in a normal HA add-on install: it only re-reads when `not self.ha_key`, and `ha_key` is set in that case, so verification reads the websocket cache, never a fresh value (`ha.py:798`, since PR #2342). Separately, `write_and_poll_value()` treats `domain == "sensor"` as Predbat-owned and POSTs `/api/states/<entity>` directly (`inverter.py:2155`, `ha.py:1071-1077`) instead of calling the integration. Probed empirically across all four write-path/domain combinations (GH#4738): a control entity that resolves to a `sensor.*` domain by mistake gets a direct state overwrite that reads back as success, with zero corresponding lines in the real integration's log. `call_service_wrapper()`'s return value is also discarded at every `inverter.py` write site, so a rejected HA service call (e.g. a Modbus "Illegal Function" error) never reaches the verify logic. | `inverter` |
+| GE Cloud (`gecloud.py`) | Gateway fields can come back null. `merge_non_null` stops nulls overwriting good values, and the publish path guards null containers — GH#4656 was a null crash in that area. | `ge_cloud` |
+| Teslemetry / Powerwall (`teslemetry.py`) | Battery model is inferred from site `nameplate_power / battery_count`. A nameplate fallback combined with `inverter_hybrid: True` once produced a false 5 kW inverter limit and spurious morning export. Tariff writes push a whole TOU schedule every cycle, so a setting changed by hand in the Tesla app is reverted on the next cycle (GH#4600, GH#4610). | `teslemetry` |
+| Sunsynk / DEYE (`sunsynk.py`, `deye.py`) | Freeze export is gated by the per-slot power register (`sellTime{n}Pac` on Sunsynk), confirmed on live hardware — setting the energy mode alone had no effect, and with slot power at zero the battery still charged. `read_only` was ignored by the reconcile loops until `_is_read_only()` gated `_reconcile_control()` (GH#4436). | `sunsynk_control`, `deye_control` |
+| Grid sign / arrow direction | `grid_power_invert` is owned by some integrations and not others. With two systems configured, one integration setting it `True` bleeds into the other's entities and inverts the arrows. The fix is an explicit `False` in the automatic config of both. | `sunsynk_config`, `teslemetry` |
+| Enphase (`enphase.py`) | Unofficial Enlighten endpoints. Accounts with MFA cannot log in at all. Discharge-to-grid schedules are required for export control. Writes need a double-submit CSRF token or return 403. Using the Enphase app at the same time can trip session limits. | `enphase_api` |
+| Octopus (`octopus.py`, `fetch.py`) | Intelligent Go tariffs are detected via `is_intelligent_go_tariff()`, and IOG-prefixed tariffs must be skipped when updating intelligent devices. Saving-session auto-join rebinding regressed when `joined_events` was empty (GH#4573). `octopus_slots_signature()` deliberately omits the time-drifting fields of active dispatch slots so a replan is not forced every cycle. | `octopus_*`, `saving_session*` |
+| Axle (`axle.py`) | Export sessions have to boost the import rate as well as the export rate. State is published unconditionally from `run()` so a fetch failure does not freeze the sensor at a stale value. | `axle` |
+| History fetch / memory (`ha.py`) | History is fetched in `HISTORY_CHUNK_DAYS`-sized chunks with boundary dedup — records landing exactly on a chunk start inside a data gap corrupted smoothing before that was fixed. The largest memory peak in a run is ML load-predictor training (`load_predictor.py`), not the plan. | `history_chunking` |
+| Charge/discharge curve (`inverter.py`) | The curve is evaluated per target minute; tapering near ~93% SOC is expected behaviour, not a fault. | `find_charge_curve`, `battery_curve_keys` |
+| Standalone / Docker (non-HA) | GH#4601: a callback returning `None` instead of `True` broke the Octopus saving-session fallback in standalone mode. Anything that works under HA but not standalone is worth checking along the `ha.py` websocket and `userinterface.py` callback paths. | `trigger_callback_success_signal` |
+| Holiday mode (`fetch.py`) | GH#4732: under `days_previous_auto` (the default) holiday mode is handled entirely inside `compute_load_forecast_history()`, not by the `days_previous = [1]` branch, which is only reachable with `days_previous_auto: False`. Days whose holiday state does not match the *forecast day's* are now excluded outright rather than halved, and `get_holiday_minutes()` must span `num_days + 1` to cover the `minutes_now` overhang. A slot with no matching history falls back to `holiday_load_scaling` (default 0.7), which is what makes holiday mode act on day one - a normalised weighted mean cannot otherwise express "all of my data is wrong". | `holiday_mode` |
+| Predheat (`predheat.py`) | GH#4670: with `predheat_enable` set, Predheat still did not activate after startup because of lazy flag initialisation. There is no registered Predheat test module, so there is nothing to run here — investigate by reading. | none |
+
+## Symptom → first place to look
+
+| Report | Start here |
+|--------|-----------|
+| Plan tab blank / no plan shown in HA | `predbat.cost_today` missing from HA recorder history — a recorder configuration problem (GH#3936). Test: `faq_recorder_config`, and see `docs/faq.md`. |
+| Exports happen at the wrong time | `plan.py` export optimisation order, plus `combine_export_slots` and `metric_min_improvement_export` in their config. |
+| Battery charges or freezes when it shouldn't | Freeze paths in `prediction.py` and the inverter component's control write; check `best_soc_keep` and the freeze-related config in the replay. |
+| Rates wrong, missing or not updating | `fetch.py` rate scanning, then the provider component (`octopus.py`, `kraken.py`, `energydataservice.py`). |
+| Inverter setting not applied | `execute.py` into the component's reconcile loop; check whether `read_only` is set. |
+| Energy totals jump or reset | Provider-side cumulative counters and any monotonic clamping. |
+| Works in HA, broken in Docker/standalone | `ha.py` websocket and `userinterface.py` callback return values. |
+| Plan seems stuck / doesn't adopt a clearly better replan | `should_replace_plan()` (`plan.py:1103`) compares pre-clip snapshots; a retained incumbent keeps its stale snapshot without the expired-window pruning `charge_window_best` gets, so the improvement gap can read identical for hours while real costs move. Combined with the fragmentation tie-break (`plan.py:1114`), which always favours the plan that adds no slot, a genuinely better plan can stay rejected until something else invalidates the plan outright. Confirmed from a 24h log: 180 consecutive comparisons with an unchanged gap, only 7 of 187 total ever adopting a new plan (GH#4736). Not a bug in the tie-break itself — `test_plan_tiebreak.py` asserts exactly that rule on purpose. |
+
+## Traps when investigating
+
+- **Stale kernel binary.** The `prediction_kernel_lib_*.so` binaries are committed and CI has a job for them. The warning above means the checkout falls back to the Python engine, which is fine for triage. Never rebuild or commit binaries while triaging.
+- **`minutes_now = 0` hides time-of-day bugs.** The load-forecast tests set `minutes_now = 0` in their shared
+  setup, which made GH#4732's holiday off-by-one invisible for years: the faulty `tod <= minutes_now` was then
+  true only for the midnight slot. Anything indexing history as `(minutes_now - tod) + d * 1440` needs a test at
+  a non-zero `minutes_now`, and wall-clock-aligned fixture days (`test_holiday_mode.py`) rather than the
+  minutes-ago bucketing in `test_load_forecast_history.py`, which only lines up when `minutes_now` is 0.
+- **Golden plans move when load scaling changes.** Any change to `step_data_history`'s `scale_today` handling
+  shifts both `coverage/cases/*.expected.json` (regenerate by copying the `*.actual.json` the run writes) and
+  `coverage/cases/random_results.json` (regenerate with `./run_random`, then copy `random_results.json` over it).
+  `debug_cases` stops at the first failing case, so a second case can start failing only after you fix the first.
+  Before regenerating, confirm the shift is the intended one by temporarily restoring the old behaviour and
+  checking the golden files pass again.
+- **Test ordering.** Some tests share a `PredBat` instance, which is exactly why `run_debug_cases` builds a fresh one per case. A test that fails in a full run but passes alone is usually pollution, not the reporter's bug — another reason to run only the targeted test.
+- **Version drift.** Compare `git describe --tags` against the version in the first few lines of their log. A fair number of reports are already fixed on main, and that is a useful triage answer on its own.
+- **Log noise.** `predbat.log` carries routine `Warn:` lines (config clamps, kernel status, unsupported settings). Don't quote a warning as the root cause unless it lines up with the time the reporter describes.
+- **Hardware questions.** A unit test settles what the code does, not what an inverter did. Several findings here were only confirmed on live hardware. If the question is hardware behaviour, say the maintainer needs to confirm it rather than running a test to look thorough.
+- **`gh issue list --search` without `--repo` searches all of GitHub.** Confident-looking hits can be from unrelated projects (GH#4705). Always pass `--repo springfall2008/batpred` on a duplicate search.
+
+## Adding to this file
+
+When an investigation turns up something a future triage run would have wanted to know — a config item that explains a class of report, an API quirk, a symptom that maps to a module — add a row. Keep it short, name the symbol rather than the line number, and cite the issue number so the next reader can check the original.

@@ -3,7 +3,7 @@ repos:
   rev: v5.0.0
   hooks:
   - id: file-contents-sorter
-    files: ^(\.cspell\/custom-dictionary-workspace.txt|requirements\.txt)$
+    files: ^requirements\.txt$
     args: ["--ignore-case", "--unique"]
   - id: trailing-whitespace
     args: [--markdown-linebreak-ext=md]
@@ -12,6 +12,22 @@ repos:
     exclude: (example_chart.yml)
   - id: check-json
     exclude: ^(\.cspell\.json|\.devcontainer\/devcontainer\.json)$
+# The cspell dictionary needs case-insensitive *uniqueness*, which file-contents-sorter cannot do -
+# its --unique is case-sensitive while --ignore-case sorts case-folded, so case-duplicate entries
+# compare equal and their order varies with PYTHONHASHSEED between runs
+- repo: local
+  hooks:
+  - id: cspell-dictionary-sorter
+    name: cspell dictionary sorter
+    language: python
+    entry: python .cspell/sort_dictionary.py
+    files: ^\.cspell\/custom-dictionary-workspace\.txt$
+  - id: triage-daemon-tests
+    name: triage daemon unit tests
+    language: python
+    entry: python tools/test_triage_daemon.py
+    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+    pass_filenames: false
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0
   hooks:
@@ -36,12 +52,14 @@ repos:
   rev: v0.37.0
   hooks:
   - id: markdownlint-fix # Configure in .mdlrc
+    exclude: ^docs/superpowers/ # internal planning artifacts, not published docs
 - repo: https://github.com/streetsidesoftware/cspell-cli
   rev: v8.0.0
   hooks:
   - id: cspell
     additional_dependencies:
     - "@cspell/dict-en-gb"
+    exclude: ^docs/superpowers/ # internal planning artifacts, not published docs
 exclude: |
   ^\.venv/|
   \.backup$

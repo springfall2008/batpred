@@ -111,6 +111,36 @@ especially if you have a small battery. If you set it to zero then Predbat may n
 
 To reverse the direction of your [grid power entity](apps-yaml.md#power-data) in the Predbat web console, you may need to set '**grid_power_invert** to true if your **grid_power** is positive when importing.
 
+## In the power flow diagram the grid always shows 0W even though I'm clearly exporting (or importing)
+
+**grid_power** must be a single signed sensor - negative while importing, positive while exporting (or the reverse, corrected with **grid_power_invert**). Some meter/CT-clamp integrations instead expose two separate sensors that are always zero or positive - one for import, one for export - rather than one signed sensor. If **grid_power** is pointed at one of these (e.g. the import-only sensor), it will correctly read 0 whenever you're exporting (and vice versa), because that sensor structurally cannot represent flow in the other direction - Predbat is displaying it faithfully, it just isn't the right sensor for this field.
+
+If this is your situation, create a template sensor in Home Assistant that combines the two into one signed value (e.g. `export - import`, or `-import` when only importing) and point **grid_power** at that combined template instead of either sensor directly.
+
+## I have a second solar array that Predbat doesn't manage as an inverter - how do I include its generation?
+
+The [Power Data](apps-yaml.md#power-data) **pv_power**/**pv_today** lists take one entry per inverter Predbat is actually configured to manage (`num_inverters`) - you can't just add an extra line for a second array that has no corresponding managed inverter (e.g. a separate FIT-metered string, or a second hybrid system Predbat isn't controlling), Predbat will still only look for as many sensors as it has inverters defined.
+
+Instead, create a template sensor in Home Assistant that adds the extra array's generation into the same total, and point your managed inverter's **pv_power**/**pv_today** entry at that combined sensor instead of the raw inverter sensor. For example, combining a managed inverter's PV power with a separate FIT array's:
+
+```yaml
+# Combined PV power sensor, updated every 5 minutes instead of the default of every sensor state change
+- trigger:
+    - platform: time_pattern
+      minutes: "/5"
+  sensor:
+    - name: "Combined PV Power"
+      unique_id: "combined_pv_power"
+      unit_of_measurement: W
+      device_class: power
+      state_class: measurement
+      state: >
+        {{ (states('sensor.givtcp_xxx_pv_power') | float(0)
+          + states('sensor.fit_array_pv_power') | float(0)) | round(0) }}
+```
+
+Use a `time_pattern` trigger template (rather than a plain templated sensor in the UI) so it updates on a fixed schedule instead of firing on every state change of either underlying sensor, which generates unnecessary extra state history. The same pattern works for **pv_today** (summing the two daily energy totals instead of instantaneous power).
+
 ## My plan is freeze charging or holding at 100% battery a lot
 
 **Round trip losses**
@@ -216,13 +246,11 @@ recorder:
       - predheat
     entities:
       - sensor.predbat_load_ml_forecast
-      - sensor.predbat_pv_today
       - sensor.predbat_pv_tomorrow
       - sensor.predbat_pv_forecast_raw
       - sensor.predbat_pv_d2
       - sensor.predbat_pv_d3
       - sensor.predbat_temperature
-      - sensor.predbat_pv_forecast_h0
   include:
     entities: #The history of these entities is used by Predbat
       - predbat.cost_today
@@ -237,6 +265,7 @@ recorder:
       - predbat.load_inday_adjustment
       - predbat.ppkwh_today
       - predbat.ppkwh_hour
+      - predbat.pv_energy_h0
       - predbat.pv_power
       - predbat.rates
       - predbat.rates_export
@@ -252,6 +281,16 @@ recorder:
       - predheat.target_temperature
 
 ```
+
+Two things to be careful of if you adapt the example above:
+
+- Don't drop entries from the `include` list without checking what reads them. Predbat needs the recorded history of
+every entity listed there and quietly loses a feature for each one it can no longer read - `predbat.cost_today`, for
+instance, is what the Plan tab's *History* and *Yesterday Without Predbat* views are built from.
+- Don't add further Predbat sensors to the `exclude` list for the same reason. `sensor.predbat_pv_forecast_h0` and
+`sensor.predbat_pv_today` are deliberately left out of it because PV calibration and the PV accuracy chart compare
+against their history. Adding a `sensor.*` entity to `exclude` and to `include` does not rescue it either - an entry
+under `include` only overrides the exclusion of its whole *domain*, which here is `predbat`, not `sensor`.
 
 When the serialized attributes payload for a Predbat entity state exceeds 16384 bytes, the recorder will not store any attributes for that state (only the state value itself is stored). States whose serialized attributes payload is below this limit are stored normally.
 You can suppress these warnings by adding the following to your `configuration.yaml` file:

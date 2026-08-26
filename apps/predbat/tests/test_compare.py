@@ -344,6 +344,124 @@ def test_compare(my_predbat):
         print("ERROR T11: apply_hardware_overrides raised on bad input: {}".format(e))
         failed += 1
 
+    # ------------------------------------------------------------------
+    # T12: run_all() source actually contains the mid-loop config restore
+    #      (T9/T10 above only prove the pattern works in isolation - this
+    #      closes the gap by checking it's genuinely wired into run_all()
+    #      itself, not just demonstrated as a standalone snippet - #4156)
+    # ------------------------------------------------------------------
+    import inspect
+
+    run_all_source = inspect.getsource(Compare.run_all)
+    # The restore block must appear between the "restore hardware settings" comment (which is
+    # inside the per-tariff loop) and the loop's closing use of publish_data(), otherwise it's
+    # not actually running once per tariff.
+    hardware_restore_idx = run_all_source.find("Restore hardware settings after each tariff")
+    publish_data_idx = run_all_source.find("self.publish_data()")
+    config_restore_idx = run_all_source.find("config_snapshot", hardware_restore_idx + 1) if hardware_restore_idx >= 0 else -1
+
+    if hardware_restore_idx < 0 or publish_data_idx < 0:
+        print("ERROR T12: could not locate expected markers in run_all() source - test may need updating")
+        failed += 1
+    elif not (hardware_restore_idx < config_restore_idx < publish_data_idx):
+        print("ERROR T12: config_snapshot restore is not positioned inside the per-tariff loop in run_all() - the #4156 leak is not actually fixed")
+        failed += 1
+    else:
+        print("PASS T12: run_all() restores config: overrides inside the per-tariff loop, not just once at the end")
+
+    # ------------------------------------------------------------------
+    # T13: run_single() re-plans iBoost against the tariff's own rates
+    #      instead of leaving it stuck with the plan computed for the live
+    #      tariff (the compare-plan iBoost timing bug)
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.iboost_enable = True
+    pb.iboost_solar = False
+    pb.iboost_charging = False
+    pb.iboost_smart = True
+    pb.iboost_today = 3.0
+    pb.import_today_now = 0
+    pb.export_today_now = 0
+    pb.cost_today_sofar = 0
+    pb.carbon_today_sofar = 0
+    pb.forecast_plan_hours = 48
+    pb.manual_charge_times = None
+    pb.manual_export_times = None
+    pb.manual_freeze_charge_times = None
+    pb.manual_freeze_export_times = None
+    pb.manual_demand_times = None
+    pb.manual_all_times = None
+    pb.octopus_intelligent_charging = False
+    pb.iboost_plan = ["stale_plan_from_live_tariff"]
+
+    tariff_plan_calls = []
+
+    def _mock_plan_iboost_smart():
+        tariff_plan_calls.append(1)
+        return ["fresh_plan_for_this_tariff"]
+
+    pb.plan_iboost_smart = _mock_plan_iboost_smart
+
+    cmp.fetch_config = lambda tariff: None
+    cmp.apply_hardware_overrides = lambda tariff, pb: None
+    cmp.fetch_rates = lambda tariff, base_import, base_export: "existing"
+    cmp.recompute_car_charging = lambda slots: None
+    cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
+
+    result = cmp.run_single({"name": "test_tariff", "id": "test"}, {}, {}, 48 * 60, fetch_sensor=False)
+
+    if not tariff_plan_calls:
+        print("ERROR T13: plan_iboost_smart() was not called during run_single()")
+        failed += 1
+    elif pb.iboost_plan != ["fresh_plan_for_this_tariff"]:
+        print("ERROR T13: iboost_plan should be replaced with the tariff-specific plan, got {}".format(pb.iboost_plan))
+        failed += 1
+    else:
+        print("PASS T13: run_single() re-plans iBoost using the compared tariff's own rates")
+
+    # ------------------------------------------------------------------
+    # T14: run_single() clears iboost_plan (rather than reusing a stale one)
+    #      when iBoost smart-rate planning isn't applicable for this tariff run
+    # ------------------------------------------------------------------
+    cmp, pb = _make_compare()
+    pb.iboost_enable = True
+    pb.iboost_solar = True
+    pb.iboost_charging = True
+    pb.iboost_smart = False
+    pb.iboost_today = 0
+    pb.import_today_now = 0
+    pb.export_today_now = 0
+    pb.cost_today_sofar = 0
+    pb.carbon_today_sofar = 0
+    pb.forecast_plan_hours = 48
+    pb.manual_charge_times = None
+    pb.manual_export_times = None
+    pb.manual_freeze_charge_times = None
+    pb.manual_freeze_export_times = None
+    pb.manual_demand_times = None
+    pb.manual_all_times = None
+    pb.octopus_intelligent_charging = False
+    pb.iboost_plan = ["stale_plan_from_live_tariff"]
+    pb.plan_iboost_smart = lambda: tariff_plan_calls.append(1) or []
+
+    cmp.fetch_config = lambda tariff: None
+    cmp.apply_hardware_overrides = lambda tariff, pb: None
+    cmp.fetch_rates = lambda tariff, base_import, base_export: "existing"
+    cmp.recompute_car_charging = lambda slots: None
+    cmp.run_scenario = lambda end_record: {"cost": 0, "metric": 0}
+
+    tariff_plan_calls.clear()
+    cmp.run_single({"name": "test_tariff2", "id": "test2"}, {}, {}, 48 * 60, fetch_sensor=False)
+
+    if tariff_plan_calls:
+        print("ERROR T14: plan_iboost_smart() should not be called when iboost_charging/iboost_solar handle boosting and iboost_smart is off")
+        failed += 1
+    elif pb.iboost_plan != []:
+        print("ERROR T14: stale iboost_plan from the live tariff should be cleared, got {}".format(pb.iboost_plan))
+        failed += 1
+    else:
+        print("PASS T14: run_single() clears stale iboost_plan when smart-rate planning isn't applicable")
+
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
     else:

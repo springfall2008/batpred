@@ -13,6 +13,7 @@ Tests for ComponentBase start method and backoff behavior
 """
 
 import asyncio
+from types import SimpleNamespace
 from datetime import timezone
 from unittest.mock import patch
 
@@ -78,6 +79,14 @@ class TestComponent(ComponentBase):
             return False
 
         return self.return_true_on_run
+
+
+def test_component_base_not_calculating(my_predbat):
+    """Test that components are not calculating unless they explicitly say otherwise."""
+    component = TestComponent(MockBase())
+    assert not component.is_calculating(), "ComponentBase should default to not calculating"
+    print("PASS: ComponentBase defaults to not calculating")
+    return False
 
 
 def test_component_base_immediate_success(my_predbat):
@@ -353,9 +362,86 @@ def test_component_base_first_cleared_when_run_presets_api_started(my_predbat):
     return asyncio.run(run_test())
 
 
+def test_component_base_set_arg_auto(my_predbat):
+    """
+    Test ComponentBase.set_arg_auto() (issue #4494 follow-up, PR #4500 review): warns once when
+    it overwrites a key the user had explicitly set in apps.yaml, otherwise behaves exactly like
+    set_arg() - auto-discovery always wins either way, this only makes the override discoverable.
+    """
+    print("\n*** Test: ComponentBase.set_arg_auto warns once on apps.yaml override ***")
+
+    base = MockBase()
+    base.args_from_apps_yaml = {"battery_scaling": [0.9]}
+    base.apps_yaml_override_warned = set()
+    set_calls = {}
+    base.set_arg = lambda arg, value: set_calls.__setitem__(arg, value)
+
+    component = TestComponent(base)
+
+    # apps.yaml had a different value - warn once, auto-discovered value still applied
+    component.set_arg_auto("battery_scaling", ["sensor.predbat_battery_soh"])
+    assert set_calls.get("battery_scaling") == ["sensor.predbat_battery_soh"], "Auto-discovered value should be applied"
+    assert any("apps.yaml sets 'battery_scaling: [0.9]'" in msg for msg in base.log_messages), "Should warn about the override"
+
+    # Second call for the same key must not repeat the warning
+    component.set_arg_auto("battery_scaling", ["sensor.predbat_battery_soh"])
+    warn_count = sum(1 for msg in base.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Warning should not repeat, got {warn_count}"
+
+    # A key never present in apps.yaml at all - no warning, behaves like plain set_arg
+    component.set_arg_auto("num_inverters", 1)
+    assert set_calls.get("num_inverters") == 1, "Should still set the value for an unconfigured key"
+    assert not any("num_inverters" in msg for msg in base.log_messages), "Should not warn for a key the user never configured"
+
+    # Base with no args_from_apps_yaml snapshot at all (e.g. component created outside
+    # PredBat.initialize(), as in most unit tests) must not raise, and must not warn
+    bare_base = MockBase()
+    bare_set_calls = {}
+    bare_base.set_arg = lambda arg, value: bare_set_calls.__setitem__(arg, value)
+    bare_component = TestComponent(bare_base)
+    bare_component.set_arg_auto("battery_scaling", ["sensor.predbat_battery_soh"])
+    assert bare_set_calls.get("battery_scaling") == ["sensor.predbat_battery_soh"], "Should still work without an apps_yaml snapshot"
+
+    print("PASS: set_arg_auto warns once on a genuine override, stays silent otherwise, and is safe without a snapshot")
+    return False
+
+
+def test_component_base_set_state_external(my_predbat):
+    """
+    Test ComponentBase.set_state_external() forwards to the HA interface with the attributes intact.
+
+    Components use this (rather than set_state_wrapper) when auto-discovery has to change one of
+    Predbat's own settings - only this path updates the matching CONFIG_ITEMS value, so writing the
+    state alone would move the displayed entity without changing what the planner reads.
+    """
+    print("\n*** Test: ComponentBase.set_state_external forwards to the HA interface ***")
+
+    calls = []
+
+    async def capture(entity_id, state, attributes={}):
+        """Record a forwarded external state write."""
+        calls.append((entity_id, state, attributes))
+        return "written"
+
+    base = MockBase()
+    base.ha_interface = SimpleNamespace(set_state_external=capture)
+    component = TestComponent(base)
+
+    result = asyncio.run(component.set_state_external("switch.predbat_inverter_hybrid", False))
+    assert calls == [("switch.predbat_inverter_hybrid", False, {})], f"Unexpected forwarded call {calls}"
+    assert result == "written", "The HA interface's return value should be passed back to the caller"
+
+    asyncio.run(component.set_state_external("sensor.predbat_test", 42, {"unit_of_measurement": "W"}))
+    assert calls[1] == ("sensor.predbat_test", 42, {"unit_of_measurement": "W"}), f"Attributes not forwarded: {calls[1]}"
+
+    print("PASS: set_state_external forwards entity, state and attributes and returns the result")
+    return False
+
+
 def test_component_base_all(my_predbat):
     """Run all component_base tests"""
     tests = [
+        ("not_calculating", test_component_base_not_calculating, "Component defaults to not calculating"),
         ("immediate_success", test_component_base_immediate_success, "Component starts immediately on first successful run"),
         ("backoff_sequence", test_component_base_backoff_sequence, "Component uses backoff on startup failures"),
         ("stop_during_backoff", test_component_base_stop_during_backoff, "Component respects api_stop during backoff"),
@@ -363,6 +449,8 @@ def test_component_base_all(my_predbat):
         ("exception_handling", test_component_base_exception_handling, "Component handles exceptions with backoff"),
         ("run_timeout", test_component_base_run_timeout, "Hung run() triggers timeout, stack trace, and error count"),
         ("first_cleared_preset", test_component_base_first_cleared_when_run_presets_api_started, "first flag clears even when run() pre-sets api_started"),
+        ("set_arg_auto", test_component_base_set_arg_auto, "set_arg_auto warns once on an apps.yaml override, silent otherwise"),
+        ("set_state_external", test_component_base_set_state_external, "set_state_external forwards to the HA interface"),
     ]
 
     failed = []

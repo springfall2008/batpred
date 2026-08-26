@@ -69,16 +69,225 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
-from predbat import THIS_VERSION
+from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+import debug_history
+from web_annual import AnnualPage
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
 
 ROOT_YAML_KEY = "pred_bat"
+
+
+def state_as_of_slots(records, slots):
+    """
+    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+
+    records must be a list of (timestamp, value) ordered oldest first. Returns
+    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
+    changed marks a slot whose value differs from the one shown at the previous slot.
+    """
+    filled = {}
+    last_value = None
+    previous = None
+    index = 0
+
+    for slot in sorted(slots):
+        while index < len(records) and records[index][0] <= slot:
+            last_value = records[index][1]
+            index += 1
+        value = last_value if last_value is not None else "-"
+        filled[slot] = (value, value != "-" and value != previous, previous)
+        previous = value
+
+    return filled
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch):
+    """
+    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+
+    entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+
+    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
+    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
+    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
+    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+
+    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
+      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
+      sorted_timestamps_30min: the 30-min row timestamps, newest first
+      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    """
+    entity_records = []
+    all_timestamps_30min = set()
+
+    for selection in entity_selections:
+        entity_id = selection["entity_id"]
+        attribute = selection["attribute"]
+        history = entity_data_fetch[entity_id]
+        records = []
+
+        if history and len(history) >= 1:
+            history = history[0]
+            if history:
+                for item in history:
+                    if "last_updated" not in item:
+                        continue
+                    try:
+                        last_updated_stamp = str2time(item["last_updated"])
+                    except (ValueError, TypeError):
+                        continue
+
+                    # Get state or attribute value
+                    if attribute:
+                        state = item.get("attributes", {}).get(attribute, None)
+                    else:
+                        state = item.get("state", None)
+
+                    if state is None:
+                        state = "None"
+
+                    records.append((last_updated_stamp, state))
+
+                    # A record makes the window it landed in a row, so activity is always on screen
+                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
+                    rounded_minutes_30 = (minutes // 30) * 30
+                    all_timestamps_30min.add(last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0))
+
+        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
+        # the local-time "now" record get_history_with_now() appends
+        records.sort(key=lambda record: record[0])
+        entity_records.append(records)
+
+    # Sort timestamps in reverse chronological order
+    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+
+    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
+    # that row rather than describing the preceding half hour
+    all_display_slots_5min = set()
+    for ts_30 in sorted_timestamps_30min:
+        for offset in range(0, 30, 5):
+            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+
+    entity_filled_30min = []
+    entity_filled_5min = []
+    for records in entity_records:
+        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
+        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
+
+    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+
+
+def is_data_numerical(history, attribute=None):
+    """
+    Check if history data is numerical (supports both state and attribute checking)
+    Returns True if at least 10% of values are numeric or boolean
+    """
+    count_nums = 0
+    count_total = 0
+
+    if history and len(history) >= 1:
+        for item in history[0]:
+            if attribute:
+                # Check attribute value
+                attr_value = item.get("attributes", {}).get(attribute, None)
+                if attr_value is None:
+                    continue
+                value = str(attr_value)
+            else:
+                # Check state value
+                value = item.get("state", None)
+                if value is None:
+                    continue
+                value = str(value)
+
+            if value.lower() in ["on", "off", "true", "false"]:
+                count_nums += 1
+            else:
+                try:
+                    float(value)
+                    count_nums += 1
+                except (ValueError, TypeError):
+                    pass
+            count_total += 1
+
+    if count_total > 0 and (count_nums / count_total) >= 0.1:
+        return True
+    elif count_total == 0:
+        return True
+    return False
+
+
+def split_entities_for_charting(entities, entity_data_fetch):
+    """
+    Fetch each entity's history and split a unit group into numeric vs non-numeric entries.
+
+    Deciding numeric-vs-timeline per entity (rather than once for the whole group, from
+    whichever entity happened to be processed last) means a numeric entity doesn't end up
+    silently rendered as a broken timeline chart just because another entity sharing the same
+    unit group is non-numerical.
+
+    entities: list of {"id": entity_id, "friendly_name": ..., "attribute": ...}
+    entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now()
+
+    Returns (numeric_entries, timeline_entries), each a list of
+    {"name": display_name, "friendly_name": ..., "entity_id": ..., "data": history_chart}.
+    """
+    numeric_entries = []
+    timeline_entries = []
+
+    for entity_info in entities:
+        entity_id = entity_info["id"]
+        friendly_name = entity_info["friendly_name"]
+        attribute = entity_info.get("attribute")
+
+        history = entity_data_fetch.get(entity_id)
+        is_numerical = is_data_numerical(history, attribute=attribute)
+
+        if attribute:
+            history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
+            display_name = f"{friendly_name} ({attribute})"
+        else:
+            history_chart = history_attribute(history, is_numerical=is_numerical)
+            display_name = friendly_name
+
+        if not history_chart:
+            continue
+
+        entry = {"name": display_name, "friendly_name": friendly_name, "entity_id": entity_id, "data": history_chart}
+        (numeric_entries if is_numerical else timeline_entries).append(entry)
+
+    return numeric_entries, timeline_entries
+
+
+def resolve_group_unit_and_name(entity_id, dashboard_values, live_unit=None, live_friendly_name=None):
+    """
+    Resolve the unit_of_measurement/friendly_name to group and label an entity by for the
+    /entity charts.
+
+    Prefers Predbat's own dashboard_values cache, falling back to a caller-supplied live HA
+    lookup (mirroring html_get_entity_text's fallback) for entities Predbat doesn't track
+    itself - e.g. inverter control entities that are selectable on this page but were never
+    published via dashboard_item(), which otherwise silently grouped every such entity into
+    "(no unit)" regardless of their real HA unit.
+
+    live_unit/live_friendly_name should only be looked up by the caller when entity_id isn't
+    in dashboard_values, since that's the only case they're used.
+    """
+    attributes = dashboard_values.get(entity_id, {}).get("attributes", {})
+    if entity_id in dashboard_values:
+        unit = attributes.get("unit_of_measurement") or ""
+        friendly_name = attributes.get("friendly_name") or ""
+    else:
+        unit = live_unit or ""
+        friendly_name = live_friendly_name or ""
+    return unit or "(no unit)", friendly_name or entity_id
 
 
 class WebInterface(ComponentBase):
@@ -96,6 +305,8 @@ class WebInterface(ComponentBase):
 
         # Plugin registration system
         self.registered_endpoints = []
+
+        self.annual_page = AnnualPage(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -199,6 +410,27 @@ class WebInterface(ComponentBase):
                 results[day_str] = dp2(total / count)
         return results
 
+    def _register_annual_routes(self, app):
+        """Register the Annual tab's routes on ``app``.
+
+        Split out from start() so a test can register these onto a bare aiohttp
+        Application and assert they exist, without booting a real TCP listener -
+        the constructor for that Application performs no network I/O of its own.
+        """
+        app.router.add_get("/annual", self.annual_page.html_annual)
+        app.router.add_post("/annual", self.annual_page.html_annual_post)
+        app.router.add_post("/annual_reset", self.annual_page.html_annual_reset)
+        app.router.add_post("/annual_array", self.annual_page.html_annual_array)
+        app.router.add_post("/annual_delete", self.annual_page.html_annual_delete)
+        app.router.add_get("/annual_cost_preview", self.annual_page.html_annual_cost_preview)
+        app.router.add_post("/annual_run", self.annual_page.html_annual_run)
+        app.router.add_get("/annual_status", self.annual_page.html_annual_status)
+        app.router.add_post("/annual_cancel", self.annual_page.html_annual_cancel)
+        app.router.add_get("/annual_download", self.annual_page.html_annual_download)
+        app.router.add_get("/annual_plan", self.annual_page.html_annual_plan)
+        app.router.add_get("/annual_view", self.annual_page.html_annual_view)
+        app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -223,9 +455,14 @@ class WebInterface(ComponentBase):
         app.router.add_get("/debug_yaml", self.html_debug_yaml)
         app.router.add_get("/debug_log", self.html_debug_log)
         app.router.add_get("/debug_apps", self.html_debug_apps)
+        app.router.add_get("/debug_apps_live", self.html_debug_apps_live)
         app.router.add_get("/debug_plan", self.html_debug_plan)
+        app.router.add_get("/debug_history_list", self.html_debug_history_list)
+        app.router.add_get("/debug_history_download", self.html_debug_history_download)
+        app.router.add_get("/debug_history_download_all", self.html_debug_history_download_all)
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
+        self._register_annual_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
@@ -243,6 +480,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/login", self.html_api_login)
         app.router.add_get("/browse", self.html_browse)
         app.router.add_get("/download", self.html_download_file)
+        app.router.add_get("/images/{filename}", self.html_logo_image)
         app.router.add_get("/internals", self.html_internals)
         app.router.add_get("/api/internals", self.html_api_internals)
         app.router.add_get("/api/internals/download", self.html_api_internals_download)
@@ -277,6 +515,12 @@ class WebInterface(ComponentBase):
             if count % 60 == 0:
                 self.update_success_timestamp()
             count += 1
+
+        # Otherwise a restart mid-run leaves the annual engine's child process
+        # orphaned - burning a CPU core for up to several minutes with nothing left
+        # tracking it - while the fresh AnnualPage created on the next start() reports
+        # idle and would happily let a second run be started alongside it.
+        await self.annual_page.job.cancel()
         await runner.cleanup()
 
         self.api_started = False
@@ -320,6 +564,24 @@ class WebInterface(ComponentBase):
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
+    def get_battery_icon(self, soc_percent, charging):
+        """
+        Pick the Material Design Icon showing how full the battery is and whether it is charging
+
+        The charging variants carry the same three levels plus a bolt, so the level survives in
+        both directions. battery-plus and battery-minus exist but have no level in them, so they
+        would trade the state of charge away for the sign.
+        """
+        if soc_percent < 30:
+            level = 0
+        elif soc_percent < 70:
+            level = 1
+        else:
+            level = 2
+        if charging:
+            return ["&#xF12A4;", "&#xF12A5;", "&#xF12A6;"][level]  # battery-charging low/medium/high
+        return ["&#xF12A1;", "&#xF12A2;", "&#xF12A3;"][level]  # battery low/medium/high
+
     def get_power_flow_diagram(self):
         """
         Generate a graphical power flow diagram showing energy movement between grid, battery, PV, and house load
@@ -339,14 +601,25 @@ class WebInterface(ComponentBase):
         pv_power = self.base.pv_power
         load_power = self.base.load_power
 
-        # Determine flow directions
-        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
-        grid_exporting = grid_power >= 10  # Grid is exporting power (positive value)
+        # Car charging only appears when a car_charging_power sensor is configured (execute.py
+        # update_car_charging_power). The charger sits on the house side of the meter, so its power
+        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # house rather than counting the car twice. Clamped at zero because the two readings come
+        # from different meters and a slow-updating load sensor can briefly read below the car.
+        car_configured = self.base.car_charging_power_configured
+        car_power = self.base.car_charging_power
+        house_power = max(0, load_power - car_power) if car_configured else load_power
 
-        battery_charging = battery_power >= 10  # Battery is charging (positive value)
-        battery_discharging = battery_power <= -10  # Battery is discharging (negative value)
+        # Determine flow directions. battery_power is positive when the battery is DISCHARGING
+        # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
+        # negative when importing, so the reading and the arrow run opposite ways round.
+        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
+
+        battery_to_house = battery_power >= 10  # Battery is discharging into the house
+        battery_charging = battery_power <= -10  # Power is flowing into the battery
 
         pv_generating = pv_power > 0  # PV is generating power
+        battery_icon = self.get_battery_icon(self.base.soc_percent, battery_charging)
         html = ""
 
         html += """
@@ -354,40 +627,89 @@ class WebInterface(ComponentBase):
             <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
 
                 <!-- Grid Circle -->
-                <circle cx="450" cy="300" r="50" fill="#4CAF50" />
-                <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
+                <circle cx="450" cy="300" r="50" fill="#757575"><title>Grid</title></circle>
+                <text x="450" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D3E;</text>
 
                 <!-- Battery Circle -->
-                <circle cx="150" cy="300" r="50" fill="#FF9800" />
-                <text x="150" y="300" text-anchor="middle" dy=".3em" fill="#fff">Battery</text>
+                <circle cx="150" cy="300" r="50" fill="#43A047"><title>Battery</title></circle>
+                <text x="150" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">{}</text>
 
                 <!-- PV Circle -->
-                <circle cx="150" cy="100" r="50" fill="#2196F3" />
-                <text x="150" y="100" text-anchor="middle" dy=".3em" fill="#fff">PV</text>
+                <circle cx="150" cy="100" r="50" fill="#FDD835"><title>PV</title></circle>
+                <text x="150" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D9B;</text>
 
                 <!-- House Circle -->
-                <circle cx="300" cy="200" r="50" fill="#9C27B0" />
-                <text x="300" y="190" text-anchor="middle" dy=".3em" fill="#fff">House</text>
+                <circle cx="300" cy="200" r="50" fill="#6D4C41"><title>House</title></circle>
+                <text x="300" y="186" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="34" fill="#fff">&#xF02DC;</text>
                 <text x="300" y="215" text-anchor="middle" dy=".3em" fill="#fff">{} W</text>
 
                 <!-- Define animation paths -->
                 <defs>
                     <!-- PV to House path -->
-                    <path id="pv-house-path" d="M200,100 L250,150" stroke="transparent" fill="none" />
+                    <path id="pv-house-path" d="M192,128 L241,161" stroke="transparent" fill="none" />
                     <!-- House to PV path -->
-                    <path id="house-pv-path" d="M250,150 L200,100" stroke="transparent" fill="none" />
+                    <path id="house-pv-path" d="M241,161 L192,128" stroke="transparent" fill="none" />
                     <!-- Battery to House path -->
-                    <path id="battery-house-path" d="M200,300 L250,250" stroke="transparent" fill="none" />
+                    <path id="battery-house-path" d="M192,272 L241,239" stroke="transparent" fill="none" />
                     <!-- House to Battery path -->
-                    <path id="house-battery-path" d="M265,235 L215,275" stroke="transparent" fill="none" />
+                    <path id="house-battery-path" d="M258,228 L209,261" stroke="transparent" fill="none" />
                     <!-- Grid to House path -->
-                    <path id="grid-house-path" d="M410,290 L355,240" stroke="transparent" fill="none" />
+                    <path id="grid-house-path" d="M408,272 L359,239" stroke="transparent" fill="none" />
                     <!-- House to Grid path -->
-                    <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
+                    <path id="house-grid-path" d="M342,228 L391,261" stroke="transparent" fill="none" />
                 </defs>
         """.format(
-            dp0(load_power)
+            battery_icon, dp0(house_power)
         )
+
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        if car_configured:
+            car_charging = car_power >= 10
+            html += """
+                <!-- Car Circle -->
+                <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
+                <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
+
+                <defs>
+                    <!-- House to Car path -->
+                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
+                    <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
+                    </marker>
+                </defs>
+            """
+            if car_charging:
+                # Calculate animation speed based on power flow - faster for higher power
+                car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
+
+                html += """
+                <!-- House to Car Arrow -->
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+
+                <!-- Moving dots for House to Car -->
+                <circle r="4" fill="#E53935" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
+                </circle>
+                <circle r="3" fill="#E53935" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
+                </circle>
+                <circle r="2" fill="#E53935" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
+                </circle>
+                """.format(
+                    dp0(car_power), car_speed, car_speed, car_speed
+                )
+            else:
+                html += """
+                <!-- House to Car Arrow (dashed) -->
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- No moving dot when the car is not charging -->
+                """.format(
+                    dp0(car_power)
+                )
+
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
@@ -395,18 +717,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- PV to House Arrow -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
 
                 <!-- Moving dots for PV to House -->
-                <circle r="4" fill="#2196F3" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
+                <circle r="4" fill="#F9A825" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,128 L241,161" />
                 </circle>
-                <circle r="3" fill="#2196F3" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,100 L250,150" />
+                <circle r="3" fill="#F9A825" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,128 L241,161" />
                 </circle>
-                <circle r="2" fill="#2196F3" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
+                <circle r="2" fill="#F9A825" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,128 L241,161" />
                 </circle>
             """.format(
                 dp0(pv_power), pv_speed, pv_speed, pv_speed
@@ -415,30 +737,30 @@ class WebInterface(ComponentBase):
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
                 <!-- No moving dot when PV is not generating -->
             """.format(
                 dp0(pv_power)
             )
-        if battery_charging:
+        if battery_to_house:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
 
             html += """
                 <!-- Battery to House Arrow -->
-                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="192" y1="272" x2="241" y2="239" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for Battery to House -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,272 L241,239" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,300 L250,250" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,272 L241,239" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,272 L241,239" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -449,18 +771,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Battery Arrow -->
-                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="258" y1="228" x2="209" y2="261" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for House to Battery -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M258,228 L209,261" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M265,235 L215,275" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M258,228 L209,261" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M258,228 L209,261" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -472,18 +794,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- Grid to House Arrow -->
-                <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="408" y1="272" x2="359" y2="239" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for Grid to House -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M408,272 L359,239" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M410,290 L355,240" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M408,272 L359,239" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M408,272 L359,239" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -494,18 +816,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Grid Arrow -->
-                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="342" y1="228" x2="391" y2="261" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for House to Grid -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,228 L391,261" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M340,230 L390,270" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,228 L391,261" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,228 L391,261" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -514,13 +836,13 @@ class WebInterface(ComponentBase):
                 <!-- Arrowhead Marker -->
                 <defs>
                     <marker id="pv-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#F9A825"/>
                     </marker>
                     <marker id="battery-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#FF9800"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#43A047"/>
                     </marker>
                     <marker id="grid-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#757575"/>
                     </marker>
                 </defs>
             </svg>
@@ -568,6 +890,11 @@ class WebInterface(ComponentBase):
 
         status_entity = self.prefix + ".status"
         last_updated = self.get_state_wrapper(status_entity, attribute="last_updated", default=None)
+        if last_updated:
+            try:
+                last_updated = str2time(last_updated).replace(tzinfo=None, microsecond=0)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_updated time {}: {}".format(last_updated, e))
         status = self.get_state_wrapper(status_entity, default="Unknown")
         detail = self.get_state_wrapper(status_entity, attribute="detail", default="")
         debug = self.get_state_wrapper(status_entity, attribute="debug", default="")
@@ -582,6 +909,11 @@ class WebInterface(ComponentBase):
             text += "<tr><td>Status</td><td{}>{}</td></tr>\n".format(debug_title, status_full)
         text += "<tr><td>Last Updated</td><td>{}</td></tr>\n".format(last_updated)
         last_started = self.get_state_wrapper(self.prefix + ".last_started", default=None)
+        if last_started:
+            try:
+                last_started = str2time(last_started).replace(tzinfo=None)
+            except (ValueError, TypeError) as e:
+                self.log("Warn: Failed to parse last_started time {}: {}".format(last_started, e))
         text += "<tr><td>Last Started</td><td>{}</td></tr>\n".format(last_started)
         text += "<tr><td>Version</td><td>{}</td></tr>\n".format(version)
 
@@ -629,10 +961,11 @@ class WebInterface(ComponentBase):
         text += '<div style="flex: 1;">\n'
         text += "<h2>Debug</h2>\n"
         text += "<table>\n"
-        text += "<tr><td>Download</td><td><a href='./debug_apps'>apps.yaml</a></td></tr>\n"
+        text += "<tr><td>Download</td><td><a href='javascript:void(0)' onclick='downloadLiveApps()'>apps.yaml (live)</a> | <a href='./debug_apps'>apps.yaml (file)</a></td></tr>\n"
         text += "<tr><td>Create</td><td><a href='./debug_yaml'>predbat_debug.yaml</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_log'>predbat.log</a></td></tr>\n"
         text += "<tr><td>Download</td><td><a href='./debug_plan'>predbat_plan.html</a></td></tr>\n"
+        text += "<tr><td>History</td><td><a href='./debug_history_download_all'>Download all (.tgz)</a></td></tr>\n"
         text += "<tr><td>Restart</td><td><button onclick='restartPredbat()' style='background-color: #ff4444; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;'>Restart Predbat</button></td></tr>\n"
         text += "</table>\n"
         text += "</div>\n"
@@ -807,45 +1140,6 @@ class WebInterface(ComponentBase):
             self.base.log(f"Error in html_api_get_entities: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
-    def is_data_numerical(self, history, attribute=None):
-        """
-        Check if history data is numerical (supports both state and attribute checking)
-        Returns True if at least 10% of values are numeric or boolean
-        """
-        count_nums = 0
-        count_total = 0
-
-        if history and len(history) >= 1:
-            for item in history[0]:
-                if attribute:
-                    # Check attribute value
-                    attr_value = item.get("attributes", {}).get(attribute, None)
-                    if attr_value is None:
-                        continue
-                    value = str(attr_value)
-                else:
-                    # Check state value
-                    value = item.get("state", None)
-                    if value is None:
-                        continue
-                    value = str(value)
-
-                if value.lower() in ["on", "off", "true", "false"]:
-                    count_nums += 1
-                else:
-                    try:
-                        float(value)
-                        count_nums += 1
-                    except (ValueError, TypeError):
-                        pass
-                count_total += 1
-
-        if count_total > 0 and (count_nums / count_total) >= 0.1:
-            return True
-        elif count_total == 0:
-            return True
-        return False
-
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
@@ -937,51 +1231,16 @@ class WebInterface(ComponentBase):
         days = int(request.query.get("days", 7))  # Default to 7 days if not specified
 
         text = self.get_header("Predbat Entity", refresh=0)
-        text += """
-<script>
-(function() {
-    // Restore scroll position and expanded rows saved before last reload
-    window.addEventListener('load', function() {
-        var savedPos = sessionStorage.getItem('entityScrollPos');
-        if (savedPos) {
-            savedPos = JSON.parse(savedPos);
-            sessionStorage.removeItem('entityScrollPos');
-            window.scrollTo(savedPos.x, savedPos.y);
-        }
-        var savedExpanded = sessionStorage.getItem('entityExpandedRows');
-        if (savedExpanded) {
-            sessionStorage.removeItem('entityExpandedRows');
-            JSON.parse(savedExpanded).forEach(function(rowIndex) {
-                var mainRow = document.getElementById('row_' + rowIndex);
-                if (mainRow) {
-                    var detailRows = document.querySelectorAll('#detail_' + rowIndex);
-                    detailRows.forEach(function(row) { row.style.display = 'table-row'; });
-                    mainRow.classList.add('expanded');
-                    var timeCell = mainRow.cells[0];
-                    timeCell.innerHTML = timeCell.innerHTML.replace('\u25b6', '\u25bc');
-                }
-            });
-        }
-    });
-    // Schedule reload, saving scroll position and expanded rows first
-    setTimeout(function() {
-        var expandedRows = [];
-        document.querySelectorAll('tr.history-row.expanded').forEach(function(row) {
-            expandedRows.push(row.id.replace('row_', ''));
-        });
-        sessionStorage.setItem('entityExpandedRows', JSON.stringify(expandedRows));
-        sessionStorage.setItem('entityScrollPos', JSON.stringify({x: window.scrollX, y: window.scrollY}));
-        location.reload();
-    }, 60000);
-})();
-</script>
-"""
 
-        # Include a back button to return the previous page
+        # Include a back button to return the previous page, and a reload button in case the
+        # entities selected weren't available yet when the page was first loaded
         text += """<div style="margin-bottom: 15px;">
             <a href="{}" class="button" style="display: inline-block; padding: 8px 15px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 4px; font-weight: bold;">
                 <span class="mdi mdi-arrow-left" style="margin-right: 5px;"></span>Back
             </a>
+            <button onclick="location.reload()" style="display: inline-block; margin-left: 10px; padding: 8px 15px; background-color: #2196F3; color: white; border: none; text-decoration: none; border-radius: 4px; font-weight: bold; cursor: pointer;">
+                <span class="mdi mdi-refresh" style="margin-right: 5px;"></span>Reload
+            </button>
         </div>""".format(
             self.default_page
         )
@@ -1075,13 +1334,16 @@ class WebInterface(ComponentBase):
                 entity_id = selection["entity_id"]
                 attribute = selection["attribute"]
 
-                attributes = self.base.dashboard_values.get(entity_id, {}).get("attributes", {})
-                unit = attributes.get("unit_of_measurement", "") or "(no unit)"
+                live_unit = live_friendly_name = None
+                if entity_id not in self.base.dashboard_values:
+                    live_unit = self.get_state_wrapper(entity_id=entity_id, attribute="unit_of_measurement")
+                    live_friendly_name = self.get_state_wrapper(entity_id=entity_id, attribute="friendly_name")
+                unit, friendly_name = resolve_group_unit_and_name(entity_id, self.base.dashboard_values, live_unit, live_friendly_name)
 
                 if unit not in entity_groups:
                     entity_groups[unit] = []
 
-                entity_groups[unit].append({"id": entity_id, "friendly_name": attributes.get("friendly_name", entity_id), "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
+                entity_groups[unit].append({"id": entity_id, "friendly_name": friendly_name, "unit": unit, "attribute": attribute, "available_attrs": entity_attributes_map.get(entity_id, [])})
 
             # Display entity details table for first selected entity
             if len(entity_selections) == 1:
@@ -1114,46 +1376,28 @@ class WebInterface(ComponentBase):
             now_str = self.now_utc.strftime(TIME_FORMAT)
 
             for unit, entities in entity_groups.items():
+                # Numeric and non-numeric entities are split per-entity (not decided once for the
+                # whole group) so a numeric entity sharing a unit with a non-numerical one still
+                # gets a proper line chart instead of being dropped into a broken timeline chart.
+                numeric_entries, timeline_entries = split_entities_for_charting(entities, entity_data_fetch)
+                if not numeric_entries and not timeline_entries:
+                    continue
+
                 text += "<h2>History Chart - {}</h2>\n".format(unit if unit != "(no unit)" else "(no unit)")
-                chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
-                text += '<div id="{}"></div>'.format(chart_id)
-                is_numerical = False
+                base_chart_id = "chart_{}".format(unit.replace("/", "_").replace(" ", "_").replace("(", "").replace(")", ""))
 
-                # First, collect all entity data
-                entity_data = []
-                for entity_info in entities:
-                    entity_id = entity_info["id"]
-                    friendly_name = entity_info["friendly_name"]
-                    attribute = entity_info.get("attribute")
-
-                    # Fetch history with attribute if specified
-                    history = entity_data_fetch[entity_id]
-
-                    # Check if data is numerical (supports both state and attribute)
-                    is_numerical = self.is_data_numerical(history, attribute=attribute)
-
-                    # Extract chart data using history_attribute
-                    if attribute:
-                        # Chart attribute data
-                        history_chart = history_attribute(history, state_key=attribute, attributes=True, is_numerical=is_numerical)
-                        display_name = f"{friendly_name} ({attribute})"
-                    else:
-                        # Chart state data (default)
-                        history_chart = history_attribute(history, is_numerical=is_numerical)
-                        display_name = friendly_name
-
-                    if history_chart:
-                        entity_data.append({"name": display_name, "entity_id": entity_id, "data": history_chart})
-
-                # Prepare data for the appropriate chart type
-                if is_numerical:
-                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in entity_data]
+                if numeric_entries:
+                    chart_id = base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    series_data = [{"name": item["name"], "data": item["data"], "chart_type": "line", "stroke_width": "2", "stroke_curve": "stepline"} for item in numeric_entries]
                     chart_unit = unit if unit != "(no unit)" else ""
-                    chart_title = "{} entities".format(len(entities)) if len(entities) > 1 else entities[0]["friendly_name"]
+                    chart_title = "{} entities".format(len(numeric_entries)) if len(numeric_entries) > 1 else numeric_entries[0]["friendly_name"]
                     text += self.render_chart(series_data, chart_unit, chart_title, now_str, tagname=chart_id)
-                else:
-                    # Render timeline chart for non-numerical data
-                    text += self.render_timeline_chart(entity_data, chart_id, days)
+
+                if timeline_entries:
+                    chart_id = base_chart_id + "_timeline" if numeric_entries else base_chart_id
+                    text += '<div id="{}"></div>'.format(chart_id)
+                    text += self.render_timeline_chart(timeline_entries, chart_id, days)
 
             # History table showing all selected entities
             if entity_selections:
@@ -1187,91 +1431,8 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect history data for all entities (both 30-min summary and 5-min detail)
-                entity_histories_30min = []
-                entity_histories_5min = []
-                all_timestamps_30min = set()
-
-                for selection in entity_selections:
-                    entity_id = selection["entity_id"]
-                    attribute = selection["attribute"]
-                    history = entity_data_fetch[entity_id]
-                    entity_data_30min = {}
-                    entity_data_5min = {}
-
-                    if history and len(history) >= 1:
-                        history = history[0]
-                        if history:
-                            history.reverse()
-                            for item in history:
-                                if "last_updated" not in item:
-                                    continue
-                                last_updated_time = item["last_updated"]
-                                last_updated_stamp = str2time(last_updated_time)
-
-                                # Get state or attribute value
-                                if attribute:
-                                    state = item.get("attributes", {}).get(attribute, None)
-                                else:
-                                    state = item.get("state", None)
-
-                                if state is None:
-                                    state = "None"
-
-                                # Store 5-minute interval data
-                                minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                                rounded_minutes_5 = (minutes // 5) * 5
-                                rounded_stamp_5 = last_updated_stamp.replace(minute=rounded_minutes_5 % 60, hour=rounded_minutes_5 // 60, second=0, microsecond=0)
-                                entity_data_5min[rounded_stamp_5] = state
-
-                                # Round to 30-minute intervals for summary
-                                rounded_minutes_30 = (minutes // 30) * 30
-                                rounded_stamp_30 = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                                entity_data_30min[rounded_stamp_30] = state
-                                all_timestamps_30min.add(rounded_stamp_30)
-
-                    entity_histories_30min.append(entity_data_30min)
-                    entity_histories_5min.append(entity_data_5min)
-
-                # Sort timestamps in reverse chronological order
-                sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
-
-                # Collect all display slots so we can precompute carry-forward fill
-                # Detail rows go BACKWARDS from the 30-min parent timestamp (offsets -5 to -25)
-                all_display_slots_5min = set()
-                for ts_30 in sorted_timestamps_30min:
-                    for offset in range(-5, -30, -5):
-                        all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
-
-                # Precompute filled dicts: {slot: (value, is_changed, prev_value)} per entity using carry-forward
-                entity_filled_30min = []
-                entity_filled_5min = []
-                for data_30min, data_5min in zip(entity_histories_30min, entity_histories_5min):
-                    # --- 30-min fill ---
-                    sorted_known_30 = sorted(data_30min.keys())
-                    filled_30 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(sorted_timestamps_30min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_30) and sorted_known_30[ki] <= slot:
-                            last_val = data_30min[sorted_known_30[ki]]
-                            ki += 1
-                        filled_30[slot] = (last_val if last_val is not None else "-", slot in data_30min, prev_val)
-                    entity_filled_30min.append(filled_30)
-
-                    # --- 5-min fill ---
-                    sorted_known_5 = sorted(data_5min.keys())
-                    filled_5 = {}
-                    last_val = None
-                    ki = 0
-                    for slot in sorted(all_display_slots_5min):
-                        prev_val = last_val
-                        while ki < len(sorted_known_5) and sorted_known_5[ki] <= slot:
-                            last_val = data_5min[sorted_known_5[ki]]
-                            ki += 1
-                        filled_5[slot] = (last_val if last_val is not None else "-", slot in data_5min, prev_val)
-                    entity_filled_5min.append(filled_5)
+                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
+                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
 
                 # Pre-compute per-row cell classes so we can decide which rows to show
                 num_cols = len(entity_selections)
@@ -1282,18 +1443,16 @@ class WebInterface(ComponentBase):
                     for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
                         value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
                         if is_changed:
-                            if prev_value is None or value != prev_value:
-                                cell_class = ' class="changed-cell"'
+                            cell_class = ' class="changed-cell"'
+                            has_highlight = True
+                        else:
+                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
+                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
+                            if any(v != value for v in sub_vals):
+                                cell_class = ' class="reverted-cell"'
                                 has_highlight = True
                             else:
-                                sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(-5, -26, -5)]
-                                if any(v != value for v in sub_vals):
-                                    cell_class = ' class="reverted-cell"'
-                                    has_highlight = True
-                                else:
-                                    cell_class = ""
-                        else:
-                            cell_class = ""
+                                cell_class = ""
                         cells.append((value, cell_class))
                     row_data.append((timestamp_30, cells, has_highlight))
 
@@ -1332,17 +1491,15 @@ class WebInterface(ComponentBase):
                         text += f"<td{cell_class}>{value}</td>"
                     text += "</tr>\n"
 
-                    # Detail rows: 5-minute slots leading UP TO the parent timestamp
-                    for offset in range(-5, -26, -5):
+                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
+                    # newest first to match the table's ordering (the row itself covers offset 0)
+                    for offset in range(25, 0, -5):
                         detail_time = timestamp_30 + timedelta(minutes=offset)
                         text += f'<tr class="detail-row" id="detail_{row_index}">'
                         text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
                         for filled in entity_filled_5min:
                             value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            if is_changed and (prev_value is None or value != prev_value):
-                                cell_class = ' class="changed-cell"'
-                            else:
-                                cell_class = ""
+                            cell_class = ' class="changed-cell"' if is_changed else ""
                             text += f"<td{cell_class}>{value}</td>"
                         text += "</tr>\n"
 
@@ -1426,7 +1583,7 @@ class WebInterface(ComponentBase):
                     pass
 
                 # Set the entity state
-                await self.base.ha_interface.set_state_external(entity_id, new_value, attributes=attributes)
+                await self.set_state_external(entity_id, new_value, attributes=attributes)
                 self.log(f"Entity {entity_id} updated to {new_value} via web interface")
 
         except Exception as e:
@@ -1538,7 +1695,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION, self.get_battery_status_icon(), refresh, codemirror=codemirror)
+        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror)
 
     def get_chart_series(self, name, results, chart_type, color):
         """
@@ -1610,6 +1767,10 @@ var width = window.innerWidth;
 var height = window.innerHeight;
 width = width / 3 * 2;
 height = height / 3 * 2;
+
+if (width < 600) {
+    width = 600
+}
 
 if (height * 1.68 > width) {
    height = width / 1.68;
@@ -1763,7 +1924,9 @@ var options = {
         text += "   ]\n"
         text += "  }\n"
         text += "}\n"
-        text += "var chart = new ApexCharts(document.querySelector('#{}'), options);\n".format(tagname)
+        # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
+        # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
+        text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
         text += "chart.render();\n"
         text += "</script>\n"
         return text
@@ -1798,6 +1961,11 @@ var options = {
             points_js = ", ".join("{{ x: '{}', y: {} }}".format(p["x"], "null" if p["y"] is None else p["y"]) for p in data_points)
             series_js += "    {{ name: '{}', data: [{}] }},\n".format(name, points_js)
 
+        # chart_id is only safe to interpolate as a *string* (DOM id, inside quotes) - it may
+        # contain characters (e.g. "%") that are invalid in a JS identifier, so a separate
+        # sanitised name is used anywhere it needs to appear as a variable name
+        js_id = re.sub(r"[^0-9A-Za-z_]", "_", chart_id)
+
         text = ""
         text += "<script>\n"
         text += "window.onresize = function(){ location.reload(); };\n"
@@ -1806,12 +1974,12 @@ var options = {
         text += "if (width < 400) { width = 400; }\n"
         text += "width = width - 50;\n"
         if fixed_height is not None:
-            text += "var height_{} = {};\n".format(chart_id, fixed_height)
+            text += "var height_{} = {};\n".format(js_id, fixed_height)
         else:
             num_rows = max(len(series_data), 1)
-            text += "var height_{} = {};\n".format(chart_id, num_rows * 80 + 80)
+            text += "var height_{} = {};\n".format(js_id, num_rows * 80 + 80)
         text += "var options = {\n"
-        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(chart_id)
+        text += "  chart: {{ type: 'heatmap', width: width, height: height_{}, animations: {{ enabled: false }} }},\n".format(js_id)
         text += "  plotOptions: {\n"
         text += "    heatmap: {\n"
         text += "      radius: 2,\n"
@@ -1831,8 +1999,10 @@ var options = {
         text += "  title: {{ text: '{}' }},\n".format(title)
         text += "  tooltip: { y: { formatter: function(val) { return val !== null ? val.toFixed(2) : 'N/A'; } } }\n"
         text += "};\n"
-        text += "var chart_{cid} = new ApexCharts(document.querySelector('#{cid}'), options);\n".format(cid=chart_id)
-        text += "chart_{}.render();\n".format(chart_id)
+        # getElementById, not a '#id' CSS selector - chart_id may contain characters (e.g. "%") that
+        # are invalid in an unescaped CSS identifier and would throw in querySelector
+        text += "var chart_{jid} = new ApexCharts(document.getElementById('{cid}'), options);\n".format(jid=js_id, cid=chart_id)
+        text += "chart_{}.render();\n".format(js_id)
         text += "</script>\n"
         return text
 
@@ -1893,47 +2063,44 @@ var options = {
         first_series = True
         all_states = set()
 
+        # A rangeBar data point's "x" is the y-axis category, so entities whose friendly names
+        # collide (every GivEnergy Cloud inverter publishes a "Status" sensor, for instance) would
+        # otherwise share a single unlabelled row with no way to tell which bar is which inverter.
+        name_counts = {}
+        for entity_timeline in timeline_data:
+            name_counts[entity_timeline["name"]] = name_counts.get(entity_timeline["name"], 0) + 1
+
         for entity_timeline in timeline_data:
             entity_name = entity_timeline["name"]
+            if name_counts.get(entity_name, 0) > 1:
+                entity_name = "{} ({})".format(entity_name, entity_timeline.get("entity_id", ""))
             history_chart = entity_timeline["data"]  # Dict with timestamp keys and state values
 
-            # Convert history data to timeline ranges
+            # Sort by the instant each record represents rather than by its raw timestamp text:
+            # HA/DB history is UTC while get_history_with_now() appends the current state stamped
+            # in local time, so a string sort can order records by their offset instead of by time.
+            sorted_items = []
+            for timestamp_str, state in history_chart.items():
+                try:
+                    sorted_items.append((int(str2time(timestamp_str).timestamp() * 1000), str(state)))
+                except (ValueError, TypeError):
+                    continue
+            sorted_items.sort(key=lambda item: item[0])
+
+            # Convert history data to timeline ranges. Every sample is folded into a range: unlike a
+            # numerical series, thinning a state series does not merely lower the resolution, it
+            # rewrites history. Sampling the records by array index used to alias a flapping state
+            # away entirely whenever the step kept landing on one phase of the flap, leaving the
+            # chart asserting a single multi-day run that the history table flatly contradicted.
+            # Only transitions produce a range, so an entity that rarely changes stays cheap.
             ranges = []
             current_state = None
             start_time = None
-
-            # Sort by timestamp - history_chart is a dict
-            sorted_items = sorted(history_chart.items(), key=lambda x: x[0])
-
-            # Downsample if needed - keep max 288 data points
-            max_points = 288
-            if len(sorted_items) > max_points:
-                # Calculate step size to keep approximately max_points
-                step = len(sorted_items) // max_points
-                if step < 1:
-                    step = 1
-                # Keep every Nth item, but always keep first and last
-                downsampled = [sorted_items[0]]  # Always keep first
-                # Add items at regular intervals
-                for i in range(step, len(sorted_items) - 1, step):
-                    downsampled.append(sorted_items[i])
-                # Always keep last if it's not already included
-                if len(sorted_items) > 1 and sorted_items[-1] not in downsampled:
-                    downsampled.append(sorted_items[-1])
-                sorted_items = downsampled
-
             last_timestamp_ms = None
-            for timestamp_str, state in sorted_items:
-                state = str(state)
-                all_states.add(state)
 
-                # Convert timestamp string to milliseconds for ApexCharts
-                try:
-                    timestamp_dt = str2time(timestamp_str)
-                    timestamp_ms = int(timestamp_dt.timestamp() * 1000)
-                    last_timestamp_ms = timestamp_ms  # Track the last valid timestamp
-                except (ValueError, TypeError):
-                    continue
+            for timestamp_ms, state in sorted_items:
+                all_states.add(state)
+                last_timestamp_ms = timestamp_ms
 
                 if current_state is None:
                     # First point
@@ -2025,7 +2192,7 @@ var options = {
   }
 };
 
-var chart = new ApexCharts(document.querySelector('#"""
+var chart = new ApexCharts(document.getElementById('"""
             + tagname
             + """'), options);
 chart.render();
@@ -2574,7 +2741,7 @@ chart.render();
                 new_value = float(new_value)
 
             self.log("Web interface setting {} to {}".format(pitem, new_value))
-            await self.base.ha_interface.set_state_external(pitem, new_value)
+            await self.set_state_external(pitem, new_value)
 
         raise web.HTTPFound("./config")
 
@@ -2703,6 +2870,56 @@ chart.render();
         yaml_debug = self.base.create_debug_yaml(write_file=False)
         return await self.html_file("predbat_debug.yaml.txt", yaml_debug)
 
+    def _storage(self):
+        """Return the Storage component, or None when it is unavailable."""
+        components = getattr(self.base, "components", None)
+        return components.get_component("storage") if components else None
+
+    async def html_debug_history_list(self, request):
+        """
+        Return the rolling debug-history snapshot index as JSON, newest-first with
+        steps_back annotated - consumed by the plan table's History/Yesterday view.
+        """
+        snapshots = await debug_history.list_snapshots(self._storage())
+        return web.json_response(debug_history.annotate_steps_back(snapshots))
+
+    async def html_debug_history_download(self, request):
+        """
+        Download one retained debug-history snapshot by id (?id=<snapshot_id>, or
+        ?id=latest / omitted for the newest one), for #4417.
+        """
+        storage = self._storage()
+        requested_id = request.query.get("id") or "latest"
+        # Resolve "latest" and load its data in one call - resolving it via load_snapshot()
+        # and then separately re-listing to find the id for the filename risks a capture
+        # landing in between, serving one snapshot's bytes under a different one's filename.
+        resolved_id, data = await debug_history.resolve_and_load_snapshot(storage, requested_id)
+        if data is None:
+            # requested_id is reflected back unescaped into an HTML response - a raw query
+            # param, so must be escaped rather than trusted.
+            return web.Response(content_type="text/html", text="Snapshot {} not found".format(html_module.escape(requested_id)), status=404)
+
+        filename = debug_history.snapshot_filename(resolved_id)
+        return await self.html_file(filename, data)
+
+    async def html_debug_history_download_all(self, request):
+        """
+        Download every retained debug-history snapshot as a single gzip tarball, so a
+        bug report can be gathered with one link instead of chasing a user through the
+        per-snapshot picker for the right moment, for #4417.
+        """
+        storage = self._storage()
+        named_snapshots = await debug_history.load_all_snapshots(storage)
+        if not named_snapshots:
+            return web.Response(content_type="text/html", text="No debug-history snapshots found", status=404)
+
+        archive_bytes = debug_history.build_archive(named_snapshots)
+        return web.Response(
+            content_type="application/gzip",
+            body=archive_bytes,
+            headers={"Content-Disposition": "attachment; filename=predbat_debug_history.tgz"},
+        )
+
     async def html_file_load(self, filename, also_file=None, as_file=None):
         """
         Load a file and serve it up
@@ -2726,6 +2943,22 @@ chart.render();
     async def html_debug_apps(self, request):
         return await self.html_file_load("apps.yaml", as_file="apps.yaml.txt")
 
+    async def html_debug_apps_live(self, request):
+        """
+        Return an apps.yaml reconstructed from the live in-memory settings (self.args).
+
+        Defaults to masking credential-like keys (see mask_secret_args) so a direct or
+        copied request never leaks secrets without an explicit opt-in; pass ?masked=0
+        to download the full unmasked file.
+        """
+        masked = request.query.get("masked", "1") != "0"
+        args_copy = mask_secret_args(self.args) if masked else copy.deepcopy(self.args)
+        yaml = YAML()
+        buf = StringIO()
+        yaml.dump({ROOT_YAML_KEY: args_copy}, buf)
+        filename = "apps_live_masked.yaml.txt" if masked else "apps_live.yaml.txt"
+        return await self.html_file(filename, buf.getvalue())
+
     async def html_debug_plan(self, request):
         html_plan = self.get_state_wrapper(entity_id=self.prefix + ".plan_html", attribute="html", default="<p>No plan available</p>")
         if not html_plan:
@@ -2736,7 +2969,7 @@ chart.render();
         """
         Return just the dashboard body content for AJAX refresh (preserves scroll position)
         """
-        text = self.get_status_html(THIS_VERSION)
+        text = self.get_status_html(THIS_VERSION_DISPLAY)
         return web.Response(content_type="text/html", text=text)
 
     async def html_dash(self, request):
@@ -2785,7 +3018,7 @@ chart.render();
 """
         text += "<body>\n"
         text += '<div id="dash-content-container">\n'
-        text += self.get_status_html(THIS_VERSION)
+        text += self.get_status_html(THIS_VERSION_DISPLAY)
         text += "</div>\n"
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -2803,12 +3036,12 @@ chart.render();
                 if key == "mode":
                     # Update mode - it's a select type
                     entity_id = f"select.{self.prefix}_{key}"
-                    await self.base.ha_interface.set_state_external(entity_id, value)
+                    await self.set_state_external(entity_id, value)
                 elif key in ["debug_enable", "set_read_only", "active"]:
                     # Update switches - convert to boolean
                     entity_id = f"switch.{self.prefix}_{key}"
                     bool_value = value == "on"
-                    await self.base.ha_interface.set_state_external(entity_id, bool_value)
+                    await self.set_state_external(entity_id, bool_value)
 
             # Log the update
             self.log(f"Dashboard status updated: {dict(data)}")
@@ -2911,8 +3144,8 @@ chart.render();
                 {"name": "Import", "data": rates, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline"},
                 {"name": "Export", "data": rates_export, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
                 {"name": "Gas", "data": rates_gas, "opacity": "0.2", "stroke_width": "2", "stroke_curve": "stepline", "chart_type": "area"},
-                {"name": "Hourly p/kWh", "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
-                {"name": "Today p/kWh", "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Hourly {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_hour, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
+                {"name": "Today {}/kWh".format(self.currency_symbols[1]), "data": cost_pkwh_today, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline"},
             ]
             text += self.render_chart(series_data, self.currency_symbols[1], "Energy Rates", now_str)
         elif chart == "InDay":
@@ -3846,6 +4079,8 @@ chart.render();
 
         if compare_hist:
             text += self.render_chart(series_data, self.currency_symbols[0], "Tariff Comparison - True cost", now_str, daily_chart=False)
+        elif not compare_list:
+            text += '<br><h2>No tariffs configured yet - see <a href="https://springfall2008.github.io/batpred/compare/" target="_blank" rel="noopener noreferrer">Comparing Energy Tariffs</a> for how to add some to apps.yaml</h2><br>'
         else:
             text += "<br><h2>Loading chart (please wait)...</h2><br>"
 
@@ -3862,6 +4097,8 @@ chart.render();
                 series_7d.append({"name": name, "data": rolling, "chart_type": "line", "stroke_width": "2"})
         if series_7d:
             text += self.render_chart(series_7d, self.currency_symbols[0], "Tariff Comparison - 7 day rolling average", now_str, tagname="chart7d", daily_chart=False)
+        elif not compare_list:
+            pass  # Already explained by the "No tariffs configured" message above
         else:
             text += "<br><h2>7 day rolling average chart loading (please wait)...</h2><br>"
 
@@ -4196,7 +4433,7 @@ chart.render();
                 await self.base.async_manual_select("manual_import_rates", clear_option)
             elif action == "Set Import":
                 item = self.base.config_index.get("manual_import_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_import_rates", selection_option)
             elif action == "Clear Export":
                 manual_export_rates = self.base.manual_rates("manual_export_rates")
@@ -4205,11 +4442,11 @@ chart.render();
                 await self.base.async_manual_select("manual_export_rates", clear_option)
             elif action == "Set Export":
                 item = self.base.config_index.get("manual_export_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_export_rates", selection_option)
             elif action == "Set Load":
                 item = self.base.config_index.get("manual_load_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_load_adjust", selection_option)
             elif action == "Clear Load":
                 manual_load_adjust = self.base.manual_rates("manual_load_adjust")
@@ -4218,7 +4455,7 @@ chart.render();
                 await self.base.async_manual_select("manual_load_adjust", clear_option)
             elif action == "Set SOC":
                 item = self.base.config_index.get("manual_soc_value", {})
-                await self.base.ha_interface.set_state_external(item.get("entity", None), rate)
+                await self.set_state_external(item.get("entity", None), rate)
                 await self.base.async_manual_select("manual_soc", selection_option)
             elif action == "Clear SOC":
                 manual_soc = self.base.manual_rates("manual_soc")
@@ -5125,6 +5362,34 @@ document.addEventListener('DOMContentLoaded', function() {
         except Exception as e:
             self.log(f"Error downloading file: {str(e)}")
             return web.Response(text=f"Error downloading file: {str(e)}", status=500)
+
+    async def html_logo_image(self, request):
+        """
+        Serve the bundled Predbat logo images locally.
+
+        The logos used to be loaded from raw.githubusercontent.com, which left the
+        dashboard hanging for ~15s whenever GitHub was unreachable or rate-limiting
+        (issue #4562). They now ship alongside the other app files so the page never
+        depends on internet access to render.
+        """
+        content_types = {
+            "bat_logo.svg": "image/svg+xml",
+            "bat_logo_light.png": "image/png",
+            "bat_logo_dark.png": "image/png",
+        }
+        filename = request.match_info.get("filename")
+        content_type = content_types.get(filename)
+        if not content_type:
+            return web.Response(text="Not found", status=404)
+
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
+        try:
+            with open(file_path, "rb") as handle:
+                content = handle.read()
+        except OSError:
+            return web.Response(text="Not found", status=404)
+
+        return web.Response(body=content, content_type=content_type, headers={"Cache-Control": "public, max-age=604800"})
 
     async def html_metrics_dashboard(self, request):
         """

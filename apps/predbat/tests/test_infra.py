@@ -9,11 +9,25 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import datetime, timedelta
-from prediction import wrapped_run_prediction_single, Prediction
+from const import PREDBAT_MAX_CARS, MINUTE_WATT
+from prediction import Prediction
 from matplotlib import pyplot as plt
 import asyncio
 import numpy as np
 from unittest.mock import MagicMock
+
+# Whether a failure plot is displayed on screen as well as written to a PNG. Off by default and
+# turned on by the harness --plot flag: plt.show() blocks until the window is closed, so leaving
+# it on makes a failing run hang rather than report.
+PLOT_ENABLED = False
+
+
+def set_plot_enabled(enabled):
+    """
+    Enable or disable on-screen display of failure plots
+    """
+    global PLOT_ENABLED
+    PLOT_ENABLED = bool(enabled)
 
 
 def run_async(coro):
@@ -62,8 +76,29 @@ def create_aiohttp_mock_response(status=200, json_data=None, json_exception=None
     return mock_response
 
 
+def _make_mock_context(mock_response):
+    """Wrap a single mock response in an async context manager (as returned by session.get/post)."""
+    mock_context = MagicMock()
+
+    async def aenter(*args, **kwargs):
+        return mock_response
+
+    async def aexit(*args):
+        return None
+
+    mock_context.__aenter__ = aenter
+    mock_context.__aexit__ = aexit
+    return mock_context
+
+
 def create_aiohttp_mock_session(mock_response=None, exception=None):
-    """Helper to create a mock aiohttp ClientSession"""
+    """Helper to create a mock aiohttp ClientSession.
+
+    ``mock_response`` may be a single response (every get/post call returns it) or a
+    list of responses consumed in order across successive get/post calls — useful when
+    the code under test reuses one ``ClientSession`` (or a patched constructor returning
+    the same mock) across a retry loop, e.g. a 401 followed by a successful retry.
+    """
     mock_session = MagicMock()
 
     if exception:
@@ -74,20 +109,16 @@ def create_aiohttp_mock_session(mock_response=None, exception=None):
         if mock_response is None:
             mock_response = create_aiohttp_mock_response()
 
-        mock_context = MagicMock()
+        if isinstance(mock_response, list):
+            # Independent iterators for get/post so either (or both) can be driven in sequence.
+            mock_session.get = MagicMock(side_effect=[_make_mock_context(resp) for resp in mock_response])
+            mock_session.post = MagicMock(side_effect=[_make_mock_context(resp) for resp in mock_response])
+        else:
+            mock_context = _make_mock_context(mock_response)
 
-        async def aenter(*args, **kwargs):
-            return mock_response
-
-        async def aexit(*args):
-            return None
-
-        mock_context.__aenter__ = aenter
-        mock_context.__aexit__ = aexit
-
-        # Setup both GET and POST methods
-        mock_session.get = MagicMock(return_value=mock_context)
-        mock_session.post = MagicMock(return_value=mock_context)
+            # Setup both GET and POST methods
+            mock_session.get = MagicMock(return_value=mock_context)
+            mock_session.post = MagicMock(return_value=mock_context)
 
     async def session_aenter(*args):
         return mock_session
@@ -128,6 +159,7 @@ class TestHAInterface:
         self.dummy_items = {}
         self.service_store_enable = False
         self.service_store = []
+        self.service_store_fail = set()
         self.db_primary = False
 
     def get_service_store(self):
@@ -165,16 +197,16 @@ class TestHAInterface:
             return result
         else:
             # print("Getting state: {} attribute {} => default {} ".format(entity_id, attribute, default))
-            if attribute:
-                return ""
-            else:
-                return default
+            return default
 
     def call_service(self, service, **kwargs):
         print("Calling service: {} {}".format(service, kwargs))
         if self.service_store_enable:
             self.service_store.append([service, kwargs])
-            return None
+            # Services in service_store_fail simulate a service that doesn't exist (e.g. testing a
+            # try-new-service-then-fall-back-to-old caller) - everything else succeeds, matching real
+            # HA behaviour for a registered service call.
+            return None if service in self.service_store_fail else True
 
         if service == "number/set_value":
             entity_id = kwargs.get("entity_id", None)
@@ -264,6 +296,7 @@ class MockConfigProvider:
             "calculate_plan_every": 10,
             "calculate_savings_max_charge_slots": 2,
             "holiday_days_left": 0,
+            "holiday_load_scaling": 0.7,
             "load_forecast_only": False,
             "days_previous": [7, 14],
             "days_previous_weight": [1.0, 0.5],
@@ -287,8 +320,11 @@ class MockConfigProvider:
             "notify_devices": ["notify"],
             "pv_scaling": 1.0,
             "pv_metric10_weight": 0.5,
+            "calculate_pv90_plan": False,
+            "pv_metric90_weight": 0.0,
             "load_scaling": 1.0,
             "load_scaling10": 1.0,
+            "load_scaling90": 1.0,
             "charge_scaling10": 1.0,
             "load_scaling_saving": 0.8,
             "load_scaling_free": 0.9,
@@ -337,6 +373,7 @@ class MockConfigProvider:
             "set_status_notify": False,
             "set_inverter_notify": False,
             "set_export_freeze_only": False,
+            "set_charge_freeze_only": False,
             "set_discharge_during_charge": True,
             "set_freeze_export_during_demand": False,
             "mode": "Control charge & discharge",
@@ -387,8 +424,14 @@ class MockConfigProvider:
             "inverter_clock_skew_discharge_end": 0,
             "set_window_minutes": 0,
             # Car charging config for each car (postfix _0, _1, etc.)
-            "car_charging_rate_0": 7400,
-            "car_charging_rate_1": 7400,
+            "car_charging_rate_0": 7.4,
+            "car_charging_rate_1": 7.4,
+            "car_charging_rate_2": 7.4,
+            "car_charging_rate_3": 7.4,
+            "car_charging_rate_4": 7.4,
+            "car_charging_rate_5": 7.4,
+            "car_charging_rate_6": 7.4,
+            "car_charging_rate_7": 7.4,
             "car_charging_battery_size_0": 100.0,
             "car_charging_battery_size_1": 100.0,
             "car_charging_limit_0": 100.0,
@@ -482,6 +525,7 @@ def reset_inverter(my_predbat):
     my_predbat.inverter_loss = 1.0
     my_predbat.battery_loss_discharge = 1.0
     my_predbat.inverter_hybrid = False
+    my_predbat.inverter_support_feedin_first = False
     my_predbat.battery_charge_power_curve = {}
     my_predbat.battery_discharge_power_curve = {}
     my_predbat.battery_rate_max_scaling = 1.0
@@ -490,8 +534,8 @@ def reset_inverter(my_predbat):
     my_predbat.num_cars = 0
     my_predbat.car_charging_slots[0] = []
     my_predbat.car_charging_from_battery = True
-    my_predbat.car_charging_limit = [100.0, 100.0, 100.0, 100.0]
-    my_predbat.car_charging_soc = [0, 0, 0, 0]
+    my_predbat.car_charging_limit = [100.0] * PREDBAT_MAX_CARS
+    my_predbat.car_charging_soc = [0] * PREDBAT_MAX_CARS
     my_predbat.iboost_enable = False
     my_predbat.iboost_solar = False
     my_predbat.iboost_gas = False
@@ -504,7 +548,7 @@ def reset_inverter(my_predbat):
     my_predbat.best_soc_keep = 0.0
     my_predbat.carbon_enable = 0
     my_predbat.inverter_soc_reset = True
-    my_predbat.car_charging_soc_next = [None for car_n in range(4)]
+    my_predbat.car_charging_soc_next = [None for car_n in range(PREDBAT_MAX_CARS)]
     my_predbat.charge_limit_best = []
     my_predbat.charge_window_best = []
     my_predbat.export_limits_best = []
@@ -538,7 +582,12 @@ def plot(name, prediction):
     ax.set(xlabel="time (minutes)", ylabel="Value", title=name)
     ax.legend()
     plt.savefig("{}.png".format(name))
-    plt.show()
+    if PLOT_ENABLED:
+        plt.show()
+    else:
+        # plt.show() blocks until the window is closed, so a failing run would never terminate.
+        # Close the figure instead - matplotlib warns once more than 20 are left open.
+        plt.close(fig)
 
 
 def simple_scenario(
@@ -562,6 +611,7 @@ def simple_scenario(
     charge_window_best=[],
     charge_limit_best=None,
     inverter_loss=1.0,
+    inverter_freeze_export_discharge_rate=0.0,
     battery_rate_max_charge=1.0,
     battery_rate_max_charge_dc=None,
     charge_car=0,
@@ -584,6 +634,7 @@ def simple_scenario(
     keep=0.0,
     keep_weight=0.5,
     assert_keep=0.0,
+    assert_battery_cycle=None,
     save="best",
     quiet=False,
     iboost_rate_threshold=9999,
@@ -603,6 +654,7 @@ def simple_scenario(
     battery_temperature=20,
     set_export_freeze_only=False,
     inverter_can_charge_during_export=True,
+    inverter_support_feedin_first=False,
     prediction_handle=None,
     return_prediction_handle=False,
     ignore_failed=False,
@@ -610,6 +662,7 @@ def simple_scenario(
     calculate_export_on_pv=True,
     assert_clipped=0,
     pv_ac_limit=0,
+    pv_hours=None,
 ):
     """
     No PV, No Load
@@ -671,6 +724,7 @@ def simple_scenario(
     my_predbat.pv_ac_limit = pv_ac_limit / 60.0
     my_predbat.reserve = reserve
     my_predbat.inverter_loss = inverter_loss
+    my_predbat.inverter_freeze_export_discharge_rate = inverter_freeze_export_discharge_rate / MINUTE_WATT
     my_predbat.battery_rate_max_charge = battery_rate_max_charge / 60.0
     my_predbat.battery_rate_max_charge_dc = battery_rate_max_charge_dc / 60.0
     my_predbat.battery_rate_max_discharge = battery_rate_max_charge / 60.0
@@ -705,6 +759,7 @@ def simple_scenario(
     my_predbat.car_charging_soc[0] = car_soc
     my_predbat.car_charging_limit[0] = car_limit
     my_predbat.inverter_can_charge_during_export = inverter_can_charge_during_export
+    my_predbat.inverter_support_feedin_first = inverter_support_feedin_first
     my_predbat.charge_scaling10 = charge_scaling10
 
     if my_predbat.iboost_enable and (((not iboost_solar) and (not iboost_charging)) or iboost_smart):
@@ -728,11 +783,11 @@ def simple_scenario(
     load10_step = {}
 
     for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv_step[minute] = pv_amount / (60 / 5) if not pv10 else 0
+        # pv_hours limits PV to the first N hours of the forecast, otherwise it runs at pv_amount all day
+        pv_now = 0 if (pv_hours is not None and minute >= pv_hours * 60) else pv_amount
+        pv_step[minute] = pv_now / (60 / 5) if not pv10 else 0
         load_step[minute] = load_amount / (60 / 5) if not pv10 else 0
-
-    for minute in range(0, my_predbat.forecast_minutes, 5):
-        pv10_step[minute] = pv_amount / (60 / 5) if pv10 else 0
+        pv10_step[minute] = pv_now / (60 / 5) if pv10 else 0
         load10_step[minute] = load_amount / (60 / 5) if pv10 else 0
 
     if charge_car:
@@ -787,7 +842,7 @@ def simple_scenario(
             metric_keep,
             final_iboost,
             final_carbon_g,
-        ) = wrapped_run_prediction_single(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
+        ) = prediction.thread_run_prediction_single(charge_limit_best, charge_window_best, export_window_best, export_limit_best, pv10, end_record=(my_predbat.end_record), step=5)
     else:
         (
             metric,
@@ -826,6 +881,10 @@ def simple_scenario(
     if abs(final_soc - assert_final_soc) >= 0.1:
         if not ignore_failed:
             print("ERROR: Final SOC {} should be {}".format(final_soc, assert_final_soc))
+        failed = True
+    if assert_battery_cycle is not None and abs(battery_cycle - assert_battery_cycle) >= 0.001:
+        if not ignore_failed:
+            print("ERROR: Battery cycle {} should be {}".format(battery_cycle, assert_battery_cycle))
         failed = True
     if abs(final_iboost - assert_final_iboost) >= 0.1:
         if not ignore_failed:

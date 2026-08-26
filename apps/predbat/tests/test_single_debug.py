@@ -53,6 +53,22 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
 
     print("**** Test {} ****".format(test_name))
     reset_inverter(my_predbat)
+    # Some derived state is neither saved in the debug yaml (so read_debug_yaml cannot restore it) nor
+    # reset by reset_inverter, so inside the full suite it leaks from a previous test and makes the debug
+    # plan depend on test ordering. Reset these to their standalone-run defaults so each case is
+    # deterministic regardless of what ran before:
+    #   - dynamic_load_baseline feeds the load model calculate_plan rebuilds (normally produced by
+    #     dynamic_load(), which only runs from update_pred, not the debug harness).
+    #   - battery_rate_max_export is the discharge power cap used in prediction; a leaked full-precision
+    #     value (vs the 0.0333 default) can flip the plan at a decision boundary.
+    #   - rate_max_base and rate_export_max_forward are the base-tariff terms battery_value_rate uses;
+    #     fetch rebuilds both every cycle in the product, but the debug harness never calls fetch, and
+    #     debug files written before those fields existed carry neither. Their absent-value defaults
+    #     send battery_value_rate back to rate_max / rate_export_max, which the debug file does carry.
+    my_predbat.dynamic_load_baseline = {}
+    my_predbat.battery_rate_max_export = 0.0333
+    my_predbat.rate_max_base = 0
+    my_predbat.rate_export_max_forward = {}
     my_predbat.read_debug_yaml(debug_file)
     my_predbat.config_root = "./"
     my_predbat.save_restore_dir = "./"
@@ -155,6 +171,10 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         return
 
     # Reset load model
+    # Mirror the load model rebuild done by calculate_plan (plan.py) so the original plan metric is
+    # evaluated against the same load data as the re-calculated plan - in particular load_scaling.
+    # Otherwise the two metrics printed by this harness differ by the load scaling and look like a
+    # plan regression when the plans are identical.
     if reset_load_model:
         print("Reset load model")
         my_predbat.load_minutes_step = my_predbat.step_data_history(
@@ -162,11 +182,13 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             my_predbat.minutes_now,
             forward=False,
             scale_today=my_predbat.load_inday_adjustment,
-            scale_fixed=1.0 * load_override,
+            scale_fixed=my_predbat.load_scaling * load_override,
             type_load=True,
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
             cloud_factor=my_predbat.metric_load_divergence,
+            load_adjust=my_predbat.manual_load_adjust,
+            load_baseline=my_predbat.dynamic_load_baseline,
         )
         my_predbat.load_minutes_step10 = my_predbat.step_data_history(
             my_predbat.load_minutes,
@@ -178,6 +200,8 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
             load_forecast=my_predbat.load_forecast,
             load_scaling_dynamic=my_predbat.load_scaling_dynamic,
             cloud_factor=min(my_predbat.metric_load_divergence + 0.5, 1.0) if my_predbat.metric_load_divergence else None,
+            load_adjust=my_predbat.manual_load_adjust,
+            load_baseline=my_predbat.dynamic_load_baseline,
         )
         my_predbat.pv_forecast_minute_step = my_predbat.step_data_history(my_predbat.pv_forecast_minute, my_predbat.minutes_now, forward=True, cloud_factor=my_predbat.metric_cloud_coverage)
         my_predbat.pv_forecast_minute10_step = my_predbat.step_data_history(

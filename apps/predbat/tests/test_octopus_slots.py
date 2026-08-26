@@ -80,6 +80,10 @@ def run_load_octopus_slots_tests(my_predbat):
     my_predbat.rate_max_base = 10
     my_predbat.car_charging_rate = [5.0]
     my_predbat.args["octopus_slot_max"] = 12
+    # load_octopus_slots() short-circuits to [] when car_n >= self.num_cars - set this explicitly
+    # rather than relying on whatever a previous test in the same run left num_cars as (a shared
+    # my_predbat instance persists across tests within a run).
+    my_predbat.num_cars = 1
 
     # Created 8 slots in total in the next 16 hours
     soc = 2.0
@@ -114,7 +118,19 @@ def run_load_octopus_slots_tests(my_predbat):
             expected_slots4.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0 if soc <= 20.0 else 0.0, "average": slot7_rate, "cost": (5.0 if soc <= 20.0 else 0.0) * slot7_rate, "soc": min(soc2, 10.0), "octopus": True})
         # Slots 4-8 (i >= 3) exceed the 12-block cap for slots6 (slot 0 is 90-min = 4 blocks, slots 1-2 = 3 blocks each = 10 total, slot 3 would be 13)
         slot5_rate = 4 if i < 3 else 10
-        if i >= 1:
+        if i == 3:
+            # This slot straddles the cap exactly (10 blocks already used of 12, this slot needs 3
+            # more) - split at the point the daily budget runs out rather than the whole slot
+            # flipping to the max rate (batpred#4624).
+            slot_block_start = (minutes_start // 30) * 30
+            split_minute = slot_block_start + 2 * 30  # 2 blocks (12 - 10) remain in the daily budget
+            # Full precision to match production - only cost is rounded (batpred#4644 review).
+            low_kwh = 5.0 * (split_minute - minutes_start) / 60
+            high_kwh = 5.0 - low_kwh
+            for target in (expected_slots5, expected_slots8):
+                target.append({"start": minutes_start, "end": split_minute, "kwh": low_kwh, "average": 4, "cost": dp2(4 * low_kwh), "soc": 10, "octopus": True})
+                target.append({"start": split_minute, "end": minutes_end, "kwh": high_kwh, "average": 10, "cost": dp2(10 * high_kwh), "soc": 10, "octopus": True})
+        elif i >= 1:
             expected_slots5.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot5_rate, "cost": slot5_rate * 5.0, "soc": 10, "octopus": True})
             expected_slots8.append({"start": minutes_start, "end": minutes_end, "kwh": 5.0, "average": slot5_rate, "cost": slot5_rate * 5.0, "soc": 10, "octopus": True})
         else:
@@ -193,6 +209,64 @@ def run_load_octopus_slots_tests(my_predbat):
     future_end = midnight_utc + timedelta(minutes=my_predbat.minutes_now + 120)
     slot_future_zero = [{"start": future_start.strftime(TIME_FORMAT), "end": future_end.strftime(TIME_FORMAT), "charge_in_kwh": 0, "source": "null", "location": "AT_HOME"}]
     failed |= run_load_octopus_slot_test("zero_kwh_future", my_predbat, slot_future_zero, [], False, 0.0, 0.0, 1.0)
+
+    # --- containment overlap: completed dispatch inside a longer planned dispatch (#4497) ---
+    # The HA Octopus Energy integration's completed_dispatches are merged ahead of
+    # planned_dispatches (fetch.py). A short completed historical interval sitting inside a much
+    # longer still-active planned interval must not truncate away the planned interval's future
+    # remainder - the overlap dedup previously only ever trimmed one edge of a slot, never split
+    # it around a fully-contained earlier slot.
+    print("**** Checking containment overlap (completed dispatch inside planned dispatch) ****")
+    saved_minutes_now = my_predbat.minutes_now
+    # This test is about overlap/containment handling specifically, not the daily low-rate block
+    # cap (batpred#4624's split logic) - the 540-960 remainder is 14 blocks, which would otherwise
+    # get split again by the still-active octopus_slot_max=12 from earlier in this test, coupling
+    # two independent behaviours together. Lift the cap for just this check.
+    saved_octopus_slot_max = my_predbat.args.get("octopus_slot_max")
+    my_predbat.args["octopus_slot_max"] = 999
+    containment_now = midnight_utc + timedelta(hours=10, minutes=37)
+    my_predbat.minutes_now = int((containment_now - midnight_utc).total_seconds() / 60)
+
+    containment_slots = [
+        # completed_dispatches (merged first, per fetch.py)
+        {"start": (midnight_utc + timedelta(hours=8)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=8, minutes=30)).strftime(TIME_FORMAT), "charge_in_kwh": 5.45, "source": "null", "location": "AT_HOME"},
+        {"start": (midnight_utc + timedelta(hours=8, minutes=30)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=9)).strftime(TIME_FORMAT), "charge_in_kwh": 5.66, "source": "null", "location": "AT_HOME"},
+        # planned_dispatches (merged second) - the first one fully contains both completed slots above
+        {"start": (midnight_utc + timedelta(hours=7, minutes=59)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=16)).strftime(TIME_FORMAT), "charge_in_kwh": 40.0, "source": "SMART", "location": "AT_HOME"},
+        {"start": (midnight_utc + timedelta(hours=17, minutes=30)).strftime(TIME_FORMAT), "end": (midnight_utc + timedelta(hours=18)).strftime(TIME_FORMAT), "charge_in_kwh": 2.5, "source": "SMART", "location": "AT_HOME"},
+    ]
+
+    my_predbat.car_charging_soc[0] = 0.0
+    my_predbat.car_charging_limit[0] = 0.0
+    my_predbat.car_charging_loss = 1.0
+    result = my_predbat.load_octopus_slots(0, containment_slots, False)
+
+    # The 09:00-16:00 (540-960) future remainder of the contained planned dispatch must survive
+    if not result or result[0]["end"] != 960:
+        print("ERROR: Future remainder of contained planned dispatch was lost - expected the earliest surviving slot to end at 960 (16:00), got {}\nSlots: {}".format(result[0]["end"] if result else None, result))
+        failed = True
+    else:
+        # kwh for that remainder is the 40.0kWh original scaled by its 420-of-481-minute share
+        # (479-960 minus the 480-540 carved out by the two completed slots) - must not have been
+        # lost (the reported bug) nor duplicated across the split pieces
+        expected_kwh = 40.0 * (960 - 540) / (960 - 479)
+        if abs(result[0]["kwh"] - expected_kwh) > 0.01:
+            print("ERROR: Future remainder kwh should be {:.2f}, got {}\nSlots: {}".format(expected_kwh, result[0]["kwh"], result))
+            failed = True
+
+    # The second planned dispatch (17:30-18:00), which never overlapped anything, is untouched
+    if len(result) < 2 or result[1]["start"] != 1050 or result[1]["end"] != 1080 or result[1]["kwh"] != 2.5:
+        print("ERROR: Non-overlapping planned dispatch should be unchanged (1050-1080, 2.5kWh), got {}\nSlots: {}".format(result[1] if len(result) > 1 else None, result))
+        failed = True
+
+    my_predbat.minutes_now = saved_minutes_now
+    if saved_octopus_slot_max is None:
+        my_predbat.args.pop("octopus_slot_max", None)
+    else:
+        my_predbat.args["octopus_slot_max"] = saved_octopus_slot_max
+
+    if failed:
+        return failed
 
     print("**** Checking car_charge_slot_kwh ****")
     my_predbat.car_charging_slots[0] = expected_slots5

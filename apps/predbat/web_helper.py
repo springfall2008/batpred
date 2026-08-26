@@ -180,8 +180,16 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
         // Initialise entity data
 
         document.addEventListener('DOMContentLoaded', function() {
+            // Restore the "Show All" preference across page loads (e.g. after submitting the
+            // entity form to add another entity, which is a full page navigation, not an
+            // in-place update)
+            var showAll = localStorage.getItem('entityShowAllEntities') === 'true';
+            var showAllCheckbox = document.getElementById('showAllEntities');
+            if (showAllCheckbox) {
+                showAllCheckbox.checked = showAll;
+            }
             // Load entity data from API
-            loadEntityData(false);
+            loadEntityData(showAll);
         });
 
         async function loadEntityData(showAll) {
@@ -204,6 +212,7 @@ def get_entity_js(selected_entities_json, entity_attributes_json):
         }
 
         function toggleShowAll(checked) {
+            localStorage.setItem('entityShowAllEntities', checked ? 'true' : 'false');
             loadEntityData(checked).then(function() {
                 if (isDropdownVisible) {
                     filterEntityOptions();
@@ -5689,6 +5698,41 @@ def get_plan_css():
         z-index: 2000;
     }
 
+    .clickable-state-cell {
+        cursor: pointer;
+        position: relative;
+        transition: background-color 0.2s;
+        z-index: 1;
+    }
+
+    .clickable-state-cell:has(.dropdown-content[style*="display: block"]) {
+        z-index: 2000;
+    }
+
+    .clickable-state-cell:hover {
+        filter: brightness(0.9);
+    }
+
+    .clickable-state-cell:focus-visible {
+        outline: 2px solid #2196F3;
+        outline-offset: -2px;
+    }
+
+    body.dark-mode .clickable-state-cell:hover {
+        filter: brightness(1.2);
+    }
+
+    .reason-text {
+        font-size: 13px;
+        line-height: 1.4;
+        color: #333;
+        max-width: 260px;
+    }
+
+    body.dark-mode .reason-text {
+        color: #eee;
+    }
+
     .clickable-time-cell:hover {
         filter: brightness(0.9);
     }
@@ -5959,6 +6003,16 @@ def get_plan_css():
     function toggleForceDropdown(id) {
         closeDropdowns();
         var dropdown = document.getElementById(id);
+        if (!dropdown) {
+            // dropdownId is assigned by a counter that increments across the whole table render
+            // and gets baked into the cell's onclick string; if that string is now stale relative
+            // to the current DOM (e.g. after a plan refresh reassigned different ids), this would
+            // otherwise throw here and silently abort the click with no visible effect at all -
+            // indistinguishable from the cell just not responding (batpred#4474 follow-up). Log
+            // instead of throwing so a real cause leaves a trace even without DevTools handy.
+            console.warn("toggleForceDropdown: no element found for id", id);
+            return;
+        }
         if (dropdown.style.display === "block") {
             dropdown.style.display = "none";
         } else {
@@ -6413,7 +6467,7 @@ def get_plan_css():
 
     // Close dropdowns when clicking outside
     document.addEventListener("click", function(event) {
-        if (!event.target.matches('.clickable-time-cell') && !event.target.closest('.dropdown-content')) {
+        if (!event.target.matches('.clickable-time-cell') && !event.target.matches('.clickable-state-cell') && !event.target.closest('.dropdown-content')) {
             closeDropdowns();
         }
     });
@@ -6467,7 +6521,41 @@ def get_plan_renderer_js():
     }
 
     // Render plan table from JSON data
-    function renderPlanTable(jsonData, overrides, showDebug, editable) {
+    // Find the retained debug-history snapshot for a plan row's timestamp, or null if none
+    // qualifies. window.debugHistoryData is a small array ({id, timestamp, steps_back}) fetched
+    // separately (see fetchAndRenderPlan) - matched here by wall-clock time rather than threaded
+    // through the plan JSON itself, since the History/Yesterday plan is a reconstruction (fed
+    // yesterday's real PV/load through the same renderer as the live plan) and has no inherent
+    // relationship to when a snapshot happened to be captured; only the row's own real timestamp
+    // does.
+    //
+    // Snapshots are captured server-side with their timestamp floored to the plan's own slot grid
+    // (self.midnight_utc + N * plan_interval_minutes, see predbat.py's _capture_debug_history) -
+    // the same anchor and step output.py uses to build each row's own row.time - so a snapshot's
+    // timestamp is either an exact match for one row or it isn't a match at all. That also gives
+    // each snapshot at most one owning row for free: two rows can never both claim the same
+    // snapshot, since row times a plan_interval_minutes apart can never both equal the same
+    // floored capture instant.
+    const DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS = 1000; // guards only against sub-second formatting noise
+    function findNearestDebugSnapshot(rowTimeStr) {
+        if (!rowTimeStr || !window.debugHistoryData || !window.debugHistoryData.length) {
+            return null;
+        }
+        const rowTime = new Date(rowTimeStr).getTime();
+        if (isNaN(rowTime)) {
+            return null;
+        }
+        for (const snap of window.debugHistoryData) {
+            const snapTime = new Date(snap.timestamp).getTime();
+            if (isNaN(snapTime)) { continue; }
+            if (Math.abs(rowTime - snapTime) <= DEBUG_SNAPSHOT_MATCH_TOLERANCE_MS) {
+                return snap;
+            }
+        }
+        return null;
+    }
+
+    function renderPlanTable(jsonData, overrides, showDebug, editable, showHistoryLinks) {
         try {
             if (!jsonData || !jsonData.rows) {
                 return '<p style="color:red;">No plan data available</p>';
@@ -6478,37 +6566,73 @@ def get_plan_renderer_js():
             // not 0 which is what a plain hours*60+minutes calculation would return).
             window.planMidnightRef = jsonData.time || null;
 
+            // Reason templates come from the dataset being rendered, not from window.planData -
+            // the History/Yesterday views publish their own copy alongside their own rows.
+            const reasonTemplates = jsonData.reason_templates;
+
             let html = '<table>';
             const cellStyle = 'style="padding: 4px;"';
 
+            // Short explanations for each plan-table column header, condensed from the full
+            // descriptions in predbat-plan-card.md - keep these brief, a hover tooltip is not
+            // the place for the doc page's colour-coding detail.
+            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
+            const COLUMN_HEADER_HELP = {
+                time: 'Predbat plans in slots (30 minutes by default) aligned to rate change times.',
+                import: `The import rate for this slot, in ${currencyMinor} per kWh. Bold if a charge is planned this slot.`,
+                export: `The export rate for this slot, in ${currencyMinor} per kWh. Bold if a discharge/export is planned this slot.`,
+                state: "What the battery is doing this slot - hover a state cell for the specific reason.",
+                limit: 'The battery SoC Predbat is planning to reach by the end of this slot.',
+                pv: 'Predicted solar generation for this slot, from the Solcast forecast.',
+                load: 'Predicted house electricity consumption for this slot, from historical data.',
+                clip: "Solar energy predicted to be lost - the inverter can't handle all the PV generated, or an export limit is set.",
+                xload: 'Extra load added externally via load_forecast settings (e.g. PredAI, PredHeat).',
+                car: 'Predicted car charging energy for this slot.',
+                iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
+                soc: 'Estimated battery state of charge at the start of this slot.',
+                cost: 'Estimated cost (or saving) for this slot.',
+                total: 'Running total cost for today so far, at the start of this slot.',
+                co2_rate: 'Estimated carbon intensity of the grid at the start of this slot.',
+                co2_total: 'Estimated cumulative carbon footprint at the start of this slot.',
+            };
+
+            function th(key, innerHtml, extraAttrs) {
+                const helpText = COLUMN_HEADER_HELP[key];
+                const titleAttr = helpText ? ` title="${escapeAttr(helpText)}"` : '';
+                const attrs = extraAttrs ? ` ${extraAttrs.trim()}` : '';
+                return `<th${attrs}${titleAttr}><b>${innerHtml}</b></th>`;
+            }
+
             // Render header
             html += '<tr>';
-            html += '<th><b>Time</b></th>';
-            const currencyMinor = jsonData.currency_symbols?.[1] ?? 'p';
-            html += showDebug ? `<th><b>Import ${currencyMinor} (w/loss)</b></th>` : `<th><b>Import ${currencyMinor}</b></th>`;
-            html += showDebug ? `<th><b>Export ${currencyMinor} (w/loss)</b></th>` : `<th><b>Export ${currencyMinor}</b></th>`;
-            html += '<th colspan="2"><b>State</b></th>';
-            html += '<th><b>Limit %</b></th>';
-            html += showDebug ? '<th><b>PV kWh (10%)</b></th>' : '<th><b>PV kWh</b></th>';
-            html += showDebug ? '<th><b>Load kWh (10%)</b></th>' : '<th><b>Load kWh</b></th>';
+            html += th('time', 'Time');
+            html += showDebug ? th('import', `Import ${currencyMinor} (w/loss)`) : th('import', `Import ${currencyMinor}`);
+            html += showDebug ? th('export', `Export ${currencyMinor} (w/loss)`) : th('export', `Export ${currencyMinor}`);
+            html += th('state', 'State', ' colspan="2"');
+            html += th('limit', 'Limit %');
+            html += showDebug ? th('pv', 'PV kWh (10%)') : th('pv', 'PV kWh');
+            html += showDebug ? th('load', 'Load kWh (10%)') : th('load', 'Load kWh');
             if (showDebug) {
-                html += '<th><b>Clip kWh</b></th>';
+                html += th('clip', 'Clip kWh');
             }
             if (showDebug && jsonData.rows.some(r => r.extra_load !== undefined)) {
-                html += '<th><b>XLoad kWh</b></th>';
+                html += th('xload', 'XLoad kWh');
             }
             if (jsonData.num_cars > 0) {
-                html += '<th><b>Car kWh</b></th>';
+                html += th('car', 'Car kWh');
             }
             if (jsonData.iboost_enable) {
-                html += '<th><b>iBoost kWh</b></th>';
+                html += th('iboost', 'iBoost kWh');
             }
-            html += '<th><b>SoC %</b></th>';
-            html += '<th><b>Cost</b></th>';
-            html += '<th><b>Total</b></th>';
+            html += th('soc', 'SoC %');
+            html += th('cost', 'Cost');
+            html += th('total', 'Total');
             if (jsonData.carbon_enable) {
-                html += '<th><b>CO2 g/kWh</b></th>';
-                html += '<th><b>CO2 kg</b></th>';
+                html += th('co2_rate', 'CO2 g/kWh');
+                html += th('co2_total', 'CO2 kg');
+            }
+            if (showHistoryLinks) {
+                html += '<th><b>Debug</b></th>';
             }
             html += '</tr>';
 
@@ -6525,14 +6649,22 @@ def get_plan_renderer_js():
                     html += `<td id=time bgcolor=#FFFFFF>${timeDisplay}</td>`;
                 }
 
-                // Import rate - formatted bold if in charge window, italic with symbol if estimated
+                // Import rate - formatted bold if in charge window, italic with symbol if estimated.
+                // 'manual' is excluded here when editable: renderRateCell() below already shows its
+                // own override marker (and the only functioning Clear control) for that case, driven
+                // by a separately-computed isOverride check. Baking this marker in too stacks a
+                // second, visually identical glyph from a source the Clear button doesn't know about
+                // - if the two ever disagree, you get a marker with no working Clear behind it
+                // (batpred#4474). Non-'manual' adjust types (offset/future/user/increment/saving)
+                // aren't part of that clickable-override mechanism, so they keep their marker as-is.
                 const importBold = row.state && (row.state === 'Chrg' || row.state === 'HoldChrg' || row.state === 'FrzChrg');
                 let importText = row.import_rate.toFixed(2);
                 if (showDebug && row.import_rate_adjusted !== undefined) {
                     importText += ` (${row.import_rate_adjusted.toFixed(2)})`;
                 }
-                const importAdjust = row.import_rate_adjust_type ? ` ${getAdjustSymbol(row.import_rate_adjust_type)}` : '';
-                if (row.import_rate_adjust_type) {
+                const importAdjustType = (editable && row.import_rate_adjust_type === 'manual') ? null : row.import_rate_adjust_type;
+                const importAdjust = importAdjustType ? ` ${getAdjustSymbol(importAdjustType)}` : '';
+                if (importAdjustType) {
                     importText = `<i>${importText}${importAdjust}</i>`;
                 }
                 if (importBold) {
@@ -6540,17 +6672,30 @@ def get_plan_renderer_js():
                 }
                 if (editable) {
                     html += renderRateCell(row.import_rate, row.rate_color_import, 'import', row.time, timeDisplay, overrides, importText, row.slot_minute);
+                } else if (row.rate_split) {
+                    // Car's own rate has diverged from the house rate - not necessarily an IOG cap
+                    // (any car window with its own average can diverge, e.g. combined dynamic-rate
+                    // windows) - split the cell, house on the left, car on the right, own tooltip each.
+                    const houseTitle = escapeAttr(`House rate: ${row.import_rate.toFixed(2)}${currencyMinor}/kWh`);
+                    const carTitle = escapeAttr(`Car rate: ${row.car_rate.toFixed(2)}${currencyMinor}/kWh (differs from house rate)`);
+                    html += `<td id=import data-minute="${row.slot_minute}" data-rate="${row.import_rate}" style="padding:0;">`;
+                    html += `<div style="display:flex;">`;
+                    html += `<div style="flex:1;padding:4px;background-color:${row.rate_color_import || '#FFFFFF'};" title="${houseTitle}">${importText}</div>`;
+                    html += `<div style="flex:1;padding:4px;background-color:${row.car_rate_color || '#FFFFFF'};" title="${carTitle}">${row.car_rate.toFixed(2)}</div>`;
+                    html += `</div></td>`;
                 } else {
                     html += `<td id=import ${cellStyle} bgcolor=${row.rate_color_import || '#FFFFFF'}>${importText}</td>`;
                 }
 
-                // Export rate - italic with symbol if estimated
+                // Export rate - italic with symbol if estimated (see import rate comment above for
+                // why 'manual' is excluded in editable mode)
                 let exportText = row.export_rate.toFixed(2);
                 if (showDebug && row.export_rate_adjusted !== undefined) {
                     exportText += ` (${row.export_rate_adjusted.toFixed(2)})`;
                 }
-                const exportAdjust = row.export_rate_adjust_type ? ` ${getAdjustSymbol(row.export_rate_adjust_type)}` : '';
-                if (row.export_rate_adjust_type) {
+                const exportAdjustType = (editable && row.export_rate_adjust_type === 'manual') ? null : row.export_rate_adjust_type;
+                const exportAdjust = exportAdjustType ? ` ${getAdjustSymbol(exportAdjustType)}` : '';
+                if (exportAdjustType) {
                     exportText = `<i>${exportText}${exportAdjust}</i>`;
                 }
                 if (editable) {
@@ -6562,15 +6707,16 @@ def get_plan_renderer_js():
                 // State cells (with rowspan and split handling)
                 if (!row.skip_state_cell) {
                     if (editable) {
-                        html += renderStateCell(row, timeDisplay, overrides);
+                        html += renderStateCell(row, timeDisplay, overrides, reasonTemplates);
                     } else {
                         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
                         const colspanAttr = row.split ? '' : ' colspan=2';
-                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}>${row.state_text || ''}</td>`;
+                        const titleAttr = reasonTitleAttr(row, reasonTemplates);
+                        html += `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${row.state_color || '#FFFFFF'}${titleAttr}>${row.state_text || ''}</td>`;
 
-                        // Second state cell if split
+                        // Second state cell if split - same combined reason text as the first half
                         if (row.split && row.state2_text) {
-                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+                            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${titleAttr}>${row.state2_text}</td>`;
                         }
                     }
                 }
@@ -6656,6 +6802,18 @@ def get_plan_renderer_js():
                     html += `<td id=total_carbon bgcolor=${row.carbon_color || '#FFFFFF'}>${row.total_carbon || ''}</td>`;
                 }
 
+                // Debug history snapshot link (History/Yesterday view only)
+                if (showHistoryLinks) {
+                    const snap = findNearestDebugSnapshot(row.time);
+                    if (snap) {
+                        const snapWhen = new Date(snap.timestamp);
+                        const snapLabel = isNaN(snapWhen.getTime()) ? snap.id : snapWhen.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+                        html += `<td bgcolor=#FFFFFF><a href="./debug_history_download?id=${encodeURIComponent(snap.id)}">&#8681; ${snapLabel}</a></td>`;
+                    } else {
+                        html += '<td bgcolor=#FFFFFF></td>';
+                    }
+                }
+
                 html += '</tr>';
             }
 
@@ -6710,6 +6868,11 @@ def get_plan_renderer_js():
                 if (jsonData.carbon_enable) {
                     html += '<td></td>'; // Empty cell for carbon intensity
                     html += `<td bgcolor=#FFFFFF><b>${totals.total_carbon || ''}</b></td>`;
+                }
+
+                // Empty cell for the Debug history column
+                if (showHistoryLinks) {
+                    html += '<td></td>';
                 }
 
                 html += '</tr>';
@@ -6790,8 +6953,48 @@ def get_plan_renderer_js():
         return html;
     }
 
+    // Escape text for safe use inside an HTML attribute (e.g. title="...")
+    function escapeAttr(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML.replace(/"/g, '&quot;');
+    }
+
+    // Render a row's "reasons" (list of {code, params}) into a single sentence, filling in
+    // each entry's template (looked up from the shared reason_templates table, published once
+    // per response rather than duplicating the rendered sentence on every row) with its params.
+    function renderReasonText(reasons, templates) {
+        if (!reasons || !templates) {
+            return '';
+        }
+        const rendered = reasons.map(function (entry) {
+            const template = templates[entry.code];
+            if (!template) {
+                return '';
+            }
+            return template.replace(/\\{(\\w+)\\}/g, function (match, key) {
+                return entry.params && entry.params[key] !== undefined ? entry.params[key] : match;
+            });
+        });
+        // A split cell's first half is always a demand_before_export_* code paired with the export
+        // reason as its second half - prefix "Then" (no comma) so the two read as one narrative
+        // instead of two disconnected sentences.
+        if (reasons.length === 2 && rendered[0] && rendered[1] && typeof reasons[0].code === 'string' && reasons[0].code.indexOf('demand_before_export_') === 0) {
+            rendered[1] = 'Then ' + rendered[1].charAt(0).toLowerCase() + rendered[1].slice(1);
+        }
+        return rendered.filter(Boolean).join(' ');
+    }
+
+    // Build the ` title="..."` tooltip attribute for a row's state cell, or '' when the row
+    // has no reasons. Shared by both the editable (renderStateCell) and read-only state-cell
+    // paths so the History/Yesterday views get the same tooltips as the plan view.
+    function reasonTitleAttr(row, templates) {
+        const reasonText = renderReasonText(row.reasons, templates);
+        return reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
+    }
+
     // Render state cell without dropdown (dropdown moved to time column)
-    function renderStateCell(row, timeDisplay, overrides) {
+    function renderStateCell(row, timeDisplay, overrides, templates) {
         const cellStyle = 'style="padding: 4px;"';
         const timeStr = row.time;
         const minutesFromMidnight = row.slot_minute !== undefined ? row.slot_minute : getMinutesFromTimeString(timeStr);
@@ -6819,14 +7022,45 @@ def get_plan_renderer_js():
 
         const rowspanAttr = row.rowspan_state > 0 ? ` rowspan="${row.rowspan_state}"` : '';
         const colspanAttr = row.split ? '' : ' colspan=2';
+        // reasonText is needed raw (not just as a title= attribute) for reasonCellAttrs() below,
+        // which also uses it for the tap/focus panel content - templates comes from the dataset
+        // being rendered (jsonData.reason_templates), not window.planData, so History/Yesterday
+        // views look up against their own template table rather than the plan view's.
+        const reasonText = renderReasonText(row.reasons, templates);
+        // Keep both title= (free instant hover for desktop/mouse) and the tap/focus panel below
+        // (for touch and keyboard, neither of which can trigger a hover state at all) - the two
+        // never fire together in practice, since a touch interaction can't trigger :hover/title
+        // in the first place, so there's nothing to reconcile between them.
+        const titleAttr = reasonText ? ` title="${escapeAttr(reasonText)}"` : '';
 
-        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor} class="${overrideClass}">`;
+        function reasonCellAttrs(extraClass) {
+            if (!reasonText) {
+                return { clickAttrs: extraClass ? ` class="${extraClass}"` : '', panel: '' };
+            }
+            const dropdownId = `reasonDropdown_${dropdownCounter++}`;
+            const classAttr = `clickable-state-cell${extraClass ? ' ' + extraClass : ''}`;
+            // tabindex + onkeydown make this reachable and operable by keyboard, not just tap -
+            // a bare onclick on a <td> (the existing pattern used for time/rate cell dropdowns)
+            // is mouse/touch-only, since <td> isn't focusable by default.
+            const keydown = `if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleForceDropdown('${dropdownId}')}`;
+            return {
+                clickAttrs: ` onclick="toggleForceDropdown('${dropdownId}')" onkeydown="${keydown}" tabindex="0" role="button" aria-label="Why this slot" class="${classAttr}"`,
+                panel: `<div class="dropdown"><div id="${dropdownId}" class="dropdown-content"><div class="reason-text">${escapeAttr(reasonText)}</div></div></div>`,
+            };
+        }
+
+        const first = reasonCellAttrs(overrideClass);
+        let html = `<td${colspanAttr}${rowspanAttr} ${cellStyle} bgcolor=${bgColor}${first.clickAttrs}${titleAttr}>`;
         html += row.state_text || '';
+        html += first.panel;
         html += '</td>';
 
-        // Second state cell if split
+        // Second state cell if split - same combined reason text as the first half, since
+        // row.reasons is a single list covering both halves of a split (e.g. charging and
+        // freeze-exporting in the same slot), not two separately-attributed sentences.
         if (row.split && row.state2_text) {
-            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}>${row.state2_text}</td>`;
+            const second = reasonCellAttrs('');
+            html += `<td${rowspanAttr} ${cellStyle} bgcolor=${row.state2_color || '#FFFFFF'}${second.clickAttrs}${titleAttr}>${row.state2_text}${second.panel}</td>`;
         }
 
         return html;
@@ -7080,9 +7314,29 @@ def get_plan_renderer_js():
         }
     }
 
+    // Fetch the rolling debug-history snapshot index (small: at most a few dozen tiny
+    // entries) into window.debugHistoryData for the History/Yesterday view's Debug
+    // column. Called on initial load and whenever the user switches to that view,
+    // rather than on every 5s plan poll (fetchAndRenderPlan) - the underlying data only
+    // changes on an hours-long capture interval, so polling it that often would just be
+    // wasted requests for something that only matters while the Yesterday view is open.
+    async function loadDebugHistoryData() {
+        try {
+            const response = await fetch('./debug_history_list');
+            if (response.ok) {
+                window.debugHistoryData = await response.json();
+            }
+        } catch (error) {
+            console.error('Error fetching debug history list:', error);
+        }
+    }
+
     // Switch between plan views
     function switchView(view) {
         currentView = view;
+        if (view === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
 
         // Update button styling
         document.querySelectorAll('.view-button').forEach(btn => {
@@ -7135,7 +7389,19 @@ def get_plan_renderer_js():
         }
 
         if (!data) {
-            container.innerHTML = '<h2>Plan data is loading, please wait...</h2>';
+            if (currentView === 'plan') {
+                container.innerHTML = '<h2>Plan data is loading, please wait...</h2>';
+            } else {
+                // The yesterday/baseline views are only produced once calculate_yesterday() has run,
+                // which it can't do without the recorded history of predbat.cost_today - say so rather
+                // than sitting on a loading message that will never go away
+                container.innerHTML = '<h2>No data for this view yet</h2>' +
+                    '<p>This view is computed about once an hour from what actually happened yesterday, ' +
+                    'so it stays empty for the first hour after Predbat starts.</p>' +
+                    '<p>If it never fills in, Predbat could not read the history of <b>predbat.cost_today</b> ' +
+                    'from Home Assistant. Check that the Home Assistant recorder is storing the Predbat entities ' +
+                    '(see the recorder notes in the FAQ) and look for <i>Calculate yesterday</i> warnings in the Predbat log.</p>';
+            }
             return;
         }
 
@@ -7144,7 +7410,11 @@ def get_plan_renderer_js():
 
         // Render table
         const editable = (currentView === 'plan');
-        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable);
+        // Debug-history download links only make sense on the History/Yesterday view -
+        // its rows are entirely in the past, unlike the live Plan view which is mostly
+        // future predictions with no corresponding capture.
+        const showHistoryLinks = (currentView === 'yesterday');
+        container.innerHTML = renderPlanTable(data, overrides, showDebug, editable, showHistoryLinks);
         setSelectedTimeOverrides(getSelectedTimeOverrides());
 
         // Apply dark mode colors if needed
@@ -7252,6 +7522,12 @@ def get_plan_renderer_js():
         // Initial render
         refreshPlan();
 
+        // Fetch the debug-history snapshot index once up front too, in case the page
+        // loads with currentView already set to 'yesterday' (e.g. restored state).
+        if (currentView === 'yesterday') {
+            loadDebugHistoryData().then(refreshPlan);
+        }
+
         // Set up polling every 5 seconds
         if (updateIntervalId) {
             clearInterval(updateIntervalId);
@@ -7283,8 +7559,8 @@ def get_header_html(title, calculating, default_page, arg_errors, THIS_VERSION, 
     """
 
     text = '<!doctype html><html><head><meta charset="utf-8"><title>{}</title>'.format(title)
-    text += '<link rel="icon" type="image/svg+xml" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo.svg">'
-    text += '<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png">'
+    text += '<link rel="icon" type="image/svg+xml" href="./images/bat_logo.svg">'
+    text += '<link rel="icon" type="image/png" href="./images/bat_logo_light.png">'
 
     text += """
 <script>
@@ -7298,6 +7574,16 @@ if (localStorage.getItem('darkMode') === 'true') {
     });
 }
 </script>
+<style>
+    /* Paint the correct background before the external font/chart resources below (which block
+       rendering while they load) have a chance to delay the full stylesheet - otherwise a slow or
+       uncached CDN fetch leaves the page showing its default white background until they resolve,
+       flashing bright white on every page load/refresh even with dark mode enabled (batpred#2256). */
+    html { background-color: #ffffff; }
+    html.dark-mode { background-color: #121212; }
+    body { background-color: #ffffff; color: #333; }
+    html.dark-mode body { background-color: #121212; color: #e0e0e0; }
+</style>
 <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
 <style>
@@ -7638,8 +7924,8 @@ function flyBat() {
     // Get the appropriate bat image based on dark/light mode
     const isDarkMode = document.body.classList.contains('dark-mode');
     const batImage = isDarkMode
-        ? 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png'
-        : 'https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png';
+        ? './images/bat_logo_dark.png'
+        : './images/bat_logo_light.png';
 
     bat.style.backgroundImage = `url('${batImage}')`;
 
@@ -7676,6 +7962,14 @@ function restartPredbat() {
             console.error('Error:', error);
             alert('Error initiating restart: ' + error.message);
         });
+    }
+}
+
+function downloadLiveApps() {
+    if (confirm(`Download apps.yaml with real credentials?\\n\\nOK = full unmasked file\\nCancel = masked file (credentials redacted)`)) {
+        window.location.href = './debug_apps_live?masked=0';
+    } else {
+        window.location.href = './debug_apps_live?masked=1';
     }
 }
 
@@ -7962,6 +8256,36 @@ menuLinks.forEach(link => {
     }
 });
 
+// Second pass: a sub-page belongs to its parent menu entry.
+// Some pages are sub-pages of a menu item and have no entry of their own - /annual_view
+// and /annual_compare both live under the ./annual tab. Without this they matched
+// nothing and fell through to the default below, which highlighted Dashboard while the
+// user was plainly on another tab.
+//
+// Only runs when the first pass found no exact match, so a page that DOES have its own
+// entry can never be captured by a shorter one - /apps_editor keeps its own highlight
+// rather than lighting up /apps. The longest matching prefix wins for the same reason.
+if (!activeFound && menuLinks.length > 0) {
+    let bestLink = null;
+    let bestLength = 0;
+    menuLinks.forEach(link => {
+        const linkPath = new URL(link.href).pathname;
+        const cleanLinkPath = linkPath.endsWith('/') ? linkPath.slice(0, -1) : linkPath;
+        const cleanCurrentPage = currentPage.endsWith('/') ? currentPage.slice(0, -1) : currentPage;
+        // Require a separator so /annual matches /annual_view but /app never matches
+        // /apps - a bare prefix would capture unrelated pages that merely start alike.
+        if (cleanLinkPath.length > bestLength &&
+            (cleanCurrentPage.startsWith(cleanLinkPath + '_') || cleanCurrentPage.startsWith(cleanLinkPath + '/'))) {
+            bestLink = link;
+            bestLength = cleanLinkPath.length;
+        }
+    });
+    if (bestLink) {
+        bestLink.classList.add('active');
+        activeFound = true;
+    }
+}
+
 // If no active item was found, set default
 if (!activeFound && menuLinks.length > 0) {
     const defaultLink = menuLinks[0]; // Set first menu item as default
@@ -8079,9 +8403,9 @@ setTimeout(function() {
 <div class="menu-bar">
 <div class="logo">
     <img id="logo-image"
-            src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
-            data-light-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_light.png"
-            data-dark-src="https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/docs/images/bat_logo_dark.png"
+            src="./images/bat_logo_light.png"
+            data-light-src="./images/bat_logo_light.png"
+            data-dark-src="./images/bat_logo_dark.png"
             alt="Predbat Logo"
             onclick="flyBat()"
             style="cursor: pointer;"
@@ -8100,6 +8424,7 @@ setTimeout(function() {
 <a href='./entity'>Entities</a>
 <a href='./charts'>Charts</a>
 <a href='./compare'>Compare</a>
+<a href='./annual'>WhatIf</a>
 <a href='./log'>Log</a>
 <a href='./config'>Config</a>
 <a href='./apps'>Apps"""

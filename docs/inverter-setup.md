@@ -39,14 +39,19 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud](#givenergy-with-ge-cloud) | [ge_cloud](https://github.com/springfall2008/ge_cloud) | [givenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_cloud.yaml) |
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
+   | [AlphaESS Cloud](#alphaess-cloud) | Predbat | [alphaess_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/alphaess_cloud.yaml) |
+   | [Canadian Solar EP Cube](#canadian-solar-ep-cube) | [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) | [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) |
+   | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
+   | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
+   | [Hanchu iESS](#hanchu-iess) | [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) | [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) |
    | [Huawei](#huawei) | [Huawei Solar](https://github.com/wlcrs/huawei_solar) | [huawei.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/huawei.yaml) |
    | [Kostal Plenticore](#kostal-plenticore) | [Kostal Plenticore](https://www.home-assistant.io/integrations/kostal_plenticore) | [kostal.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/kostal.yaml) |
    | [LuxPower](#luxpower) | [LuxPython](https://github.com/guybw/LuxPython_DEV) | [luxpower.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/luxpower.yaml) |
-   | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Home-Assistant-Integration) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
+   | [SigEnergy](#sigenergy-sigenstor) | [SigEnergy](https://github.com/TypQxQ/Sigenergy-Local-Modbus) | [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) |
    | [SigEnergy Cloud](#sigenergy-cloud) | Predbat built-in | [sigenergy_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_cloud.yaml) |
    | [Sofar inverters](#sofar-inverters) | [Sofar MQTT integration](https://github.com/cmcgerty/Sofar2mqtt) | [sofar.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sofar.yaml) |
    | [SolarEdge inverters](#solaredge-inverters) | [Solaredge Modbus Multi](https://github.com/WillCodeForCats/solaredge-modbus-multi) | [solaredge.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solaredge.yaml) |
@@ -55,8 +60,10 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Solis Cloud](#solis-cloud) | Predbat | [solis_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/solis_cloud.yaml) |
    | [Solis Hybrid inverters (Firmware before FB00)](#solis-inverters-before-fb00) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
    | [Solis Hybrid inverters (Firmware FB00 and later)](#solis-inverters-fb00-or-later) | [Solax Modbus integration](https://github.com/wills106/homeassistant-solax-modbus) | [ginlong_solis.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ginlong_solis.yaml) |
+   | [Sunsynk Cloud](#sunsynk-cloud) | Predbat | See [apps.yaml](apps-yaml.md#sunsynk-cloud-api) |
    | [SunSynk](#sunsynk) | [Sunsynk](https://github.com/kellerza/sunsynk) | [sunsynk.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sunsynk.yaml) |
    | [Tesla Powerwall](#tesla-powerwall) | [Tesla Fleet](https://www.home-assistant.io/integrations/tesla_fleet) or [Teslemetry](https://www.home-assistant.io/integrations/teslemetry) | [tesla_powerwall.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/tesla_powerwall.yaml) |
+   | [Tesla Powerwall via Teslemetry component (beta)](#teslemetry-component-beta) | Predbat built-in | [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) |
    | [Victron](#victron) | [Victron MQTT](https://github.com/tomer-w/victron_mqtt) | [victron.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/victron.yaml) |
 
 Note that support for all these inverters is in various stages of development. Please expect things to fail and report them as Issues on GitHub.
@@ -167,6 +174,8 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - If you set **ge_cloud_automatic** to `true` in `apps.yaml` then Predbat will auto-configure itself to use the appropriate GE Cloud controls and will ignore any inverter and battery controls set in `apps.yaml`
 - Make sure that the 'discharge down to' registers are set to 4% and charge and discharge slots 2, 3 and 4 are disabled in the portal by setting the start and end times to 00:00 (if you have them).
 - If you have set **ge_cloud_automatic** to `true` and the GE Cloud does not return accurate **load_today** energy information, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to true in `apps.yaml`.
+- The charge/export slot start and end times are stored by GivEnergy in the timezone set on your GivEnergy account. Predbat reads this timezone from the GivEnergy account details and translates the slot times into
+  the Predbat **timezone** setting, so the times shown on the Predbat select entities may differ from those shown in the GivEnergy portal if the two timezones do not match.
 
 ## GivEnergy with GE Cloud EMS
 
@@ -186,6 +195,124 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Review any other configuration settings
 
 Launch Predbat with hass.py (from the Predbat-addon repository) either via a Docker or just on a Linux/MAC/WSL command line shell.
+
+## AlphaESS Cloud
+
+**Experimental**
+
+Predbat has a built-in AlphaESS Cloud integration for AlphaESS hybrid inverters via the AlphaESS Open API, providing monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 Home Assistant integration is required.
+
+Nobody on the Predbat project has AlphaESS hardware, so this integration's wire behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters - every request and response is traced to the log by default so you can capture evidence for an issue report. A standalone diagnostics CLI (`apps/predbat/alphaess.py`) is included specifically so you can verify it against your own system, using the [diagnostics CLI](#verifying-with-the-alphaess-diagnostics-cli) below, before trusting Predbat with control.
+
+### Verifying with the AlphaESS diagnostics CLI
+
+Before turning on control, run the standalone CLI from the `apps/predbat` directory to confirm your AppID/AppSecret work and that the readings match the AlphaESS app:
+
+```bash
+cd apps/predbat
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET
+```
+
+This is read-only: it discovers every battery system on the account, polls each one's config and telemetry once, and prints what it found - it never writes anything. Useful flags for narrowing it down:
+
+- `--serial <sn>` - restrict to one system instead of every system on the account
+- `--dump-settings` - also print the full charge/discharge config object for each system, useful for confirming the current schedule against the app
+- `--api-delay <seconds>` - override the default 2-second pacing between API calls
+
+For each system, the output ends with a `Derived:` line (the capacity/inverter_limit/battery_rate_max Predbat computed) and a `Telemetry source:` line that tells you two things worth checking before you rely on the system:
+
+- Whether it's on `live (getLastPowerData)` or has fallen back to `history (getOneDayPowerBySn, 5 minute)` - the second is expected for some models and Predbat re-probes for live data automatically, but it's worth knowing which one you're on
+- Whether the periodic schedule API is entitled (`yes`, `no (6017)` or `unknown`) - entitled systems get up to six windows and a real power setpoint; everyone else uses the older two-window endpoints, which have no rate field at all
+
+Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the AlphaESS app, and in particular note the sign of `battery_power` while charging versus discharging - this convention is inferred from the API docs rather than confirmed on real hardware, and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.
+
+#### Binding and unbinding a system
+
+Binding and unbinding are account-management actions, separate from the read-only run above, and every one of them prompts `Send the ... request? [y/N]` before doing anything - answer anything other than `y` (or run with stdin closed, e.g. under `cron` or CI) and nothing is sent.
+
+To bind a new system to your AppID, first trigger AlphaESS to email a verification code to the system's registered owner:
+
+```bash
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --verify --serial AL70110230306xx --check-code YOUR_CHECK_CODE
+```
+
+`--check-code` is the system's CheckCode, found on the device label or from your installer - it is not the emailed verification code. Once the email arrives, complete the bind with the code from it:
+
+```bash
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --bind --serial AL70110230306xx --code CODE_FROM_EMAIL
+```
+
+To unbind a system from your AppID:
+
+```bash
+python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind --serial AL70110230306xx
+```
+
+**`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
+
+See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
+
+## Canadian Solar EP Cube
+
+The EP Cube has no local Modbus; the only published control interface is the vendor cloud REST API. The [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) custom integration (HACS Default store, MIT-licensed) bridges this to a Predbat-shaped set of entities and services:
+
+- Install via HACS - search "Canadian Solar EP Cube", Download, then restart Home Assistant. Configure the integration with your EP Cube cloud account email + password (captcha is handled automatically).
+- Copy the template [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) over your `apps.yaml`. No additional helpers or template sensors are needed - entity IDs are stable (no per-account devId substitution).
+- The integration exposes the standard 7 Predbat services (`charge_start`, `charge_stop`, `discharge_start`, `discharge_stop`, `charge_freeze`, `discharge_freeze`, `idle`) and translates each rate + window into a TOU-schedule rewrite on the cube.
+- Writes are idempotent (no cloud call if the requested state is already active) and budgeted to a low number of writes per day. The integration snapshots your normal mode + TOU schedule on the first override and auto-reverts at the slot end.
+- Restart Predbat after saving `apps.yaml` and check its log to confirm it sees the `sensor.ep_cube_*` entities and successfully calls the `ep_cube.*` services.
+
+## DEYE Cloud
+
+**Experimental**
+
+Predbat has a built-in DEYE Cloud integration for DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing monitoring and battery control - no local Modbus/RS485 Home Assistant integration is required.
+
+### What you need (self-hosted Home Assistant add-on)
+
+DeyeCloud authentication needs **two separate credential pairs** - it is easy to confuse them:
+
+1. **Developer application** - an *App ID* and *App Secret* that identify the API integration itself. Create a developer app once at [developer.deyecloud.com/app](https://developer.deyecloud.com/app); these become `deye_app_id` and `deye_app_secret`. This is **not** your normal login.
+2. **DeyeCloud account login** - the email/username and password you use in the Deye/Sunsynk mobile app. These become `deye_username` and `deye_password`, and are what scope the connection to *your* stations and inverters.
+
+Both pairs are required together - the token endpoint authenticates the *application* and the *account* in one call, so neither pair works on its own. Your account password is stored in `apps.yaml` and sent SHA-256 hashed by Predbat (never in plain text over the wire).
+
+Also set the **data centre** your DeyeCloud account is registered in - `eu`, `am` or `india` - via `deye_data_center`.
+
+Add the following to `apps.yaml` (all four credentials plus the data centre are required; `deye_company_id` is only needed for installer/business accounts):
+
+```yaml
+  deye_app_id: !secret deye_app_id          # developer App ID (developer.deyecloud.com/app)
+  deye_app_secret: !secret deye_app_secret  # developer App Secret
+  deye_username: !secret deye_username      # your DeyeCloud account email/username
+  deye_password: !secret deye_password      # your DeyeCloud account password
+  deye_data_center: 'eu'                    # eu | am | india
+  deye_automatic: True
+```
+
+### Predbat.com (SaaS)
+
+None of the above credentials are needed - connect your DeyeCloud account through Predbat.com and the token is injected and refreshed by the platform (`deye_auth_method: 'oauth'`).
+
+### Automatic configuration
+
+Set `deye_automatic: True` to have Predbat discover every battery inverter on your DeyeCloud account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
+
+See the components documentation for details [Components - DEYE Cloud API](components.md#deye-cloud-api-deye)
+
+## Enphase Cloud
+
+**Experimental**
+
+Predbat has a built-in Enphase Cloud integration that logs in to the Enphase Enlighten cloud (the same unofficial web endpoints used by the Enlighten app/web site) for monitoring and battery control of Enphase IQ Battery systems - no local Home Assistant integration is required.
+
+**Important**: there is no official Enphase API with battery control, so this relies on the unofficial Enlighten web-app API which Enphase may change without notice. Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use.
+
+- Copy the [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) template over the top of the supplied `apps.yaml` and set `enphase_username` and `enphase_password` to your Enlighten account credentials.
+- Set `enphase_automatic: True` to have Predbat wire up all the sensor and control entities automatically - no manual `apps.yaml` sensor configuration is required.
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules, export windows become discharge-to-grid (DTG) schedules, and freeze-export windows use restrict-battery-discharge (RBD) schedules, with the reserve set through the battery profile. `automatic_config` requires the site to support both CFG and DTG and fails configuration otherwise. Writes are cached optimistically and corrected by the next periodic re-read if they didn't land.
+
+See the components documentation for details [Components - Enphase API](components.md#enphase-api-enphase)
 
 ## Fox
 
@@ -489,6 +616,173 @@ Edit `apps.yaml`:
 You need to have a Solar Assistant installation <https://solar-assistant.io>
 
 Growatt has two popular series of inverters, SPA and SPH. Copy the template that matches your model from templates over the top of your `apps.yaml`, and edit inverter and battery settings as required. Yours may have different entity IDs on Home Assistant.
+
+## Hanchu iESS
+
+The Hanchu iESS has no native Predbat integration. Control is implemented via Predbat's generic Service API: Predbat calls four service hooks (`charge_start_service`, `charge_stop_service`, `discharge_start_service`, `discharge_stop_service`), all of which point at a single Home Assistant script that writes the corresponding time slots directly to the device via `hanchuess.device_control`.
+
+Copy the template [hanchu_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu_cloud.yaml) over your `apps.yaml` and follow the steps below.
+
+### Hanchu iESS Prerequisites
+
+Install the [hanchu-ess-ha](https://github.com/upton68/hanchu-ess-ha) integration via HACS and configure it with your Hanchu cloud account credentials. Confirm that inverter and battery sensors are appearing in Home Assistant before proceeding.
+
+### Step 1 — Create helpers
+
+Create the following helpers in Home Assistant (Settings → Devices & Services → Helpers):
+
+**Toggle helpers** (toggle type):
+
+| Entity ID | Name |
+| --------- | ---- |
+| `input_boolean.predbat_charge_start` | Predbat Charge Start |
+| `input_boolean.predbat_discharge_start` | Predbat Discharge Start |
+
+**Text helper** (text type):
+
+| Entity ID | Name |
+| --------- | ---- |
+| `input_text.hanchu_last_mode_action` | Hanchu Last Mode Action |
+
+`input_text.hanchu_last_mode_action` tracks the last mode successfully applied so the bridge script can skip a redundant API call when Predbat reasserts a state that is already active.
+
+### Step 2 — Create the bridge script
+
+All four of Predbat's service hooks call the same script, `script.hanchu_set_state_queued`, passing a `mode_action` field to indicate which state to apply. The script runs with `mode: queued` so if Predbat fires two calls close together — for example stopping a discharge and starting a charge in the same plan-evaluation cycle — Home Assistant queues the second call behind the first rather than letting both `device_control` calls race each other.
+
+Create a new script (Settings → Automations & Scenes → Scripts → Add Script → Edit in YAML) and paste the following, replacing `YOURSERIAL` with your device serial number as it appears in your HA entity IDs, and replacing `notify.notify` with your own mobile notification service:
+
+```yaml
+alias: Hanchu Set State Queued
+mode: queued
+fields:
+  mode_action:
+    required: true
+    selector:
+      select:
+        options:
+          - charge_start
+          - charge_stop
+          - discharge_start
+          - discharge_stop
+sequence:
+  - variables:
+      # mode_action is sometimes only populated under `data` rather than as a
+      # bare template variable, depending on whether the script is invoked from
+      # the HA UI or by a real service call from Predbat's AppDaemon dispatch.
+      # Check both so it works reliably either way.
+      act: >-
+        {% if mode_action is defined %}{{ mode_action }}
+        {% elif data is defined and data.mode_action is defined %}{{ data.mode_action }}
+        {% else %}unknown{% endif %}
+  - if:
+      - condition: template
+        value_template: "{{ act == states('input_text.hanchu_last_mode_action') }}"
+    then:
+      - stop: "No change — same action already applied, skipping API call"
+  - variables:
+      start_seconds: "{{ (now() - now().replace(hour=0, minute=0, second=0, microsecond=0)).seconds }}"
+      tct_start: "{{ start_seconds if act == 'charge_start' else 0 }}"
+      tct_end: "{{ 39600 if act == 'charge_start' else 0 }}"      # 11:00:00
+      tdt_start: "{{ start_seconds if act == 'discharge_start' else 0 }}"
+      tdt_end: "{{ 86340 if act == 'discharge_start' else 0 }}"   # 23:59:00
+  - action: hanchuess.device_control
+    data:
+      sn: YOURSERIAL
+      dev_type: "2"
+      value:
+        TCT_START_1: "{{ tct_start }}"
+        TCT_END_1: "{{ tct_end }}"
+        TDT_START_1: "{{ tdt_start }}"
+        TDT_END_1: "{{ tdt_end }}"
+    response_variable: result
+  - if:
+      - condition: template
+        value_template: "{{ not result.success }}"
+    then:
+      - delay:
+          seconds: 5
+      - action: hanchuess.device_control
+        data:
+          sn: YOURSERIAL
+          dev_type: "2"
+          value:
+            TCT_START_1: "{{ tct_start }}"
+            TCT_END_1: "{{ tct_end }}"
+            TDT_START_1: "{{ tdt_start }}"
+            TDT_END_1: "{{ tdt_end }}"
+        response_variable: result2
+      - if:
+          - condition: template
+            value_template: "{{ not result2.success }}"
+        then:
+          - action: notify.notify  # Replace with your own notification service
+            data:
+              title: "⚠️ Hanchu {{ act }} FAILED"
+              message: >-
+                {{ act }} write failed after retry ({{ result2.message }})
+                — check manually.
+          - stop: "Both attempts failed — leaving last_mode_action unchanged for retry"
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.hanchu_last_mode_action
+    data:
+      value: "{{ act }}"
+  - choose:
+      - conditions: "{{ act == 'charge_start' }}"
+        sequence:
+          - action: input_boolean.turn_on
+            entity_id: input_boolean.predbat_charge_start
+      - conditions: "{{ act == 'charge_stop' }}"
+        sequence:
+          - action: input_boolean.turn_off
+            entity_id: input_boolean.predbat_charge_start
+      - conditions: "{{ act == 'discharge_start' }}"
+        sequence:
+          - action: input_boolean.turn_on
+            entity_id: input_boolean.predbat_discharge_start
+      - conditions: "{{ act == 'discharge_stop' }}"
+        sequence:
+          - action: input_boolean.turn_off
+            entity_id: input_boolean.predbat_discharge_start
+```
+
+The script always writes all four time slot fields (`TCT_START_1`, `TCT_END_1`, `TDT_START_1`, `TDT_END_1`) on every call, zeroing whichever pair is not the active mode. This keeps charge and discharge mutually exclusive on the device without relying on separate stop/start calls landing in the right order.
+
+### Step 3 — Add the soc_kw template sensor
+
+Predbat requires a `soc_kw` sensor reporting battery state of charge in kWh. Add the following to your `configuration.yaml`:
+
+```yaml
+template:
+  - sensor:
+      - name: "Home Battery State of Charge kWh"
+        unique_id: home_battery_soc_kwh
+        unit_of_measurement: "kWh"
+        state_class: measurement
+        device_class: energy
+        state: >
+          {{ ((states('sensor.hanchuess_YOURSERIAL_battery_soc') | float(0)) / 100 * NN.NN) | round(2) }}
+```
+
+Replace `YOURSERIAL` with your device serial number and `NN.NN` with your total battery capacity in kWh (for example `18.80` for a dual 9.4 kWh system). Restart Home Assistant after adding this.
+
+### Step 4 — Configure apps.yaml
+
+- Replace `YOURSERIAL` throughout the template with your device serial number as it appears in your HA entity IDs
+- Adjust `inverter_limit`, `inverter_limit_charge`, `inverter_limit_discharge`, `inverter_limit_export` and `battery_rate_max` to match your inverter and battery rated capacity in watts
+- Delete the `template: True` line to allow Predbat to start
+- Configure your energy rates — see [Energy Rates](https://springfall2008.github.io/batpred/energy-rates/)
+
+> **Note:** Double-check that `inverter_limit` is spelled exactly as shown — an accented character (for example `é` instead of `e` from autocorrect) will cause Predbat to silently ignore the setting and fall back to its own default.
+
+### Hanchu Notes
+
+- **Skipping redundant calls:** Predbat re-evaluates its plan on its normal cycle and can re-issue the same service call mid-window, simply reasserting the plan rather than changing anything. The `input_text.hanchu_last_mode_action` check skips the API call entirely when the requested mode is already the last one successfully applied. The tracker only updates after a confirmed successful write, so a failed attempt still retries correctly on the next cycle.
+- **Behaviour on Predbat restart:** Whenever Predbat restarts it issues both `charge_stop_service` and `discharge_stop_service` in quick succession to put the inverter into a known neutral state. This is expected behaviour. The queued script handles this cleanly — if one of the calls matches the already-active state it is skipped as redundant; the other runs if it represents a real change. You may see one or both fire immediately after any restart.
+- **Automation latency:** Start/stop commands are occasionally delayed by up to ~2 minutes due to HA scheduling. This has not caused any practical issues in production use.
+- **No charge/discharge enable toggle:** Hanchu has no explicit enable/disable for charge or discharge. The slot zeroing mechanism (setting both start and end to `00:00:00`) is the disable method.
+- **Min SOC:** Managed via `battery_min_soc` pointing directly to the Hanchu entity — no separate Predbat reserve setting needed.
 
 ## Huawei
 
@@ -1525,8 +1819,8 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_backup_state_of_charge
     - number.sigen_plant_ess_charge_cut_off_state_of_charge
     - number.sigen_plant_ess_discharge_cut_off_state_of_charge
-    - sensor.sigen_plant_ess_max_charging_limit
-    - sensor.sigen_plant_ess_max_discharging_limit
+    - number.sigen_plant_ess_max_charging_limit
+    - number.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_max_active_power
 
 - The following additions are needed to facilitate integration with Predbat and need to be put into Home Assistant's `configuration.yaml` or configured via the HA user interface:
@@ -1582,13 +1876,15 @@ Add the following automations to `automations.yaml` (or configure via the UI):
       target:
         entity_id: select.sigen_plant_remote_ems_control_mode
       data:
-        option: >
-          {% if is_state('input_select.predbat_requested_mode', "Demand") %}Maximum Self Consumption
-          {% elif is_state('input_select.predbat_requested_mode', "Charging") %}Command Charging (PV First)
-          {% elif is_state('input_select.predbat_requested_mode', "Freeze Charging") %}Maximum Self Consumption
-          {% elif is_state('input_select.predbat_requested_mode', "Discharging") %}Command Discharging (PV First)
-          {% elif is_state('input_select.predbat_requested_mode', "Freeze Discharging") %}Maximum Self Consumption
-          {% endif %}
+        # Rendered as a single Jinja expression (not a folded if/elif block) so there's no
+        # embedded literal newline/whitespace in the result - select.select_option requires an
+        # exact match against the target entity's options list.
+        option: >-
+          {{ "Maximum Self Consumption" if is_state('input_select.predbat_requested_mode', "Demand")
+             else "Command Charging (PV First)" if is_state('input_select.predbat_requested_mode', "Charging")
+             else "Maximum Self Consumption" if is_state('input_select.predbat_requested_mode', "Freeze Charging")
+             else "Command Discharging (PV First)" if is_state('input_select.predbat_requested_mode', "Discharging")
+             else "Maximum Self Consumption" }}
     - choose:
         # Freeze Charging
         # Docs:
@@ -1597,6 +1893,18 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  Solar power to meet house load, the excess house load is met from grid import, but if there is excess Solar
         #  power above the house load, the excess solar will be used to charge the battery
         # In Sigenergy, this is effectively "self consumption" mode with discharging prohibited
+        #
+        # discharge_cut_off_state_of_charge is pinned once here, to current SoC minus a small
+        # margin, not a hardcoded value and not continuously re-pinned. Sigenergy has confirmed a
+        # firmware bug: if this is set above current SoC, the inverter actively imports from grid
+        # to reach it - even with grid_import_limitation at 0 below - so the target must never sit
+        # above SoC. Setting it once, fixed, is what actually implements "frozen": any real deficit
+        # against that fixed point (house load, or even the inverter's own standby losses) gets
+        # corrected by grid import back up to the target, rather than the target chasing SoC
+        # downward and never enforcing anything. The small margin exists only to stop ordinary
+        # sensor-reading noise around the target from triggering a real (if tiny) grid import to
+        # "correct" a fluctuation that was never a real deficit - see the note after this
+        # automation for the full reasoning.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
@@ -1610,8 +1918,8 @@ Add the following automations to `automations.yaml` (or configure via the UI):
             - action: number.set_value
               target:
                 entity_id: number.sigen_plant_ess_discharge_cut_off_state_of_charge
-              data:
-                value: 100
+              data_template:
+                value: "{{ [(states('sensor.sigen_plant_battery_state_of_charge') | float(100)) - 0.25, 0] | max }}"
             - action: number.set_value
               target:
                 entity_id: number.sigen_plant_grid_import_limitation
@@ -1624,6 +1932,14 @@ Add the following automations to `automations.yaml` (or configure via the UI):
         #  excess solar generated, the current SoC level will be held and the excess solar will be exported. If there is
         #  a shortfall of generated solar power to meet the house load, the battery will discharge to meet the extra load.
         # In Sigenergy, this is effectively "self consumption" mode with charging prohibited
+        #
+        # charge_cut_off_state_of_charge is left as a simple hardcoded 0 here, unlike the
+        # discharge cut-off above. A mirrored bug (SoC above charge_cut_off forcing extra
+        # discharge/export) was considered - 0 is always below current SoC by the same
+        # structural shape as the confirmed discharge-side bug - but it was never
+        # vendor-confirmed, and 0 has been in real use across the wider community template
+        # for months without anyone reporting the kind of dramatic, easily-noticed symptom
+        # a real mirrored bug would produce. Kept simple rather than adding unproven complexity.
         - conditions:
             - condition: state
               entity_id: input_select.predbat_requested_mode
@@ -1671,20 +1987,20 @@ Add the following automations to `automations.yaml` (or configure via the UI):
               data:
                 value: 100
 
-  - id: automation_sigen_ess_max_charging_limit_input_number_action
-    alias: Predbat max charging limit action
-    description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
-    triggers:
-    - trigger: state
-      entity_id: input_number.charge_rate
-    actions:
-    - action: number.set_value
-      target:
-        entity_id: number.sigen_plant_ess_max_charging_limit
-      data:
-        value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
-          states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
-    mode: single
+- id: automation_sigen_ess_max_charging_limit_input_number_action
+  alias: Predbat max charging limit action
+  description: Mapper from input_number.charge_rate to number sigen_plant_ess_max_charging_limit
+  triggers:
+  - trigger: state
+    entity_id: input_number.charge_rate
+  actions:
+  - action: number.set_value
+    target:
+      entity_id: number.sigen_plant_ess_max_charging_limit
+    data:
+      value: '{{ [(states(''input_number.charge_rate'') | float / 1000) | round(2),
+        states(''sensor.sigen_inverter_ess_rated_charging_power'') | float] | min}}'
+  mode: single
 
 - id: automation_sigen_ess_max_discharging_limit_input_number_action
   alias: Predbat max discharging limit action
@@ -1711,6 +2027,14 @@ so you may need to adapt the above automations and `apps.yaml` (or rename your e
 
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first integration to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
+
+*Important:* Sigenergy have confirmed this is a known firmware bug on their side (not a Predbat or integration issue): even with **grid_import_limitation** set to 0kW, the inverter will still import from the grid to charge the battery if the current SoC is below **discharge_cut_off_state_of_charge**. In practice this has been observed importing several kW, not just a trickle, when the gap between SoC and the cut-off is large - continuing unattended until the target is reached. **grid_import_limitation** is therefore not a reliable backstop against this: the fix is keeping **discharge_cut_off_state_of_charge** pinned so it's never above current SoC, as the automation above does.
+
+The pin is set once, when Freeze Charging starts, rather than continuously updated as SoC changes - and this matters, not just as a simplification. "Frozen" means holding a fixed point; if the target itself kept moving to track live SoC, any downward drift (from real losses or otherwise) would just relocate the target to wherever the battery ended up, with nothing ever correcting it back. A fixed target is what makes the correction mechanism (the same import behaviour that caused the original bug) actually useful: it holds the line against any real deficit, including the inverter's own standby losses, not just customer load. The small margin (0.25 percentage points) below the pinned value exists to cover possible imprecision in that one reading - not ongoing noise tolerance, since the pin is fixed rather than re-sampled, so only the single initial reading matters. It still matters because the underlying mechanism only ever corrects one way: a reading that's a hair low at the moment of pinning would cost a real, if tiny, import to "correct" a gap that was never really there, while a reading that's a hair high costs nothing - so even a one-off imprecise read isn't self-cancelling without some margin.
+
+The margin is clamped at 0 (`[value, 0] | max`) rather than allowed to go negative. This isn't just tidiness: `discharge_cut_off_state_of_charge` is an unsigned 16-bit Modbus register on the wire, and the integration's own write encoding has no guard against a negative value - it would silently wrap around into a huge, nonsensical raw value rather than being rejected. At very low SoC (below the margin) an unclamped template could produce exactly that.
+
+See [batpred#4375](https://github.com/springfall2008/batpred/issues/4375) and the wider [Sigenergy setup discussion](https://github.com/springfall2008/batpred/issues/2077) for the full investigation, including a more advanced (currently experimental, untested) variant that ratchets the target up in response to confirmed solar surplus over each period rather than using a fixed one-off value.
 
 ## Sigenergy Cloud
 
@@ -2305,6 +2629,71 @@ To run PredBat with Solis hybrid inverters with firmware level FB00 or later (yo
 
 7. Ensure the correct entity IDs are used for your specific inverter setup. These entries should correspond to the buttons exposed by your Home Assistant Solis integration.
 
+## Sunsynk Cloud
+
+**Experimental**
+
+Predbat has a built-in Sunsynk Cloud integration for Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect cloud API, providing monitoring and, once confirmed on your own hardware, battery control - no local Modbus/RS485 Home Assistant integration is required. This is a different integration from the [local Modbus SunSynk integration](#sunsynk) described below - use Sunsynk Cloud if you don't have, or don't want to run, local dongle/Modbus access.
+
+Nobody on the Predbat project has a Sunsynk account, so this integration's wire format is inferred from two third-party open-source clients rather than documented. A standalone diagnostics CLI is included specifically so you can verify it against your own inverter before trusting Predbat with control.
+
+### Sunsynk Connect account and region
+
+You need a Sunsynk Connect account e-mail and password - the same login used by the Sunsynk phone app. Add them to `apps.yaml`:
+
+```yaml
+  sunsynk_username: 'you@example.com'
+  sunsynk_password: 'your-password'
+  sunsynk_region: 'sunsynk'
+  sunsynk_automatic: true
+  sunsynk_control_enable: true
+```
+
+Set `sunsynk_region` to `'inteless'` instead of `'sunsynk'` if your account logs in via the `pv.inteless.com` host rather than `api.sunsynk.net` - check with your installer, or try the [diagnostics CLI](#verifying-with-the-sunsynk-diagnostics-cli) below with each region if you are not sure.
+
+### Sunsynk Cloud on Predbat.com (SaaS)
+
+None of the above credentials are needed - connect your Sunsynk Connect account through Predbat.com and the token is injected and refreshed by the platform (`sunsynk_auth_method: 'oauth'`).
+
+### Verifying with the Sunsynk diagnostics CLI
+
+Before turning on control, run the standalone CLI from the `apps/predbat` directory to confirm the account logs in and that the readings match the Sunsynk app:
+
+```bash
+cd apps/predbat
+python3 sunsynk.py --username you@example.com --password your-password
+```
+
+If login fails, retry with the pre-2025 plaintext login:
+
+```bash
+python3 sunsynk.py --username you@example.com --password your-password --auth-method password_legacy
+```
+
+Useful flags:
+
+- `--region sunsynk|inteless` - select the API region (default `sunsynk`)
+- `--serial <sn>` - restrict to one inverter instead of every inverter on the account
+- `--dump-settings` - print the full settings object, useful for confirming the current work mode and slot layout against the app
+- `--write-test` - build a harmless self-use-at-floor schedule, show it, and offer to send it after confirmation - use this to verify a write actually reaches the inverter, and how long the dongle takes to apply it
+
+Check the dumped `soc`, `battery_power`, `grid_power`, `load_power` and `pv_power` readings against the Sunsynk app, and in particular note whether `battery_power` is positive while charging or while discharging - this sign convention has not been confirmed on real hardware and getting it wrong would invert Predbat's whole model of the battery. Please report your findings via a GitHub issue so the assumption can be confirmed or corrected.
+
+### Sunsynk Cloud automatic configuration
+
+Set `sunsynk_automatic: true` to have Predbat discover every inverter on your Sunsynk Connect account and wire up all the sensor and schedule control entities automatically - no manual `apps.yaml` sensor configuration is required.
+
+### Sunsynk Cloud inverter control
+
+`sunsynk_control_enable` defaults to `true`, so Predbat drives the inverter as soon as the component is configured. Set it to `false` for monitoring only.
+
+Because the write format is inferred from third-party clients rather than documented by Sunsynk, it is worth running the diagnostics CLI against your own inverter before relying on control, and switching it off if anything looks wrong. Two behaviours to be aware of either way:
+
+- There is a single whole-object settings endpoint. Predbat reads the settings immediately before every write and writes the whole object back, so using the Sunsynk phone app at the same time can overwrite Predbat's change, and vice versa - the last writer wins
+- A write reaching the cloud does not mean the inverter has applied it. The dongle picks up new settings on its next poll, typically one to five minutes later
+
+See the components documentation for details: [Components - Sunsynk Cloud API](components.md#sunsynk-cloud-api-sunsynk)
+
 ## Sunsynk
 
 - Copy the Sunsynk template over the top of your `apps.yaml`, and edit for your system.
@@ -2483,6 +2872,23 @@ template:
 
 ## Tesla Powerwall
 
+### Teslemetry component (beta)
+
+!!! warning "Beta"
+    Predbat's built-in Teslemetry component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual configuration](#manual-configuration-via-home-assistant-integrations) below.
+
+The component needs only your token in `apps.yaml` and no Home Assistant Tesla integration (`site_id` is optional - omit it to use the first site on your account):
+
+```yaml
+  teslemetry_key: 'your-teslemetry-token'
+  teslemetry_site_id: 'your-energy-site-id'  # optional: omit to use the first site on your account
+  teslemetry_automatic: True
+```
+
+Copy the template [teslemetry.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/teslemetry.yaml) over the top of your `apps.yaml` and edit for your system. See [Tesla Powerwall Teslemetry API](components.md#tesla-powerwall-teslemetry-api-teslemetry) for details.
+
+### Manual configuration via Home Assistant integrations
+
 Integration of the Tesla Powerwall follows the approach outlined in [Ed Hull's blog](https://edhull.co.uk/blog/2025-08-24/predbat-docker-tesla).
 Ed's setup only covered Predbat controlling charging the Powerwall, the below configuration (thanks @Slee2112) covers both charging and discharging (exporting).
 
@@ -2559,7 +2965,7 @@ input_text:
 
 You then need to obtain an access token for the API. There are two ways - either use the existing Fleet Integration if you have that setup, or manually obtain them.
 
-### Option 1: Tesla Fleet Integration (recommended)
+### Option 1: Tesla Fleet Integration
 
 The Tesla Fleet integration already handles token exchanges for you. You can simply use this token for the REST API calls.
 
@@ -2995,6 +3401,10 @@ rest_command:
 
 This is at an early stage of development, see GitHub discussion [#789](https://github.com/springfall2008/batpred/discussions/798) and [#2846](https://github.com/springfall2008/batpred/issues/2846)
 
+The Victron inverter type is configured with `has_charge_enable_time: false` and `has_discharge_enable_time: false` (only `has_target_soc: true`) - Predbat has no way to enable or disable a charge/discharge window on a Victron/Cerbo system, in any Predbat mode. All it can do is write a target SoC percentage.
+
+This means Predbat can only actually cause charging or discharging if a charge/discharge schedule is already permanently enabled on the Victron/Cerbo side (e.g. covering all day, or whatever hours you want available) - Predbat then just moves the target SoC up or down within that always-open window: raising the target causes charging, lowering it causes discharging, and leaving it at the current SoC holds. There's currently no way to have Predbat also switch a schedule on and off for you.
+
 ## I want to add an unsupported inverter to Predbat
 
 - First copy one of the template configurations that is close to your system and try to configure it to match the sensors you have
@@ -3122,6 +3532,20 @@ You can also call more than one service e.g:
       entity_id: switch.tsunami_charger
 ```
 
+If you need to address the entity using Home Assistant's `target` syntax (e.g. copying an example from an
+automation) rather than a flat `entity_id`, that's supported too:
+
+```yaml
+  charge_start_service:
+    - service: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.predbat_charge_start
+```
+
+`target` is the only key handled specially: it is pulled out and sent to Home Assistant as its own top-level
+field. Every other key (`entity_id`, `device_id`, `option`, etc.) continues to be sent as part of the service
+data, as before.
+
 Note: By default the service will only be called once until things change, e.g. **charge_start_service** will be called once and then won't be called again until **charge_stop_service** stops the charge.
 If however, you want the service to be called on each Predbat run then you should set **repeat** to True for the given service e.g:
 
@@ -3243,6 +3667,22 @@ When True, the inverter supports charge freeze modes.
 ### support_discharge_freeze
 
 When True, the inverter supports discharge freeze modes.
+
+### support_feedin_first
+
+When True, the inverter's Freeze Export is a genuine "Feed-in First" mode - it prioritises house load,
+then grid export, and only puts what is left into the battery. Predbat then models solar above your
+export limit as charging the battery rather than being clipped and lost.
+
+Optional and defaults to False, because most inverters implement Freeze Export by simply disabling
+charging, so that surplus really is clipped - modelling recapture on those would credit the battery
+with energy it never receives. Only set it True for hardware where Freeze Export selects an
+export-first work mode: FoxESS and FoxCloud, and the SolisCloud ("Feed-in priority"), SolaxCloud
+("Feed-in"), SunsynkCloud and DeyeCloud ("Selling First") integrations.
+
+Recapture is additionally gated on the `apps.yaml` setting
+[inverter_can_charge_during_export](apps-yaml.md#inverter_can_charge_during_export), so setting that
+to `false` disables it regardless.
 
 ### has_ge_inverter_mode
 

@@ -32,6 +32,10 @@ from utils import str2time
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
 
+# Maximum days of history fetched per request. Long windows are split so only one chunk's
+# response body, decoded string and parsed objects are resident at a time.
+HISTORY_CHUNK_DAYS = 3
+
 
 class RunThread(threading.Thread):
     def __init__(self, coro):
@@ -494,7 +498,7 @@ class HAInterface(ComponentBase):
 
         # Create event and result holder for this request
         event = threading.Event()
-        result_holder = {"response": None, "success": None, "error": None}
+        result_holder = {"response": None, "success": None, "error": None, "ha_error": None}
 
         # Add to command queue
         with self.ws_pending_lock:
@@ -511,21 +515,27 @@ class HAInterface(ComponentBase):
             self.log("Warn: Service call {}/{} failed: {}".format(domain, service, result_holder["error"]))
             return None
 
-        # Check for timeout (neither success nor error was set)
+        # Check for timeout (neither success nor error was set). This is indistinguishable here from
+        # a call that actually succeeded but whose response arrived (or was processed) just after the
+        # 2 minute deadline - callers that treat a falsy return as "try a different service name"
+        # (e.g. octopus.py's join fallback) can in principle be tricked into a harmless-but-redundant
+        # duplicate call by this specific edge case. Not fully resolved - the timeout window is long
+        # enough that this should be rare in practice, and the alternative (a real explicit failure)
+        # is by far the more common falsy case.
         if result_holder.get("success") is None and not result_holder.get("error"):
             self.log("Warn: Service call {}/{} failed or timed out: result {}".format(domain, service, result_holder))
             return None
 
         success = result_holder.get("success", False)
         if not success:
-            self.log("Warn: Service call {}/{} data {} failed".format(domain, service, service_data))
+            self.log("Warn: Service call {}/{} data {} failed: {}".format(domain, service, service_data, result_holder.get("ha_error")))
             return None
 
         # Return response data if requested
         if return_response:
             return result_holder.get("response")
 
-        return None
+        return True
 
     async def socketLoop(self):
         """
@@ -621,9 +631,19 @@ class HAInterface(ComponentBase):
                                                     if result_id in self.ws_pending_requests:
                                                         request_info = self.ws_pending_requests.pop(result_id)
                                                         result_holder = request_info["result_holder"]
-                                                        result_holder["success"] = data.get("success", False)
+                                                        # #3460: .get()'s default only covers a *missing* key - some
+                                                        # services (observed for notify.notify) return a "result"
+                                                        # message with "success" explicitly present but null, which
+                                                        # .get("success", False) passes through as None rather than
+                                                        # False. That left success/error both None, indistinguishable
+                                                        # from a genuine 2-minute timeout to the caller and producing
+                                                        # a misleading "failed or timed out" warning immediately.
+                                                        result_holder["success"] = bool(data.get("success"))
                                                         result_holder["response"] = data.get("result", {}).get("response", None)
                                                         result_holder["error"] = None
+                                                        # HA's own reported reason when success is False (e.g. {"code": "not_found", "message": "..."})
+                                                        # - distinct from "error" above, which is reserved for a local send/transport failure.
+                                                        result_holder["ha_error"] = data.get("error")
                                                         request_info["event"].set()
 
                                             success = data.get("success", False)
@@ -675,7 +695,22 @@ class HAInterface(ComponentBase):
                                     if domain == "fire_event":
                                         await websocket.send_json({"id": sid, "type": domain, "event_type": service, "event_data": {"service": service_data["event_service"], "domain": service_data["event_domain"]}})
                                     else:
-                                        await websocket.send_json({"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": service_data, "return_response": return_response})
+                                        # HA's call_service command expects 'target' (entity_id/device_id/area_id
+                                        # addressing) as a sibling of service_data, not nested inside it - a
+                                        # nested target is rejected with invalid_format: extra keys not allowed
+                                        # @ data['target'] (#4662). Callers commonly configure services with a
+                                        # target: entity_id: ... block (the standard HA action syntax), which
+                                        # lands as a "target" key inside service_data, so it must be pulled out
+                                        # here. Pop from a copy, not service_data itself - the original dict is
+                                        # the same object async_call_service_websocket_command() logs on failure
+                                        # ("Warn: Service call ... data ... failed"), so mutating it in place
+                                        # would silently drop target from that diagnostic.
+                                        outgoing_data = dict(service_data) if isinstance(service_data, dict) else service_data
+                                        target = outgoing_data.pop("target", None) if isinstance(outgoing_data, dict) else None
+                                        call_frame = {"id": sid, "type": "call_service", "domain": domain, "service": service, "service_data": outgoing_data, "return_response": return_response}
+                                        if target:
+                                            call_frame["target"] = target
+                                        await websocket.send_json(call_frame)
 
                                     # Track pending request (only if send succeeded)
                                     with self.ws_pending_lock:
@@ -869,12 +904,36 @@ class HAInterface(ComponentBase):
         else:
             self.log("Warn: Failed to update state data from HA")
 
-    def get_history(self, sensor, now, days=30, from_time=None, force_db=False):
+    def get_history_window(self, sensor, start, end):
+        """
+        Fetch a single window of history for a sensor.
+
+        :param sensor: The sensor to get the history for.
+        :param start: Start of the window.
+        :param end: End of the window.
+        :return: The raw API response, or None.
+        """
+        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
+        if isinstance(res, list) and len(res) > 0:
+            return res
+        return None
+
+    def get_history(self, sensor, now, days=30, from_time=None, force_db=False, chunk_days=HISTORY_CHUNK_DAYS):
         """
         Get the history for a sensor from Home Assistant.
 
+        Long windows are fetched in chunks so only one chunk's response body, decoded string
+        and parsed objects are resident at a time rather than the whole window's. A 21 day
+        window of a power sensor is tens of megabytes of JSON, and holding all three
+        representations of it at once dominated the peak memory of a plan cycle.
+
         :param sensor: The sensor to get the history for.
-        :return: The history for the sensor.
+        :param now: Current time, the end of the window.
+        :param days: How many days of history to fetch.
+        :param from_time: Explicit window start, overriding days.
+        :param force_db: Read from the database rather than Home Assistant.
+        :param chunk_days: Maximum days per request; 0 or None fetches the window in one request.
+        :return: The history for the sensor, oldest first, or None.
         """
         if not sensor:
             return None
@@ -889,11 +948,28 @@ class HAInterface(ComponentBase):
         else:
             start = now - timedelta(days=days)
         end = now
-        res = self.api_call("/api/history/period/{}".format(start.strftime(TIME_FORMAT_HA)), {"filter_entity_id": sensor, "end_time": end.strftime(TIME_FORMAT_HA)})
-        if isinstance(res, list) and len(res) > 0:
-            return res
-        else:
-            return None
+
+        if not chunk_days or (end - start) <= timedelta(days=chunk_days):
+            return self.get_history_window(sensor, start, end)
+
+        history = []
+        cursor = start
+        while cursor < end:
+            window_end = min(cursor + timedelta(days=chunk_days), end)
+            res = self.get_history_window(sensor, cursor, window_end)
+            if res:
+                for item in res[0]:
+                    # Home Assistant opens every window with the state in effect at start_time.
+                    # For chunks after the first that instant is already covered by the previous
+                    # chunk, and the synthesised record can land inside a gap in the recording
+                    # where it would add a data point a single request never returns, changing
+                    # how minute_data interpolates across that gap.
+                    if cursor > start and item.get("last_updated") and str2time(item["last_updated"]) <= cursor:
+                        continue
+                    history.append(item)
+            cursor = window_end
+
+        return [history] if history else None
 
     async def set_state_external(self, entity_id, state, attributes={}):
         """

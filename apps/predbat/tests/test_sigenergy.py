@@ -22,7 +22,9 @@ from sigenergy import (
     SIGENERGY_CODE_IN_OTHER_VPP,
     SIGENERGY_CODE_SYSTEM_PENDING_REVIEW,
     SIGENERGY_MODE_MSC,
+    SIGENERGY_MODE_NBI,
     SIGENERGY_MODE_VPP,
+    SIGENERGY_VPP_RECLAIM_INTERVAL,
     SIGENERGY_OPTIONS_TIME,
     _safe_float,
     _safe_int,
@@ -171,8 +173,13 @@ class MockSigenergyAPI(SigenergyAPI):
         """Store state."""
         self.dashboard_items[entity_id] = {"state": state, "attributes": attributes or {}}
 
-    def get_arg(self, key, default=None):
-        """Return stored arg or default."""
+    def get_arg(self, key, default=None, **kwargs):
+        """Return stored arg or default.
+
+        Accepts and ignores the wider ComponentBase.get_arg keyword arguments (indirect,
+        combine, attribute, index, domain, can_override, required_unit) so helpers that
+        pass them — such as fetch_axle_active — work against this mock.
+        """
         return self.args.get(key, default)
 
     def set_arg(self, key, value):
@@ -2244,7 +2251,7 @@ def test_sigenergy_update_control_time_validation(my_predbat):
 
 
 def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
-    """offboard=True → return False immediately regardless of VPP state (no mode switch)."""
+    """offboard=True + VPP active waits for observed MSC before offboarding."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
@@ -2257,10 +2264,20 @@ def test_sigenergy_offboard_toggle_in_vpp(my_predbat):
         return True
 
     api.set_operating_mode = mock_set_mode
+    api.offboard_systems = AsyncMock(return_value=[])
 
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should return False"
-    assert not modes_set, "Should not call set_operating_mode — offboard API already changes mode"
+    assert modes_set == [SIGENERGY_MODE_MSC], "Should leave VPP explicitly rather than assume offboard does it"
+    api.offboard_systems.assert_not_awaited()
+
+    # MQTT publish success is not mode confirmation. Only observed telemetry allows the
+    # REST offboard to follow, preventing a race between the two transports.
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert result is False, "offboard=True should still return False"
+    assert modes_set == [SIGENERGY_MODE_MSC], "A confirmed VPP exit should not be repeated"
+    api.offboard_systems.assert_awaited_once_with(sid)
 
     return failed
 
@@ -2279,30 +2296,209 @@ def test_sigenergy_offboard_toggle_not_in_vpp(my_predbat):
         return True
 
     api.set_operating_mode = mock_set_mode
+    api.offboard_systems = AsyncMock(return_value=[])
 
     result = run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
     assert result is False, "offboard=True should return False"
     assert not modes_set, "No mode switch needed"
+    api.offboard_systems.assert_awaited_once_with(sid)
 
     return failed
 
 
-def test_sigenergy_offboard_toggle_switch_event(my_predbat):
-    """Turning on the offboard switch triggers offboard_systems (no mode switch)."""
+def test_sigenergy_offboard_overrides_axle_control(my_predbat):
+    """An explicit offboard exits Axle's NBI mode before removing authorisation."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_NBI
+    api.args["axle_control"] = True
+    api.args["axle_session"] = "binary_sensor.predbat_axle_event"
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": "on"}
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.offboard_systems = AsyncMock(return_value=[])
+
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+
+    assert api.set_operating_mode.await_count == 2, "MSC is retried while telemetry still reports NBI"
+    api.set_operating_mode.assert_awaited_with(sid, SIGENERGY_MODE_MSC)
+    api.offboard_systems.assert_not_awaited()
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    api.offboard_systems.assert_awaited_once_with(sid)
+
+    return failed
+
+
+def test_sigenergy_offboard_defers_when_the_mode_switch_fails(my_predbat):
+    """A failed VPP exit must NOT offboard — that is the lockout this guards against."""
     failed = False
     sid = "SIG001"
     api = _make_api_with_system(sid)
     api.controls[sid] = {"offboard": False}
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
 
     offboarded = []
-    modes_set = []
+    mode_attempts = []
+
+    async def mock_set_mode(system_id, mode_int):
+        mode_attempts.append(mode_int)
+        return False  # broker down / token expired
 
     async def mock_offboard(system_ids):
         offboarded.append(system_ids)
         return True
 
+    async def mock_publish_controls(system_id=None):
+        pass
+
+    api.set_operating_mode = mock_set_mode
+    api.offboard_systems = mock_offboard
+    api.publish_controls = mock_publish_controls
+
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+    assert not offboarded, "Must not revoke authorisation while the system is still in VPP"
+
+    # Retried by the periodic check. A successful MQTT publish still is not enough.
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert len(mode_attempts) == 2, "A failed VPP exit must be retried, not latched"
+    assert not offboarded, "Still no offboard while the exit keeps failing"
+
+    api.set_operating_mode = _make_ok_set_mode(mode_attempts)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert not offboarded, "MQTT acceptance alone must not allow offboarding"
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert offboarded, "Offboard proceeds once telemetry confirms the system is out of VPP"
+
+    return failed
+
+
+def _make_ok_set_mode(recorder):
+    """Return a set_operating_mode stub that records and succeeds."""
+
+    async def _ok(system_id, mode_int):
+        recorder.append(mode_int)
+        return True
+
+    return _ok
+
+
+def test_sigenergy_offboard_retries_when_the_api_call_fails(my_predbat):
+    """A failed offboard is retried rather than reported as done."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_MSC  # already out of VPP
+
+    attempts = []
+
+    async def mock_offboard(system_ids):
+        attempts.append(system_ids)
+        return None if len(attempts) == 1 else []
+
+    api.offboard_systems = mock_offboard
+
+    done = run_async(api._offboard_system_if_needed(sid))
+    assert done is False, "A failed offboard must not be latched as complete"
+
+    done = run_async(api._offboard_system_if_needed(sid))
+    assert done is True, "The retry succeeds"
+    assert len(attempts) == 2, "Offboard retried exactly once after the failure"
+
+    run_async(api._offboard_system_if_needed(sid))
+    assert len(attempts) == 2, "A completed offboard is not repeated"
+
+    return failed
+
+
+def test_sigenergy_offboard_retries_per_item_failure(my_predbat):
+    """A per-system failure payload must not be latched as a successful offboard."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    api.offboard_systems = AsyncMock(side_effect=[[{"systemId": sid, "result": False, "codeList": [1200]}], []])
+
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    assert sid not in api._offboard_done, "Per-item failure must leave the completion latch clear"
+    assert run_async(api._offboard_system_if_needed(sid)) is True
+    assert api.offboard_systems.await_count == 2, "Per-item failure is retried"
+
+    return failed
+
+
+def test_sigenergy_offboard_unknown_mode_defers(my_predbat):
+    """An absent or unrecognised mode is not proof that the owner's app has control."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.offboard_systems = AsyncMock(return_value=[])
+
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    api.offboard_systems.assert_not_awaited()
+    assert sid not in api._offboard_vpp_exit_done, "Unknown mode must not latch the VPP exit"
+
+    api.current_mode[sid] = 42
+    assert run_async(api._offboard_system_if_needed(sid)) is False
+    api.offboard_systems.assert_not_awaited()
+    assert sid not in api._offboard_vpp_exit_done, "Unrecognised mode must not latch the VPP exit"
+
+    return failed
+
+
+def test_sigenergy_offboard_switch_survives_restart(my_predbat):
+    """A restart must not re-onboard a system the owner deliberately left.
+
+    The offboard switch is a control entity, so its state is restored on startup like
+    every other one — no separate durable latch is needed, and re-onboarding would cost
+    the owner a fresh approval email.
+    """
+    failed = False
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    api.system_id_filter = {sid}
+    api.systems = {}
+    slug = api._system_slug(sid)
+    api.dashboard_items["switch.predbat_sigenergy_{}_offboard".format(slug)] = {"state": "on"}
+
+    onboarded = []
+
+    async def mock_onboard(system_ids):
+        onboarded.append(system_ids)
+        return True
+
+    api.onboard_systems = mock_onboard
+
+    run_async(api.run(seconds=0, first=True))
+    assert not onboarded, "A restart must not re-onboard a system whose offboard switch is on"
+
+    return failed
+
+
+def test_sigenergy_offboard_toggle_switch_event(my_predbat):
+    """Turning on offboard leaves VPP, then waits for telemetry before offboarding."""
+    failed = False
+    sid = "SIG001"
+    api = _make_api_with_system(sid)
+    api.controls[sid] = {"offboard": False}
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+
+    offboarded = []
+    modes_set = []
+    order = []
+
+    async def mock_offboard(system_ids):
+        offboarded.append(system_ids)
+        order.append("offboard")
+        return True
+
     async def mock_set_mode(system_id, mode_int):
         modes_set.append((system_id, mode_int))
+        order.append("mode")
         return True
 
     async def mock_publish_controls(system_id=None):
@@ -2315,8 +2511,22 @@ def test_sigenergy_offboard_toggle_switch_event(my_predbat):
     run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
 
     assert api.controls[sid]["offboard"] is True, "offboard control should be True after turn_on"
-    assert offboarded, "offboard_systems should be called"
-    assert not modes_set, "set_operating_mode should NOT be called — offboard API changes the mode"
+    assert not offboarded, "offboard_systems must wait for telemetry confirmation"
+    assert modes_set == [(sid, SIGENERGY_MODE_MSC)], "Should hand control back to the owner's app explicitly"
+    assert order == ["mode"], "Only the mode request is sent while telemetry still says VPP"
+
+    api.current_mode[sid] = SIGENERGY_MODE_MSC
+    run_async(api._manage_vpp_registration(sid, is_readonly=False, is_offboard=True))
+    assert offboarded, "offboard_systems follows once MSC is observed"
+    assert order == ["mode", "offboard"], "Must confirm the VPP exit before offboarding"
+
+    # Toggling back off clears the latch so a later offboard exits VPP again.
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_off", None, "offboard", sid))
+    assert api.controls[sid]["offboard"] is False, "offboard control should be False after turn_off"
+    run_async(api._update_control("switch.predbat_sigenergy_sig001_offboard", "turn_on", None, "offboard", sid))
+    assert modes_set == [(sid, SIGENERGY_MODE_MSC), (sid, SIGENERGY_MODE_MSC)], "Re-onboard then offboard should exit VPP again"
+    assert order == ["mode", "offboard", "mode"], "Second offboard also waits for live confirmation"
 
     return failed
 
@@ -2435,11 +2645,19 @@ def test_sigenergy_run_derives_onboard_status(my_predbat):
     assert api_pending.onboard_status[sid] == "pending_approval", "pending_approval derived from MSC mode"
     assert api_pending.dashboard_items[sensor_key]["state"] == "pending_approval"
 
-    # Offboard toggle on → offboarded regardless of mode
+    # Offboard COMPLETED → offboarded regardless of mode.
     api_offboard = _make_api(SIGENERGY_MODE_VPP, offboard_on=True)
+    api_offboard._offboard_done.add(sid)
     run_async(api_offboard.run(seconds=300, first=False))
-    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded when toggle is on"
+    assert api_offboard.onboard_status[sid] == "offboarded", "offboarded once the offboard has landed"
     assert api_offboard.dashboard_items[sensor_key]["state"] == "offboarded"
+
+    # Toggle on but the offboard has NOT landed yet (mode switch or API call still
+    # failing): the status must not claim offboarded, or support reads a lie while
+    # the system is still live on the platform.
+    api_inflight = _make_api(SIGENERGY_MODE_MSC, offboard_on=True)
+    run_async(api_inflight.run(seconds=300, first=False))
+    assert api_inflight.onboard_status[sid] == "active", "pending offboard stays active rather than falsely requesting onboarding approval"
 
     return failed
 
@@ -2462,6 +2680,224 @@ def test_sigenergy_run_pending_publishes_before_early_exit(my_predbat):
     assert sensor_key in api.dashboard_items, "sensor published before early return"
     # Status was set to not_onboarded by the setdefault call in run() before onboard_systems
     assert api.dashboard_items[sensor_key]["state"] in ("not_onboarded", "pending_approval"), "sensor has a known status value"
+
+    return failed
+
+
+def _make_contended_api(sid, mode, axle_control=False, axle_event="off"):
+    """Build a MockSigenergyAPI whose system sits in the given operating mode.
+
+    Args:
+        sid: System ID to register.
+        mode: Operating mode integer to report as the system's current mode.
+        axle_control: Value of the axle_control option.
+        axle_event: State of the Axle event binary sensor ("on" or "off").
+
+    Returns:
+        A MockSigenergyAPI with run()'s async helpers stubbed out.
+    """
+    api = MockSigenergyAPI()
+    api.systems = {sid: {"deviceList": []}}
+    api.current_mode = {sid: mode}
+    api.system_id_filter = {sid}
+    api.args["axle_control"] = axle_control
+    api.args["axle_session"] = "binary_sensor.predbat_axle_event"
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": axle_event}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api.set_operating_mode = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock()
+    api.fetch_history_totals = AsyncMock()
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+    return api
+
+
+def test_sigenergy_reclaims_vpp_from_third_party_controller(my_predbat):
+    """Without axle_control, a system taken into NBI is reclaimed into VPP, and says so."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert api.last_contended_by[sid] == "Northbound Integration", "records which controller displaced Predbat"
+
+    reclaim_logs = [m for m in api.log_messages if "reclaiming VPP mode" in m]
+    assert len(reclaim_logs) == 1, "reclaim is logged once, got {}".format(api.log_messages)
+    assert "Northbound Integration" in reclaim_logs[0], "log names the displacing controller"
+    assert "onboard" not in reclaim_logs[0].lower(), "reclaim log must not blame onboarding"
+
+    return failed
+
+
+def test_sigenergy_contention_does_not_report_pending_approval(my_predbat):
+    """Contention must not surface as pending_approval — that shows a false 'approve in app' banner."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=300, first=False))
+    assert api.onboard_status[sid] == "active", "contended system stays active, not pending_approval"
+
+    api_msc = _make_contended_api(sid, SIGENERGY_MODE_MSC)
+    api_msc._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api_msc.run(seconds=300, first=False))
+    assert api_msc.onboard_status[sid] == "pending_approval", "MSC still means pending approval"
+
+    return failed
+
+
+def test_sigenergy_contention_marker_published_before_recovery(my_predbat):
+    """A contention episode shorter than a poll interval must still reach the sensor.
+
+    Regression test: the marker used to be cleared on recovery while the sensor only
+    published every 5 minutes, so brief contention was never visible to support.
+    """
+    failed = False
+    sid = "SIG001"
+    sensor_key = "sensor.predbat_sigenergy_sig001_onboard_status"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    # Minute tick during contention — the real _manage_vpp_registration records the marker.
+    run_async(api.run(seconds=60, first=False))
+    assert api.dashboard_items[sensor_key]["attributes"]["last_contended_by"] == "Northbound Integration", "contention published on the minute tick"
+
+    # Mode recovers. The marker must survive so the episode remains visible.
+    api.current_mode[sid] = SIGENERGY_MODE_VPP
+    run_async(api.run(seconds=120, first=False))
+    assert api.dashboard_items[sensor_key]["attributes"]["in_vpp"] is True, "in_vpp reports the live state"
+    assert api.dashboard_items[sensor_key]["attributes"]["last_contended_by"] == "Northbound Integration", "marker is not cleared on recovery"
+
+    return failed
+
+
+def test_sigenergy_reclaim_runs_on_the_minute(my_predbat):
+    """The reclaim check runs every minute, so a displaced system is not left for a full poll."""
+    failed = False
+    sid = "SIG001"
+
+    assert SIGENERGY_VPP_RECLAIM_INTERVAL == 60, "reclaim cadence is one minute"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api._manage_vpp_registration.assert_awaited_once()
+
+    return failed
+
+
+def test_sigenergy_controls_skipped_message_distinguishes_contention(my_predbat):
+    """Skipping controls because another controller holds the system must not blame onboarding."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI)
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+
+    skip_logs = [m for m in api.log_messages if "controls skipped" in m]
+    assert skip_logs, "controls-skipped message is logged"
+    assert any("held by another controller" in m for m in skip_logs), "message names contention, got {}".format(skip_logs)
+    assert not any("onboard is approved" in m for m in skip_logs), "must not tell the user to approve onboarding"
+    api.apply_controls.assert_not_awaited()
+
+    return failed
+
+
+def test_sigenergy_axle_control_off_reclaims_as_before(my_predbat):
+    """With axle_control unset, an active Axle event does not change behaviour."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=False, axle_event="on")
+    assert api._axle_has_control() is False, "axle_control off means Predbat keeps ownership"
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+
+    return failed
+
+
+def test_sigenergy_axle_event_leaves_mode_alone(my_predbat):
+    """With axle_control on, Predbat must not touch the mode in either direction."""
+    failed = False
+    sid = "SIG001"
+
+    # Axle has already taken the system into NBI — leave it there.
+    api_nbi = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    result = run_async(api_nbi._manage_vpp_registration(sid, is_readonly=False))
+    assert result is False, "controls do not proceed while Axle owns the inverter"
+    api_nbi.set_operating_mode.assert_not_awaited()
+    assert any("standing down" in m for m in api_nbi.log_messages), "stand-down is logged, got {}".format(api_nbi.log_messages)
+
+    # Event started but Axle has not switched yet — do NOT drop to MSC, which would hand
+    # control to the owner's app rather than to Axle.
+    api_vpp = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    run_async(api_vpp._manage_vpp_registration(sid, is_readonly=False))
+    api_vpp.set_operating_mode.assert_not_awaited()
+
+    return failed
+
+
+def test_sigenergy_axle_event_skips_controls(my_predbat):
+    """Predbat must not issue battery commands while Axle is dispatching."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="on")
+    api._manage_vpp_registration = AsyncMock(return_value=False)
+    run_async(api.run(seconds=60, first=False))
+    api.apply_controls.assert_not_awaited()
+
+    api_off = _make_contended_api(sid, SIGENERGY_MODE_VPP, axle_control=True, axle_event="off")
+    api_off._manage_vpp_registration = AsyncMock(return_value=True)
+    run_async(api_off.run(seconds=60, first=False))
+    api_off.apply_controls.assert_awaited_once_with(sid)
+
+    return failed
+
+
+def test_sigenergy_axle_event_end_resumes_control(my_predbat):
+    """When the event ends Predbat reclaims VPP and says it has resumed."""
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
+
+    # Event ends — the live sensor flips, no prediction cycle required.
+    api.dashboard_items["binary_sensor.predbat_axle_event"] = {"state": "off"}
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_awaited_once_with(sid, SIGENERGY_MODE_VPP)
+    assert any("resuming control" in m for m in api.log_messages), "resume is logged, got {}".format(api.log_messages)
+
+    return failed
+
+
+def test_sigenergy_axle_standoff_survives_restart(my_predbat):
+    """A restart mid-event must not reclaim VPP.
+
+    Regression test: reading the cached set_read_only_axle flag failed here, because
+    reset() leaves it False and the component starts before the first update_pred().
+    Evaluating axle_control and the event sensor live is what makes first=True safe.
+    """
+    failed = False
+    sid = "SIG001"
+
+    api = _make_contended_api(sid, SIGENERGY_MODE_NBI, axle_control=True, axle_event="on")
+    # Simulate the parent having the stale post-reset value the prediction loop has not
+    # yet refreshed — the component must not depend on it.
+    api.base = MagicMock()
+    api.base.set_read_only_axle = False
+
+    assert api._axle_has_control() is True, "live evaluation sees the event despite the stale flag"
+    run_async(api._manage_vpp_registration(sid, is_readonly=False))
+    api.set_operating_mode.assert_not_awaited()
 
     return failed
 
@@ -2538,10 +2974,26 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_skipped_when_not_vpp", test_sigenergy_apply_controls_skipped_when_not_vpp),
         ("offboard_toggle_in_vpp", test_sigenergy_offboard_toggle_in_vpp),
         ("offboard_toggle_not_in_vpp", test_sigenergy_offboard_toggle_not_in_vpp),
+        ("offboard_overrides_axle_control", test_sigenergy_offboard_overrides_axle_control),
         ("offboard_toggle_switch_event", test_sigenergy_offboard_toggle_switch_event),
+        ("offboard_defers_when_mode_switch_fails", test_sigenergy_offboard_defers_when_the_mode_switch_fails),
+        ("offboard_retries_when_api_call_fails", test_sigenergy_offboard_retries_when_the_api_call_fails),
+        ("offboard_retries_per_item_failure", test_sigenergy_offboard_retries_per_item_failure),
+        ("offboard_unknown_mode_defers", test_sigenergy_offboard_unknown_mode_defers),
+        ("offboard_switch_survives_restart", test_sigenergy_offboard_switch_survives_restart),
         ("publish_onboard_status_sensors", test_sigenergy_publish_onboard_status_sensors),
         ("run_derives_onboard_status", test_sigenergy_run_derives_onboard_status),
         ("run_pending_publishes_before_early_exit", test_sigenergy_run_pending_publishes_before_early_exit),
+        ("reclaims_vpp_from_third_party_controller", test_sigenergy_reclaims_vpp_from_third_party_controller),
+        ("contention_does_not_report_pending_approval", test_sigenergy_contention_does_not_report_pending_approval),
+        ("contention_marker_published_before_recovery", test_sigenergy_contention_marker_published_before_recovery),
+        ("reclaim_runs_on_the_minute", test_sigenergy_reclaim_runs_on_the_minute),
+        ("controls_skipped_message_distinguishes_contention", test_sigenergy_controls_skipped_message_distinguishes_contention),
+        ("axle_control_off_reclaims_as_before", test_sigenergy_axle_control_off_reclaims_as_before),
+        ("axle_event_leaves_mode_alone", test_sigenergy_axle_event_leaves_mode_alone),
+        ("axle_event_skips_controls", test_sigenergy_axle_event_skips_controls),
+        ("axle_event_end_resumes_control", test_sigenergy_axle_event_end_resumes_control),
+        ("axle_standoff_survives_restart", test_sigenergy_axle_standoff_survives_restart),
     ]
 
     for name, fn in tests:

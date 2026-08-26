@@ -16,10 +16,16 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
     - [Axle Energy VPP (axle)](#axle-energy-vpp-axle)
     - [Ohme Charger (ohme)](#ohme-charger-ohme)
+    - [myenergi (myenergi)](#myenergi-myenergi)
     - [Fox ESS API (fox)](#fox-ess-api-fox)
+    - [Tesla Powerwall Teslemetry API (teslemetry)](#tesla-powerwall-teslemetry-api-teslemetry)
+    - [Enphase API (enphase)](#enphase-api-enphase)
     - [Solax Cloud API (Solax)](#solax-cloud-api-solax)
     - [Solis Cloud API (Solis)](#solis-cloud-api-solis)
     - [Sigenergy Cloud API (Sigenergy)](#sigenergy-cloud-api-sigenergy)
+    - [DEYE Cloud API (deye)](#deye-cloud-api-deye)
+    - [Sunsynk Cloud API (sunsynk)](#sunsynk-cloud-api-sunsynk)
+    - [AlphaESS Cloud API (alphaess)](#alphaess-cloud-api-alphaess)
     - [Alert Feed (alert_feed)](#alert-feed-alert_feed)
     - [Carbon Intensity API (carbon)](#carbon-intensity-api-carbon)
     - [Temperature API (temperature)](#temperature-api-temperature)
@@ -212,9 +218,80 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `ge_cloud_direct` | Boolean | Yes | - | `ge_cloud_direct` | Set to `true` to enable GivEnergy Cloud control |
 | `api_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key |
 | `automatic` | Boolean | No | false | `ge_cloud_automatic` | Set to `true` to automatically configured Predbat to use GivEnergy Cloud direct (no additional apps.yaml changes required) |
+| `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
+| `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
+| `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### EV chargers (gecloud)
+
+Every GivEnergy EV charger on the account is polled alongside the inverters and publishes
+its meter readings as `sensor.predbat_gecloud_<serial>_evc_*` entities, plus two entities
+describing the charger itself:
+
+| Entity | Description |
+| ------ | ----------- |
+| `sensor.predbat_gecloud_<serial>_evc_status` | The charger's status as GivEnergy reports it, e.g. `charging`, `idle`, `offline` |
+| `binary_sensor.predbat_gecloud_<serial>_evc_car_connected` | `on` while a car is plugged in, from the status above |
+
+Those two entities are published whatever your settings say — they are new entities and
+change nothing that already exists.
+
+Setting `ge_cloud_automatic_evc` to `true` additionally wires the chargers into Predbat's
+car planning, in serial order so charger N is car N:
+
+- **car_charging_energy** — each charger's `_evc_energy_active_import_register`, so
+  `car_charging_hold` subtracts the car charging from house load precisely instead of
+  falling back to the `car_charging_threshold` heuristic
+- **car_charging_planned** — each charger's `_evc_car_connected`, so Predbat only plans
+  car charging when there is actually a car on the cable
+- **num_cars** — raised to the number of chargers if it is currently lower, never reduced,
+  since another component may have registered cars of its own
+
+This is deliberately a separate setting from `ge_cloud_automatic` rather than part of it:
+it registers a car and moves `num_cars`, which would change the plan for existing users
+who had only ever asked for their inverter to be configured. It runs whether or not a
+GivEnergy battery is present, so a GivEnergy charger alongside another manufacturer's
+battery is configured too. Everything else about the car —
+**car_charging_battery_size**, **car_charging_limit** and **car_charging_soc** — still
+comes from `apps.yaml` as usual.
+
+`car_charging_planned` is wired to a binary sensor rather than to the status sensor on
+purpose: it answers `on`, which the default **car_charging_planned_response** already
+matches, so this works without you having to add GivEnergy's status words to that list.
+If your charger reports a status Predbat does not recognise it is treated as no car
+connected and logged once, so please report the value from the log so it can be added.
+
+#### Charger control (gecloud)
+
+With `ge_cloud_evc_control` set to `true`, Predbat drives each charger from its own car's
+plan: `start-charge` inside a planned charging window, `stop-charge` outside one. Charger N
+follows car N, in the same serial order the automatic configuration uses, so the two cannot
+disagree about which charger is which car.
+
+`ge_cloud_automatic_evc` must also be on, since it is that configuration which establishes
+the charger to car mapping. Predbat says so in the log and leaves control off rather than
+guessing if you enable control without it.
+
+- A command is only sent when the wanted state actually changes, so a charger already
+  charging inside a window is left alone rather than commanded every minute
+- A charger with no car plugged in is never commanded — Predbat waits for
+  `_evc_car_connected` to go `on`
+- Nothing is commanded until Predbat has published a car plan, so a restart cannot stop a
+  charge that is already running
+
+A `switch.predbat_gecloud_evc_control` entity appears when control is enabled, on by
+default, so you can hand the charger back without editing `apps.yaml`. Turning it off — or
+putting Predbat into read only mode — **releases** rather than just going quiet: if Predbat
+had stopped the charger it sends `start-charge` once on the way out, so a car is never left
+stranded by a charger Predbat walked away from. The switch state is saved, so an off
+survives a restart.
+
+Unlike a Zappi, there is no previous mode to restore on release: `start-charge` and
+`stop-charge` are commands rather than modes, so your charger's own mode (Grid, Hybrid,
+Solar) still decides what happens once Predbat lets go.
 
 #### How to get your API key (gecloud)
 
@@ -485,6 +562,8 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 - Requires your Ohme account credentials
 - Can automatically manage Intelligent Octopus charging slots
 - Monitors real-time charging status and energy consumption
+- Publishes `sensor.predbat_ohme_energy_today`, the energy delivered to the car today, and wires it to `car_charging_energy` when `ohme_automatic` is set.
+  See [Ohme charge energy](car-charging.md#ohme-charge-energy)
 
 #### Configuration Options (ohme)
 
@@ -492,7 +571,148 @@ Integrates with Ohme EV chargers to monitor charging sessions and coordinate cha
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `email` | String | Yes | - | `ohme_login` | Your Ohme account email address |
 | `password` | String | Yes | - | `ohme_password` | Your Ohme account password |
-| `ohme_automatic_octopus_intelligent` | Boolean | No | - | `ohme_automatic_octopus_intelligent` | Set to `true` to automatically sync with Intelligent Octopus |
+| `ohme_automatic` | Boolean | No | `False` | `ohme_automatic` | Set to `true` to register the Ohme charger with Predbat as a car |
+| `ohme_control` | Boolean | No | `False` | `ohme_control` | Set to `true` to let Predbat start and stop the charger from its own plan. Requires `ohme_automatic`; released by read only mode |
+| `ohme_automatic_octopus_intelligent` | Boolean | No | unset (auto-detect) | `ohme_automatic_octopus_intelligent` | Take the Intelligent car slots from Ohme. Omit the setting entirely to auto-detect it when `ohme_automatic` is on, or give it `true`/`false` to override. Do not write `auto` - any value other than `true`/`false` is read as true |
+
+---
+
+### myenergi (myenergi)
+
+**Can be restarted:** Yes
+
+#### What it does (myenergi)
+
+Monitors myenergi Zappi EV chargers and Eddi hot water diverters, publishing their status, power and session energy as Predbat entities, and provides send-boost and cancel-boost controls.
+
+Predbat supports both of myenergi's APIs:
+
+- **Direct** (default) — HTTP digest authentication against `director.myenergi.net`, using your hub serial number and an API key you generate yourself. This is the same API the `ha-myenergi` Home Assistant integration uses, and any myenergi owner can set it up today.
+- **Cloud OAuth** — the official 3rd party API at `api.s18.myenergi.net`. This needs credentials issued by myenergi through their partner registration process.
+
+#### When to enable (myenergi)
+
+- You have a Zappi or an Eddi and want Predbat to account for their energy use when planning
+- You want Predbat to publish sensors for their status, power and session energy
+- You want to trigger or cancel a boost from Home Assistant
+
+#### Important notes (myenergi)
+
+- With `myenergi_automatic` on (the default), Predbat sets three `apps.yaml` values for you:
+    - `car_charging_energy` — every Zappi's session energy, so charging is subtracted from your house load rather than being learnt as base load. Ensure `switch.predbat_car_charging_hold` is on (it is by default) for that subtraction to take effect
+    - `car_charging_planned` — every Zappi's plug status sensor, one entry per car, so Predbat knows when the car is plugged in and due to charge. The regex the `apps.yaml` templates ship for this key matches the third-party `ha-myenergi` integration's entity names, not the ones Predbat publishes, so without this Predbat would fall back to the `car_charging_threshold` heuristic
+    - `iboost_energy_today` — the first Eddi's session energy (first by serial number). This feeds the iboost model, and it is also subtracted from your historical house load whenever `switch.predbat_iboost_energy_subtract` is on (the default), which happens whether or not iboost itself is enabled
+- Auto-configuration runs once, after the first poll that returns devices. A Zappi or Eddi added later is published as entities but is not wired into those keys until Predbat restarts
+- If you set `car_charging_planned` yourself in `apps.yaml`, Predbat logs a note and auto-discovery still wins — remove your entry to silence it
+- Predbat's shipped `car_charging_planned_response` list covers the plug states a Zappi reports when the car is connected, including `ev ready to charge`. If you maintain your own list, add that value or Predbat will treat a car that is plugged in and waiting as not planned to charge
+- Boosting a Zappi is only accepted by myenergi while it is in Eco or Eco+ mode
+- Set `myenergi_enable_controls` to `false` for monitor-only operation — the boost switches are still published but stop responding
+
+#### Configuration Options (myenergi)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `auth_method` | String | No | `direct` | `myenergi_auth_method` | `direct` (local digest API) or `oauth` (official cloud API) |
+| `hub_serial` | String | No | - | `myenergi_hub_serial` | Hub serial number — required when `auth_method` is `direct`. It is the API login rather than a device filter, so it cannot default to all devices; one serial reads every device on the account. With no hub, use the serial the API key was generated against |
+| `api_key` | String | No | - | `myenergi_api_key` | API key generated at myaccount.myenergi.com — required when `auth_method` is `direct` |
+| `key` | String | No | - | `myenergi_key` | OAuth access token, cloud transport |
+| `token_hash` | String | No | - | `myenergi_token_hash` | OAuth refresh token hash, used to refresh `key` automatically. At least one of `key` or `token_hash` is required when `auth_method` is `oauth` |
+| `token_expires_at` | String | No | - | `myenergi_token_expires_at` | OAuth access token expiry, used to trigger a refresh |
+| `automatic` | Boolean | No | true | `myenergi_automatic` | Set to `false` to stop Predbat wiring the device sensors into `car_charging_energy`, `car_charging_planned` and `iboost_energy_today` automatically |
+| `enable_controls` | Boolean | No | true | `myenergi_enable_controls` | Set to `false` for monitor-only operation |
+| `poll_seconds` | Integer | No | 60 | `myenergi_poll_seconds` | Poll interval in seconds, rounded to the nearest whole multiple of 60, minimum 60 and maximum 1800 (a longer gap would make Predbat's own health check report the component as failed) |
+| `zappi_control` | Boolean | No | false | `myenergi_zappi_control` | Set to `true` to let Predbat drive your Zappi from its car charging plan — see [Zappi charge control](#zappi-charge-control-myenergi) |
+
+The component only starts when at least one of `myenergi_api_key`, `myenergi_key` or `myenergi_token_hash`
+is set. That test is a plain any-of and does not look at `myenergi_auth_method`, so a credential belonging
+to the transport you did not select still starts the component — it then logs which setting is missing
+rather than failing silently.
+
+Example for the direct transport:
+
+```yaml
+myenergi_hub_serial: '12345678'
+myenergi_api_key: !secret myenergi_api_key
+```
+
+#### How to get your API key (myenergi)
+
+1. Sign in at <https://myaccount.myenergi.com>.
+2. Open **Advanced** then **API Key**.
+3. Generate a key for your hub and copy it.
+4. Your hub serial number is printed on the hub and shown in the myenergi app. If you have no hub, use the serial of the device
+   acting as one — the Zappi or Eddi you generated the key against. Either way a single serial is enough, because it is the
+   login for the account rather than a choice of which device to read: Predbat discovers every Zappi and Eddi behind it.
+
+#### Published entities (myenergi)
+
+Per Zappi (`{sn}` is the device serial number):
+
+- `sensor.predbat_myenergi_zappi_{sn}_status`, `_mode`, `_plug_status`, `_power`, `_session_energy`
+- `binary_sensor.predbat_myenergi_zappi_{sn}_charging`
+- `switch.predbat_myenergi_zappi_{sn}_boost`, `number.predbat_myenergi_zappi_{sn}_boost_energy`
+
+Per Eddi:
+
+- `sensor.predbat_myenergi_eddi_{sn}_status`, `_power`, `_session_energy`, `_temp_1`, `_temp_2`
+- `switch.predbat_myenergi_eddi_{sn}_boost`, `number.predbat_myenergi_eddi_{sn}_boost_minutes`
+
+The Eddi temperature sensors are only published when a probe is connected.
+
+#### Controls (myenergi)
+
+Turning a boost switch on sends a boost of the amount selected on the companion number entity — kWh for a Zappi, minutes for an Eddi. Turning it off cancels the boost. The switch state is read back from the device, so a boost started or stopped in the myenergi app is reflected here too.
+
+myenergi only accepts a Zappi boost while the charger is in Eco or Eco+ mode. Predbat checks that one condition before calling, and logs a warning instead. Every other reason a boost can be refused — an Eddi already at its maximum tank temperature, for instance — is only discovered from myenergi's reply, so Predbat issues the call and logs `myenergi: control failed` when it comes back refused. The switch reverts to the device's real state on the next poll either way.
+
+Not implemented in this release: priority, minimum green level, phase setting, and charging schedules. These exist on the transport interface as reserved methods, ready for a later release, and nothing in Predbat calls them — there is no entity or service that can reach them, so there is nothing for you to try. If a future release wires one up before it is implemented, it warns once per control rather than failing silently. Super schedules, managed mode and Libbi batteries are out of scope entirely for this release; the component only supports Zappi and Eddi devices and does not expose any control surface for them.
+
+#### Zappi charge control (myenergi)
+
+With `myenergi_zappi_control: true` Predbat drives your Zappi from the car charging plan it has already worked out, instead of you scheduling the charge on the Zappi itself.
+
+Inside a planned charging window Predbat puts the Zappi in **Fast**, and outside one it puts it in **Stopped**. Fast is used because the window was chosen for its electricity rate rather than for sunshine — Eco or Eco+ would only charge from surplus, and the car would not get what the plan assumed.
+
+Each Zappi follows its own car. Zappis are matched to cars in serial number order, the same order `car_charging_energy` and `car_charging_planned` are wired in, so your first Zappi follows car 0's plan, your second follows car 1's, and so on.
+
+Predbat re-checks the Zappi every minute. If the mode is changed in the myenergi app while Predbat is in control, it is put back — otherwise control would drift away silently.
+
+##### The control switch
+
+A `switch.predbat_myenergi_zappi_control` entity appears once `myenergi_zappi_control` is set. It starts **on**, and turning it off hands your Zappi back without editing `apps.yaml`. The setting is remembered across restarts, so a restart will not quietly take control back.
+
+##### When Predbat hands the Zappi back
+
+Predbat releases the Zappi when the control switch is turned off, or when Predbat itself is put in read only mode. Releasing restores the mode the Zappi was in before Predbat first changed it, falling back to **Eco+** when there is nothing saved — after a restart, for instance. It deliberately does not simply stop sending commands, because Predbat may have left the Zappi Stopped and walking away would leave the car unable to charge.
+
+##### Two things to expect
+
+Charge control needs `myenergi_automatic`, because it is automatic configuration that establishes which Zappi belongs to which car. It also needs `myenergi_enable_controls`. If either is off, Predbat logs which one and leaves the Zappi alone.
+
+While Predbat is in control the Zappi is in Fast or Stopped, and myenergi only accepts a boost in Eco or Eco+ — so the manual boost switch will refuse for as long as control is on. Turn the control switch off if you want to boost by hand.
+
+Outside a planned window the Zappi is Stopped, which means it will not divert surplus solar to the car either. If you would rather keep solar diversion, leave `myenergi_zappi_control` off and let the Zappi run its own modes.
+
+#### Known limitation (myenergi)
+
+The session energy sensors reset to zero when a charging or heating session ends. Predbat expects that: it treats these sensors as incrementing counters and rebases the series whenever it sees one reset, so both the per-minute load subtraction and the daily `iboost_today` total come out right across any number of sessions in a day.
+
+The one case it cannot see is a small session. A drop of less than 1 kWh is smoothed over as a dip in the data rather than treated as a reset, so a session that finishes below roughly 1 kWh — a short top-up, or a brief Eddi diversion — can be missed and its energy left out of the day's figures. A reading of zero between the sessions does not help, because the dip is smoothed away before the reset is looked for. That applies equally to `car_charging_energy` and to `iboost_today`. In practice it is a fraction of a kWh, and the planner mostly cares about the larger sessions, but the daily totals can read slightly low if your Zappi or Eddi does a lot of very short sessions.
+
+#### Testing your configuration (myenergi)
+
+You can test either transport independently of Predbat:
+
+```bash
+cd /config/appdaemon/apps/predbat
+python3 myenergi.py --hub-serial YOUR_HUB_SERIAL --api-key YOUR_API_KEY
+```
+
+Add `--boost zappi` or `--boost eddi` (with `--amount`) to send a test boost, or `--cancel-boost zappi`/`--cancel-boost eddi` to cancel one. Use `--token` in place of `--hub-serial`/`--api-key` to test the cloud OAuth transport instead.
+
+To try the charge control commands against a real Zappi without enabling the feature, `--start-charge` puts it in Fast exactly as a planned window does, `--stop-charge` puts it in Stopped as being outside one does, and `--release` puts it back in Eco+ as handing it back does. Run the command again with no action to see the mode that took effect.
+
+Note `--stop-charge` leaves the Zappi stopped, so remember to `--release` it afterwards or set the mode you want in the myenergi app.
 
 ---
 
@@ -524,6 +744,121 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 
 ---
 
+### Tesla Powerwall Teslemetry API (teslemetry)
+
+**Can be restarted:** Yes
+
+!!! warning "Beta"
+    This component is in **beta** and under active development. It is not yet recommended for general use - expect issues and please report them on GitHub. For a proven setup today, use the [manual Home Assistant integration](inverter-setup.md#manual-configuration-via-home-assistant-integrations) instead.
+
+#### What it does (teslemetry)
+
+Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST API (which mirrors Tesla Fleet API paths, so a direct Fleet API connection works by changing the base URL). Publishes live power flows, SOC and daily energy sensors, and exposes fox-style charge/discharge window entities that Predbat programs directly. Because the Powerwall has no native scheduler, the component translates the programmed windows into operation mode, backup reserve, grid-charging and export-rule commands each cycle, including the export tariff-trick needed to force the Powerwall to export.
+
+#### When to enable (teslemetry)
+
+- You have a Tesla Powerwall (developed against Powerwall 3)
+- You want Predbat to control charging and export directly via the Tesla cloud
+- You have a Teslemetry subscription and API token (or Tesla Fleet API access)
+
+#### Important notes (teslemetry)
+
+- Export freeze is not supported by the Powerwall hardware and is disabled automatically
+- The Powerwall has no charge/discharge rate control; rates are modelled from the nameplate power
+- When enabled (and Predbat is not read-only) the component owns the device tariff, publishing Predbat's real import/export rates (quantised into a few time-of-use bands) so they show correctly in the Tesla app, with a synthetic high-price `ON_PEAK` band over the committed discharge window to drive export
+- Export start/stop is driven each cycle by the operation-mode and export-rule commands; the tariff is pushed only when the rates or the discharge window actually change, to conserve Teslemetry's monthly API-call budget
+- The four diagnostic control entities (operation mode, backup reserve, grid charging, allow export) mirror the emulator's asserted state; any manual change made to them is re-asserted away within about a minute while Predbat is not read-only
+
+#### Configuration Options (teslemetry)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `key` | String | Yes | - | `teslemetry_key` | Bearer token. In `api_key` mode this is your static Teslemetry token; in `oauth` mode it is the Tesla Fleet API access token (refreshed automatically) |
+| `site_id` | String or String List | No | First account site | `teslemetry_site_id` | Optional Tesla energy site id (or list of ids) to filter the sites discovered from the account; leave unset to use the first site on the account automatically |
+| `base_url` | String | No | `https://api.teslemetry.com` | `teslemetry_base_url` | REST base URL; for direct Fleet API set this to your regional Fleet endpoint (e.g. `https://fleet-api.prd.eu.vn.cloud.tesla.com`) |
+| `automatic` | Boolean | No | false | `teslemetry_automatic` | Set to `true` to automatically configure Predbat to use the Powerwall (no manual apps.yaml inverter settings required) |
+| `auth_method` | String | No | `api_key` | `teslemetry_auth_method` | `api_key` (static Teslemetry token) or `oauth` (direct Tesla Fleet API). In `oauth` mode the OAuth flow and token refresh are handled for you by predbat.com - the same way the Fox integration works - so `oauth` requires connecting via predbat.com; self-hosted users use `api_key` |
+
+---
+
+### Enphase API (enphase)
+
+**Can be restarted:** Yes
+
+#### What it does (enphase)
+
+Connects Predbat to the Enphase Enlighten cloud for monitoring and battery control of Enphase IQ Battery systems, with no local hardware access required. Predbat logs in through the same web endpoints used by the Enlighten app/web site, publishes monitoring sensors, and can write battery schedules to control charging and discharging.
+
+#### When to enable (enphase)
+
+- You have an Enphase IQ Battery system managed through the Enlighten app
+- You want cloud-based monitoring and control without any local integration
+- Your Enphase account does not have multi-factor authentication (MFA) enabled
+
+#### Important notes (enphase)
+
+- **EXPERIMENTAL**: this uses the unofficial Enlighten web-app API - there is no official Enphase API with battery control, and Enphase may change it without notice
+- Accounts with multi-factor authentication (MFA) enabled are **not supported** - disable MFA on the Enphase account before use
+- Predbat controls the battery by writing Enphase schedules: charge windows become charge-from-grid (CFG) schedules with a target SOC, export windows become discharge-to-grid (DTG) schedules, freeze-export windows use restrict-battery-discharge (RBD) schedules, and the reserve is set through the battery profile. `automatic_config` requires both CFG and DTG support and fails configuration if either is missing
+- On a successful write, Predbat optimistically updates its local cache and moves on rather than waiting to re-read the cloud - the periodic schedule/profile re-read (every 30 minutes) corrects the cache later if a write didn't actually land
+- The PV, grid, battery and load power sensors come from the Enlighten livestream: once per cycle Predbat connects to Enphase's AWS IoT broker over MQTT, takes one measured reading and disconnects. These are separately metered channels, so they are instantaneous and the house load is a real measurement rather than a calculation
+- A livestream reading stays in use for up to 15 minutes, so a single failed connection does not disturb the sensors. Past that they fall back rather than keep presenting an old measurement as current, and readings are never carried across a restart
+- In that fallback, all four come from the same 15-minute energy bucket of the cloud's intra-day data, so they still agree with each other and a power-flow display still balances. The cloud keeps back-filling a bucket for several minutes after it closes, so Predbat reads a bucket that has settled - which means the fallback values lag real time by roughly 15 to 30 minutes
+- In that fallback, load power is the energy-balance residual (PV + grid + battery), which is how the Enphase cloud derives its own consumption figure. Because it is a small difference between much larger numbers, it becomes unreliable while the battery is charging or discharging hard - it is clamped at zero so it can never show a negative house load, but treat it as indicative only during battery activity. The energy (`*_today`) sensors are unaffected either way and remain accurate
+- **Predbat owns the battery schedules**: it drives exactly one window per direction, so unless it is in read-only mode it deletes any other CFG/DTG/RBD schedule it finds on the site, including ones you created in the Enlighten app. Do not add your own battery schedules while Predbat is in write mode - the Enphase cloud rejects any overlapping schedule with an HTTP 409 conflict, which would stop Predbat from controlling the battery. Set Predbat to read-only mode if you want to manage schedules yourself
+- A window that is no longer needed is deleted rather than disabled, because the Enphase cloud ignores a request to disable a schedule (it reports success but keeps enforcing the window)
+- Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
+
+#### Configuration Options (enphase)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | Yes | - | `enphase_username` | Your Enphase Enlighten account e-mail address |
+| `password` | String | Yes | - | `enphase_password` | Your Enphase Enlighten account password |
+| `site_id` | String | No | First site found | `enphase_site_id` | Restrict Predbat to a single Enlighten site id |
+| `automatic` | Boolean | No | false | `enphase_automatic` | Set to `true` to automatically configure Predbat to use the Enphase inverter (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `enphase_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Enphase Cloud from overwriting `pv_power` and `pv_today` config |
+
+#### Published Entities (enphase)
+
+For each site (`{site_id}` in the entity names), the component creates:
+
+**Battery Sensors:**
+
+- Battery SOC (%)
+- Battery available energy (kWh)
+- Battery capacity (kWh)
+- Battery max rate (W)
+- Battery status
+- Battery profile
+- Battery reserve (%)
+- Battery reserve minimum (%)
+
+**Energy Sensors:**
+
+- PV/load/import/export today (kWh)
+- Battery charge/discharge today (kWh)
+
+**Power Sensors (derived from the most recent completed 15-minute energy bucket):**
+
+- PV power, grid power, battery power, load power (W)
+
+**Control Entities (per site):**
+
+- Battery schedule reserve (number, %) - written to Enphase immediately on change, like Fox
+- Charge/export start and end time (select, HH:MM:SS format)
+- Charge/export target SOC (number, %)
+- Charge/export enable (switch)
+- Charge/export write (switch) - triggers the cloud write for that schedule
+
+A configured site always supports both charge and export control - `automatic_config` requires both
+the charge-from-grid (CFG) and discharge-to-grid (DTG) schedule families to be available, so both sets
+of controls are always published. There is no separate freeze control: freeze-export is derived
+automatically (and written as a restrict-battery-discharge schedule) whenever the export target SOC is
+set to exactly 99%; 100% already means export is disabled.
+
+---
+
 ### Solis Cloud API (solis)
 
 **Can be restarted:** Yes
@@ -547,6 +882,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
     - Leave `soc_max` unset and allow Predbat to automatically detect battery size from historical charging data (requires several days of data)
 - Supports both V1 (older firmware) and V2 (newer firmware) time window formats
 - Automatic configuration available - sets up all required Predbat sensors automatically
+- **Inverter timezone must match Predbat's `timezone` setting**: charge/discharge slot times are written to the inverter as plain `HH:MM` values with no timezone attached. The inverter interprets these using its own configured timezone, not Predbat's. If your inverter's timezone is set to UTC (or anything other than Predbat's `timezone`, `Europe/London` by default), the resulting charge/discharge windows will be offset by the difference - for example, a full hour out whenever British Summer Time is in effect. Set the inverter's own timezone to match Predbat's `timezone` setting to avoid this.
 
 #### Configuration Options (solis)
 
@@ -558,6 +894,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 | `automatic` | Boolean | No | false | `solis_automatic` | Set to `true` to automatically configure Predbat to use the Solis inverter (no manual apps.yaml sensor updates required) |
 | `base_url` | String | No | Auto-detected | `solis_base_url` | Solis Cloud API base URL (automatically selects correct region) |
 | `control_enable` | Boolean | No | true | `solis_control_enable` | Enable/disable control commands (set to false for monitoring only) |
+| `nominal_voltage` | Float | No | - | `solis_nominal_voltage` | Your battery's nominal pack voltage (e.g. cell count x nominal cell voltage), used only for the battery capacity sensor. Not the same as the live measured battery voltage. Without it, the capacity sensor is still published but flagged unreliable - see [apps.yaml](apps-yaml.md#solis-cloud-api) |
 
 ---
 
@@ -636,6 +973,143 @@ sigenergy_client_key: |
 ```
 
 See [Sigenergy Cloud setup](inverter-setup.md#sigenergy-cloud) for the full credential-acquisition walkthrough.
+
+---
+
+### DEYE Cloud API (deye)
+
+**Can be restarted:** Yes
+
+#### What it does (deye)
+
+Integrates with DEYE (Sunsynk-family) hybrid inverters via the DeyeCloud OpenAPI, providing direct cloud-based monitoring and battery control - no local Modbus/RS485 access is required. Predbat discovers every battery inverter registered against the account, publishes monitoring sensors, and writes Fox-style schedule control entities that are combined into a single `strategy_dynamic_control` command each cycle.
+
+#### When to enable (deye)
+
+- You have a DEYE (or Sunsynk-family) hybrid inverter with battery storage registered on DeyeCloud
+- You want direct cloud-based monitoring and control without local hardware access
+- You have created a DeyeCloud developer app (App ID/Secret), or you are using Predbat.com
+
+#### Important notes (deye)
+
+- **EXPERIMENTAL**: This is a new integration and may have issues
+- Two deployment modes are supported: the self-hosted Home Assistant add-on manages its own DeyeCloud token from developer app credentials (`deye_auth_method: 'app_credentials'`, the default), while Predbat.com injects and refreshes the token for you (`deye_auth_method: 'oauth'`)
+- DEYE is mode-less like Enphase/Tesla: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal DEYE work mode (`SELLING_FIRST` for export, `ZERO_EXPORT_TO_CT` for charge/hold/idle) automatically from that intent. `ZERO_EXPORT_TO_CT` measures at the grid CT, so the battery serves the whole house without exporting; the stricter `ZERO_EXPORT_TO_LOAD` measures at the inverter's own output and would stop the battery serving anything not wired to it
+- Solar Sell is always left on. It governs whether surplus PV reaches the grid, not what the battery does, so turning it off outside export windows would curtail spare solar for most daylight hours - export windows are driven by the work mode and the slot SOC targets instead
+- Predbat never enables charging from an external generator. The per-slot generator flag is the owner's setting, not Predbat's: it is read from the inverter and carried through unchanged when Predbat rewrites the programme, and left off when it cannot be read
+- Self-use TOU slots are written at the inverter's rated power. Zero slot power is how DEYE expresses a freeze (the battery neither charges nor discharges), so it is used only for freeze-charge and freeze-export; if neither the inverter rating nor the battery config is known, Predbat skips the control write rather than send a slot power it cannot justify
+- Freeze-charge is implemented via the reserve, and freeze-export is signalled by setting the export target SOC to 99% (100% already means export is disabled)
+- Writes are combined into one atomic `strategy_dynamic_control` call per cycle with change detection (no write when the payload is unchanged), and the resulting `orderId` is polled asynchronously until success
+- The reserve control entity writes to DeyeCloud immediately on change, like Fox and Enphase
+
+#### Configuration Options (deye)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_id` | String | No | - | `deye_app_id` | Your DeyeCloud developer app's App ID (self-hosted add-on only) |
+| `app_secret` | String | No | - | `deye_app_secret` | Your DeyeCloud developer app's App Secret (self-hosted add-on only) |
+| `username` | String | No | - | `deye_username` | Your DeyeCloud account e-mail address or username (self-hosted add-on only) |
+| `password` | String | No | - | `deye_password` | Your DeyeCloud account password (self-hosted add-on only) |
+| `data_center` | String | No | `eu` | `deye_data_center` | DeyeCloud region: `eu`, `am` or `india` |
+| `company_id` | String | No | - | `deye_company_id` | Optional, only needed for installer/business accounts |
+| `auth_method` | String | No | `app_credentials` | `deye_auth_method` | `app_credentials` (self-managed token, HA add-on) or `oauth` (token injected and refreshed by Predbat.com) |
+| `inverter_sn` | String/List | No | All found | `deye_inverter_sn` | Restrict Predbat to specific inverter serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `deye_automatic` | Set to `true` to automatically configure Predbat to use the discovered DEYE inverter(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `deye_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent DEYE Cloud from overwriting the `pv_power` config |
+
+See [DEYE Cloud setup](inverter-setup.md#deye-cloud) for the full credential-acquisition walkthrough.
+
+---
+
+### Sunsynk Cloud API (sunsynk)
+
+**Can be restarted:** Yes
+
+#### What it does (sunsynk)
+
+Integrates with Sunsynk (DEYE-family) hybrid inverters via the Sunsynk Connect cloud API, providing cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required. Predbat discovers every inverter registered against the account, publishes monitoring sensors and derived battery ratings, and writes DEYE-style schedule control entities that are combined into a single settings write each cycle.
+
+#### When to enable (sunsynk)
+
+- You have a Sunsynk hybrid inverter with battery storage registered on Sunsynk Connect (the same account used by the Sunsynk phone app)
+- You want cloud-based monitoring, with optional battery control, and no local hardware or Modbus dongle access
+- You have your Sunsynk Connect account e-mail and password, or you are using Predbat.com
+
+#### Important notes (sunsynk)
+
+- **EXPERIMENTAL:** nobody on the Predbat project has a Sunsynk account, so the wire format is inferred from third-party open-source clients rather than from documentation. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report
+- **Control is on by default**, the same as `solis_control_enable`. Set `sunsynk_control_enable: false` for monitoring only - Predbat then reads telemetry and settings but never writes to the inverter. Because the write format is inferred rather than documented, it is worth running the [diagnostics CLI](inverter-setup.md#sunsynk-cloud) against your own inverter first to confirm the settings layout, and switching control off if anything looks wrong
+- **Three login methods.** `sunsynk_auth_method` selects `password` (RSA-encrypted login, the default), `password_legacy` (the pre-2025 plaintext login, opt-in) or `oauth` (Predbat.com injects and refreshes the token). `password` never falls back to `password_legacy` automatically - choosing the plaintext login is a deliberate decision by the user, not something Predbat does for you. `password_legacy` is still sent over TLS, but without the additional RSA encryption layer, so it exists only for regions whose API still serves the older login
+- Sunsynk is mode-less like DEYE/Enphase: Predbat only owns the charge window, export window, reserve and target SOCs - the component derives the internal Sunsynk work mode automatically from that intent
+- There is a single whole-object settings endpoint, so every write is a read-modify-write of the entire settings object rather than a partial update. Predbat re-reads the settings immediately before every write to keep the race window as small as possible, and logs when a field it does not own has changed since the last read
+- Using the Sunsynk phone app while Predbat is running can overwrite Predbat's settings, and vice versa - there is one whole-object write endpoint, so the last writer wins
+- A write reaching the cloud does not mean the inverter has applied it: the dongle collects new settings on its next poll, typically one to five minutes later. Predbat tolerates a few cycles of divergence before warning
+
+#### Configuration Options (sunsynk)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `username` | String | No | - | `sunsynk_username` | Your Sunsynk Connect account e-mail address (self-hosted add-on only) |
+| `password` | String | No | - | `sunsynk_password` | Your Sunsynk Connect account password (self-hosted add-on only) |
+| `key` | String | No | - | `sunsynk_key` | Injected OAuth access token (Predbat.com SaaS mode only) |
+| `region` | String | No | `sunsynk` | `sunsynk_region` | API region: `sunsynk` (`api.sunsynk.net`) or `inteless` (`pv.inteless.com`) |
+| `auth_method` | String | No | `password` | `sunsynk_auth_method` | `password` (RSA-encrypted login), `password_legacy` (pre-2025 plaintext login) or `oauth` (token injected by Predbat.com) |
+| `token_expires_at` | String | No | - | `sunsynk_token_expires_at` | Injected OAuth token expiry timestamp (Predbat.com SaaS mode only) |
+| `token_hash` | String | No | - | `sunsynk_token_hash` | Injected OAuth token refresh dedup handle (Predbat.com SaaS mode only) |
+| `inverter_sn` | String/List | No | All found | `sunsynk_inverter_sn` | Restrict Predbat to specific inverter serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `sunsynk_automatic` | Set to `true` to automatically configure Predbat to use the discovered Sunsynk inverter(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `sunsynk_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent Sunsynk Cloud from overwriting the `pv_power` config |
+| `control_enable` | Boolean | No | true | `sunsynk_control_enable` | Allow Predbat to write charge/export schedules to the inverter. Set to `false` for monitoring only |
+| `battery_nominal_voltage` | Float | No | - | `sunsynk_battery_nominal_voltage` | Override for the battery pack's nominal voltage, only needed if it cannot be inferred from the reported charge target |
+
+See [Sunsynk Cloud setup](inverter-setup.md#sunsynk-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI.
+
+---
+
+### AlphaESS Cloud API (alphaess)
+
+**Can be restarted:** Yes
+
+#### What it does (alphaess)
+
+Integrates with AlphaESS SMILE/Storion hybrid inverters via the AlphaESS Open API, providing cloud-based monitoring and, once confirmed against your own hardware, battery control - no local Modbus/RS485 access is required. Predbat discovers every battery system bound to the developer AppID, publishes monitoring sensors and derived ratings (including EV charger power and energy where one is fitted), and writes schedule control entities that map directly onto the AlphaESS charge and discharge schedule fields.
+
+#### When to enable (alphaess)
+
+- You have an AlphaESS hybrid inverter with battery storage registered on the AlphaESS cloud
+- You want cloud-based monitoring, with optional battery control, and no local hardware access
+- You have registered a developer account at <https://open.alphaess.com/> and have an AppID and AppSecret
+
+#### Important notes (alphaess)
+
+- **EXPERIMENTAL:** nobody on the Predbat project has AlphaESS hardware, so behaviour is inferred from AlphaESS's published Open API documentation and the Home Assistant AlphaESS integration rather than confirmed against real inverters. Every request and response is traced to the log (`api_debug`, on by default) with credentials redacted, so a tester can capture evidence for an issue report. Run the [diagnostics CLI](inverter-setup.md#alphaess-cloud) against your own system before trusting Predbat with control
+- **Control is on by default**, the same as `sunsynk_control_enable`. Set `alphaess_control_enable: false` for monitoring only. `switch.predbat_set_read_only` additionally holds back Predbat's own automatic writes, including its periodic re-apply
+- **Both write endpoints are documented as writable once per 24 hours.** Predbat therefore only writes when the payload actually changes, gates charge and discharge independently so one does not consume the other's budget, and paces writes with `alphaess_min_write_interval`
+- Predbat's controls map straight onto the schedule fields and the inverter does the timing. `batUseCap` carries the export target while an export window is programmed and the reserve otherwise, because the API has only one field for the discharge floor. A **zero** charge or discharge rate is how Predbat signals a freeze, since AlphaESS has no pause endpoint
+- Times sit on a **15-minute grid** (`00:00` to `23:45`). Off-grid values are accepted by the API and then silently ignored by the inverter, so Predbat snaps windows inward and disables any window that snapping collapses
+- Newer systems may be entitled to the periodic scheduling API (six windows a day, with a power setpoint per window). Predbat probes this once per system; a `6017` response means the account or hardware is not entitled and Predbat falls back to the universally available two-window endpoints. On that legacy path a non-zero charge rate is not honoured by the hardware
+- **The API does not report a grid export limit.** On a G98/G99-capped site you must set `export_limit` in `apps.yaml` yourself, or Predbat will plan exports the connection clips. `battery_rate_max` is likewise not reported and is estimated from the inverter's nominal power - correct it with `battery_rate_max_scaling` or `alphaess_battery_rate_max`
+- **An AlphaESS-connected EV charger is detected automatically.** `getLastPowerData` reports its per-charger power as `null` when no charger is fitted, which is the one documented signal that one physically exists. For a system that has one, Predbat publishes `ev_power` (W) and `ev_energy_today` (kWh) and, when `automatic` is enabled, points `car_charging_energy` at the charger energy of every system that has one. That mapping is inert on its own - Predbat only subtracts car energy from house load once `car_charging_hold` is enabled. Systems with no charger are left out, because their EV energy reads a permanent zero that is indistinguishable from a charger nobody uses. Controlling the charger is not supported
+- Systems reporting no battery capacity (plug-in solar, such as the VT1000 family) are skipped by design - there is nothing for Predbat to control
+- A system that does not serve live power data automatically falls back to five-minute history data and re-probes itself back to live if it recovers
+- Using the AlphaESS phone app while Predbat is running can overwrite Predbat's settings, and vice versa - the charge and discharge endpoints are whole-object replacements, so the last writer wins. Predbat logs when a field it owns has changed since its last write
+- A write reaching the cloud does not mean the inverter has applied it: it collects new settings on its next poll, typically one to five minutes later
+
+#### Configuration Options (alphaess)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `app_id` | String | Yes | - | `alphaess_app_id` | Your AlphaESS developer AppID from <https://open.alphaess.com/> |
+| `app_secret` | String | Yes | - | `alphaess_app_secret` | Your AlphaESS developer AppSecret |
+| `inverter_sn` | String/List | No | All found | `alphaess_inverter_sn` | Restrict Predbat to specific system serial number(s) - single string or list |
+| `automatic` | Boolean | No | false | `alphaess_automatic` | Set to `true` to automatically configure Predbat to use the discovered AlphaESS system(s) (no manual apps.yaml sensor updates required) |
+| `automatic_ignore_pv` | Boolean | No | false | `alphaess_automatic_ignore_pv` | When `automatic` is enabled, set to `true` to prevent AlphaESS Cloud from overwriting the `pv_power` config |
+| `control_enable` | Boolean | No | true | `alphaess_control_enable` | Allow Predbat to write charge/export schedules to the inverter. Set to `false` for monitoring only |
+| `battery_rate_max` | Float | No | - | `alphaess_battery_rate_max` | Override, in Watts, for the battery's maximum charge/discharge rate. The API does not report one, so Predbat otherwise estimates it from the inverter's nominal power |
+| `api_delay` | Float | No | 2 | `alphaess_api_delay` | Seconds to wait between API calls. AlphaESS advise a minimum 10-second polling interval |
+| `min_write_interval` | Integer | No | 300 | `alphaess_min_write_interval` | Minimum spacing, in seconds, between writes to the same inverter and direction |
+
+See [AlphaESS Cloud setup](inverter-setup.md#alphaess-cloud) for the full walkthrough, including how to run the standalone diagnostics CLI and how to bind or unbind a system.
 
 ---
 
@@ -780,7 +1254,8 @@ On first run the component queries your account for active meter point agreement
 - **EDF and E.ON Next only** — this component uses the Kraken GraphQL schema specific to those providers and will not work with Octopus Energy (use the `octopus` component instead)
 - The component automatically sets `metric_octopus_import` and `metric_standing_charge` in Predbat, and will also set `metric_octopus_export` **when an export tariff is discovered** — no manual `apps.yaml` edits are needed for those settings once the relevant tariffs have been detected and the component is running
 - E.ON Next customers who have solar export may have their import and export on **separate account numbers** — in this case the component will attempt to discover the export account automatically via an address-matching strategy, or you can provide `export_account_id` explicitly
-- For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically
+- For OSS (self-hosted) installations you need to supply credentials — either an API key (`api_key` auth method) or email/password (`email` auth method). SaaS/cloud-managed installations use OAuth and have credentials managed automatically. If you can't find a way to generate a separate API key for your provider, use the `email` auth method with the same email/password you use to sign into your normal EDF or E.ON Next online account — no separate key is required for that method
+- For accounts with a SmartFlex-managed EV device, an `intelligent_dispatch` binary sensor is published per device (see [Published entities](#published-entities-kraken)) and automatically wired into `octopus_intelligent_slot`, exactly like Octopus Intelligent Go — no manual `apps.yaml` configuration is needed for this. Make sure **switch.predbat_octopus_intelligent_charging** (see [car charging docs](car-charging.md)) is turned On so Predbat actually uses the dispatch slots for planning
 
 #### Configuration Options (kraken)
 
@@ -852,6 +1327,7 @@ All entities use the pattern `sensor.predbat_kraken_{account_id}_{suffix}` (acco
 | `sensor.predbat_kraken_a_12345678_import_rates` | Import rate periods — consumed by Predbat automatically |
 | `sensor.predbat_kraken_a_12345678_import_standing` | Daily standing charge in £/day |
 | `sensor.predbat_kraken_a_12345678_export_rates` | Export rate periods — only present when an export tariff is found |
+| `binary_sensor.predbat_kraken_a_12345678_intelligent_dispatch[_N]` | On when a SmartFlex dispatch slot is active for device `N` — only present for accounts with a SmartFlex-managed EV device |
 
 Predbat is automatically configured to use these energy rates once Kraken is enabled.
 

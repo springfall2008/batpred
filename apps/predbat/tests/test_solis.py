@@ -10,14 +10,15 @@
 
 import asyncio
 import solis as solis_module
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 from solis import SolisAPI, SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME, SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT, SOLIS_CID_DISCHARGE_ENABLE_BASE
 from solis import SOLIS_CID_BATTERY_FORCE_CHARGE_SOC, SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC, SOLIS_CID_CHARGE_DISCHARGE_SETTINGS
-from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE
+from solis import SOLIS_CID_STORAGE_MODE, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_TOU_MODE, SOLIS_TOU_BIT_REPROBE_HOURS
 from solis import SOLIS_CID_ALLOW_EXPORT, SOLIS_ALLOW_EXPORT_ON, SOLIS_ALLOW_EXPORT_OFF, SOLIS_CID_BATTERY_RESERVE_SOC
-from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT
+from solis import SOLIS_CID_BATTERY_MAX_CHARGE_CURRENT, SOLIS_CID_BATTERY_RECOVERY_SOC, SOLIS_CID_DISCHARGE_SOC
 from solis import SOLIS_CID_POWER_LIMIT, SOLIS_BIT_BACKUP_MODE
+from solis import SOLIS_READ_ENDPOINT, SOLIS_READ_BATCH_ENDPOINT, SOLIS_CONTROL_ENDPOINT, SOLIS_INVERTER_LIST_ENDPOINT, SOLIS_INVERTER_DETAIL_ENDPOINT
 from solis import get_solis_mode_enum, compute_solis_mode_value
 from solis import ENUM_OTHER, ENUM_SELF_USE, ENUM_SELF_USE_NO_GRID_CHARGING, ENUM_FEED_IN_PRIORITY, ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING
 from solis import SOLIS_BIT_SELF_USE, SOLIS_BIT_FEED_IN_PRIORITY, SOLIS_BIT_GRID_CHARGING, SOLIS_BIT_OFF_GRID
@@ -53,6 +54,10 @@ class MockSolisAPI(SolisAPI):
         self.automatic = False
         self.session = None
         self.nominal_voltage = 48.0
+        self.nominal_voltage_last_known = {}
+        self.nominal_pack_voltage = None
+        self.capacity_voltage_warned = set()
+        self.tou_bit_refused = {}
         self.control_enable = True
         self.inverter_sn = []
 
@@ -62,7 +67,6 @@ class MockSolisAPI(SolisAPI):
         # Cache structures
         self.cached_values = {}
         self.inverter_details = {}
-        self.storage_modes = {}
         self.parallel_battery_count = {}
         self.max_charge_current = {}
         self.max_discharge_current = {}
@@ -505,6 +509,8 @@ def _make_run_api(configured_sns=None, control_enable=True, automatic=False):
 
     async def mock_write_time_windows_if_changed(sn):
         api.write_time_windows_calls.append(sn)
+        # Mirror the real method, which reports whether every control register write verified
+        return getattr(api, "_test_write_result", True)
 
     api.write_time_windows_if_changed = mock_write_time_windows_if_changed
 
@@ -669,6 +675,85 @@ async def test_run_read_only_skips_write():
     return False
 
 
+async def test_run_skips_control_writes_for_no_battery_inverter():
+    """Issue #4707: an inverter Solis Cloud says has no battery must not be written to.
+
+    automatic_config() already refuses to enrol it as a battery inverter, but it stays in
+    self.inverter_sn, so the control loop kept driving the full charge/discharge write path
+    against PV-only hardware once a minute. Predbat never plans for it, so its stale slot 1 is
+    never cleared and it asks for a storage mode the inverter has no reason to accept, forever.
+    """
+    print("\n=== Test: run skips control writes for a No Battery inverter ===")
+
+    with_batt = "1031260253072197"
+    no_batt = "6031042245160206"
+    api = _make_run_api(configured_sns=[with_batt, no_batt], control_enable=True)
+    api.inverter_sn = [with_batt, no_batt]
+    api.inverter_details = {with_batt: _DETAIL_WITH_BATTERY, no_batt: _DETAIL_NO_BATTERY}
+
+    result = await api.run(60, False)
+
+    assert result is True, f"Expected True, got {result}"
+    assert api.write_time_windows_calls == [with_batt], f"Expected write_time_windows only for the battery inverter, got {api.write_time_windows_calls}"
+    assert api.reset_charge_windows_calls == [with_batt], f"Expected reset_charge_windows only for the battery inverter, got {api.reset_charge_windows_calls}"
+    print("PASSED: control writes skip the No Battery inverter")
+    return False
+
+
+async def test_run_skips_startup_register_reset_for_no_battery_inverter():
+    """Issue #4707: startup_reset_registers writes too, so it must skip a No Battery inverter."""
+    print("\n=== Test: run skips startup register reset for a No Battery inverter ===")
+
+    with_batt = "1031260253072197"
+    no_batt = "6031042245160206"
+    api = _make_run_api(configured_sns=[with_batt, no_batt], control_enable=True)
+    api.inverter_details = {with_batt: _DETAIL_WITH_BATTERY, no_batt: _DETAIL_NO_BATTERY}
+
+    async def mock_get_inverter_list():
+        return [{"sn": with_batt}, {"sn": no_batt}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        result = await api.run(0, True)
+
+    assert result is True, f"Expected True, got {result}"
+    assert api.startup_reset_registers_calls == [with_batt], f"Expected startup_reset_registers only for the battery inverter, got {api.startup_reset_registers_calls}"
+    # It is still polled and published - only writes are withheld
+    assert no_batt in api.fetch_inverter_details_calls, "the No Battery inverter should still be polled for its PV sensors"
+    print("PASSED: startup register reset skips the No Battery inverter")
+    return False
+
+
+async def test_run_logs_why_a_no_battery_inverter_is_not_controlled():
+    """Issue #4707: withholding control must not be silent.
+
+    automatic_config() logs its own skip, but it only runs when automatic is enabled. With
+    auto-config off nothing else would say why an enrolled inverter is never written to.
+    """
+    print("\n=== Test: run explains why a No Battery inverter is not controlled ===")
+
+    with_batt = "1031260253072197"
+    no_batt = "6031042245160206"
+    api = _make_run_api(configured_sns=[with_batt, no_batt], control_enable=True, automatic=False)
+    api.inverter_details = {with_batt: _DETAIL_WITH_BATTERY, no_batt: _DETAIL_NO_BATTERY}
+
+    async def mock_get_inverter_list():
+        return [{"sn": with_batt}, {"sn": no_batt}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    with patch.object(solis_module.aiohttp, "ClientSession", return_value=_FakeAiohttpSession()), patch.object(solis_module.aiohttp, "ClientTimeout", return_value=None):
+        await api.run(0, True)
+
+    explained = [m for m in api.log_messages if no_batt in m and "no battery" in m.lower()]
+    assert explained, f"Expected a log line explaining {no_batt} is not controlled, got {api.log_messages}"
+    unexplained = [m for m in api.log_messages if with_batt in m and "no battery" in m.lower()]
+    assert not unexplained, f"The battery inverter should not be reported as having no battery, got {unexplained}"
+    print("PASSED: the No Battery skip is logged")
+    return False
+
+
 def test_oauth_bearer_headers():
     """OAuth mode builds a Bearer header (no HMAC); api-key mode keeps the HMAC header."""
     failed = False
@@ -713,7 +798,7 @@ class _GatingBase:
     def __init__(self, config):
         self._config = config
         self.prefix = "predbat"
-        self.args = {}
+        self.args = config.copy()
         self.local_tz = datetime.now().astimezone().tzinfo
         self.log_messages = []
 
@@ -759,6 +844,27 @@ def test_solis_not_activated_without_credentials():
     return failed
 
 
+def test_solis_skipped_component_logging():
+    """Solis logs missing credential alternatives only when partly configured."""
+    import components as components_module
+
+    unconfigured_base = _GatingBase({})
+    components_module.Components(unconfigured_base).initialize(only="solis", phase=1)
+    if any("Skipping Solis Cloud API interface" in message for message in unconfigured_base.log_messages):
+        print("ERROR: Unconfigured Solis component should be skipped without a warning")
+        return True
+
+    configured_base = _GatingBase({"solis_auth_method": "oauth"})
+    components_module.Components(configured_base).initialize(only="solis", phase=1)
+    expected = "Warn: Skipping Solis Cloud API interface, needs at least one of: solis_api_key, solis_access_token"
+    if expected not in configured_base.log_messages:
+        print("ERROR: Partly configured Solis component should log missing credential alternatives")
+        return True
+
+    print("PASSED: Solis skipped component logging")
+    return False
+
+
 def test_solis_activated_with_api_key():
     """Solis activates in HMAC mode when api_key + api_secret are configured."""
     failed = False
@@ -771,6 +877,30 @@ def test_solis_activated_with_api_key():
         failed = True
     if not failed:
         print("PASSED: Solis activated with HMAC api_key")
+    return failed
+
+
+def test_initialize_attribute_parity_with_mock():
+    """Every attribute MockSolisAPI stubs must also be set by the real SolisAPI.initialize().
+
+    MockSolisAPI replaces __init__ wholesale, so an attribute added to the mock but forgotten in
+    the real initialize() passes every unit test here and then raises AttributeError against a
+    live inverter — which is exactly how capacity_voltage_warned shipped broken in #4502.
+    """
+    failed = False
+    # Attributes that exist only to drive the test harness and have no production counterpart.
+    test_only = {"_test_now_utc_exact", "log_messages", "dashboard_items", "read_and_write_cid_calls", "set_storage_mode_calls"}
+    component = _init_solis_component({"solis_api_key": "k", "solis_api_secret": "s"})
+    if component is None:
+        print("ERROR: Solis should activate with api_key + api_secret")
+        return True
+    mock_attrs = set(vars(MockSolisAPI()).keys()) - test_only
+    missing = sorted(attr for attr in mock_attrs if not hasattr(component, attr))
+    if missing:
+        print("ERROR: SolisAPI.initialize() does not set attributes stubbed by MockSolisAPI: {}".format(missing))
+        failed = True
+    if not failed:
+        print("PASSED: SolisAPI.initialize() sets every attribute MockSolisAPI stubs")
     return failed
 
 
@@ -884,6 +1014,63 @@ async def test_oauth_execute_request_refreshes_before_call():
     return failed
 
 
+async def _always_valid_token():
+    """Pretend the OAuth token is already valid so no refresh is attempted."""
+    return True
+
+
+async def test_oauth_endpoint_namespace_translation():
+    """OAuth mode must post to the gateway's /api/access_data|control_device routes.
+
+    Regression test for FD#1538: the HMAC host's paths are not served on
+    api-oauth2.soliscloud.com (they return an XML <ForbiddenException>), so an
+    OAuth-only instance never discovered its inverter and published no entities.
+    """
+    failed = False
+
+    expected = {
+        SOLIS_READ_ENDPOINT: "/api/control_device/atRead",
+        SOLIS_READ_BATCH_ENDPOINT: "/api/control_device/atReadBatch",
+        SOLIS_CONTROL_ENDPOINT: "/api/control_device/control",
+        SOLIS_INVERTER_LIST_ENDPOINT: "/api/access_data/inverterList",
+        SOLIS_INVERTER_DETAIL_ENDPOINT: "/api/access_data/inverterDetail",
+    }
+
+    for hmac_path, oauth_path in expected.items():
+        api = MockSolisAPI()
+        api.auth_method = "oauth"
+        api.access_token = "tok"
+        api.base_url = "https://solis.test"
+        api.check_and_refresh_oauth_token = _always_valid_token
+        api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {}}))
+
+        await api._execute_request(hmac_path, {})
+
+        got = api.session.post_calls[0]["url"]
+        if got != "https://solis.test" + oauth_path:
+            print("ERROR: OAuth {} should post to {}, got {}".format(hmac_path, oauth_path, got))
+            failed = True
+
+    # api-key mode must keep the HMAC paths untouched.
+    api = MockSolisAPI()
+    api.auth_method = "api_key"
+    api.api_key = "key"
+    api.api_secret = "secret"
+    api.base_url = "https://solis.hmac"
+    api.session = _RecordingSession(_FakeResponse(status=200, payload={"code": "0", "data": {}}))
+
+    await api._execute_request(SOLIS_INVERTER_LIST_ENDPOINT, {})
+
+    got = api.session.post_calls[0]["url"]
+    if got != "https://solis.hmac" + SOLIS_INVERTER_LIST_ENDPOINT:
+        print("ERROR: api-key mode must not translate endpoints, got {}".format(got))
+        failed = True
+
+    if not failed:
+        print("PASSED: OAuth endpoint namespace translation (api-key paths unchanged)")
+    return failed
+
+
 async def test_oauth_execute_request_aborts_when_token_missing():
     """In OAuth mode, _execute_request must fail fast (no HTTP) when no access_token is available,
     even if check_and_refresh_oauth_token() reports success (e.g. refresh skipped — missing env)."""
@@ -944,6 +1131,190 @@ async def test_with_retry_aborts_on_oauth_failed():
     return failed
 
 
+# Battery blocks as SolisCloud inverterDetail actually returns them. Trimmed to the fields the
+# enrolment gate looks at; captured from a live two-inverter account where the battery had been
+# moved off the older inverter onto a newer one.
+_DETAIL_WITH_BATTERY = {
+    "batteryHealthSoh": 100.0,
+    "batteryType": "PYLON_LV",
+    "batteryTypeCode": "0001",
+    "batteryVoltage": 51.28,
+    "batteryCDEnableSet": 1,
+    "batteryJump": {"canJump": True, "batteryCount": 1, "batterySn": "1031260253072197BAT01"},
+    "batteryList": [{"batteryTypeName": "PYLON_LV", "battSn": "PYLON", "batteryVoltage": 51.28}],
+}
+
+_DETAIL_NO_BATTERY = {
+    "batteryHealthSoh": 0.0,
+    "batteryType": "No Battery",
+    "batteryTypeCode": "0000",
+    "batteryVoltage": 0.0,
+    "batteryCDEnableSet": 0,
+    "batteryJump": {"canJump": False, "batteryCount": 0},
+    "batteryList": [{"batteryTypeName": "No Battery", "battSn": "", "noBattery": True, "batteryVoltage": 0.0}],
+    # Lifetime counters survive the battery being removed - this inverter really did cycle
+    # 7.3 MWh before the pack was taken off it, so they must NOT be read as "has a battery".
+    "batteryTotalChargeEnergy": 7.332,
+    "batteryTotalDischargeEnergy": 6.619,
+    "batteryYearChargeEnergy": 1.159,
+    "batteryMonthChargeEnergy": 0.0,
+}
+
+# A second firmware, from a different account. Same "No Battery" verdict, but reported differently:
+# noBattery is None rather than True, batteryJump is None rather than a dict, and the only positive
+# statements are the two name fields. This is why the boolean cannot be the sole signal.
+_DETAIL_NO_BATTERY_ALT_FIRMWARE = {
+    "batteryHealthSoh": 0.0,
+    "batteryType": "No Battery",
+    "batteryTypeCode": "0000",
+    "batteryVoltage": 0.0,
+    "batteryCDEnableSet": 0,
+    "batteryJump": None,
+    "batteryList": [{"batteryType": 0, "batteryTypeName": "No Battery", "battSn": "", "noBattery": None, "batteryVoltage": 0.0}],
+    "batteryTotalChargeEnergy": 0.0,
+}
+
+# A real pack on that same firmware. Note the type name is 'Lithium Battery LV', not 'PYLON_LV' -
+# the positive values vary by pack, which is why detection matches "No Battery" rather than a
+# whitelist of known batteries.
+_DETAIL_WITH_BATTERY_ALT_FIRMWARE = {
+    "batteryHealthSoh": 100.0,
+    "batteryType": "Lithium Battery LV",
+    "batteryTypeCode": "0063",
+    "batteryVoltage": 54.83,
+    "batteryCDEnableSet": 1,
+    "batteryJump": None,
+    "batteryList": [{"batteryType": 99, "batteryTypeName": "Lithium Battery LV", "battSn": "", "noBattery": None, "batteryVoltage": 54.83}],
+}
+
+# A real pack that happens to report SoH 0 - a documented, valid SolisCloud response. It must stay
+# enrolled; SoH alone can never be the reason to drop an inverter.
+_DETAIL_REAL_BATTERY_ZERO_SOH = {
+    "batteryHealthSoh": 0.0,
+    "batteryType": "PYLON_LV",
+    "batteryTypeCode": "0001",
+    "batteryVoltage": 50.9,
+    "batteryCDEnableSet": 1,
+    "batteryJump": {"canJump": True, "batteryCount": 1},
+    "batteryList": [{"batteryTypeName": "PYLON_LV", "battSn": "PYLON", "batteryVoltage": 50.9}],
+}
+
+
+async def _run_automatic_config(details):
+    """Run automatic_config() over `details` ({sn: detail}) and return the recorded set_arg_auto args."""
+    api = MockSolisAPI()
+    api.inverter_sn = list(details.keys())
+    api.inverter_details = dict(details)
+    recorded = {}
+    api.set_arg_auto = lambda key, value: recorded.__setitem__(key, value)
+    await api.automatic_config()
+    return recorded, api
+
+
+async def test_automatic_config_skips_no_battery_inverter():
+    """An inverter SolisCloud reports as having no battery must not be enrolled as a battery inverter.
+
+    Enrolling it makes num_inverters too high; every per-inverter arg is then short by one entry, so
+    inverter N reads out of range, and inverter.py invents an 8 kWh battery for hardware that has none.
+    """
+    failed = False
+    print("**** Testing automatic_config skips a No Battery inverter ****")
+
+    with_batt = "1031260253072197"
+    no_batt = "6031042245160206"
+    recorded, api = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY, no_batt: _DETAIL_NO_BATTERY})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: expected num_inverters 1 (only the inverter with a battery), got {}".format(recorded.get("num_inverters")))
+        failed = True
+
+    soc_entities = recorded.get("soc_percent") or []
+    if len(soc_entities) != 1 or no_batt.lower() in " ".join(soc_entities):
+        print("ERROR: expected only the battery inverter to be wired up, got soc_percent={}".format(soc_entities))
+        failed = True
+    if soc_entities and with_batt.lower() not in " ".join(soc_entities):
+        print("ERROR: the inverter that does have a battery was dropped, got soc_percent={}".format(soc_entities))
+        failed = True
+
+    if not any("no battery" in m.lower() for m in api.log_messages):
+        print("ERROR: expected a log line explaining the inverter was skipped for having no battery")
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config skips a No Battery inverter")
+    return failed
+
+
+async def test_automatic_config_skips_no_battery_on_alt_firmware():
+    """The other firmware leaves noBattery as None - only the name fields say "No Battery"."""
+    failed = False
+    print("**** Testing automatic_config skips a No Battery inverter on the alternate firmware ****")
+
+    with_batt = "6031052256280133"
+    no_batt = "6031052254150188"
+    recorded, _ = await _run_automatic_config({with_batt: _DETAIL_WITH_BATTERY_ALT_FIRMWARE, no_batt: _DETAIL_NO_BATTERY_ALT_FIRMWARE})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: expected num_inverters 1, got {} - noBattery is None here, so the name fields must carry it".format(recorded.get("num_inverters")))
+        failed = True
+
+    soc_entities = recorded.get("soc_percent") or []
+    if len(soc_entities) != 1 or no_batt.lower() in " ".join(soc_entities):
+        print("ERROR: expected only the battery inverter to be wired up, got soc_percent={}".format(soc_entities))
+        failed = True
+    if soc_entities and with_batt.lower() not in " ".join(soc_entities):
+        print("ERROR: the 'Lithium Battery LV' inverter was dropped - detection must not whitelist pack names, got soc_percent={}".format(soc_entities))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config skips a No Battery inverter on the alternate firmware")
+    return failed
+
+
+async def test_automatic_config_skips_no_battery_named_only_in_battery_list():
+    """ "No Battery" stated only inside batteryList must still be believed.
+
+    Which of Solis's battery fields are populated varies by firmware - one sets noBattery True,
+    another leaves it None, batteryJump is a dict on one and None on the other. So no single field
+    can be the only thing standing between us and inventing an 8 kWh battery; every place Solis
+    names the battery type is checked.
+    """
+    failed = False
+    print("**** Testing automatic_config believes 'No Battery' stated only in batteryList ****")
+
+    detail = {
+        "batteryHealthSoh": 0.0,
+        # No top-level batteryType at all - the list is the only statement.
+        "batteryList": [{"batteryTypeName": "No Battery", "noBattery": None}],
+    }
+    recorded, _ = await _run_automatic_config({"6000000000000001": detail})
+
+    if recorded.get("num_inverters") is not None:
+        print("ERROR: expected no configuration at all (no inverters with batteries), got num_inverters={}".format(recorded.get("num_inverters")))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config believes 'No Battery' stated only in batteryList")
+    return failed
+
+
+async def test_automatic_config_keeps_real_battery_reporting_zero_soh():
+    """SoH 0 on a real pack is a valid SolisCloud response - such an inverter must stay enrolled."""
+    failed = False
+    print("**** Testing automatic_config keeps a real battery reporting SoH 0 ****")
+
+    sn = "1031260253072197"
+    recorded, _ = await _run_automatic_config({sn: _DETAIL_REAL_BATTERY_ZERO_SOH})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: a real battery reporting SoH 0 must stay enrolled, got num_inverters={}".format(recorded.get("num_inverters")))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config keeps a real battery reporting SoH 0")
+    return failed
+
+
 def run_solis_tests(my_predbat):
     """
     Run all Solis API tests
@@ -955,11 +1326,18 @@ def run_solis_tests(my_predbat):
         # Run tests
         failed |= test_oauth_bearer_headers()
         failed |= test_solis_not_activated_without_credentials()
+        failed |= test_solis_skipped_component_logging()
         failed |= test_solis_activated_with_api_key()
         failed |= test_solis_activated_with_oauth_token()
+        failed |= test_initialize_attribute_parity_with_mock()
         failed |= asyncio.run(test_oauth_execute_request_refreshes_before_call())
+        failed |= asyncio.run(test_oauth_endpoint_namespace_translation())
         failed |= asyncio.run(test_oauth_execute_request_aborts_when_token_missing())
         failed |= asyncio.run(test_with_retry_aborts_on_oauth_failed())
+        failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
+        failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
+        failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
+        failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
         failed |= asyncio.run(test_read_and_write_cid())
@@ -969,6 +1347,17 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v1_mode())
         failed |= asyncio.run(test_write_time_windows_v2_no_changes())
         failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
+        failed |= asyncio.run(test_write_time_windows_v2_no_active_slot())
+        failed |= asyncio.run(test_discharge_soc_clamped_to_recovery_soc())
+        failed |= asyncio.run(test_recovery_soc_lowered_when_above_minimum())
+        failed |= asyncio.run(test_recovery_soc_lowered_to_target_when_reachable())
+        failed |= asyncio.run(test_discharge_soc_unchanged_above_recovery())
+        failed |= asyncio.run(test_discharge_soc_unclamped_when_recovery_unknown())
+        failed |= asyncio.run(test_recovery_soc_not_lowered_below_inverter_minimum())
+        failed |= asyncio.run(test_control_write_failure_withholds_success_timestamp())
+        failed |= asyncio.run(test_control_write_success_updates_success_timestamp())
+        failed |= asyncio.run(test_storage_mode_failure_does_not_fail_control_write())
+        failed |= asyncio.run(test_recovery_soc_polled_outside_batch())
         failed |= asyncio.run(test_write_time_windows_zero_charge_current())
         failed |= asyncio.run(test_write_time_windows_v1_slot_detection())
         failed |= asyncio.run(test_write_time_windows_v1_discharge_slot_detection())
@@ -1005,13 +1394,22 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_set_storage_mode_if_needed_changes())
         failed |= asyncio.run(test_set_storage_mode_if_needed_no_changes())
         failed |= asyncio.run(test_set_storage_mode_if_needed_all_modes())
+        failed |= asyncio.run(test_compute_solis_mode_value_can_drop_the_tou_bit())
+        failed |= asyncio.run(test_storage_mode_stops_asking_for_a_refused_tou_bit())
+        failed |= asyncio.run(test_storage_mode_keeps_the_tou_bit_when_the_inverter_accepts_it())
+        failed |= asyncio.run(test_storage_mode_does_not_learn_from_an_unrelated_verify_failure())
+        failed |= asyncio.run(test_refused_tou_bit_is_retested_after_the_reprobe_window())
+        failed |= asyncio.run(test_refused_tou_bit_is_not_persisted_across_a_restart())
         failed |= asyncio.run(test_get_solis_mode_enum())
         failed |= asyncio.run(test_compute_solis_mode_value())
         failed |= asyncio.run(test_get_solis_mode_enum_compute_roundtrip())
         failed |= asyncio.run(test_fetch_entity_data())
         failed |= asyncio.run(test_fetch_entity_data_power_clamping())
         failed |= asyncio.run(test_fetch_entity_data_invalid_values())
+        failed |= asyncio.run(test_set_arg_auto_warns_once_on_apps_yaml_override())
         failed |= asyncio.run(test_automatic_config())
+        failed |= asyncio.run(test_get_nominal_voltage_and_capacity_voltage())
+        failed |= asyncio.run(test_publish_entities_capacity_voltage_reliability())
         failed |= asyncio.run(test_publish_entities_export_power_unit_conversion())
         failed |= asyncio.run(test_inverter_sn_filter_exact_match())
         failed |= asyncio.run(test_inverter_sn_filter_case_insensitive())
@@ -1024,6 +1422,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_run_first_discovery_exception())
         failed |= asyncio.run(test_run_subsequent_polling_intervals())
         failed |= asyncio.run(test_run_read_only_skips_write())
+        failed |= asyncio.run(test_run_skips_control_writes_for_no_battery_inverter())
+        failed |= asyncio.run(test_run_skips_startup_register_reset_for_no_battery_inverter())
+        failed |= asyncio.run(test_run_logs_why_a_no_battery_inverter_is_not_controlled())
 
     except Exception as e:
         print(f"Error running Solis tests: {e}")
@@ -1908,6 +2309,296 @@ async def test_write_time_windows_v2_stale_slot_clearing():
     return False
 
 
+def _discharge_slot_api(discharge_soc, recovery_soc, over_discharge_soc, inverter_sn="TEST123"):
+    """Build a V2-mode MockSolisAPI with one enabled discharge slot and the given SOC limits.
+
+    Args:
+        discharge_soc: Cut-off SOC Predbat wants for the slot
+        recovery_soc: Value cached for CID 7229, or None to leave it absent
+        over_discharge_soc: Value cached for CID 158, or None to leave it absent
+        inverter_sn: Inverter serial number to use
+
+    Returns: The configured MockSolisAPI
+    """
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    api.inverter_sn = [inverter_sn]
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 1,
+            "discharge_start_time": "16:00",
+            "discharge_end_time": "19:00",
+            "discharge_soc": discharge_soc,
+            "discharge_current": 30,
+        }
+    }
+    cache = {}
+    if recovery_soc is not None:
+        cache[SOLIS_CID_BATTERY_RECOVERY_SOC] = str(recovery_soc)
+    if over_discharge_soc is not None:
+        cache[SOLIS_CID_BATTERY_OVER_DISCHARGE_SOC] = str(over_discharge_soc)
+    api.cached_values[inverter_sn] = cache
+    return api
+
+
+def _written_soc(api, inverter_sn="TEST123"):
+    """Return the value written to the discharge slot 1 cut-off SOC register, or None.
+
+    Args:
+        api: MockSolisAPI whose recorded calls should be searched
+        inverter_sn: Inverter serial number the write was made against
+
+    Returns: The written value as a string, or None if the register was not written
+    """
+    call = next((c for c in api.read_and_write_cid_calls if c["cid"] == SOLIS_CID_DISCHARGE_SOC[0]), None)
+    return call["value"] if call else None
+
+
+def _written_recovery(api):
+    """Return the value written to the battery recovery SOC register, or None.
+
+    Args:
+        api: MockSolisAPI whose recorded calls should be searched
+
+    Returns: The written value as a string, or None if the register was not written
+    """
+    call = next((c for c in api.read_and_write_cid_calls if c["cid"] == SOLIS_CID_BATTERY_RECOVERY_SOC), None)
+    return call["value"] if call else None
+
+
+async def test_discharge_soc_clamped_to_recovery_soc():
+    """A discharge target below the recovery SOC is raised to it when recovery cannot be lowered.
+
+    Reproduces issue #4702: with over-discharge at 20 the inverter holds recovery at 21 and
+    silently discards a write of 20, leaving the slot on a stale cut-off.
+    """
+    print("\n=== Test: discharge SOC clamped to recovery SOC ===")
+
+    api = _discharge_slot_api(discharge_soc=20, recovery_soc=21, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_soc(api) == "21", f"Discharge SOC should be clamped up to 21, got {_written_soc(api)}"
+    # Recovery is already at the inverter's minimum of over_discharge + 1, so must not be touched
+    assert _written_recovery(api) is None, "Recovery SOC must not be written when already at its minimum"
+    print("PASSED: Target of 20 clamped to recovery SOC of 21, recovery left alone")
+    return False
+
+
+async def test_recovery_soc_lowered_when_above_minimum():
+    """A recovery SOC above over-discharge + 1 is lowered towards the target before clamping."""
+    print("\n=== Test: recovery SOC lowered when above its minimum ===")
+
+    # Recovery sits at 50 but over-discharge is 20, so the inverter would accept 21
+    api = _discharge_slot_api(discharge_soc=20, recovery_soc=50, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_recovery(api) == "21", f"Recovery SOC should be lowered to 21, got {_written_recovery(api)}"
+    assert _written_soc(api) == "21", f"Discharge SOC should then be 21, got {_written_soc(api)}"
+    print("PASSED: Recovery lowered 50 -> 21 and discharge SOC written as 21 rather than a stale 50")
+    return False
+
+
+async def test_recovery_soc_lowered_to_target_when_reachable():
+    """When the target sits above over-discharge + 1 the recovery SOC drops to the target exactly."""
+    print("\n=== Test: recovery SOC lowered to the target itself ===")
+
+    # Target 30 is comfortably above the inverter minimum of 11, so no clamping is needed
+    api = _discharge_slot_api(discharge_soc=30, recovery_soc=45, over_discharge_soc=10)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_recovery(api) == "30", f"Recovery SOC should be lowered to the target 30, got {_written_recovery(api)}"
+    assert _written_soc(api) == "30", f"Discharge SOC should be the unclamped target 30, got {_written_soc(api)}"
+    print("PASSED: Recovery lowered to the target so no capacity is given up")
+    return False
+
+
+async def test_discharge_soc_unchanged_above_recovery():
+    """A target already at or above the recovery SOC is written through untouched."""
+    print("\n=== Test: discharge SOC above recovery SOC is untouched ===")
+
+    api = _discharge_slot_api(discharge_soc=40, recovery_soc=21, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_soc(api) == "40", f"Discharge SOC should stay at 40, got {_written_soc(api)}"
+    assert _written_recovery(api) is None, "Recovery SOC must not be written when the target is already reachable"
+    print("PASSED: Reachable target written unchanged with no recovery write")
+    return False
+
+
+async def test_discharge_soc_unclamped_when_recovery_unknown():
+    """With no cached recovery SOC the target is written as-is rather than guessed at."""
+    print("\n=== Test: discharge SOC unclamped when recovery SOC is unknown ===")
+
+    api = _discharge_slot_api(discharge_soc=20, recovery_soc=None, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_soc(api) == "20", f"Discharge SOC should be the raw target 20, got {_written_soc(api)}"
+    assert _written_recovery(api) is None, "Recovery SOC must not be written when its value is unknown"
+    print("PASSED: Unknown recovery SOC leaves the target untouched")
+    return False
+
+
+async def test_recovery_soc_not_lowered_below_inverter_minimum():
+    """Recovery is never driven below over-discharge + 1, which the inverter refuses."""
+    print("\n=== Test: recovery SOC floored at over-discharge + 1 ===")
+
+    # Target of 5 is below the inverter minimum of 21, so recovery stops at 21 and the target clamps
+    api = _discharge_slot_api(discharge_soc=5, recovery_soc=40, over_discharge_soc=20)
+    assert await api.write_time_windows_if_changed("TEST123") is True, "write_time_windows_if_changed should succeed"
+
+    assert _written_recovery(api) == "21", f"Recovery SOC should stop at over-discharge + 1 = 21, got {_written_recovery(api)}"
+    assert _written_soc(api) == "21", f"Discharge SOC should be clamped to 21, got {_written_soc(api)}"
+    print("PASSED: Recovery floored at 21 and the target clamped to match")
+    return False
+
+
+async def test_control_write_failure_withholds_success_timestamp():
+    """A refused control register write stops the success timestamp advancing, so the component ages out.
+
+    components.is_alive() treats a timestamp older than an hour as unhealthy, which is what puts
+    "component errors: Solis" into the run status instead of the failure sitting only in the log.
+    """
+    print("\n=== Test: control write failure withholds the success timestamp ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+    api._test_write_result = False
+
+    async def mock_get_inverter_list():
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    result = await api.run(seconds=0, first=True)
+
+    assert api.write_time_windows_calls == [sn], "The control write should still have been attempted"
+    assert api.update_success_timestamp_calls == 0, "A failed control write must not refresh the success timestamp"
+    # Still True: routing this through the return value would hit non_fatal_error_occurred(), whose
+    # had_errors flag makes update_pred() skip record_status() and freeze predbat.status
+    assert result is True, "The run itself should still be reported as successful"
+    print("PASSED: Failed control write withheld the timestamp without failing the run")
+    return False
+
+
+async def test_control_write_success_updates_success_timestamp():
+    """A clean control write refreshes the success timestamp as before."""
+    print("\n=== Test: successful control write updates the success timestamp ===")
+
+    sn = "INV001"
+    api = _make_run_api(configured_sns=[sn], control_enable=True)
+
+    async def mock_get_inverter_list():
+        return [{"sn": sn}]
+
+    api.get_inverter_list = mock_get_inverter_list
+
+    result = await api.run(seconds=0, first=True)
+
+    assert api.update_success_timestamp_calls == 1, "A successful control write should refresh the timestamp"
+    assert result is True, "Run should return True"
+    print("PASSED: Successful control write refreshed the timestamp")
+    return False
+
+
+async def test_storage_mode_failure_does_not_fail_control_write():
+    """A refused CID 636 write must not make write_time_windows_if_changed report failure.
+
+    The TOU bit on CID 636 is cleared by some inverters for reasons that are not understood, and it
+    fails verification on every cycle. Letting that count as a control failure would age those
+    systems out to unhealthy permanently, so the storage mode result is deliberately not folded
+    into the return value. This test pins that down.
+    """
+    print("\n=== Test: storage mode failure does not fail the control write ===")
+
+    inverter_sn = "TEST123"
+    api = _discharge_slot_api(discharge_soc=40, recovery_soc=21, over_discharge_soc=20, inverter_sn=inverter_sn)
+    api._mock_storage_mode = False  # Exercise the real set_storage_mode_if_needed path
+    # Force a mode change so the CID 636 write is actually attempted
+    api.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] = "0"
+
+    async def failing_storage_mode_write(sn, cid, value, field_description=None):
+        api.read_and_write_cid_calls.append({"inverter_sn": sn, "cid": cid, "value": str(value), "field_description": field_description})
+        if cid == SOLIS_CID_STORAGE_MODE:
+            return False
+        if sn not in api.cached_values:
+            api.cached_values[sn] = {}
+        api.cached_values[sn][cid] = str(value)
+        return True
+
+    api.read_and_write_cid = failing_storage_mode_write
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+
+    storage_calls = [c for c in api.read_and_write_cid_calls if c["cid"] == SOLIS_CID_STORAGE_MODE]
+    assert len(storage_calls) > 0, "The storage mode write should have been attempted"
+    assert result is True, "A failed storage mode write must not fail the control write"
+    print("PASSED: CID 636 failure left the control write reporting success")
+    return False
+
+
+async def test_recovery_soc_polled_outside_batch():
+    """CID 7229 is polled individually, the batch endpoint mis-reports it as 1."""
+    print("\n=== Test: recovery SOC excluded from the batch poll ===")
+
+    assert SOLIS_CID_BATTERY_RECOVERY_SOC not in solis_module.SOLIS_CID_INFREQUENT, "Recovery SOC must not be in the batched infrequent list"
+    assert SOLIS_CID_BATTERY_RECOVERY_SOC in solis_module.SOLIS_CID_INFREQUENT_SINGLE, "Recovery SOC must be in the single-read infrequent list"
+    print("PASSED: Recovery SOC is polled via the single-read list")
+    return False
+
+
+async def test_write_time_windows_v2_no_active_slot():
+    """Test write_time_windows_if_changed in V2 mode when slot 1 has no charge or discharge window.
+
+    Regression test: when neither charge nor discharge is enabled for slot 1, the inverter has no
+    time-of-use schedule configured and will not retain the TOU bit (SOLIS_BIT_TOU_MODE) on CID 636 -
+    it always reads back with that bit cleared. Predbat must mirror the V1 branch's behaviour and
+    request the '... - No Timed Charge/Discharge' mode variant in this case, otherwise every cycle
+    writes a value the inverter immediately rejects, producing a permanent verify-failure loop.
+    """
+    print("\n=== Test: write_time_windows_if_changed V2 mode no active slot ===")
+
+    api = MockSolisAPI()
+    api._test_v2_mode = True  # Enable V2 mode
+    api._mock_storage_mode = True  # Mock storage mode tracking
+    inverter_sn = "TEST123"
+    api.inverter_sn = [inverter_sn]
+
+    # Slot 1 has neither charge nor discharge enabled - no TOU schedule configured at all
+    api.charge_discharge_time_windows[inverter_sn] = {
+        1: {
+            "charge_enable": 0,
+            "charge_start_time": "00:00",
+            "charge_end_time": "00:00",
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 0,
+            "discharge_start_time": "00:00",
+            "discharge_end_time": "00:00",
+            "discharge_soc": 10,
+            "discharge_current": 30,
+        }
+    }
+
+    api.cached_values[inverter_sn] = {}
+
+    result = await api.write_time_windows_if_changed(inverter_sn)
+    assert result == True, "write_time_windows_if_changed should return True"
+
+    # Storage mode must use the 'No Timed Charge/Discharge' variant since no slot is active
+    storage_mode_calls = api.set_storage_mode_calls
+    assert len(storage_mode_calls) == 1, f"Expected 1 storage mode call, got {len(storage_mode_calls)}"
+    assert storage_mode_calls[0]["mode"] == "Self-Use - No Timed Charge/Discharge", f"Storage mode should be 'Self-Use - No Timed Charge/Discharge' when no slot is active, got '{storage_mode_calls[0]['mode']}'"
+
+    print("PASSED: V2 mode uses 'No Timed Charge/Discharge' variant when no slot is active")
+    return False
+
+
 async def test_write_time_windows_v1_mode():
     """Test write_time_windows_if_changed in V1 mode"""
     print("\n=== Test: write_time_windows_if_changed V1 mode ===")
@@ -2561,6 +3252,7 @@ async def test_publish_entities():
         "gridPurchasedTodayEnergy": 8.7,
         "gridPurchasedTodayEnergyStr": "kWh",
         "batteryCapacitySoc": 85,
+        "batteryHealthSoh": 0,  # documented, valid API response (issue #4494) - must not publish as 0% health
         "maxChargePowerW": 5000,
         "eTotal": 9876.5,
         "eTotalStr": "kWh",
@@ -2652,6 +3344,10 @@ async def test_publish_entities():
     api.max_charge_current[inverter_sn] = 50
     api.max_discharge_current[inverter_sn] = 50
 
+    # Nominal pack voltage for the battery capacity calculation (issue #4493) - deliberately
+    # distinct from the fixture's live batteryVoltage (52.3V) used for power conversions
+    api.nominal_pack_voltage = 512.0
+
     # Call publish_entities
     await api.publish_entities()
 
@@ -2678,10 +3374,11 @@ async def test_publish_entities():
     charge_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_soc"]
     assert charge_soc["state"] == 95, f"Charge SOC should be 95, got {charge_soc['state']}"
 
-    # Check power conversion (amps to watts)
+    # Check power conversion (amps to watts), using the LIVE measured voltage (52.3V from the
+    # fixture's batteryVoltage), not the old hard-coded 48.0V (issue #4493)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power" in api.dashboard_items, "Charge slot 1 power should be published"
     charge_power = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_charge_slot1_power"]
-    expected_power = int(50 * api.nominal_voltage)  # 50A * 48.0V = 2420W
+    expected_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
     assert charge_power["state"] == expected_power, f"Charge power should be {expected_power}W, got {charge_power['state']}"
     assert charge_power["attributes"]["unit_of_measurement"] == "W", "Charge power should have W unit"
 
@@ -2704,16 +3401,18 @@ async def test_publish_entities():
     reserve_soc = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_reserve_soc"]
     assert reserve_soc["state"] == "10", f"Reserve SOC should be 10, got {reserve_soc['state']}"
 
-    # Check max power numbers (converted from amps)
+    # Check max power numbers (converted from amps using the LIVE measured voltage, 52.3V from
+    # the fixture's batteryVoltage - not the old hard-coded 48.0V, issue #4493)
     assert f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power" in api.dashboard_items, "Max charge power should be published"
     max_charge = api.dashboard_items[f"number.{prefix}_solis_{inverter_sn_lower}_max_charge_power"]
-    expected_max_power = int(50 * api.nominal_voltage)  # 50A * 48.0V
+    expected_max_power = int(50 * 52.3)  # 50A * 52.3V (live measured, not nominal)
     assert max_charge["state"] == expected_max_power, f"Max charge power should be {expected_max_power}W, got {max_charge['state']}"
 
-    # Check battery capacity calculation (Ah to kWh)
+    # Check battery capacity calculation (Ah to kWh), using the configured nominal PACK voltage
+    # (512V) rather than the live measured voltage (issue #4493)
     assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity" in api.dashboard_items, "Battery capacity should be published"
     battery_cap = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_capacity"]
-    expected_kwh = round(100 * api.nominal_voltage / 1000.0, 2)  # 100Ah * 48.0V / 1000 = 4.84 kWh
+    expected_kwh = round(100 * 512.0 / 1000.0, 2)  # 100Ah * 512.0V / 1000 = 51.2 kWh
     assert battery_cap["state"] == expected_kwh, f"Battery capacity should be {expected_kwh}kWh, got {battery_cap['state']}"
     assert battery_cap["attributes"]["unit_of_measurement"] == "kWh", "Battery capacity should have kWh unit"
 
@@ -2750,6 +3449,13 @@ async def test_publish_entities():
     pv2_voltage = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_pv2_voltage"]
     assert pv2_voltage["state"] == 272.1, f"PV2 voltage should be 272.1, got {pv2_voltage['state']}"
     assert pv2_voltage["attributes"]["unit_of_measurement"] == "V", "PV2 voltage should have V unit"
+
+    # A batteryHealthSoh of 0 is published as-is (0.0) - it's ambiguous (flaky API vs genuinely
+    # unhealthy battery) so it's reported honestly rather than assumed to mean "fully healthy".
+    # It's Inverter.__init__ that protects battery_scaling itself from a 0/negative reading.
+    assert f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh" in api.dashboard_items, "Battery SOH should be published"
+    battery_soh = api.dashboard_items[f"sensor.{prefix}_solis_{inverter_sn_lower}_battery_soh"]
+    assert battery_soh["state"] == 0.0, f"Battery SOH of 0 should be published as-is (0.0), got {battery_soh['state']}"
 
     print(f"PASSED: publish_entities created {len(api.dashboard_items)} entities correctly")
     return False
@@ -3582,6 +4288,305 @@ async def test_set_storage_mode_if_needed_all_modes():
     return False
 
 
+class _StorageModeInverter(MockSolisAPI):
+    """Stub whose CID 636 behaviour the test controls, driven through the real write/verify path.
+
+    MockSolisAPI.read_and_write_cid always reports success, which cannot express an inverter that
+    accepts a write and then reports a different value back, so the real implementation is used
+    here with only read_cid/write_cid replaced.
+    """
+
+    def __init__(self, register, strip_tou=False, refuse_all=False):
+        """Start at `register`; optionally mask off the TOU bit, or ignore writes entirely."""
+        super().__init__()
+        self.register = register
+        self.strip_tou = strip_tou
+        self.refuse_all = refuse_all
+        self.writes = []
+
+    read_and_write_cid = SolisAPI.read_and_write_cid
+
+    async def read_cid(self, inverter_sn, cid):
+        """Report the stub register, refreshing the cache the way the real read does."""
+        self.cached_values.setdefault(inverter_sn, {})[cid] = str(self.register)
+        return str(self.register), {}
+
+    async def write_cid(self, inverter_sn, cid, value, old_value=None, field_description=None):
+        """Accept the write (the API answers code 0 either way) and apply the stub's policy."""
+        self.writes.append(int(value))
+        if not self.refuse_all:
+            self.register = int(value)
+            if self.strip_tou:
+                self.register &= ~(1 << SOLIS_BIT_TOU_MODE)
+        self.cached_values.setdefault(inverter_sn, {})[cid] = str(value)
+        self.log(f"Solis API: Set storage mode to {value} on {inverter_sn}")
+        return True
+
+
+async def test_compute_solis_mode_value_can_drop_the_tou_bit():
+    """Issue #4707: callers must be able to ask for a mode value with the TOU bit left clear.
+
+    Some inverters will not take bit 1 on CID 636 - the control API answers with code 0 and the
+    register comes back without it. The remaining modes are still valid, they just shift down:
+    35 becomes 33 and 98 becomes 96.
+    """
+    failed = False
+    print("\n=== Test: compute_solis_mode_value can drop the TOU bit ===")
+
+    # (mode, starting value, expected with the bit dropped, expected by default, description)
+    cases = [
+        (ENUM_SELF_USE, 33, 33, 35, "Self-Use"),
+        (ENUM_FEED_IN_PRIORITY, 96, 96, 98, "Feed-in priority"),
+        # Bits outside the mode table (here bit 7) are independent modifiers and must survive:
+        # this is the 179 -> 177 pair reported in the issue.
+        (ENUM_SELF_USE, 179, 177, 179, "Self-Use with an unrelated bit 7 set"),
+        # Modes that already clear the bit are unaffected either way.
+        (ENUM_SELF_USE_NO_GRID_CHARGING, 33, 1, 1, "Self-Use - No Timed Charge/Discharge"),
+        (ENUM_FEED_IN_PRIORITY_NO_GRID_CHARGING, 98, 64, 64, "Feed-in priority - No Timed Charge/Discharge"),
+    ]
+
+    for mode_enum, old_value, expected_dropped, expected_default, description in cases:
+        dropped = compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=True)
+        if dropped != expected_dropped:
+            print("ERROR: {} from {} with the bit dropped: expected {}, got {}".format(description, old_value, expected_dropped, dropped))
+            failed = True
+        if dropped & (1 << SOLIS_BIT_TOU_MODE):
+            print("ERROR: {} from {}: TOU bit still set in {}".format(description, old_value, dropped))
+            failed = True
+
+        default = compute_solis_mode_value(mode_enum, old_value)
+        if default != expected_default:
+            print("ERROR: {} from {} by default: expected {}, got {}".format(description, old_value, expected_default, default))
+            failed = True
+
+    if not failed:
+        print("PASSED: compute_solis_mode_value can drop the TOU bit, and does not by default")
+    return failed
+
+
+async def test_storage_mode_stops_asking_for_a_refused_tou_bit():
+    """Issue #4707: once an inverter strips the TOU bit, stop asking for it.
+
+    Predbat used to recompute 35 from the cached 33 every cycle, write it, have bit 1 stripped,
+    cache 33 again from the verify read, and repeat once a minute forever. The refusal is learnt
+    from the read-back rather than predicted, so it holds on any firmware.
+    """
+    failed = False
+    print("\n=== Test: storage mode stops asking for a refused TOU bit ===")
+
+    inverter_sn = "6031052254150188"
+    api = _StorageModeInverter(register=33, strip_tou=True)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+
+    for _ in range(4):
+        await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+
+    if api.writes != [35]:
+        print("ERROR: expected a single probe write of 35 then silence, got {}".format(api.writes))
+        failed = True
+    if api.register != 33:
+        print("ERROR: expected the inverter to be left at 33, got {}".format(api.register))
+        failed = True
+
+    warnings = [m for m in api.log_messages if m.startswith("Warn:") and "636" in m]
+    if len(warnings) != 1:
+        print("ERROR: expected exactly one verify warning, got {}".format(warnings))
+        failed = True
+
+    if not failed:
+        print("PASSED: a refused TOU bit is asked for once, not every cycle")
+    return failed
+
+
+async def test_storage_mode_keeps_the_tou_bit_when_the_inverter_accepts_it():
+    """Issue #4707: an inverter that does take bit 1 must keep getting it.
+
+    Dropping it there would be a silent downgrade - without the TOU bit, 33 means
+    "Self-Use - No Timed Charge/Discharge" on the firmware that still uses that table.
+    """
+    failed = False
+    print("\n=== Test: storage mode keeps the TOU bit when it is accepted ===")
+
+    inverter_sn = "1031260253072197"
+    api = _StorageModeInverter(register=33, strip_tou=False)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.register != 35:
+        print("ERROR: expected the inverter to reach 35, got {}".format(api.register))
+        failed = True
+
+    # Something outside Predbat moves it back; the next cycle must still ask for the TOU bit.
+    api.register = 1
+    api.cached_values[inverter_sn][SOLIS_CID_STORAGE_MODE] = "1"
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+
+    if api.writes != [35, 35]:
+        print("ERROR: expected 35 to be requested both times, got {}".format(api.writes))
+        failed = True
+
+    if not failed:
+        print("PASSED: the TOU bit is retained on an inverter that accepts it")
+    return failed
+
+
+async def test_refused_tou_bit_is_retested_after_the_reprobe_window():
+    """Issue #4707: a learnt refusal must expire, so a wrong conclusion cannot be permanent.
+
+    The probe is a single write at one moment in time, and the inverter's answer can depend on
+    state Predbat does not fully see - #4239 already found the TOU bit is only retained while a
+    window is configured. Concluding "never set this bit" from one refusal and holding it for the
+    life of the process would silently disable timed charging on an inverter that does use bit 1.
+    Re-testing every SOLIS_TOU_BIT_REPROBE_HOURS bounds the cost of being wrong to that window,
+    for three extra writes a day.
+    """
+    failed = False
+    print("\n=== Test: a refused TOU bit is retested after the re-probe window ===")
+
+    inverter_sn = "6031052254150188"
+    api = _StorageModeInverter(register=33, strip_tou=True)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+
+    start = datetime(2026, 8, 24, 17, 7, tzinfo=api.local_tz)
+    api._test_now_utc_exact = start
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+
+    # Just inside the window: still quiet.
+    api._test_now_utc_exact = start + timedelta(hours=SOLIS_TOU_BIT_REPROBE_HOURS) - timedelta(minutes=1)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes != [35]:
+        print("ERROR: expected no re-probe before the window elapses, got {}".format(api.writes))
+        failed = True
+
+    # Window elapsed: try the bit once more.
+    api._test_now_utc_exact = start + timedelta(hours=SOLIS_TOU_BIT_REPROBE_HOURS)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes != [35, 35]:
+        print("ERROR: expected exactly one re-probe once the window elapsed, got {}".format(api.writes))
+        failed = True
+
+    # And the refused answer is learnt again rather than re-probed every cycle.
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes != [35, 35]:
+        print("ERROR: expected the refusal to be relearnt, got {}".format(api.writes))
+        failed = True
+
+    if not failed:
+        print("PASSED: a refused TOU bit is retested once per re-probe window")
+    return failed
+
+
+async def test_refused_tou_bit_is_not_persisted_across_a_restart():
+    """Issue #4707: the refusal is process-local, so a restart re-probes.
+
+    Nothing about it is written through the Storage component - a firmware update that changes
+    the answer must not be masked by a stale cached verdict.
+    """
+    failed = False
+    print("\n=== Test: a refused TOU bit is not persisted ===")
+
+    inverter_sn = "6031052254150188"
+    api = _StorageModeInverter(register=33, strip_tou=True)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if not api.tou_bit_refused:
+        print("ERROR: expected the refusal to be recorded in the first place")
+        failed = True
+
+    # A fresh component, as after a restart, knows nothing and probes again.
+    restarted = _StorageModeInverter(register=33, strip_tou=True)
+    restarted.inverter_sn = [inverter_sn]
+    restarted.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33"}
+    if restarted.tou_bit_refused:
+        print("ERROR: a new component should start with no learnt refusals, got {}".format(restarted.tou_bit_refused))
+        failed = True
+
+    await restarted.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if restarted.writes != [35]:
+        print("ERROR: expected a fresh component to probe the TOU bit, got {}".format(restarted.writes))
+        failed = True
+
+    if not failed:
+        print("PASSED: the refusal is process-local and re-probed after a restart")
+    return failed
+
+
+async def test_storage_mode_does_not_learn_from_an_unrelated_verify_failure():
+    """Issue #4707: only a read-back that differs by exactly the TOU bit counts as a refusal.
+
+    A write the inverter drops wholesale says nothing about bit 1 in particular, and must not
+    silently switch Predbat to a mode value it never asked for.
+    """
+    failed = False
+    print("\n=== Test: storage mode does not learn from an unrelated verify failure ===")
+
+    inverter_sn = "1031260253072198"
+    # Backup/Reserve (bit 4) already set; Self-Use computes 51, and this inverter takes nothing.
+    api = _StorageModeInverter(register=17, refuse_all=True)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "17"}
+
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+
+    if api.writes != [51, 51]:
+        print("ERROR: expected 51 (with the TOU bit) to be retried, got {}".format(api.writes))
+        failed = True
+
+    if not failed:
+        print("PASSED: a wholesale write refusal does not disable the TOU bit")
+    return failed
+
+
+async def test_set_arg_auto_warns_once_on_apps_yaml_override():
+    """
+    Test ComponentBase.set_arg_auto() (issue #4494 follow-up, PR #4500 review): when
+    automatic_config() binds a key to an auto-discovered entity, and the user had already set
+    that key explicitly in apps.yaml, auto-discovery must still win (unchanged behaviour) but a
+    one-time note should be logged so the override isn't silently invisible.
+    """
+    print("\n=== Test: set_arg_auto warns once on apps.yaml override ===")
+
+    api = MockSolisAPI()
+    set_arg_calls = {}
+
+    def mock_set_arg(key, value):
+        set_arg_calls[key] = value
+
+    api.set_arg = mock_set_arg
+    api.base.args_from_apps_yaml = {"battery_scaling": [1.0], "num_inverters": 1}
+    api.base.apps_yaml_override_warned = set()
+
+    # User's apps.yaml value differs from what auto-discovery wants to set - warn once, but
+    # still apply the auto-discovered value (existing precedence is unchanged)
+    api.set_arg_auto("battery_scaling", ["sensor.predbat_solis_abc123_battery_soh"])
+    assert set_arg_calls.get("battery_scaling") == ["sensor.predbat_solis_abc123_battery_soh"], "Auto-discovered value should still win"
+    assert any("apps.yaml sets 'battery_scaling: [1.0]'" in msg for msg in api.log_messages), "Should warn once about the apps.yaml override"
+    warn_count = sum(1 for msg in api.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Should warn exactly once, got {warn_count}"
+
+    # Calling again for the same key (e.g. next automatic_config() run) must not repeat the warning
+    api.set_arg_auto("battery_scaling", ["sensor.predbat_solis_abc123_battery_soh"])
+    warn_count = sum(1 for msg in api.log_messages if "apps.yaml sets 'battery_scaling" in msg)
+    assert warn_count == 1, f"Warning should not repeat, got {warn_count}"
+
+    # apps.yaml value happens to already equal the auto-discovered value - nothing was actually
+    # overridden, so no warning
+    api.set_arg_auto("num_inverters", 1)
+    assert not any("num_inverters" in msg for msg in api.log_messages), "Should not warn when nothing was actually overridden"
+
+    # Key never set in apps.yaml at all - no warning
+    api.set_arg_auto("grid_power", ["sensor.predbat_solis_abc123_grid_power"])
+    assert not any("grid_power" in msg for msg in api.log_messages), "Should not warn for a key the user never configured"
+
+    print("PASSED: set_arg_auto warns once on a genuine apps.yaml override and stays silent otherwise")
+    return False
+
+
 async def test_automatic_config():
     """Test automatic_config method configures Predbat correctly"""
     print("Testing automatic_config...")
@@ -3726,6 +4731,116 @@ async def test_automatic_config():
 
     print("PASSED: automatic_config skips inverters without batteries")
 
+    # Test with a battery reporting batteryHealthSoh: 0 - a documented, valid Solis Cloud API
+    # response (issue #4494), not the same as the field being absent. The inverter must still be
+    # configured (not treated as having no battery), otherwise automatic_config aborts entirely
+    # and load_today/charge_start_time etc. are never set.
+    api5 = MockSolisAPI()
+    api5.inverter_sn = ["SN0SOH999"]
+    api5.inverter_details = {"SN0SOH999": {"batteryHealthSoh": 0}}
+
+    set_arg_calls5 = {}
+
+    def mock_set_arg5(key, value):
+        set_arg_calls5[key] = value
+
+    api5.set_arg = mock_set_arg5
+
+    await api5.automatic_config()
+
+    assert set_arg_calls5.get("num_inverters") == 1, f"Expected 1 inverter configured despite batteryHealthSoh 0, got {set_arg_calls5.get('num_inverters')}"
+    assert "load_today" in set_arg_calls5, "load_today should still be configured when batteryHealthSoh is 0"
+
+    print("PASSED: automatic_config still configures an inverter with batteryHealthSoh 0")
+
+    return False
+
+
+async def test_get_nominal_voltage_and_capacity_voltage():
+    """
+    Test get_nominal_voltage() and get_capacity_voltage() (issue #4493): power/current
+    conversions must use the live measured battery voltage (not the old hard-coded 48V), retaining
+    the last known-good reading if it becomes unavailable, while capacity must use a separately
+    configured nominal pack voltage and never guess at one.
+    """
+    print("\n=== Test: get_nominal_voltage and get_capacity_voltage ===")
+
+    api = MockSolisAPI()
+    sn = "TEST_SN"
+    api.inverter_sn = [sn]
+
+    # No details yet - falls back to the 48.0V default
+    assert api.get_nominal_voltage(sn) == 48.0, "Should fall back to 48.0V default with no data"
+    assert api.get_capacity_voltage(sn) is None, "Should return None when solis_nominal_voltage isn't configured"
+
+    # Live batteryVoltage reported - used directly, and remembered
+    api.inverter_details[sn] = {"batteryVoltage": 533.0}
+    assert api.get_nominal_voltage(sn) == 533.0, "Should use the live measured voltage"
+
+    # Live reading becomes unavailable (e.g. API outage) - retains the last known value, not 48.0
+    api.inverter_details[sn] = {"batteryVoltage": None}
+    assert api.get_nominal_voltage(sn) == 533.0, "Should retain last known-good voltage when unavailable"
+
+    # solis_nominal_voltage configured - used for capacity regardless of live voltage
+    api.nominal_pack_voltage = 512.0
+    assert api.get_capacity_voltage(sn) == 512.0, "Should use the configured nominal pack voltage for capacity"
+
+    print("PASSED: get_nominal_voltage and get_capacity_voltage behave correctly")
+    return False
+
+
+async def test_publish_entities_capacity_voltage_reliability():
+    """
+    Test battery_capacity behaviour with and without solis_nominal_voltage configured (issue
+    #4493). The sensor is always published - dropping it outright for every existing install
+    that hasn't set the new option was judged too disruptive - but without a configured nominal
+    pack voltage it falls back to the live measured voltage and is flagged unreliable (a warning
+    is logged, and the "reliable"/"voltage_source" attributes say so), since that value wobbles
+    with charge state and is still not the true nominal figure. parallel_battery_count is applied
+    either way.
+    """
+    print("\n=== Test: publish_entities battery_capacity voltage reliability ===")
+    from solis import SOLIS_CID_BATTERY_CAPACITY
+
+    api = MockSolisAPI()
+    sn = "SN0CAP999"
+    api.inverter_sn = [sn]
+    api.inverter_details[sn] = {"batteryVoltage": 533.0}
+    api.cached_values[sn] = {SOLIS_CID_BATTERY_CAPACITY: "100"}
+
+    prefix = api.prefix
+    entity_id = f"sensor.{prefix}_solis_{sn.lower()}_battery_capacity"
+
+    # No solis_nominal_voltage configured - still published, using the live voltage, flagged unreliable
+    await api.publish_entities()
+    assert entity_id in api.dashboard_items, "battery_capacity should still be published without solis_nominal_voltage configured"
+    capacity_item = api.dashboard_items[entity_id]
+    expected_kwh_estimated = round(100 * 533.0 / 1000.0, 2)  # 100Ah * 533.0V (live) / 1000 = 53.3 kWh
+    assert capacity_item["state"] == expected_kwh_estimated, f"Expected {expected_kwh_estimated}kWh from live voltage, got {capacity_item['state']}"
+    assert capacity_item["attributes"]["reliable"] is False, "Should be flagged unreliable when using the live voltage"
+    assert "estimated from the live measured voltage" in capacity_item["attributes"]["voltage_source"]
+    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    assert warn_count == 1, f"Should warn that the value is an estimate exactly once, got {warn_count}"
+
+    # publish_entities() runs roughly once a minute in production - a second call must not repeat
+    # the warning, or it would drown out the log for every install that hasn't configured this
+    api.dashboard_items = {}
+    await api.publish_entities()
+    warn_count = sum(1 for msg in api.log_messages if "estimated from the live measured voltage" in msg)
+    assert warn_count == 1, f"Warning should not repeat on a second publish_entities() call, got {warn_count}"
+
+    # With solis_nominal_voltage AND 2 parallel batteries configured - both applied, flagged reliable
+    api.nominal_pack_voltage = 512.0
+    api.parallel_battery_count[sn] = 2
+    api.dashboard_items = {}
+    await api.publish_entities()
+    assert entity_id in api.dashboard_items, "battery_capacity should be published once configured"
+    capacity_item = api.dashboard_items[entity_id]
+    expected_kwh = round(100 * 2 * 512.0 / 1000.0, 2)  # 100Ah x 2 parallel x 512V / 1000 = 102.4 kWh
+    assert capacity_item["state"] == expected_kwh, f"Expected {expected_kwh}kWh, got {capacity_item['state']}"
+    assert capacity_item["attributes"]["reliable"] is True, "Should be flagged reliable when solis_nominal_voltage is configured"
+
+    print("PASSED: battery_capacity is always published, flags reliability, and respects parallel_battery_count")
     return False
 
 

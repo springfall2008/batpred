@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string
+from utils import get_override_time_from_string, mask_secret_args
 import json
 import yaml
 import re
@@ -29,11 +29,10 @@ from const import (
     PREDBAT_MODE_OPTIONS,
     PREDBAT_MODE_MONITOR,
 )
-from config import CONFIG_API_OVERRIDE
-from predbat import THIS_VERSION
+from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
+from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 DEBUG_EXCLUDE_LIST = [
-    "pool",
     "ha_interface",
     "components",
     "prediction",
@@ -190,7 +189,13 @@ class UserInterface:
             overrides = self.get_manual_api(arg)
             if isinstance(default, list):
                 value = self.get_arg(arg, default=default, indirect=indirect, combine=combine, attribute=attribute, index=index, domain=domain, can_override=False)
+                is_dict_list = self.is_multi_instance_override(arg)
                 for override in overrides:
+                    # dict_list index only dedupes at write time, it has no output position (#4405)
+                    if is_dict_list:
+                        value.append(override.get("value", None))
+                        self.log("Note: API Overridden arg {} value {} appended".format(arg, value))
+                        continue
                     override_index = override.get("index", 0)
                     if override_index is None:
                         override_index = 0
@@ -255,20 +260,33 @@ class UserInterface:
 
         if isinstance(default, float):
             # Convert to float?
-            try:
-                value = float(value)
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # Nothing resolved - not configured, or an out-of-range index on a per-inverter list
+                # (resolve_arg has already logged "Out of range index ..."). That is exactly what the
+                # caller's default is for, so apply it quietly rather than reporting an error: flagging
+                # it pins the warning on the status sensor and ends every run as "Read-Only with Errors"
+                # for a gap the caller already handles. A value that is present but unparseable is a
+                # genuine fault and is still reported below.
                 value = default
+            else:
+                try:
+                    value = float(value)
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad float value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad float value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, int) and not isinstance(default, bool):
             # Convert to int?
-            try:
-                value = int(float(value))
-            except (ValueError, TypeError):
-                self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
-                self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+            if value is None:
+                # See the float case above - a missing value is what the default is for, not an error
                 value = default
+            else:
+                try:
+                    value = int(float(value))
+                except (ValueError, TypeError):
+                    self.log("Warn: Return bad int value {} from {} using default {}".format(value, arg, default))
+                    self.record_status("Warn: Return bad int value {} from {}".format(value, arg), had_errors=True)
+                    value = default
         elif isinstance(default, bool) and isinstance(value, str):
             # Convert to Boolean
             if value.lower() in ["on", "true", "yes", "enabled", "enable", "connected"]:
@@ -448,6 +466,21 @@ class UserInterface:
                 value = None
             if default is None:
                 default = item.get("default", None)
+                if item.get("type") == "input_number" and isinstance(default, int) and not isinstance(default, bool):
+                    # This default is not just a fallback for a missing value - get_arg() (the only
+                    # caller that reaches here with default=None) applies a further type coercion to
+                    # whatever value this function returns, keyed on the *type* of this default,
+                    # regardless of whether that returned value is this default or the item's real
+                    # configured value. So an int default doesn't just risk supplying an int when
+                    # unset - it forces every read of this item back to an int even when the user has
+                    # genuinely configured a fractional one, via get_arg's int(float(value)) (#4296:
+                    # metric_battery_cycle's real, present, correctly-resolved 0.5 was still coerced
+                    # to 0 downstream, purely because its default happened to be the int 0). Normalise
+                    # here, at the source, so it can't matter which literal a future item's "default"
+                    # happens to be written as.
+                    step = item.get("step", 1)
+                    if isinstance(step, float) and step != int(step):
+                        default = float(default)
             if value is None:
                 value = default
             return value, default
@@ -760,11 +793,7 @@ class UserInterface:
                     pass
                 else:
                     if key == "args":
-                        # Remove keys from args
-                        debug[key] = copy.deepcopy(self.__dict__[key])
-                        for sub_key in debug[key]:
-                            if ("_key" in sub_key.lower()) or ("password" in sub_key.lower()):
-                                debug[key][sub_key] = "xxx"
+                        debug[key] = mask_secret_args(self.__dict__[key])
                     else:
                         debug[key] = self.__dict__[key]
         inverters_debug = []
@@ -794,7 +823,7 @@ class UserInterface:
         """
 
         text = ""
-        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION)
+        text += "# Predbat Dashboard - {}\n".format(THIS_VERSION_DISPLAY)
         text += "type: entities\n"
         text += "Title: Predbat\n"
         text += "entities:\n"
@@ -865,11 +894,19 @@ class UserInterface:
     async def trigger_callback(self, service_data):
         """
         Trigger a callback for a service via HA Interface
+
+        Returns True if a matching listener was found and run, False otherwise - callers
+        (e.g. HAInterface.call_service()'s loopback branch) use this as the success signal
+        for the same True/success, False/None-failure contract the websocket branch provides,
+        since loopback mode only ever simulates the entity-control services in EVENT_LISTEN_LIST,
+        not arbitrary third-party integration services.
         """
         for item in self.EVENT_LISTEN_LIST:
             if item["domain"] == service_data.get("domain", "") and item["service"] == service_data.get("service", ""):
                 # self.log("Trigger callback for {} {}".format(item["domain"], item["service"]))
                 await item["callback"](item["service"], service_data, None)
+                return True
+        return False
 
     def define_service_list(self):
         self.SERVICE_REGISTER_LIST = [
@@ -904,6 +941,30 @@ class UserInterface:
             {"domain": "update", "service": "skip", "callback": self.update_event},
         ]
 
+    def is_new_install(self):
+        """
+        Determine whether this is a genuinely new install, used to set sensible defaults
+        (e.g. mode defaults to Monitor rather than Control charge & discharge).
+        """
+        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
+        if current_status:
+            return False
+
+        # HA's live state and history can both come back empty for a moment right after an
+        # abrupt restart, before HA's own state store has fully warmed back up. A single
+        # failed predbat.status read isn't enough evidence of a fresh install on its own -
+        # predbat_config.json only exists once Predbat has actually saved a config before,
+        # so its presence is a persistent, restart-proof signal that this is a real install,
+        # not a new one (see #4397/#4396 root cause, and #3259/#3306 for the resulting
+        # spurious config resets this was letting through).
+        config_path = os.path.join(self.config_root or "", "predbat_config.json")
+        if not self.ha_interface.db_primary and os.path.isfile(config_path):
+            self.log("predbat.status unavailable but predbat_config.json exists - not treating this as a new install")
+            return False
+
+        self.log("New install detected")
+        return True
+
     def load_user_config(self, quiet=True, register=False, load_config=False):
         """
         Load config from HA
@@ -913,12 +974,7 @@ class UserInterface:
         self.log("Refreshing Predbat configuration")
 
         # New install, used to set default of expert mode
-        new_install = True
-        current_status = self.load_previous_value_from_ha(self.prefix + ".status")
-        if current_status:
-            new_install = False
-        else:
-            self.log("New install detected")
+        new_install = self.is_new_install()
 
         # Build config index
         for item in self.CONFIG_ITEMS:
@@ -964,7 +1020,10 @@ class UserInterface:
 
             # Get from current state, if not from HA directly
             ha_value = item.get("value", None)
-            if ha_value is None:
+            # The update entity is synthesised after release discovery and is explicitly
+            # non-restorable. Looking in history when its current state is absent registers
+            # an empty 30-day query with HAHistory, which then retries every two minutes.
+            if ha_value is None and type != "update":
                 ha_value = self.load_previous_value_from_ha(entity)
 
             # Update drop down menu
@@ -991,7 +1050,25 @@ class UserInterface:
                 try:
                     # Convert to float first
                     ha_value = float(ha_value)
-                    # For entities with integer step, convert to int to preserve integer format
+
+                    # Clamp to the declared min/max. This is reachable from an apps.yaml override,
+                    # which bypasses the HA input_number entity's own min/max enforcement entirely -
+                    # an out-of-range value here can otherwise silently distort the optimiser (e.g.
+                    # pv_metric10_weight is documented/limited to 0.0-1.0 but a raw apps.yaml value
+                    # of, say, 30 passes straight through unclamped).
+                    item_min = item.get("min", None)
+                    item_max = item.get("max", None)
+                    if item_min is not None and ha_value < item_min:
+                        self.record_status("Warn: Config item {} value {} is below the minimum {} - clamping to {}".format(name, ha_value, item_min, item_min), had_errors=True)
+                        ha_value = float(item_min)
+                    elif item_max is not None and ha_value > item_max:
+                        self.record_status("Warn: Config item {} value {} is above the maximum {} - clamping to {}".format(name, ha_value, item_max, item_max), had_errors=True)
+                        ha_value = float(item_max)
+
+                    # For entities with integer step, convert to int to preserve integer format.
+                    # Done after clamping since min/max can themselves be declared as floats (e.g.
+                    # metric_min_improvement_plan has step=1 but max=250.0) - clamping alone would
+                    # otherwise silently hand back a float and defeat this normalisation.
                     step = item.get("step", 1)
                     if isinstance(step, int) or (isinstance(step, float) and step == int(step)):
                         # Step is an integer (e.g., 1, 2, etc.), so keep value as integer if it has no decimal part
@@ -1118,6 +1195,22 @@ class UserInterface:
                 command = command_split[0]
                 command_index = int(command_split[1])
         return command, command_index
+
+    def is_multi_instance_override(self, command):
+        """
+        True if the command is a dict_list override (e.g. rates_import_override)
+        """
+        return APPS_SCHEMA.get(command, {}).get("type") == "dict_list"
+
+    def strip_command_args(self, command):
+        """
+        Strip the ?args or =value suffix from a manual API command string
+        """
+        if "?" in command:
+            return command.split("?")[0]
+        elif "=" in command:
+            return command.split("=")[0]
+        return command
 
     def get_manual_api(self, command_type):
         """
@@ -1312,21 +1405,20 @@ class UserInterface:
         for value in values_list:
             if value == "off":
                 continue
-            for prev in time_overrides[:]:
-                if "=" in prev:
-                    prev_no_eq = prev.split("=")[0]
-                elif "?" in prev:
-                    prev_no_eq = prev.split("?")[0]
-                else:
-                    prev_no_eq = prev
-                if "=" in value:
-                    value_no_eq = value.split("=")[0]
-                elif "?" in value:
-                    value_no_eq = value.split("?")[0]
-                else:
-                    value_no_eq = value
-                if prev_no_eq == value_no_eq:
-                    time_overrides.remove(prev)
+            value_no_eq = self.strip_command_args(value)
+            has_index = "(" in value_no_eq
+            value_command = value_no_eq.split("(")[0] if has_index else value_no_eq
+
+            # No-index dict_list commands only dedupe against an exact repeat, not by name (#4405)
+            is_multi_instance = not has_index and self.is_multi_instance_override(value_command)
+
+            if is_multi_instance:
+                if value in time_overrides:
+                    time_overrides.remove(value)
+            else:
+                for prev in time_overrides[:]:
+                    if self.strip_command_args(prev) == value_no_eq:
+                        time_overrides.remove(prev)
             time_overrides.append(value)
 
         values = ",".join(time_overrides)

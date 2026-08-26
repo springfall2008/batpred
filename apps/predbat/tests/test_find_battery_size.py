@@ -764,6 +764,162 @@ def test_battery_scaling_auto_skip_today(my_predbat):
     return failed
 
 
+def test_battery_scaling_auto_history_survives_ha_restart(my_predbat):
+    """
+    Regression test for the soc_max_calculated history being wiped by a Home Assistant restart.
+
+    After a HA restart the sensor.*_soc_max_calculated entity no longer exists (its state is
+    ephemeral and is not restored), but the recorder still holds its last-known "history"
+    attribute. battery_size_tracking / update_soc_max_calculated_sensor must fall back to the
+    recorder (via load_previous_value_from_ha) instead of treating the missing entity as an
+    empty history, otherwise the 7-day trimmed mean is reset to a single noisy day every restart.
+    """
+    print("*** Running test: battery_scaling_auto_history_survives_ha_restart ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = True
+
+    from datetime import timedelta as td
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today = my_predbat.now_utc.date()
+    day0 = str(today - td(days=3))
+    day1 = str(today - td(days=2))
+    day2 = str(today - td(days=1))
+    # Same 3 days of prior history used in test_battery_scaling_auto_basic, but this time it is
+    # only available via the recorder (get_history), simulating the entity being gone after a restart.
+    prior_history = {day0: 9.0, day1: 9.5, day2: 10.0}
+
+    # Simulate the HA restart: the entity is completely gone from live state.
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    original_get_history = my_predbat.ha_interface.get_history
+
+    def fake_get_history(entity_id, now=None, days=30):
+        if entity_id == sensor_name:
+            return [[{"state": "9.5", "attributes": {"history": prior_history}, "last_changed": my_predbat.now_utc}]]
+        return original_get_history(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = fake_get_history
+
+    # Mock find_battery_size to return a known value for today
+    inv.find_battery_size = lambda _nc=0: 9.4
+
+    try:
+        inv.battery_size_tracking()
+        # Same expectation as test_battery_scaling_auto_basic: trimmed mean of [9.0,9.4,9.5,10.0] drops extremes
+        expected_mean = (9.4 + 9.5) / 2
+        expected_scaling = _clamped_auto_scaling(expected_mean, nominal)
+        expected_soc_max = round(nominal * expected_scaling, 3)
+
+        # The republished sensor history must still contain the 3 recorder-only days plus today
+        published_history = my_predbat.ha_interface.dummy_items.get(sensor_name, {}).get("history", {})
+        if len(published_history) != 4:
+            print("ERROR: expected republished history to retain 4 days (3 recovered + today), got {}".format(published_history))
+            failed = True
+
+        if abs(inv.soc_max - expected_soc_max) > 0.001:
+            print("ERROR: soc_max {:.3f} does not match expected {:.3f} - recorder history was not used".format(inv.soc_max, expected_soc_max))
+            failed = True
+
+        if not failed:
+            print("SUCCESS: history recovered from recorder after simulated HA restart, trimmed mean preserved")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_history_survives_ha_restart raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
+def test_battery_scaling_auto_state_survives_restart_after_today_recorded(my_predbat):
+    """
+    Regression test for battery_scaling_auto being silently skipped after a mid-day HA restart.
+
+    When the restart happens after today's value was already recorded, the recovered history
+    (via load_previous_value_from_ha) contains today's key, so find_battery_size is correctly
+    skipped. But the trimmed mean must still be recovered - it needs the same recorder fallback,
+    otherwise the live-only state read returns None and battery_scaling_auto is skipped for the
+    rest of the day, leaving soc_max un-refined until the next calendar day.
+    """
+    print("*** Running test: battery_scaling_auto_state_survives_restart_after_today_recorded ***")
+    failed = False
+    nominal = 10.0
+    inv = _make_inv_for_scaling(my_predbat, nominal)
+    my_predbat.battery_scaling_auto = True
+
+    from datetime import timedelta as td
+
+    sensor_name = "sensor.{}_soc_max_calculated".format(my_predbat.prefix)
+    today = my_predbat.now_utc.date()
+    day0 = str(today - td(days=3))
+    day1 = str(today - td(days=2))
+    day2 = str(today - td(days=1))
+    today_key = str(today)
+    # Today's value was already recorded before the restart, so the recovered history includes it.
+    # Trimmed mean of [9.0, 9.4, 9.5, 10.0] drops the extremes -> (9.4 + 9.5) / 2 = 9.45, which is
+    # the state the recorder holds for the sensor.
+    recorded_history = {day0: 9.0, day1: 9.5, day2: 10.0, today_key: 9.4}
+    recorded_state = "9.45"
+
+    # Simulate the HA restart: the entity is completely gone from live state; only the recorder has it.
+    my_predbat.ha_interface.dummy_items.pop(sensor_name, None)
+
+    original_get_history = my_predbat.ha_interface.get_history
+
+    def fake_get_history(entity_id, now=None, days=30):
+        if entity_id == sensor_name:
+            return [[{"state": recorded_state, "attributes": {"history": recorded_history}, "last_changed": my_predbat.now_utc}]]
+        return original_get_history(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = fake_get_history
+
+    # find_battery_size must NOT be called - today is already in the recovered history.
+    calls = [0]
+
+    def mock_find_should_not_be_called(_nc=0):
+        calls[0] += 1
+        return 999.0
+
+    inv.find_battery_size = mock_find_should_not_be_called
+
+    try:
+        inv.battery_size_tracking()
+        if calls[0] > 0:
+            print("ERROR: find_battery_size was called {} time(s) but today was already recorded".format(calls[0]))
+            failed = True
+
+        expected_mean = 9.45
+        expected_scaling = _clamped_auto_scaling(expected_mean, nominal)
+        expected_soc_max = round(nominal * expected_scaling, 3)
+        if abs(inv.soc_max - expected_soc_max) > 0.001:
+            print("ERROR: soc_max {:.3f} does not match expected {:.3f} - trimmed mean not recovered from recorder after restart".format(inv.soc_max, expected_soc_max))
+            failed = True
+        if abs(inv.battery_scaling - expected_scaling) > 0.001:
+            print("ERROR: battery_scaling {:.3f} does not match expected {:.3f}".format(inv.battery_scaling, expected_scaling))
+            failed = True
+
+        if not failed:
+            print("SUCCESS: trimmed mean recovered from recorder after restart, battery_scaling_auto still applied")
+    except Exception as e:
+        print("ERROR: test_battery_scaling_auto_state_survives_restart_after_today_recorded raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+    finally:
+        my_predbat.ha_interface.get_history = original_get_history
+
+    my_predbat.battery_scaling_auto = False
+    return failed
+
+
 def test_battery_scaling_auto_no_result(my_predbat):
     """
     Test that when find_battery_size returns None and there is no prior sensor state, soc_max is unchanged.
@@ -1564,6 +1720,14 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_battery_scaling_auto_skip_today(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_history_survives_ha_restart(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_battery_scaling_auto_state_survives_restart_after_today_recorded(my_predbat)
     if failed:
         return failed
 

@@ -1,0 +1,119 @@
+// Enphase Enlighten livestream "Data Channel" message.
+//
+// Schema published by Enphase at
+// https://assets-enlighten.enphaseenergy.com/mobile/static/proto/DataMsg.proto and
+// .../MeterSummaryData.proto, combined here into one file (their DataMsg imports
+// HemsStreamMessage.proto but does not reference it, so that import is dropped).
+//
+// Regenerate enphase_livestream_pb2.py after editing:
+//   python -m grpc_tools.protoc -I apps/predbat --python_out=apps/predbat \
+//       apps/predbat/enphase_livestream.proto
+syntax = "proto3";
+
+enum MeterSumGridState {
+  OPER_RELAY_UNKNOWN = 0;
+  OPER_RELAY_OPEN = 1;
+  OPER_RELAY_CLOSED = 2;
+  OPER_RELAY_OFFGRID_AC_GRID_PRESENT = 3;
+  OPER_RELAY_OFFGRID_READY_FOR_RESYNC_CMD = 4;
+  OPER_RELAY_WAITING_TO_INITIALIZE_ON_GRID = 5;
+  OPER_RELAY_GEN_OPEN = 6;
+  OPER_RELAY_GEN_CLOSED = 7;
+  OPER_RELAY_GEN_STARTUP = 8;
+  OPER_RELAY_GEN_SYNC_READY = 9;
+  OPER_RELAY_GEN_AC_STABLE = 10;
+  OPER_RELAY_GEN_AC_UNSTABLE = 11;
+}
+
+enum BattMode {
+  BATT_MODE_FULL_BACKUP = 0;
+  BATT_MODE_SELF_CONS = 1;
+  BATT_MODE_SAVINGS = 2;
+}
+
+enum DryContactId {
+  NC1 = 0;
+  NC2 = 1;
+  NO1 = 2;
+  NO2 = 3;
+}
+
+enum DryContactRelayState {
+  DC_RELAY_STATE_INVALID = 0;
+  DC_RELAY_OFF = 1;
+  DC_RELAY_ON = 2;
+}
+
+enum MeterType {
+  METER_TYPE_NONE = 0;
+  METER_TYPE_PV = 1;
+  METER_TYPE_STORAGE = 2;
+}
+
+// One measured channel. agg_p_mw is real power in milliwatts (divide by 1000 for W);
+// agg_s_mva is apparent power in milli-VA.
+message MeterChannel {
+  int64 agg_p_mw = 1;
+  int64 agg_s_mva = 2;
+  repeated int64 agg_p_ph_mw = 3;
+  repeated int64 agg_s_ph_mva = 4;
+  optional string device_sn = 5;
+}
+
+message AggMeterChannel {
+  int64 agg_p_mw = 1;
+  int64 agg_s_mva = 2;
+  repeated int64 agg_p_ph_mw = 3;
+  repeated int64 agg_s_ph_mva = 4;
+  optional MeterType type = 5;
+  repeated MeterChannel channels = 6;
+}
+
+message MeterSummaryData {
+  MeterChannel pv = 1;
+  MeterChannel storage = 2;
+  MeterChannel grid = 3;
+  MeterChannel load = 4;
+  MeterSumGridState grid_relay = 5;
+  int32 soc = 6;
+  MeterChannel generator = 7;
+  MeterSumGridState gen_relay = 8;
+  uint32 phase_count = 9;
+  bool is_split_phase = 10;
+  repeated AggMeterChannel meter_channel = 14;
+}
+
+message DryContactStatus {
+  DryContactId id = 1;
+  DryContactRelayState state = 2;
+}
+
+message DryContactName {
+  DryContactId id = 1;
+  string load_name = 2;
+}
+
+message LoadStatus {
+  string id = 1;
+  string relay_status = 2;
+  float power = 3;
+}
+
+message PowerMatchStatus {
+  bool status = 1;
+  uint32 totalPCUCount = 2;
+  uint32 runningPCUCount = 3;
+  bool isSupported = 4;
+}
+
+message DataMsg {
+  int32 protocol_ver = 1;
+  uint64 timestamp = 2;
+  MeterSummaryData meters = 3;
+  BattMode batt_mode = 4;
+  int32 backup_soc = 5;
+  repeated DryContactStatus dry_contact_relay_status = 6;
+  repeated DryContactName dry_contact_relay_name = 7;
+  repeated LoadStatus load_status = 8;
+  PowerMatchStatus power_match_status = 9;
+}

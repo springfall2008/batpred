@@ -18,21 +18,27 @@ phase order. Routes HA events to components based on entity prefix filtering.
 """
 
 from storage import StorageComponent
+from alphaess import AlphaESSAPI
 from solcast import SolarAPI
 from gecloud import GECloudDirect, GECloudData
 from ohme import OhmeAPI
+from myenergi import MyEnergiAPI
 from octopus import OctopusAPI
 from carbon import CarbonAPI
 from temperature import TemperatureAPI
 from axle import AxleAPI
 from solax import SolaxAPI
 from sigenergy import SigenergyAPI
+from teslemetry import TeslemetryAPI
 from solis import SolisAPI
 from alertfeed import AlertFeed
 from web import WebInterface
 from ha import HAInterface, HAHistory
 from db_manager import DatabaseManager
 from fox import FoxAPI
+from deye import DeyeAPI
+from sunsynk import SunsynkAPI
+from enphase import EnphaseAPI
 from kraken import KrakenAPI
 from web_mcp import PredbatMCPServer
 
@@ -104,6 +110,7 @@ COMPONENT_LIST = {
             "forecast_solar": {"required": False, "config": "forecast_solar", "default": False},
             "forecast_solar_max_age": {"required": False, "config": "forecast_solar_max_age", "default": 8},
             "forecast_solar_open_meteo_backup": {"required": False, "config": "forecast_solar_open_meteo_backup", "default": False},
+            "forecast_solar_open_meteo_first": {"required": False, "config": "forecast_solar_open_meteo_first", "default": False},
             "pv_forecast_today": {"required": False, "config": "pv_forecast_today"},
             "pv_forecast_tomorrow": {"required": False, "config": "pv_forecast_tomorrow"},
             "pv_forecast_d3": {"required": False, "config": "pv_forecast_d3"},
@@ -132,6 +139,16 @@ COMPONENT_LIST = {
                 "required": False,
                 "default": False,
                 "config": "ge_cloud_automatic",
+            },
+            "automatic_evc": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_automatic_evc",
+            },
+            "evc_control": {
+                "required": False,
+                "default": False,
+                "config": "ge_cloud_evc_control",
             },
         },
         "phase": 1,
@@ -194,12 +211,52 @@ COMPONENT_LIST = {
                 "required": True,
                 "config": "ohme_password",
             },
+            "ohme_automatic": {
+                "required": False,
+                "default": False,
+                "config": "ohme_automatic",
+            },
+            "ohme_control": {
+                "required": False,
+                "default": False,
+                "config": "ohme_control",
+            },
+            # Deliberately has no default: unset means "auto-detect from the Octopus component",
+            # which is distinct from an explicit False meaning "never use Ohme for the car slots"
             "ohme_automatic_octopus_intelligent": {
                 "required": False,
                 "config": "ohme_automatic_octopus_intelligent",
             },
         },
         "phase": 1,
+    },
+    "myenergi": {
+        "class": MyEnergiAPI,
+        "name": "myenergi Zappi/Eddi",
+        "event_filter": "predbat_myenergi_",
+        "args": {
+            "auth_method": {"required": False, "config": "myenergi_auth_method", "default": "direct"},
+            "hub_serial": {"required": False, "config": "myenergi_hub_serial"},
+            "api_key": {"required": False, "config": "myenergi_api_key"},
+            "key": {"required": False, "config": "myenergi_key"},
+            "token_expires_at": {"required": False, "config": "myenergi_token_expires_at"},
+            "token_hash": {"required": False, "config": "myenergi_token_hash"},
+            "automatic": {"required": False, "config": "myenergi_automatic", "default": True},
+            "enable_controls": {"required": False, "config": "myenergi_enable_controls", "default": True},
+            "poll_seconds": {"required": False, "config": "myenergi_poll_seconds", "default": 60},
+            "zappi_control": {"required": False, "config": "myenergi_zappi_control", "default": False},
+        },
+        # Gate activation on having at least one auth path — api_key is the direct
+        # transport's local hub credential, key is the cloud transport's access token.
+        # Without this the component would start for every instance since all
+        # individual args are optional to allow either auth mode.
+        # api_key is the direct transport's credential; key (the OAuth access token) and
+        # token_hash (which the refresh chain exchanges for one) are the cloud transport's.
+        # token_hash has to be listed too: a refresh-only OAuth setup carries no key, and
+        # initialize() accepts that, so gating on key alone would never construct it.
+        "required_or": ["api_key", "key", "token_hash"],
+        "phase": 1,
+        "can_restart": True,
     },
     "fox": {
         "class": FoxAPI,
@@ -236,6 +293,133 @@ COMPONENT_LIST = {
             "token_hash": {
                 "required": False,
                 "config": "fox_token_hash",
+            },
+        },
+        "phase": 1,
+    },
+    "deye": {
+        "class": DeyeAPI,
+        "name": "DEYE Cloud",
+        "event_filter": "predbat_deye_",
+        "args": {
+            "app_id": {"required": False, "config": "deye_app_id"},
+            "app_secret": {"required": False, "config": "deye_app_secret"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as deye_key;
+            # without this entry it is dropped and DEYE rejects every call as
+            # "auth invalid token".
+            "key": {"required": False, "config": "deye_key"},
+            "username": {"required": False, "config": "deye_username"},
+            "password": {"required": False, "config": "deye_password"},
+            "data_center": {"required": False, "default": "eu", "config": "deye_data_center"},
+            "company_id": {"required": False, "config": "deye_company_id"},
+            "auth_method": {"required": False, "default": "app_credentials", "config": "deye_auth_method"},
+            "token_expires_at": {"required": False, "config": "deye_token_expires_at"},
+            "token_hash": {"required": False, "config": "deye_token_hash"},
+            "inverter_sn": {"required": False, "config": "deye_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "deye_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "deye_automatic_ignore_pv"},
+            # config/battery reports capacity in Ah, so it needs a pack voltage to become
+            # kWh. Normally derived from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "deye_battery_nominal_voltage"},
+        },
+        # Gate activation on having at least one auth path — app credentials (app_id,
+        # self-hosted add-on) OR an injected SaaS access token (key). Without this the
+        # component would start for every instance since all individual args are
+        # optional to allow either auth mode. Gate on key, not token_hash: the hash is
+        # only a refresh dedup handle, so gating on it starts the component for an
+        # instance that has no usable token and then fails on every API call.
+        "required_or": ["app_id", "key"],
+        "phase": 1,
+    },
+    "sunsynk": {
+        "class": SunsynkAPI,
+        "name": "Sunsynk Cloud",
+        "event_filter": "predbat_sunsynk_",
+        "args": {
+            "username": {"required": False, "config": "sunsynk_username"},
+            "password": {"required": False, "config": "sunsynk_password"},
+            # In oauth mode OAuthMixin assigns 'key' straight to access_token (see
+            # oauth_mixin._init_oauth). Predbat.com injects the access token as
+            # sunsynk_key; without this entry it is dropped and every call is rejected.
+            "key": {"required": False, "config": "sunsynk_key"},
+            "region": {"required": False, "default": "sunsynk", "config": "sunsynk_region"},
+            "auth_method": {"required": False, "default": "password", "config": "sunsynk_auth_method"},
+            "token_expires_at": {"required": False, "config": "sunsynk_token_expires_at"},
+            "token_hash": {"required": False, "config": "sunsynk_token_hash"},
+            "inverter_sn": {"required": False, "config": "sunsynk_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "sunsynk_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "sunsynk_automatic_ignore_pv"},
+            # On by default, matching solis_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only - worth doing while the inferred write format is unconfirmed
+            # against live hardware (see the VERIFY@SPIKE notes in sunsynk_const.py).
+            "control_enable": {"required": False, "default": True, "config": "sunsynk_control_enable"},
+            # Battery capacity arrives in amp-hours, so it needs a pack voltage to become
+            # kWh. Normally inferred from the BMS charge target; this is the escape hatch
+            # for a pack that does not report one.
+            "battery_nominal_voltage": {"required": False, "config": "sunsynk_battery_nominal_voltage"},
+        },
+        # Gate activation on having at least one auth path — a username (self-hosted) OR
+        # an injected SaaS access token. Without this the component would start for every
+        # instance, since all individual args are optional to allow either auth mode.
+        "required_or": ["username", "key"],
+        "phase": 1,
+    },
+    "alphaess": {
+        "class": AlphaESSAPI,
+        "name": "AlphaESS Cloud API",
+        "event_filter": "predbat_alphaess_",
+        "args": {
+            "app_id": {"required": False, "config": "alphaess_app_id"},
+            "app_secret": {"required": False, "config": "alphaess_app_secret"},
+            "inverter_sn": {"required": False, "config": "alphaess_inverter_sn"},
+            "automatic": {"required": False, "default": False, "config": "alphaess_automatic"},
+            "automatic_ignore_pv": {"required": False, "default": False, "config": "alphaess_automatic_ignore_pv"},
+            # On by default, matching sunsynk_control_enable: an inverter component that does
+            # not drive the inverter is not what a user configuring it expects. Set false for
+            # monitoring only. switch.predbat_set_read_only still gates every write.
+            "control_enable": {"required": False, "default": True, "config": "alphaess_control_enable"},
+            # The API reports no battery power limit and no pack current/voltage to derive
+            # one from, so it is estimated from poinv. This is the escape hatch for a user
+            # who knows their pack's real limit.
+            "battery_rate_max": {"required": False, "config": "alphaess_battery_rate_max"},
+            "api_delay": {"required": False, "default": 2, "config": "alphaess_api_delay"},
+            "min_write_interval": {"required": False, "default": 300, "config": "alphaess_min_write_interval"},
+        },
+        # Gate activation on having an AppID. Without this the component would start for
+        # every instance, since all individual args are optional.
+        "required_or": ["app_id"],
+        "phase": 1,
+        "can_restart": True,
+    },
+    "enphase": {
+        "class": EnphaseAPI,
+        "name": "Enphase API",
+        "event_filter": "predbat_enphase_",
+        "args": {
+            "username": {
+                "required": True,
+                "config": "enphase_username",
+            },
+            "password": {
+                "required": True,
+                "config": "enphase_password",
+            },
+            "site_id": {
+                "required": False,
+                "config": "enphase_site_id",
+            },
+            "automatic": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic",
+            },
+            "automatic_ignore_pv": {
+                "required": False,
+                "default": False,
+                "config": "enphase_automatic_ignore_pv",
             },
         },
         "phase": 1,
@@ -366,6 +550,22 @@ COMPONENT_LIST = {
         "phase": 1,
         "can_restart": True,
     },
+    "teslemetry": {
+        "class": TeslemetryAPI,
+        "name": "Tesla Powerwall (Teslemetry)",
+        "event_filter": "predbat_teslemetry_",
+        "args": {
+            "key": {"required": True, "config": "teslemetry_key"},
+            "site_id": {"required": False, "config": "teslemetry_site_id"},
+            "base_url": {"required": False, "config": "teslemetry_base_url", "default": "https://api.teslemetry.com"},
+            "automatic": {"required": False, "default": False, "config": "teslemetry_automatic"},
+            "auth_method": {"required": False, "config": "teslemetry_auth_method", "default": "api_key"},
+            "token_expires_at": {"required": False, "config": "teslemetry_token_expires_at"},
+            "token_hash": {"required": False, "config": "teslemetry_token_hash"},
+        },
+        "phase": 1,
+        "can_restart": True,
+    },
     "solax": {
         "class": SolaxAPI,
         "name": "SolaX Cloud API",
@@ -401,6 +601,7 @@ COMPONENT_LIST = {
             "automatic": {"required": False, "config": "solis_automatic", "default": False},
             "base_url": {"required": False, "config": "solis_base_url", "default": "https://www.soliscloud.com:13333"},
             "control_enable": {"required": False, "config": "solis_control_enable", "default": True},
+            "nominal_voltage": {"required": False, "config": "solis_nominal_voltage"},
         },
         # Gate activation on having at least one auth path — HMAC (api_key) OR OAuth
         # (access_token). Without this the component would start for every instance
@@ -419,7 +620,7 @@ COMPONENT_LIST = {
             "load_ml_max_days_history": {"required": False, "config": "load_ml_max_days_history", "default": 28},
             "load_ml_database_days": {"required": False, "config": "load_ml_database_days", "default": 90},
         },
-        "phase": 1,
+        "phase": 2,  # Load ML in phase 2 so that any Predbat cloud components (such as GEcloud) have been started and initialised pv_today, etc
         "can_restart": True,
     },
 }
@@ -466,6 +667,8 @@ class Components:
                 continue
 
             have_all_args = True
+            missing_config = []
+            required_or_config = []
             self.components[component_name] = None
             self.component_tasks[component_name] = None
 
@@ -483,8 +686,10 @@ class Components:
                     continue
                 elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
                     have_all_args = False
+                    missing_config.append(f"{arg_info['config']} (must be true)")
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
+                    missing_config.append(arg_info["config"])
                 else:
                     arg_dict[arg] = self.base.get_arg(arg_info["config"], default, indirect=indirect)
             required_or = component_info.get("required_or", [])
@@ -492,9 +697,22 @@ class Components:
             if required_or:
                 if not any(arg_dict.get(arg, None) for arg in required_or):
                     have_all_args = False
+                    required_or_config = [component_info["args"][arg]["config"] for arg in required_or]
             if have_all_args:
                 self.log(f"Initialising {component_info['name']} interface")
                 self.components[component_name] = component_info["class"](self.base, **arg_dict)
+            else:
+                configured_args = getattr(self.base, "args_from_apps_yaml", None)
+                if configured_args is None:
+                    configured_args = self.base.args
+                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values())
+                if component_configured:
+                    reasons = []
+                    if missing_config:
+                        reasons.append(f"missing required configuration: {', '.join(missing_config)}")
+                    if required_or_config:
+                        reasons.append(f"needs at least one of: {', '.join(required_or_config)}")
+                    self.log(f"Warn: Skipping {component_info['name']} interface, {'; '.join(reasons)}")
 
     def start(self, only=None, phase=0):
         """Start all initialised components"""

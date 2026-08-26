@@ -164,6 +164,14 @@ The optional `azimuth_zero_south` (default False) can be set to True if you pref
   forecast_solar_max_age: 4
 ```
 
+Setting `forecast_solar_open_meteo_first: true` makes Predbat use Open-Meteo as the primary forecast
+source and fall back to Forecast.solar only if Open-Meteo returns no data. Your existing
+`forecast_solar` per-array settings (postcode, latitude, longitude, azimuth, declination, kwp,
+efficiency) are reused unchanged, but `forecast_solar_max_age` is not — the refresh interval instead
+comes from `open_meteo_forecast_max_age` while this flag is set. See the
+[Using Open-Meteo as the primary source](apps-yaml.md#using-open-meteo-as-the-primary-source) section
+of the apps.yaml documentation for details.
+
 or you can set longitude and latitude if you are not in the UK or postcode does not work:
 
 ```yaml
@@ -407,6 +415,20 @@ You can also set environment variable `PREDBAT_REPOSITORY` (same `owner/repo` fo
 
 Once Predbat has been installed and configured you should update Predbat to the latest version by selecting the latest version in the **select.predbat_update** selector,
 or by turning on the **switch.predbat_auto_update** to auto-update Predbat.
+
+### Update integrity checking
+
+Every file Predbat downloads during an update is checked against the checksum GitHub publishes for it,
+both when it is downloaded and again immediately before it is installed.
+If any file does not match, the update is abandoned and **nothing is installed**, so a corrupted or truncated download can never leave you with a broken Predbat.
+Predbat carries on running the version you already have, and you can simply retry the update.
+
+Updates are fetched as a single compressed archive rather than one request per file, which makes updating considerably quicker.
+This applies to branches such as `main` as well as to releases; if no archive is available Predbat falls back to downloading the files one at a time.
+Only the files that make up Predbat are installed from the archive; your `apps.yaml` and the rest of your configuration are never touched by an update.
+
+If you are updating from a branch rather than a release, a change merged part way through your download can cause a checksum mismatch.
+Predbat retries automatically against a fresh file listing, so this normally resolves itself.
 
 ## Manually installing a Predbat release
 

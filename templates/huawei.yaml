@@ -226,6 +226,12 @@ pred_bat:
   car_charging_energy:
   - sensor.go_echarger_energy_kwh
 
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  #car_charging_power:
+  #- sensor.go_echarger_nrg_12
+
   num_cars: 1
 
   car_charging_planned:

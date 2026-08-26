@@ -39,7 +39,7 @@ If the **switch.predbat_set_read_only** is set to On then this prevents Predbat 
 Predbat will continue making and updating its prediction plan every 10 minutes (by default), but no inverter changes will be made.
 This is useful if you want to override what Predbat is planning to do (e.g. your own automation), or whilst you are learning how Predbat works before turning it on 'in anger'.
 
-**Note:** _Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting_
+**Note:** _Changing the Predbat mode or the read-only switch will cause Predbat to reset the inverter settings to default, this will disable both charge and discharge, reset charge and discharge rates to full power and reset the reserve to the default setting. This reset write happens even when you are turning read-only **on** - it's a deliberate one-off action to hand control back to the inverter's own native scheduling, not a violation of read-only mode. Depending on your inverter, actually reverting to native behaviour after this write can take some time, not necessarily immediately. If you've set inverter values manually (e.g. directly via your inverter's own app) that you want left alone, be aware this reset will overwrite them the moment you enable read-only._
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/43faa962-6b8a-495a-88f8-f762aa1d55b8)
 
@@ -71,11 +71,29 @@ In **Control charge & discharge** mode Predbat will set both charge and force ex
 
 If you have set the **switch.predbat_set_export_freeze_only** set to On then forced export won't occur but Predbat can force the export of solar power to the grid when desired.
 
+Similarly, if you have **switch.predbat_set_charge_freeze_only** set to On then the battery won't be charged from the grid, but Predbat can still freeze charge to hold the current battery level.
+
 ## Expert mode
 
 Predbat has a toggle switch called **switch.predbat_expert_mode** which is set to Off by default for new installs (On by default for upgraded installs).
 A lot of Predbat's more advanced configuration options will not be available unless expert mode is turned On.
 It's recommended for new users to start without expert mode and then maybe turn it on later once you become more confident with the tool.
+
+## Performance tweaks mode
+
+Predbat has a second toggle switch called **switch.predbat_performance_tweaks** which is also Off by default.
+
+Behind it sit the options that trade planning time for plan quality. They are all turned **On** by default, so out of the box Predbat
+produces the best plan it can - you only need this toggle if your machine struggles to keep up. Turning it On reveals the switches so
+you can turn individual features Off and buy back CPU time.
+
+While the toggle is Off each hidden option runs at its default, so there is nothing to configure and nothing to go wrong. Note that a
+hidden option is pinned to its default and cannot be overridden from `apps.yaml` - turn this toggle On if you need to hold one of them Off.
+
+Currently behind this toggle:
+
+- **switch.predbat_calculate_second_pass** - the full second-pass optimisation
+- **switch.predbat_calculate_pv90_plan** - the PV90% upside scenario
 
 ## Performance related
 
@@ -85,7 +103,14 @@ This can however use a lot of CPU power especially on more complex tariffs like 
 You can tweak **input_number.predbat_calculate_plan_every** (_expert mode_) (default 10 minutes) to reduce the frequency of replanning while keeping the inverter control in the fixed 5-minute slots.
 E.g. a value of 10 or 15 minutes should also give good results.
 
-If you have performance problems leave **switch.predbat_calculate_second_pass** (_expert mode_) turned Off as it's quite CPU intensive and provides very little improvement for most systems.
+If you have performance problems, turn On **switch.predbat_performance_tweaks** to reveal the two switches that cost the most planning time. Both are On by
+default because both improve the plan; turn them Off to buy the time back:
+
+- **switch.predbat_calculate_pv90_plan** - simulating the third (sunny) scenario is the larger of the two costs
+- **switch.predbat_calculate_second_pass** - re-optimises every window in the plan rather than just the near-term ones
+
+As a rough guide, on a 20-scenario benchmark of one-day plans, turning both Off returns planning time to about three quarters of what it takes with them On.
+The second pass in particular gets more expensive the longer your plan is, so on a two-day horizon it costs proportionally more than that.
 
 You can turn on **switch.predbat_combine_charge_slots** and **switch.predbat_combine_export_slots** (_expert mode_) to speed up planning.
 Note: Combining export slots may prevent optimal forced export. Combining charge slots is usually fine for tariffs with longer periods of fixed rates but can limit the planning ability in some cases.
@@ -136,6 +161,20 @@ The battery value is accounted for in the optimisations at the lowest future imp
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,
 greater than 1.0 will value it more (and hence hold more charge at the end of the plan).
 
+**input_number.predbat_metric_battery_value_export_scaling** (_expert mode_) Discounts that end-of-plan battery value when you would not be able to sell
+the surplus for what it cost to buy. Valuing the battery at the lowest future import rate assumes the energy can always be redeployed, which holds while
+surplus can be exported at a good price - but if your export rate is below your cheapest import rate, anything the house cannot use is only partly
+recovered, so the stored energy is worth less than it cost.<BR>
+Predbat scales the value by how much of the cheapest import price your export would actually recover: full value when your export rate matches or beats it,
+falling to this setting when export is worth nothing. The default is 0.8, so a system that cannot export at all values leftover battery at 80% of the
+replacement price, while a system exporting at 80% of its cheapest import rate takes only a 4% reduction.<BR>
+Set it to 1.0 to switch this off entirely and value leftover battery at full replacement cost regardless of your export rate.
+The effect is to make Predbat less willing to buy energy purely to carry it forward, which matters most on tariffs with no export payment at all,
+where energy bought cheaply and then spilled to the grid is a complete loss.<BR>
+The export rate used here is your tariff's own rate looking forward from the end of the plan, not the highest price on offer anywhere in the forecast.
+A saving session paying well above your tariff does not count towards it - a one-off event says nothing about whether your surplus can be sold in general,
+and letting it count would switch the discount off for a whole plan on a system that in fact cannot export at all.
+
 **input_number.metric_self_sufficiency** (_expert mode_) A price in pence per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
 Effectively saying to Predbat to account for imports at a higher price than reality in the calculation and thus selecting plans with less import.
 If you want to be as self-sufficient as possible then set this to the difference between your lowest import rate and the highest export rate to take exports that require additional import appear unprofitable.
@@ -145,6 +184,7 @@ This setting will not impact the real calculated costs and is only used for plan
 
 **switch.predbat_metric_dynamic_load_adjust** (default False) is a toggle that when enabled allows Predbat to take into account your energy consumption within the last 5 minutes.
 If the load is above what your battery can deliver the plan is updated to predict this load will continue during the current slot, thus preventing forced export in the plan.
+If the load remains high for two checks in a row, this prediction is extended into the following slot too, so the plan stays up to date across the slot boundary.
 If car charging is planned but the load indicates that the car is not charging then Predbat will assume the car will no longer charge during this slot thus allowing the plan to include potential export.
 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
@@ -174,6 +214,16 @@ Note that the output data entity predbat.load_energy_h0 will be scaled according
 This can  be used to make the PV10% scenario take into account extra load usage and hence be more pessimistic while leaving the central scenario unchanged.
 The default is 1.1 meaning an extra 10% load is added. This will only have an impact if the PV 10% weighting is non-zero.
 
+**input_number.predbat_load_scaling90** (_expert mode_) is a percentage Scaling factor applied to historical load only for the PV90% upside scenario, exactly
+like `load_scaling10` above but discounting the load instead of adding to it. It is an absolute multiplier of the historical load - it does not compose with
+`load_scaling`. The default is 0.7, meaning the PV90% scenario uses 70% of your raw historical load regardless of what `load_scaling` itself is set to.
+This will only have an impact if the PV 90% weighting is non-zero (see `pv_metric90_weight` and `switch.predbat_calculate_pv90_plan` below).<BR>
+Because the three load scalings are independent, some combinations would otherwise invert a scenario - a `load_scaling` set below `load_scaling90` would give
+the PV90% case _more_ load than the central case, making it a second downside case rather than the intended upside one. To prevent that, Predbat clamps the
+three values when it reads them, so that `load_scaling90` <= `load_scaling` <= `load_scaling10` always holds. The PV90% case can therefore never end up with
+more load than the central case, and the PV10% case can never end up with less. If a clamp changes one of your configured values Predbat logs which value it
+adjusted and to what; at the default settings nothing is clamped.
+
 **input_number.predbat_load_scaling_saving** is a percentage Scaling factor applied to historical load only during Octopus Saving session or Axle export events.
 This can be used to model your household cutting down on energy use inside a saving session (e.g. turning off a heat pump, deferring cooking until after the session, etc).
 The default is 1.0, i.e. no change to load in saving sessions.
@@ -189,11 +239,28 @@ See also [PV configuration options in apps.yaml](apps-yaml.md#solcast-solar-fore
 **input_number.predbat_pv_scaling** is a percentage scaling factor applied to PV data, decrease this if you want to be more pessimistic on PV production vs Solcast.<BR>
 Use 1.0 to accurately apply the Solcast forecast generation data. A value of 0.9, for instance, would reduce 10% from the Solcast generation forecast.
 
-**input_number.predbat_pv_metric10_weight** is the percentage weighting given to the Solcast 10% PV scenario in calculating solar generation.
+**input_number.predbat_pv_metric10_weight** is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 10% PV scenario in calculating solar generation.
 Use 0.0 to disable using the PV 10% in Predbat's forecast of solar generation.
 A value of 0.1 assumes that 1 in every 10 times we will get the Solcast 10% scenario, and 9 in every 10 times we will get the 'median' Solcast forecast.<BR>
 Predbat estimates solar generation for each half-hour slot to be a pv_metric10_weight weighting of the Solcast 10% PV forecast to the Solcast Median forecast.<BR>
-A value of 0.15 (the default) is recommended.
+A value of 0.15 (the default) is recommended. Do not enter a value above 1.0 (e.g. 30 for "30%") - Predbat will clamp it back into range and log a warning, but the resulting plan is likely to look very wrong in the meantime.
+
+**switch.predbat_calculate_pv90_plan** (_performance tweaks_) enables the PV90% upside scenario described below - it is **On by default**.
+Turn it Off (after turning on **switch.predbat_performance_tweaks** to reveal it) and the PV90% scenario is not simulated at all, saving that
+planning time, regardless of what `pv_metric90_weight` is set to.
+The two settings that tune it (`pv_metric90_weight` and `load_scaling90`) remain expert-mode only, so everyone running the PV90% scenario is using the same
+values and their results are comparable.
+
+**input_number.predbat_pv_metric90_weight** (_expert mode_) is a weighting, expressed as a fraction between 0.0 and 1.0 (not a whole-number percentage), given to the Solcast 90% PV scenario in calculating solar generation.
+It is the upside mirror of `pv_metric10_weight` above: where the PV10% scenario models a cloudier, higher-load day, the PV90% scenario models a sunnier day
+(the 90% PV forecast) combined with a lower household load (see `load_scaling90` above).
+Predbat blends the three simulated futures into one metric, so a value of 0.1 assumes that 1 in every 10 times we will get the Solcast 90% scenario.
+
+**The default is 0.15 and `switch.predbat_calculate_pv90_plan` above is On by default, so this weight is live.** Turning that switch Off forces the
+running weight to 0.0 regardless of this setting, so no PV90% simulation is run and the plan is exactly as it would be without this setting. Giving weight to
+the possibility of a better-than-forecast day makes Predbat somewhat less willing to charge from the grid, since it now prices in a chance of more free solar
+than the central forecast predicts.
+If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are scaled back proportionally so the central scenario is never given a negative weighting.
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
@@ -253,9 +320,9 @@ This prevents Predbat from planning unnecessary forced exports during sunny peri
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
 
-**switch.predbat_calculate_second_pass** (_expert mode_) When turned On causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
+**switch.predbat_calculate_second_pass** (_performance tweaks_) When turned On (the default) causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
 
-Note: This feature is quite slow so may need a higher-performance machine so is turned Off by default.
+Note: This feature is quite slow, so turn On **switch.predbat_performance_tweaks** and switch it Off if your machine is struggling.
 
 This can help to slightly improve the plan for tariffs like Agile but can make it worse in some fixed rate tariffs in which you want to force export late.
 
@@ -354,6 +421,10 @@ If you set this to a negative value then Predbat will assume unpublished export 
 **switch.predbat_calculate_inday_adjustment** Set to On by default. When turned on, will calculate the difference between today's actual load and today's predicated load and adjust the rest of the day's usage prediction accordingly.
 A scale factor can be set with **input_number.predbat_metric_inday_adjust_damping** (_expert mode_) (default 0.95) to either scale up or down the impact of the in-day adjustment (lower numbers scale down its impact).
 The in-day adjustment factor can be seen in **predbat.load_inday_adjustment** and charted with the [In-Day Adjustment chart](creating-charts.md).
+The adjustment is carried across midnight into the plan for tomorrow rather than being reset, decaying from its full value
+at midnight to no adjustment by the following midnight - the same curve Predbat itself applies when it seeds tomorrow's
+adjustment from today's final value. This keeps the overnight charge sized against the load Predbat will actually predict
+in the morning, which matters most when the divergence is systematic rather than a one-off (a holiday, for example).
 
 **input_number.predbat_carbon_metric** (_carbon enable_) When Carbon footprint tracking is turned On (**switch.predbat_carbon_enable**) (Off by default),
 you can specify a cost per kg of CO2 used to weight the selection of plans. Values of around 10-200 will give varying outcomes to trade off cost vs carbon footprint of your system.
@@ -381,6 +452,10 @@ as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
 
+Low-power charging is skipped for any charge window that overlaps with forecast solar production, the full charge rate is used instead.
+Throttling the charge rate while the sun is shining would cap how much solar reaches the battery, the surplus would be exported at the
+export rate and the charge target then made up from grid import later, which costs more than the full rate charge Predbat planned for.
+
 The YouTube video [low power charging and charging curve](https://youtu.be/L2vY_Vj6pQg?si=0ZiIVrDLHkeDCx7h)
 explains how the low-power charging works and shows how Predbat automatically creates it.
 
@@ -391,6 +466,11 @@ this defaults to 10 but can be changed between 0 and 30.
 once it has been reached or to protect against discharging beyond the set limit.
 
 **switch.predbat_set_charge_freeze** (_expert mode_) When turned On will allow Predbat to hold the current battery level while drawing from the grid/solar as an alternative to charging. On by default.
+
+**switch.predbat_set_charge_freeze_only** (_expert mode_) When turned On charging the battery from the grid is prevented, but charge freeze can be used (if enabled) to hold the current battery
+level rather than discharging it. This is useful if you don't want to import to fill the battery at all, for example on a flat tariff or where you only want the battery charged by solar. Off by default.
+
+Note that if both this and **switch.predbat_set_charge_freeze** are turned Off, Predbat has no way to use a charge window at all and will leave the battery in demand mode throughout.
 
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
 
@@ -602,10 +682,20 @@ Whilst the holiday days left are non-zero, Predbat's 'holiday mode' is active.
 
 When Predbat is in 'Demand' mode (i.e. not actively charging or discharging) and 'holiday mode' is active, Predbat's status will show as 'Demand (Holiday)'.
 
-With `days_previous_auto` enabled (the default), holiday mode is instead accounted for automatically by the
-weighted-bucket forecast, which down-weights historical days whose holiday mode state doesn't match today's.
+With `days_previous_auto` enabled (the default), holiday mode is accounted for automatically by the
+[weighted-bucket forecast](apps-yaml.md#days_previous_auto-weighted-historical-load-forecast), which predicts each
+day from historical days in the same holiday state - while you are away only your holiday days are used, and once
+you are home only your non-holiday days are. The holiday state is worked out for each day of the plan separately,
+so the day you travel home is already planned against your normal load.
 
-In this case just set holiday mode for the days you are away and Predbat does the rest.
+For the first 24 hours of a holiday there is no holiday history to learn from yet. Until there is, Predbat scales
+your normal predicted load by **input_number.predbat_holiday_load_scaling** (default 0.7, i.e. it assumes you will
+use 70% of normal while away). Lower it if your house draws very little while you are away, raise it towards 1.0 if
+your usage barely changes. The setting only applies while there is no matching holiday history for that time of day,
+so it retires itself automatically once the first holiday day has been recorded.
+
+Just set holiday mode for the days you are away and Predbat does the rest - **turn it off as soon as you are back**,
+so that the plan switches straight back to your normal load history.
 
 ### Holiday mode with days_previous_auto off
 
@@ -617,6 +707,10 @@ to take longer for the historical data to catch up, you could then enable holida
 
 - For short holidays set holiday_days_left to the number of full days you are away, including today but excluding the return day
 - For longer holidays set holiday_days_left to the number of days you are away plus another 7 days until the data catches back up
+
+Note that this last piece of advice applies only when `days_previous_auto` is off. With it on (the default), leaving
+holiday mode enabled after you get home would keep Predbat predicting from your holiday days and under-estimate your
+load, so turn it off on your return instead.
 
 ## Manual Control
 
@@ -723,7 +817,9 @@ This is described in detail in [Manual API](manual-api.md) and is mentioned here
 - Secondly Predbat will create a debug output file 'debug/predbat_debug_HH_MM_SS.yaml' in a subfolder of the Predbat installation directory.
 This file contains a full export of your current Predbat config and is extremely useful to enable recreating your setup to diagnose issues. Any sensitive information such as Solcast or GivEnergy Cloud API keys are automatically removed.
 
-The following automation might be useful to automatically turn off Predbat debug mode after turning it on to capture the debug logs:
+Predbat automatically turns this switch back Off after 2 hours if it's still on, to bound the raw disk writes it triggers if left on by accident - if you need a longer debug session than that, you'll need to turn it back On again.
+
+The following automation might be useful to automatically turn off Predbat debug mode sooner than that, after turning it on to capture the debug logs:
 
 ```yaml
 alias: "Predbat: Auto turn-off debug mode"
@@ -752,6 +848,17 @@ mode: single
 ```
 
 **switch.predbat_plan_debug** (_expert mode_) when turned On adds some extra debug to the Predbat HTML plan - see [Predbat Plan debug mode](predbat-plan-card.md#debug-mode-for-predbat-plan) for more details. Off by default.
+
+### Debug history
+
+Turning on `switch.predbat_debug_enable` only captures debug information from the moment you switch it on - not much help if you have already noticed a problem and want to see what Predbat was doing an hour or two ago. Predbat also keeps a small rolling history of debug snapshots automatically, independent of that switch, so there is always some recent history to look back at:
+
+- **switch.predbat_debug_history_enable** - turns the rolling history off entirely when off (default on). `debug_history_force_capture` still works even while this is off.
+- **input_number.predbat_debug_history_count** - how many snapshots to retain (default 15, minimum 1 - use the enable switch above to turn the feature off, not a count of 0).
+- **input_number.predbat_debug_history_interval** - how many hours between automatic snapshots (default 3). With the defaults, 15 snapshots at 3-hourly intervals covers just under 48 hours.
+- **switch.predbat_debug_history_force_capture** - turn this on to trigger an immediate snapshot rather than waiting for the next scheduled one, useful from an automation that has just spotted something worth investigating. Predbat resets the switch back off itself once the snapshot has been taken, and still takes the snapshot even if `debug_history_enable` is off.
+
+Retained snapshots can all be downloaded together as a single `.tgz` archive from a link on the web interface's dashboard **Debug** panel, or individually from the **Debug** column shown on the plan's **History** view (next to any time slot a snapshot was captured for exactly). An automation can also fetch the most recent snapshot directly without needing to know its exact timestamp, by calling `GET <predbat-url>/debug_history_download?id=latest` after turning `switch.predbat_debug_history_force_capture` on.
 
 ## Updating Predbat
 
