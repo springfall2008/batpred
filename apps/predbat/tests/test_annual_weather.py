@@ -275,10 +275,12 @@ def test_annual_weather(my_predbat):
         return actual_payload if "archive-api" in url else forecast_payload
 
     recovering_weather = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=poisoned_storage, fetch_json=recovering_fetch)
-    # Derived from the same _build_url + hash the production code uses, not a hand-written
-    # literal - a literal silently stops matching (and this test silently stops exercising the
-    # discard path) the moment the cache key derivation changes, exactly as happened here.
-    poisoned_key = "weather_actual_2025_0_{}".format(hashlib.sha256(recovering_weather._build_url(ARCHIVE_URL, ARRAYS[0], 2025).encode()).hexdigest()[:16])
+    # Derived from the same _window/_build_url + hash the production code uses, not a
+    # hand-written literal - a literal silently stops matching (and this test silently stops
+    # exercising the discard path) the moment the cache key derivation changes, exactly as
+    # happened here.
+    poisoned_start, poisoned_end = recovering_weather._window(2025)
+    poisoned_key = "weather_actual_2025_0_{}".format(hashlib.sha256(recovering_weather._build_url(ARCHIVE_URL, ARRAYS[0], poisoned_start, poisoned_end).encode()).hexdigest()[:16])
     poisoned_storage.cache[("annual", poisoned_key)] = truncated_payload
     recovering_year = asyncio.run(recovering_weather.fetch(2025))
     if not recovering_year.has_actual(date(2025, 1, 10)):
@@ -383,6 +385,58 @@ def test_annual_weather_orientation_cache(my_predbat):
     asyncio.run(second._fetch_series("https://example.test/archive", 2025, "actual"))
     if len(urls) != downloads_after_first:
         print("  ERROR: an identical array re-downloaded instead of hitting the cache")
+        failed = True
+
+    return failed
+
+
+def test_annual_weather_window(my_predbat):
+    """A month-windowed fetch requests only that window and cannot collide with a full year."""
+    failed = False
+    urls = []
+
+    async def fake_fetch(url):
+        """Record the URL and return a minimal usable payload."""
+        urls.append(url)
+        return {
+            "hourly": {
+                "time": ["2026-07-01T00:00", "2026-07-01T01:00"],
+                "global_tilted_irradiance": [100.0, 120.0],
+                "temperature_2m": [18.0, 19.0],
+                "wind_speed_10m": [2.0, 2.0],
+            }
+        }
+
+    print("Test: months=None keeps the whole-year window")
+    storage = FakeAnnualStorage()
+    client = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    asyncio.run(client._fetch_series("https://example.test/archive", 2025, "actual"))
+    if "start_date=2025-01-01" not in urls[-1] or "end_date=2026-01-01" not in urls[-1]:
+        print("  ERROR: a full-year fetch should still span 2025-01-01 to 2026-01-01, got {}".format(urls[-1]))
+        failed = True
+
+    print("Test: a single-month window requests that month plus a two day buffer")
+    urls.clear()
+    storage = FakeAnnualStorage()
+    client = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch, months=[7])
+    asyncio.run(client._fetch_series("https://example.test/archive", 2026, "actual"))
+    if "start_date=2026-07-01" not in urls[-1]:
+        print("  ERROR: a July window should start on 2026-07-01, got {}".format(urls[-1]))
+        failed = True
+    if "end_date=2026-08-02" not in urls[-1]:
+        print("  ERROR: a July window should end on 2026-08-02 (31 July plus a two day buffer), got {}".format(urls[-1]))
+        failed = True
+
+    print("Test: a windowed entry cannot be served from a full-year entry")
+    storage = FakeAnnualStorage()
+    urls.clear()
+    full = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch)
+    windowed = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=storage, fetch_json=fake_fetch, months=[7])
+    asyncio.run(full._fetch_series("https://example.test/archive", 2026, "actual"))
+    downloads_after_full = len(urls)
+    asyncio.run(windowed._fetch_series("https://example.test/archive", 2026, "actual"))
+    if len(urls) == downloads_after_full:
+        print("  ERROR: the windowed fetch was served the full-year cache entry")
         failed = True
 
     return failed

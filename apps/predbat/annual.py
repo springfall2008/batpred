@@ -1539,6 +1539,7 @@ class AnnualPredictor:
             log=self.log,
             storage=self.storage,
             p10_fallback=self.config["pv10_derate_fallback"],
+            months=self.config["months"] if len(self.config["months"]) < 12 else None,
         )
         latitude, longitude = await self._resolve_location(weather_client.fetch_json)
         weather_client.latitude = latitude
