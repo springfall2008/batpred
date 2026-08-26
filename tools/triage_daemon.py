@@ -82,9 +82,7 @@ POLL_SECONDS = 300
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
-_ALLOWED_TOOLS_BASE = [
-    # Read the issue, search for duplicates, post the triage comment
-    "Bash(gh *)",
+_ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
     "Bash(git diff*)",
@@ -150,6 +148,8 @@ _ALLOWED_TOOLS_BASE = [
     "Grep",
     "Glob",
 ]
+# Read the issue, search for duplicates, post the triage comment
+_ALLOWED_TOOLS_BASE = ["Bash(gh *)"] + _ALLOWED_TOOLS_NON_GH
 ALLOWED_TOOLS = ",".join(_ALLOWED_TOOLS_BASE)
 # The /issue-pr invocation needs everything the read-only triage flow has, plus
 # committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
@@ -190,6 +190,45 @@ _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr creat
 # matching can't parse flags, so this is a heuristic, not a guarantee.
 _PR_FORCE_PUSH_DENIALS = ["Bash(git push*--force*)", "Bash(git push*-f*)"]
 DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# The review and cleanup flows do NOT inherit the broad "Bash(gh *)" grant: with it
+# present, carving a scoped exception out of the gh api denial below would do nothing,
+# since "Bash(gh *)" already allows every gh api call once that denial is lifted, and
+# a narrower allow gets no precedence over a broader one - only "deny wins over allow"
+# is a real rule here. Instead, list the specific gh subcommands actually needed, so
+# there is no catch-all for the scoped gh api grant to hide behind.
+_ALLOWED_GH_PR_READ = [
+    "Bash(gh pr view*)",
+    "Bash(gh pr diff*)",
+    "Bash(gh pr list*)",
+    "Bash(gh pr comment*)",
+    "Bash(gh issue view*)",
+    "Bash(gh issue list*)",
+    "Bash(gh search*)",
+]
+# /code-review posts findings as inline PR comments, which needs gh api against the
+# PR-comments endpoint - scoped to this repo only. No write/push/commit access, and
+# deliberately no "gh pr review*" either: that would also allow --approve/
+# --request-changes, a governance action beyond "post a comment."
+_REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
+_REVIEW_EXTRA_ALLOWED = [f"Bash(gh api repos/{REPO}/*)"]
+ALLOWED_TOOLS_REVIEW = ",".join(_ALLOWED_GH_PR_READ + _ALLOWED_TOOLS_NON_GH + _REVIEW_EXTRA_ALLOWED)
+DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if item not in _REVIEW_REMOVED_DENIALS)
+# BOT_CLEANUP needs the review flow's read access and scoped gh api grant, plus
+# committing/pushing/pre-commit and checking out the PR's own branch (the review flow
+# never needs a local checkout, and never gh pr checks/run view - it doesn't touch CI).
+# Deliberately not the full _ALLOWED_TOOLS_PR_EXTRA: no "gh pr create*" - cleanup
+# pushes to the existing PR's branch, it never opens a new one.
+_CLEANUP_EXTRA_GH = ["Bash(gh pr checkout*)", "Bash(gh pr checks*)", "Bash(gh run view*)", "Bash(gh run list*)"]
+_CLEANUP_EXTRA_WRITE = [
+    "Bash(git add*)",
+    "Bash(git commit*)",
+    "Bash(git push*)",
+    "Bash(./run_pre_commit*)",
+    "Bash(./run_pre_commit)",
+]
+ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
+_CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
+DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
 
 
 def load_state():
@@ -211,6 +250,11 @@ def save_state(state):
 def issue_url(issue_number):
     """Return the GitHub URL for an issue, for easy opening from the daemon's log."""
     return f"https://github.com/{REPO}/issues/{issue_number}"
+
+
+def pr_url(pr_number):
+    """Return the GitHub URL for a PR, for easy opening from the daemon's log."""
+    return f"https://github.com/{REPO}/pull/{pr_number}"
 
 
 def fetch_new_issues(since_number):
@@ -524,6 +568,28 @@ def fetch_bot_review_issues():
     return json.loads(result.stdout)
 
 
+def fetch_bot_review_prs():
+    """Return open PRs currently labelled BOT_REVIEW, each with its title."""
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,title", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def fetch_bot_cleanup_prs():
+    """Return open PRs currently labelled BOT_CLEANUP, each with its title."""
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 def remove_review_label(issue_number):
     """Remove BOT_REVIEW once the issue is confirmed triaged, so it isn't reprocessed."""
     subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
@@ -549,6 +615,62 @@ def mark_review_failed(issue_number):
     )
     subprocess.run(
         ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
+def remove_pr_review_label(pr_number):
+    """Remove BOT_REVIEW from a PR once the review has been posted, so it isn't reprocessed."""
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
+
+
+def mark_pr_review_failed(pr_number):
+    """Post a note and swap BOT_REVIEW for BOT_FAILED on a PR, so a failing review isn't
+    retried every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW to retry.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            REPO,
+            "--body",
+            "Automated review failed to complete for this PR - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
+def remove_pr_cleanup_label(pr_number):
+    """Remove BOT_CLEANUP once fixes have been committed and pushed, so it isn't reprocessed."""
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP"], check=True)
+
+
+def mark_pr_cleanup_failed(pr_number):
+    """Post a note and swap BOT_CLEANUP for BOT_FAILED on a PR, so a failing cleanup
+    isn't retried every poll cycle. Remove BOT_FAILED and re-add BOT_CLEANUP to retry.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            REPO,
+            "--body",
+            "Automated cleanup failed to complete for this PR - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_CLEANUP` to try again.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP", "--add-label", "BOT_FAILED"],
         check=True,
     )
 
@@ -591,6 +713,113 @@ def process_bot_review_issue(issue):
     remove_review_label(issue_number)
 
 
+def review_pr(pr_number):
+    """Run /code-review against a PR at the "high" effort level, posting findings as
+    inline PR comments. Read-only otherwise: no code changes, no push, no PR actions.
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/code-review {pr_number} high --comment",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS_REVIEW,
+        "--disallowedTools",
+        DISALLOWED_TOOLS_REVIEW,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "100",
+        "--max-budget-usd",
+        "20.00",
+    ]
+    log_path = LOG_DIR / f"pr-{pr_number}-review.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[review-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== PR #{pr_number} review started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== PR #{pr_number} review exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print(f"[review-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
+
+
+def process_bot_review_pr(pr):
+    """Run the BOT_REVIEW flow for one PR: /code-review posts findings as comments,
+    nothing here ever touches the PR's code. On success, remove BOT_REVIEW - the
+    posted review is the artifact, there's no separate "done" state to track. A
+    failed invocation swaps to BOT_FAILED instead, with an explanatory comment.
+    """
+    pr_number = pr["number"]
+    print(f'[review-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    sync_repo()
+    reset_scratch()
+    try:
+        review_pr(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: review failed: {exc}", flush=True)
+        mark_pr_review_failed(pr_number)
+        return
+    remove_pr_review_label(pr_number)
+
+
+def cleanup_pr(pr_number):
+    """Run the /pr-cleanup skill against a PR: address review feedback and CI
+    failures, then commit and push - under the write-capable cleanup permission set.
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS_CLEANUP,
+        "--disallowedTools",
+        DISALLOWED_TOOLS_CLEANUP,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "150",
+        "--max-budget-usd",
+        "25.00",
+    ]
+    log_path = LOG_DIR / f"pr-{pr_number}-cleanup.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[cleanup-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== PR #{pr_number} cleanup started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== PR #{pr_number} cleanup exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print(f"[cleanup-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
+
+
+def process_bot_cleanup_pr(pr):
+    """Run the BOT_CLEANUP flow for one PR: address review feedback and CI failures,
+    then remove the trigger label. A failed run swaps to BOT_FAILED instead, with an
+    explanatory comment.
+    """
+    pr_number = pr["number"]
+    print(f'[cleanup-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    sync_repo()
+    reset_scratch()
+    try:
+        cleanup_pr(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[cleanup-pr] PR #{pr_number}: cleanup failed: {exc}", flush=True)
+        mark_pr_cleanup_failed(pr_number)
+        return
+    remove_pr_cleanup_label(pr_number)
+
+
 def main():
     if not CLONE_DIR.exists():
         raise SystemExit(f"Expected a git clone at {CLONE_DIR} - see setup steps before running this daemon.")
@@ -609,6 +838,10 @@ def main():
                 process_bot_pr_issue(issue)
             for issue in fetch_bot_review_issues():
                 process_bot_review_issue(issue)
+            for pr in fetch_bot_review_prs():
+                process_bot_review_pr(pr)
+            for pr in fetch_bot_cleanup_prs():
+                process_bot_cleanup_pr(pr)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)
