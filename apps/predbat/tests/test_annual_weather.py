@@ -10,11 +10,12 @@
 """Tests for the annual prediction Open-Meteo weather module."""
 
 import asyncio
+import hashlib
 from datetime import date, datetime, timedelta
 
 import pytz
 
-from annual_weather import AnnualWeather, percentile
+from annual_weather import ARCHIVE_URL, AnnualWeather, percentile
 
 ARRAYS = [{"kwp": 5.0, "declination": 35, "azimuth": 180, "efficiency": 0.95}]
 TWO_ARRAYS = [
@@ -266,7 +267,6 @@ def test_annual_weather(my_predbat):
 
     print("Test: a cache entry poisoned before this guard existed is discarded and re-fetched, not trusted forever")
     poisoned_storage = FakeAnnualStorage()
-    poisoned_storage.cache[("annual", "weather_actual_2025_0_51.5_-0.1")] = truncated_payload
     recovering_calls = {"n": 0}
 
     async def recovering_fetch(url):
@@ -275,6 +275,11 @@ def test_annual_weather(my_predbat):
         return actual_payload if "archive-api" in url else forecast_payload
 
     recovering_weather = AnnualWeather(ARRAYS, latitude=51.5, longitude=-0.1, log=print, storage=poisoned_storage, fetch_json=recovering_fetch)
+    # Derived from the same _build_url + hash the production code uses, not a hand-written
+    # literal - a literal silently stops matching (and this test silently stops exercising the
+    # discard path) the moment the cache key derivation changes, exactly as happened here.
+    poisoned_key = "weather_actual_2025_0_{}".format(hashlib.sha256(recovering_weather._build_url(ARCHIVE_URL, ARRAYS[0], 2025).encode()).hexdigest()[:16])
+    poisoned_storage.cache[("annual", poisoned_key)] = truncated_payload
     recovering_year = asyncio.run(recovering_weather.fetch(2025))
     if not recovering_year.has_actual(date(2025, 1, 10)):
         print("  ERROR: a poisoned cache entry should be discarded and re-fetched rather than trusted forever")
