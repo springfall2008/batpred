@@ -587,7 +587,13 @@ class Execute:
                                     if resetDischarge:
                                         inverter.adjust_discharge_rate(0)
                                         resetDischarge = False
-                                    if self.set_reserve_enable:
+                                    # Not while actually charging: the battery is being filled from the grid, so it
+                                    # cannot be feeding the car, and pinning reserve just above a rising SoC costs a
+                                    # write for every 1% of the climb (#3899). Left to reset below for the duration,
+                                    # and latched at the SoC reached once charging stops - which is the point the
+                                    # inverter returns to demand and the hold starts to mean something. The sibling
+                                    # iBoost hold below already sits out a charge for the same reason.
+                                    if self.set_reserve_enable and status != "Charging":
                                         inverter.adjust_reserve(min(inverter.soc_percent + 1, 100))
                                         resetReserve = False
                                 carHolding = True
