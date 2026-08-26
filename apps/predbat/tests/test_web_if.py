@@ -14,7 +14,7 @@ import os
 import shutil
 import tempfile
 from components import Components
-from web_helper import get_plan_renderer_js
+from web_helper import get_plan_css, get_plan_renderer_js
 
 
 def test_plan_renderer_renders_batch_controls():
@@ -27,6 +27,12 @@ def test_plan_renderer_renders_batch_controls():
     assert "const batchActive = getBatchActive();" in renderer_js
     assert "addToBatchSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
     assert 'class="cancel-batch"' in renderer_js
+    assert "startPeriodSelection('${timeDisplay}')" in renderer_js
+
+    plan_css = get_plan_css()
+    assert "function startPeriodSelection(time)" in plan_css
+    assert "selectPeriod(_predbatPeriodStart, time)" in plan_css
+    assert "cells.slice(firstIndex, lastIndex + 1)" in plan_css
 
 
 def run_test_web_if(my_predbat):

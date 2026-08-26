@@ -6031,7 +6031,7 @@ def get_plan_css():
             const batchActive = getBatchActive();
             const timeCell = dropdown.closest('td');
             const timeDisplay = timeCell ? timeCell.getAttribute('data-time-display') || '' : '';
-            dropdown.querySelectorAll('a.batch-select-action, a.cancel-batch').forEach(n => n.remove());
+            dropdown.querySelectorAll('a.batch-select-action, a.period-select-action, a.cancel-batch').forEach(n => n.remove());
 
             const a = document.createElement('a');
             if (batchActive) {
@@ -6042,6 +6042,15 @@ def get_plan_css():
                 a.className = 'batch-select-action';
                 a.setAttribute('onclick', `event.stopPropagation(); addToBatchSelection('${timeDisplay}', '${id}')`);
                 a.textContent = 'Batch select';
+                dropdown.insertBefore(a, dropdown.firstChild || null);
+
+                const periodAction = document.createElement('a');
+                periodAction.className = 'period-select-action';
+                periodAction.setAttribute('onclick', `event.stopPropagation(); startPeriodSelection('${timeDisplay}')`);
+                periodAction.textContent = 'Select period';
+                dropdown.insertBefore(periodAction, dropdown.firstChild || null);
+                dropdown.style.display = 'block';
+                return;
             }
             dropdown.insertBefore(a, dropdown.firstChild || null);
         } catch (e) {
@@ -6277,6 +6286,7 @@ def get_plan_css():
     // Use module-scoped variables so refreshing the page clears the batch.
     var _predbatSelectedTimeOverrides = null; // null = not initialised
     var _predbatBatchActive = false;
+    var _predbatPeriodStart = null;
 
     function getSelectedTimeOverrides() {
         // If already initialised in-memory, return that.
@@ -6312,6 +6322,11 @@ def get_plan_css():
     }
 
     function toggleTimeSelection(time, dropdownId) {
+        if (_predbatPeriodStart !== null) {
+            selectPeriod(_predbatPeriodStart, time);
+            openDropdown(dropdownId);
+            return;
+        }
         // Only toggle selection when batch mode is active. Otherwise just open
         // the dropdown to allow the user to start batching explicitly.
         if (getBatchActive()) {
@@ -6328,6 +6343,28 @@ def get_plan_css():
     function clearSelectedTimeOverrides() {
         setSelectedTimeOverrides([]);
         setBatchActive(false);
+        _predbatPeriodStart = null;
+    }
+
+    function startPeriodSelection(time) {
+        _predbatPeriodStart = time;
+        setSelectedTimeOverrides([time]);
+        setBatchActive(true);
+        closeDropdowns();
+    }
+
+    function selectPeriod(startTime, endTime) {
+        const cells = Array.from(document.querySelectorAll('td.clickable-time-cell[data-time-display]'));
+        const startIndex = cells.findIndex(cell => cell.getAttribute('data-time-display') === startTime);
+        const endIndex = cells.findIndex(cell => cell.getAttribute('data-time-display') === endTime);
+        if (startIndex < 0 || endIndex < 0) {
+            _predbatPeriodStart = null;
+            return;
+        }
+        const firstIndex = Math.min(startIndex, endIndex);
+        const lastIndex = Math.max(startIndex, endIndex);
+        setSelectedTimeOverrides(cells.slice(firstIndex, lastIndex + 1).map(cell => cell.getAttribute('data-time-display')));
+        _predbatPeriodStart = null;
     }
 
     function addToBatchSelection(time, dropdownId) {
@@ -6929,6 +6966,7 @@ def get_plan_renderer_js():
             html += `<a class="cancel-batch" onclick="event.stopPropagation(); clearSelectedTimeOverrides()">Cancel Batch</a>`;
         } else {
             html += `<a class="batch-select-action" onclick="event.stopPropagation(); addToBatchSelection('${timeDisplay}', '${dropdownId}')">Batch select</a>`;
+            html += `<a class="period-select-action" onclick="event.stopPropagation(); startPeriodSelection('${timeDisplay}')">Select period</a>`;
         }
         if (manualTimes.includes(minutesFromMidnight)) {
             html += `<a onclick="event.stopPropagation(); handleTimeOverride('${timeDisplay}', 'Clear')">Clear</a>`;
