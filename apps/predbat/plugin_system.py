@@ -138,10 +138,19 @@ class PluginSystem:
                 except Exception as e:
                     self.log(f"Failed to initialise plugin class {name}: {e}")
 
-        # 2. FALLBACK: Class has PREDBAT_PLUGIN = True attribute
+        # 2. FALLBACK: Class has PREDBAT_PLUGIN = True attribute AND is defined in
+        # this module. The same __module__ guard as strategy 1, and for the same
+        # reason: PredBatPlugin itself sets PREDBAT_PLUGIN = True as its discovery
+        # marker, so every plugin that does `from plugin_system import PredBatPlugin`
+        # has a matching class sitting in its namespace. Without the guard this
+        # fallback re-introduces exactly the bug strategy 1 just fixed, and it is
+        # reachable in the two cases where strategy 1 declines: the plugin class does
+        # not end in "Plugin", or it raised during __init__ and left plugin_instance
+        # None. Both end with the abstract base constructed, the plugin logged as
+        # loaded, and nothing registered.
         if plugin_instance is None:
             for name, obj in inspect.getmembers(plugin_module, inspect.isclass):
-                if hasattr(obj, "PREDBAT_PLUGIN") and getattr(obj, "PREDBAT_PLUGIN"):
+                if getattr(obj, "PREDBAT_PLUGIN", False) and obj.__module__ == plugin_module.__name__:
                     try:
                         self.log(f"Initialising plugin class (attribute-based): {name}")
                         plugin_instance = obj(self.base)
