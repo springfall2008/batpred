@@ -32,7 +32,9 @@ def set_rate_profile(my_predbat, profile, default_rate=20.0, export_rate=0.0):
 
 def check_slot_invariants(test_name, slots):
     """
-    Check the invariants all iBoost plans must hold: sorted by time, no duplicate slot starts
+    Check the invariants all iBoost plans must hold: sorted by time, no duplicate slot starts,
+    every slot longer than zero and no overlapping slots (in_iboost_slot divides by the length
+    and drops overlapped slots)
     """
     failed = False
     starts = [slot["start"] for slot in slots]
@@ -42,6 +44,13 @@ def check_slot_invariants(test_name, slots):
     if len(starts) != len(set(starts)):
         print("ERROR: {} iBoost plan contains duplicate slot starts: {}".format(test_name, slots))
         failed = True
+    for index, slot in enumerate(slots):
+        if slot["end"] <= slot["start"]:
+            print("ERROR: {} iBoost slot has a zero or negative length: {}".format(test_name, slots))
+            failed = True
+        if (index + 1 < len(slots)) and (slot["end"] > slots[index + 1]["start"]):
+            print("ERROR: {} iBoost slots overlap: {}".format(test_name, slots))
+            failed = True
     return failed
 
 
@@ -124,21 +133,27 @@ def make_forecast_attribute(my_predbat, points):
     return {(my_predbat.midnight_utc + timedelta(minutes=minute)).isoformat(): kwh for minute, kwh in points}
 
 
-def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=None, expect_total=None, expect_empty=False):
+def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=None, expect_total=None, expect_empty=False, minutes_now=None):
     """
     Run fetch_iboost_forecast() against mocked sensor state and check the per-interval demand
 
     config is merged into my_predbat.args (and removed afterwards); states is a dict of
-    entity_id -> attributes dict pushed into the mock HA interface. expect_demand is a dict of
-    interval start -> kWh checked to within 0.05 kWh; unlisted intervals must be (close to) zero.
+    entity_id -> either an attributes dict or a plain scalar state, pushed into the mock HA
+    interface. expect_demand is a dict of interval start -> kWh checked to within 0.05 kWh;
+    unlisted intervals must be (close to) zero.
     """
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
+    if minutes_now is not None:
+        my_predbat.minutes_now = minutes_now
     for key, value in config.items():
         my_predbat.args[key] = value
     for entity_id, attributes in states.items():
-        my_predbat.ha_interface.set_state(entity_id, "ok", attributes=attributes)
+        if isinstance(attributes, dict):
+            my_predbat.ha_interface.set_state(entity_id, "ok", attributes=attributes)
+        else:
+            my_predbat.ha_interface.set_state(entity_id, attributes)
 
     demand = my_predbat.fetch_iboost_forecast()
 
@@ -161,30 +176,43 @@ def run_iboost_fetch_test(test_name, my_predbat, config, states, expect_demand=N
         del my_predbat.args[key]
     for entity_id in states:
         del my_predbat.ha_interface.dummy_items[entity_id]
+    if minutes_now is not None:
+        my_predbat.minutes_now = 12 * 60
 
     return failed
 
 
-def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, fill_rate_threshold=-99.0, expect_slots=None):
+def run_iboost_forecast_plan_test(
+    test_name, my_predbat, forecast, tank_soc_percent=None, capacity=10.0, reserve=0.0, today=0, max_energy=6.0, max_power=2, fill_rate_threshold=-99.0, minutes_now=None, rate_threshold=100, rate_threshold_export=100, gas_rate=None, expect_slots=None
+):
     """
     Run a single iBoost forecast planner test case and compare the exact slots produced
 
-    forecast is a dict of interval start (absolute minute) -> demand kWh; max_power is in kW.
+    forecast is a dict of interval start (absolute minute) -> demand kWh; max_power is in kW;
+    gas_rate sets a flat gas rate and turns iboost_gas on for the test.
     expect_slots is the exact expected plan (list of slot dicts).
     """
     failed = False
     print("**** Running Test: {} ****".format(test_name))
 
+    if minutes_now is not None:
+        my_predbat.minutes_now = minutes_now
     my_predbat.iboost_smart = True
     my_predbat.iboost_today = today
     my_predbat.iboost_max_energy = max_energy
     my_predbat.iboost_max_power = max_power / 60
     my_predbat.iboost_smart_min_length = 30
+    my_predbat.iboost_rate_threshold = rate_threshold
+    my_predbat.iboost_rate_threshold_export = rate_threshold_export
     my_predbat.iboost_tank_capacity = capacity
     my_predbat.iboost_tank_reserve = reserve
     my_predbat.iboost_tank_soc_percent = tank_soc_percent
     my_predbat.iboost_fill_rate_threshold = fill_rate_threshold
     my_predbat.iboost_forecast = forecast
+    if gas_rate is not None:
+        my_predbat.iboost_gas = True
+        my_predbat.iboost_gas_scale = 1.0
+        my_predbat.rate_gas = {minute: gas_rate for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now + 120)}
 
     slots = my_predbat.plan_iboost_smart()
 
@@ -198,6 +226,13 @@ def run_iboost_forecast_plan_test(test_name, my_predbat, forecast, tank_soc_perc
     my_predbat.iboost_fill_rate_threshold = -99.0
     my_predbat.iboost_smart = False
     my_predbat.iboost_today = 0
+    my_predbat.iboost_rate_threshold = 100
+    my_predbat.iboost_rate_threshold_export = 100
+    if gas_rate is not None:
+        my_predbat.iboost_gas = False
+        my_predbat.rate_gas = {}
+    if minutes_now is not None:
+        my_predbat.minutes_now = 12 * 60
 
     return failed
 
@@ -251,6 +286,46 @@ def run_iboost_forecast_tests(my_predbat):
         {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(100, 0.0), (200, 1.0)])}},
         expect_empty=True,
     )
+    # Two forecast sensors are summed per interval
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_multi",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results", "sensor.hot_water_demand2$results"]},
+        {
+            "sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(780, 0.0), (810, 1.0), (840, 1.0)])},
+            "sensor.hot_water_demand2": {"results": make_forecast_attribute(my_predbat, [(810, 0.0), (840, 0.5), (870, 0.5)])},
+        },
+        expect_demand={780: 1.0, 810: 0.5},
+        expect_total=1.5,
+    )
+    # A scalar state (misconfiguration without a $attribute suffix) is skipped with a warning
+    # rather than crashing the fetch cycle
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_scalar_state",
+        my_predbat,
+        {"iboost_forecast": ["sensor.bad_forecast"]},
+        {"sensor.bad_forecast": 3.5},
+        expect_empty=True,
+    )
+    # Data lying wholly beyond the planning horizon falls back to the legacy plan
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_beyond_horizon",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results"]},
+        {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(2400, 0.0), (2500, 1.0)])}},
+        expect_empty=True,
+    )
+    # Mid-interval fetch: the draw already taken earlier in the current interval is excluded (it
+    # is reflected in the tank SoC reading), only the remainder counts as demand
+    failed |= run_iboost_fetch_test(
+        "iboost_fetch_partial_interval",
+        my_predbat,
+        {"iboost_forecast": ["sensor.hot_water_demand$results"]},
+        {"sensor.hot_water_demand": {"results": make_forecast_attribute(my_predbat, [(720, 0.0), (735, 0.5), (750, 1.0), (780, 1.0)])}},
+        expect_demand={720: 0.5},
+        expect_total=0.5,
+        minutes_now=735,
+    )
 
     # A draw at 14:00 with a cheap window before it and an even cheaper one after it: the energy
     # must be booked before the draw, never in the cheaper slot after it
@@ -295,6 +370,58 @@ def run_iboost_forecast_tests(my_predbat):
     set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
     failed |= run_iboost_forecast_plan_test("iboost_plan_uncovered_first", my_predbat, {720: 1.0, 840: 1.0}, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
 
+    # Mid-interval replan: only 15 minutes of the current cheap interval remain, so at most
+    # 0.5 kWh can be booked there (the rest books in the next slot) and the emitted slot starts
+    # at minutes_now, never in the past
+    set_rate_profile(my_predbat, [(720, 750, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_partial_interval",
+        my_predbat,
+        {780: 1.0},
+        minutes_now=735,
+        expect_slots=[{"start": 735, "end": 750, "kwh": 0.5, "average": 5.0, "cost": 2.5}, {"start": 750, "end": 770, "kwh": 0.5, "average": 20.0, "cost": 10.0}],
+    )
+
+    # Import rate threshold: only slots at or below the threshold are eligible; with no slot at
+    # or below it the demand goes uncovered rather than booking an over-threshold slot
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_threshold_import", my_predbat, {840: 1.0}, rate_threshold=10, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+    failed |= run_iboost_forecast_plan_test("iboost_plan_threshold_import_none", my_predbat, {840: 1.0}, rate_threshold=4, expect_slots=[])
+
+    # Export rate threshold: an export rate above the export threshold blocks boosting
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0, export_rate=15.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_threshold_export", my_predbat, {840: 1.0}, rate_threshold_export=10, expect_slots=[])
+
+    # Gas comparison: only slots where import is at or below the gas rate are eligible
+    set_rate_profile(my_predbat, [(780, 810, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test("iboost_plan_gas", my_predbat, {840: 1.0}, gas_rate=10.0, expect_slots=[{"start": 780, "end": 810, "kwh": 1.0, "average": 5.0, "cost": 5.0}])
+
+    # Capacity headroom before the target draw: the 3p slot at 810 cannot serve the second draw
+    # because the tank is already full from 750 until the first draw at 840, so the boost must
+    # land between the draws even though a cheaper slot exists earlier
+    set_rate_profile(my_predbat, [(750, 780, 2.0), (810, 840, 3.0), (870, 900, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_capacity_binding",
+        my_predbat,
+        {840: 1.0, 900: 1.0},
+        capacity=1.0,
+        expect_slots=[{"start": 750, "end": 780, "kwh": 1.0, "average": 2.0, "cost": 2.0}, {"start": 870, "end": 900, "kwh": 1.0, "average": 5.0, "cost": 5.0}],
+    )
+
+    # Price-tie consolidation: with 780 already booked, the tie at 5p between 720 and 810 goes to
+    # the adjacent 810 so boosts form a contiguous run
+    set_rate_profile(my_predbat, [(720, 750, 5.0), (780, 810, 4.0), (810, 840, 5.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_adjacency",
+        my_predbat,
+        {840: 1.0},
+        max_power=1,
+        expect_slots=[{"start": 780, "end": 810, "kwh": 0.5, "average": 4.0, "cost": 2.0}, {"start": 810, "end": 840, "kwh": 0.5, "average": 5.0, "cost": 2.5}],
+    )
+
+    # A zero element power cannot boost at all
+    failed |= run_iboost_forecast_plan_test("iboost_plan_zero_power", my_predbat, {840: 1.0}, max_power=0, expect_slots=[])
+
     # Fill threshold: a negative-rate slot qualifies for filling, so on top of the 0.5 kWh the
     # draw needs, the remaining headroom is bought in the -2p slot up to the element power
     set_rate_profile(my_predbat, [(780, 810, -2.0)], default_rate=20.0)
@@ -316,6 +443,25 @@ def run_iboost_forecast_tests(my_predbat):
             {"start": 750, "end": 780, "kwh": 0.5, "average": 20.0, "cost": 10.0},
             {"start": 900, "end": 930, "kwh": 0.5, "average": 20.0, "cost": 10.0},
             {"start": 930, "end": 960, "kwh": 0.5, "average": 20.0, "cost": 10.0},
+        ],
+    )
+
+    # Fill day-cap accounting: the fill at 780 initially exhausts the day cap, but trimming the
+    # displaced 2p booking refunds it immediately, so the later 3p fill slot at 960 (after the
+    # draw) is still filled instead of being blocked by phantom day-cap usage
+    set_rate_profile(my_predbat, [(780, 810, 10.0), (840, 870, 2.0), (960, 990, 3.0)], default_rate=20.0)
+    failed |= run_iboost_forecast_plan_test(
+        "iboost_plan_fill_day_cap",
+        my_predbat,
+        {900: 2.0},
+        capacity=2.0,
+        max_energy=3.0,
+        max_power=4,
+        fill_rate_threshold=10.0,
+        expect_slots=[
+            {"start": 780, "end": 800, "kwh": 1.0, "average": 10.0, "cost": 10.0},
+            {"start": 840, "end": 860, "kwh": 1.0, "average": 2.0, "cost": 2.0},
+            {"start": 960, "end": 980, "kwh": 1.0, "average": 3.0, "cost": 3.0},
         ],
     )
 
@@ -348,5 +494,16 @@ def run_iboost_forecast_tests(my_predbat):
         failed = True
     my_predbat.iboost_smart = False
     my_predbat.iboost_today = 0
+
+    # Restore the shared instance for later tests: iboost parameters back to their config
+    # defaults and the extra rate keys set_rate_profile wrote beyond the usual test span removed
+    my_predbat.iboost_max_energy = 3.0
+    my_predbat.iboost_max_power = 2400 / 60 / 1000
+    my_predbat.iboost_smart_min_length = 30
+    for minute in range(my_predbat.forecast_minutes + my_predbat.minutes_now, my_predbat.forecast_minutes + my_predbat.minutes_now + 120):
+        if minute in my_predbat.rate_import:
+            del my_predbat.rate_import[minute]
+        if minute in my_predbat.rate_export:
+            del my_predbat.rate_export[minute]
 
     return failed

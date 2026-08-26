@@ -639,11 +639,16 @@ can schedule heating ahead of each draw instead of spreading a fixed daily energ
 Configure **iboost_forecast** (and optionally **iboost_forecast_scaling** and **iboost_tank_soc**) in `apps.yaml` -
 see [iBoost energy](apps-yaml.md#iboost-energy) for the data format. When **iboost_forecast** is not configured the planner behaviour is unchanged.
 
+The forecast planner runs exactly when the smart planner would: iBoost must be enabled and either both **switch.predbat_iboost_solar** and
+**switch.predbat_iboost_charging** must be Off, or **switch.predbat_iboost_smart** must be On. A configured forecast has no effect in the solar or
+battery modes, and in the energy-rates-only modes it takes over slot selection, including the time-ordered plan normally used when
+**switch.predbat_iboost_smart** is Off.
+
 The hot water tank is modelled as a charge-only store: heating adds energy up to the tank capacity, forecast draws remove it, and the planner books the
 cheapest eligible slots before each draw so that the stored energy never falls below the reserve at any draw.
 Slots are still subject to the rate thresholds, the gas rate comparison and the daily **input_number.predbat_iboost_max_energy** cap described above.
 
-The store model is controlled by two additional entities:
+The forecast planner is controlled by these additional entities:
 
 - **input_number.predbat_iboost_tank_capacity** Sets the usable stored energy of the tank in kWh - default 10.
 - **input_number.predbat_iboost_tank_reserve** Sets the minimum stored energy in kWh to hold in the tank before each draw - default 0.
