@@ -6287,6 +6287,7 @@ def get_plan_css():
     var _predbatSelectedTimeOverrides = null; // null = not initialised
     var _predbatBatchActive = false;
     var _predbatPeriodStart = null;
+    var _predbatBatchAnchor = null;
 
     function getSelectedTimeOverrides() {
         // If already initialised in-memory, return that.
@@ -6321,7 +6322,7 @@ def get_plan_css():
         _predbatBatchActive = !!val;
     }
 
-    function toggleTimeSelection(time, dropdownId) {
+    function toggleTimeSelection(time, dropdownId, clickEvent) {
         if (_predbatPeriodStart !== null) {
             selectPeriod(_predbatPeriodStart, time);
             openDropdown(dropdownId);
@@ -6330,12 +6331,18 @@ def get_plan_css():
         // Only toggle selection when batch mode is active. Otherwise just open
         // the dropdown to allow the user to start batching explicitly.
         if (getBatchActive()) {
+            if (clickEvent && clickEvent.shiftKey && _predbatBatchAnchor !== null) {
+                selectPeriod(_predbatBatchAnchor, time);
+                openDropdown(dropdownId);
+                return;
+            }
             const selectedTimes = getSelectedTimeOverrides();
             const key = time;
             const updated = selectedTimes.includes(key)
                 ? selectedTimes.filter(item => item !== key)
                 : selectedTimes.concat(key);
             setSelectedTimeOverrides(updated);
+            _predbatBatchAnchor = time;
         }
         openDropdown(dropdownId);
     }
@@ -6344,10 +6351,12 @@ def get_plan_css():
         setSelectedTimeOverrides([]);
         setBatchActive(false);
         _predbatPeriodStart = null;
+        _predbatBatchAnchor = null;
     }
 
     function startPeriodSelection(time) {
         _predbatPeriodStart = time;
+        _predbatBatchAnchor = time;
         setSelectedTimeOverrides([time]);
         setBatchActive(true);
         closeDropdowns();
@@ -6365,6 +6374,7 @@ def get_plan_css():
         const lastIndex = Math.max(startIndex, endIndex);
         setSelectedTimeOverrides(cells.slice(firstIndex, lastIndex + 1).map(cell => cell.getAttribute('data-time-display')));
         _predbatPeriodStart = null;
+        _predbatBatchAnchor = endTime;
     }
 
     function addToBatchSelection(time, dropdownId) {
@@ -6374,6 +6384,7 @@ def get_plan_css():
             setSelectedTimeOverrides(selectedTimes.concat(key));
         }
         setBatchActive(true);
+        _predbatBatchAnchor = time;
         // Start batching and close the dropdown so the user sees the updated
         // UI state (other dropdowns will show Cancel Batch when opened).
         closeDropdowns();
@@ -6956,7 +6967,7 @@ def get_plan_renderer_js():
             overrideClass = 'override-freeze-export';
         }
 
-        let html = `<td bgcolor=${bgColor} onclick="toggleTimeSelection('${timeDisplay}', '${dropdownId}')" class="clickable-time-cell ${overrideClass}" data-time-display="${timeDisplay}">`;
+        let html = `<td bgcolor=${bgColor} onclick="toggleTimeSelection('${timeDisplay}', '${dropdownId}', event)" class="clickable-time-cell ${overrideClass}" data-time-display="${timeDisplay}">`;
         html += timeDisplay;
         html += '<div class="dropdown">';
         html += `<div id="${dropdownId}" class="dropdown-content">`;

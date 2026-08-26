@@ -23,11 +23,12 @@ def test_plan_renderer_renders_batch_controls():
     the runtime batch state.
     """
     renderer_js = get_plan_renderer_js()
-    assert "toggleTimeSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
+    assert "toggleTimeSelection('${timeDisplay}', '${dropdownId}', event)" in renderer_js
     assert "const batchActive = getBatchActive();" in renderer_js
     assert "addToBatchSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
     assert 'class="cancel-batch"' in renderer_js
     assert "startPeriodSelection('${timeDisplay}')" in renderer_js
+    assert "clickEvent.shiftKey" in get_plan_css()
 
     plan_css = get_plan_css()
     assert "function startPeriodSelection(time)" in plan_css
