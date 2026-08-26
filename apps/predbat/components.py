@@ -705,7 +705,19 @@ class Components:
                 configured_args = getattr(self.base, "args_from_apps_yaml", None)
                 if configured_args is None:
                     configured_args = self.base.args
-                component_configured = any(configured_args.get(arg_info["config"]) for arg_info in component_info["args"].values())
+                # Only args that gate activation identify a component the user is actually
+                # setting up. Incidental shared settings must not count - gecloud_data
+                # declares the general-purpose days_previous, which the shipped apps.yaml
+                # sets for everyone, so counting all args warns every non-GivEnergy user
+                # about an integration they never configured.
+                gating_args = set(required_or)
+                for arg, arg_info in component_info["args"].items():
+                    if arg_info.get("required", False) or arg_info.get("required_true", False):
+                        gating_args.add(arg)
+                # Presence, not truthiness: a setting supplied as empty or false is still an
+                # attempt to configure the component, and is exactly when the warning helps -
+                # e.g. a secret that unexpectedly resolved to an empty string.
+                component_configured = any(component_info["args"][arg]["config"] in configured_args for arg in gating_args)
                 if component_configured:
                     reasons = []
                     if missing_config:
