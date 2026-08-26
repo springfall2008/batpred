@@ -30,6 +30,8 @@ def test_plan_renderer_renders_batch_controls():
     assert "startPeriodSelection('${timeDisplay}')" in renderer_js
     assert "clickEvent = clickEvent || window.event;" in get_plan_css()
     assert "clickEvent.shiftKey" in get_plan_css()
+    assert "selectPeriod(_predbatBatchAnchor, time, true)" in get_plan_css()
+    assert "const selectedTimes = append ? getSelectedTimeOverrides().concat(periodTimes) : periodTimes;" in get_plan_css()
 
     plan_css = get_plan_css()
     assert "function startPeriodSelection(time)" in plan_css

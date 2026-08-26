@@ -6333,7 +6333,7 @@ def get_plan_css():
         // the dropdown to allow the user to start batching explicitly.
         if (getBatchActive()) {
             if (clickEvent && clickEvent.shiftKey && _predbatBatchAnchor !== null) {
-                selectPeriod(_predbatBatchAnchor, time);
+                selectPeriod(_predbatBatchAnchor, time, true);
                 openDropdown(dropdownId);
                 return;
             }
@@ -6363,7 +6363,7 @@ def get_plan_css():
         closeDropdowns();
     }
 
-    function selectPeriod(startTime, endTime) {
+    function selectPeriod(startTime, endTime, append) {
         const cells = Array.from(document.querySelectorAll('td.clickable-time-cell[data-time-display]'));
         const startIndex = cells.findIndex(cell => cell.getAttribute('data-time-display') === startTime);
         const endIndex = cells.findIndex(cell => cell.getAttribute('data-time-display') === endTime);
@@ -6373,7 +6373,9 @@ def get_plan_css():
         }
         const firstIndex = Math.min(startIndex, endIndex);
         const lastIndex = Math.max(startIndex, endIndex);
-        setSelectedTimeOverrides(cells.slice(firstIndex, lastIndex + 1).map(cell => cell.getAttribute('data-time-display')));
+        const periodTimes = cells.slice(firstIndex, lastIndex + 1).map(cell => cell.getAttribute('data-time-display'));
+        const selectedTimes = append ? getSelectedTimeOverrides().concat(periodTimes) : periodTimes;
+        setSelectedTimeOverrides(selectedTimes);
         _predbatPeriodStart = null;
         _predbatBatchAnchor = endTime;
     }
