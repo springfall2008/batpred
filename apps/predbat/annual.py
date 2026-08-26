@@ -261,6 +261,40 @@ def _validate_tariff(raw, path="annual.tariff"):
     return tariff
 
 
+def _validate_export_tariffs(raw):
+    """Normalise the optional export-tariff sweep list.
+
+    Each entry names one export product to evaluate against otherwise identical inputs. An
+    absent or empty list means the single export side already on annual.tariff, which is
+    what every config written before this existed means.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise AnnualConfigError("annual.export_tariffs must be a list of export tariff entries")
+
+    entries = []
+    seen = set()
+    for index, entry in enumerate(raw):
+        path = "annual.export_tariffs[{}]".format(index)
+        if not isinstance(entry, dict):
+            raise AnnualConfigError("{} must be a mapping".format(path))
+        tariff_id = entry.get("id")
+        if not tariff_id or not isinstance(tariff_id, str):
+            raise AnnualConfigError("{} is missing a string id".format(path))
+        if tariff_id in seen:
+            raise AnnualConfigError("annual.export_tariffs must not repeat the id '{}'".format(tariff_id))
+        seen.add(tariff_id)
+        if not entry.get("export_octopus_url") and not entry.get("rates_export"):
+            raise AnnualConfigError("{} needs either export_octopus_url or rates_export".format(path))
+        normalised = {"id": tariff_id, "name": entry.get("name", tariff_id)}
+        for key in ("export_octopus_url", "rates_export"):
+            if entry.get(key):
+                normalised[key] = entry[key]
+        entries.append(normalised)
+    return entries
+
+
 def _validated_costs(raw):
     """Return the validated install-cost settings, as an AnnualConfigError on failure.
 
@@ -378,6 +412,11 @@ def validate_config(config, today=None):
         # no-PV/battery scenario on the same tariff as the battery scenarios therefore
         # understates what the system is worth. Defaults to the Ofgem price cap.
         "baseline_tariff": _validate_tariff(raw.get("baseline_tariff") or DEFAULT_BASELINE_TARIFF, path="annual.baseline_tariff"),
+        # An optional sweep of export products, each priced against the same import side,
+        # standing charge, weather and sampled days as everything else in this run - see
+        # AnnualPredictor.run()'s by_export branch. Absent or empty means no sweep: run()
+        # returns today's single-tariff document unchanged.
+        "export_tariffs": _validate_export_tariffs(raw.get("export_tariffs")),
         "samples_per_month": samples_per_month,
         "sampling": sampling,
         "costs": _validated_costs(raw.get("costs")),
@@ -1707,6 +1746,41 @@ class AnnualPredictor:
         months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(self.config["months"])
         total_units = len(months_to_plan) + (1 if fast_mode else 0)
         completed = 0
+
+        export_tariffs = self.config["export_tariffs"]
+        if export_tariffs:
+            by_export = {}
+            # One AnnualTariff per export product, each sharing the import side and the
+            # standing charge. Built from config["tariff"] with the export keys REPLACED, not
+            # merged, so a config that also names an export side on annual.tariff cannot leak
+            # into a sweep entry that omits it.
+            for entry in export_tariffs:
+                tariff_config = {key: value for key, value in self.config["tariff"].items() if key not in ("export_octopus_url", "rates_export")}
+                for key in ("export_octopus_url", "rates_export"):
+                    if entry.get(key):
+                        tariff_config[key] = entry[key]
+                tariff = AnnualTariff(tariff_config, log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
+                months, baseline_fallback_months, completed, _ = await self._plan_months(tariff, year, zone, months_to_plan, progress, total_units * len(export_tariffs), completed)
+                results = self._build_results(months, fast_mode=False, months_interpolated=0)
+                # Attributed to THIS tariff, not merged into the run-wide list. Outgoing Prime
+                # launched in June 2026, so on any month before that it silently falls back to
+                # today's rates repeated - and a synthetic tariff sitting unlabelled beside two
+                # real ones is the one failure mode that makes the comparison actively
+                # misleading. The consumer needs to be able to mark that one card.
+                tariff_caveats = self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year)
+                by_export[entry["id"]] = {
+                    "name": entry["name"],
+                    "annual": results["annual"],
+                    "months": results["months"],
+                    "caveats": tariff_caveats,
+                    "rates_synthesised": bool(tariff.fallback_months) or bool(tariff.unpaid_export_months),
+                }
+            return {
+                "year": year,
+                "months_requested": list(self.config["months"]),
+                "by_export": by_export,
+                "caveats": self.caveats,
+            }
 
         months, baseline_fallback_months, completed, interpolatable = await self._plan_months(self.tariff, year, zone, months_to_plan, progress, total_units)
 
