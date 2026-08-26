@@ -261,12 +261,22 @@ def _validate_tariff(raw, path="annual.tariff"):
     return tariff
 
 
-def _validate_export_tariffs(raw):
+def _validate_export_tariffs(raw, dno_region=None):
     """Normalise the optional export-tariff sweep list.
 
     Each entry names one export product to evaluate against otherwise identical inputs. An
     absent or empty list means the single export side already on annual.tariff, which is
     what every config written before this existed means.
+
+    ``dno_region`` is the region already resolved (or not) for the main ``annual.tariff``
+    block, passed in so a templated ``{dno_region}`` export URL here is rejected exactly
+    like the identical URL would be on ``annual.tariff`` (see ``_validate_tariff``). Without
+    this check, an unresolved ``{dno_region}`` reaches ``AnnualTariff._resolve_url`` as
+    ``extra_args=None``, which fails to substitute the placeholder and leaves ``export_url``
+    effectively unusable - and because every export-pricing path is gated on
+    ``if self.export_url:``, that tariff silently prices every export minute at zero, with
+    no fallback triggered and no caveat raised, so a real product scores as a legitimate
+    zero-export result.
     """
     if raw is None:
         return []
@@ -287,6 +297,9 @@ def _validate_export_tariffs(raw):
         seen.add(tariff_id)
         if not entry.get("export_octopus_url") and not entry.get("rates_export"):
             raise AnnualConfigError("{} needs either export_octopus_url or rates_export".format(path))
+        export_url = entry.get("export_octopus_url")
+        if export_url and "{dno_region}" in export_url and not dno_region:
+            raise AnnualConfigError("{path}.export_octopus_url uses {{dno_region}} but annual.tariff.dno_region is not set; supply your Octopus region letter, for example 'A' for Eastern England".format(path=path))
         normalised = {"id": tariff_id, "name": entry.get("name", tariff_id)}
         for key in ("export_octopus_url", "rates_export"):
             if entry.get(key):
@@ -398,8 +411,13 @@ def validate_config(config, today=None):
                 )
 
     # Validated ahead of fast_mode below, so the fast_mode expression sees the final list
-    # rather than raw, unvalidated input.
-    export_tariffs = _validate_export_tariffs(raw.get("export_tariffs"))
+    # rather than raw, unvalidated input. Passed the same dno_region annual.tariff resolves
+    # with, so a templated export URL here is rejected on the same terms as one on
+    # annual.tariff itself, rather than silently pricing that tariff's export at zero. A
+    # non-dict annual.tariff is left for _validate_tariff below to reject with its own
+    # message rather than raising AttributeError here first.
+    raw_tariff = raw.get("tariff")
+    export_tariffs = _validate_export_tariffs(raw.get("export_tariffs"), raw_tariff.get("dno_region") if isinstance(raw_tariff, dict) else None)
 
     return {
         "location": dict(location),
@@ -1603,6 +1621,20 @@ class AnnualPredictor:
         return sorted(side for fb_year, fb_month, side in fallback_months if fb_year == year and fb_month == month)
 
     @staticmethod
+    def _baseline_fallback_caveat(months):
+        """Return the caveat for month(s) whose no-PV/battery counterfactual fell back to the main tariff.
+
+        Shared between the single-tariff and sweep paths in run(): both fall back to the
+        shared baseline_tariff's main tariff when a baseline month cannot be fetched, and
+        both need the same warning that this silently changes what no_pvbat means there -
+        no_pvbat feeds savings.pv_battery_vs_none_p, single card or sweep alike. Returns
+        None when there is nothing to report, so a caller can do ``if message: ...``.
+        """
+        if not months:
+            return None
+        return "No baseline-tariff rates were available for month(s) {}, so the no-PV/battery counterfactual there was priced on the main tariff instead, which understates what the system is worth in those months.".format(sorted(months))
+
+    @staticmethod
     def _tariff_fallback_caveats(fallback_months, unpaid_export_months, year):
         """Return the caveat strings describing a tariff's current-rates fallback and/or wholly-unpriced export months.
 
@@ -1628,6 +1660,33 @@ class AnnualPredictor:
             unpaid_list = ", ".join("{}-{:02d}".format(unpaid_year, unpaid_month) for unpaid_year, unpaid_month in sorted(unpaid_export_months))
             caveats.append("No export rates at all (historical or current) could be found for {} on this tariff, so export was priced at zero for those months. If this tariff pays for export, savings for those months are understated.".format(unpaid_list))
         return caveats
+
+    def _export_card(self, entry, tariff, months, year):
+        """Build one by_export[id] card from a swept tariff's own planned months.
+
+        Extracted out of run()'s sweep loop so a stub-tariff test can exercise the card's
+        exact shape (the five keys Task 8 renders) without a real network run through
+        _plan_months. Attributed to THIS tariff, not merged into the run-wide caveats list:
+        Outgoing Prime launched in June 2026, so on any month before that it silently falls
+        back to today's rates repeated - and a synthetic tariff sitting unlabelled beside two
+        real ones is the one failure mode that makes the comparison actively misleading. The
+        consumer needs to be able to mark that one card.
+        """
+        results = self._build_results(months, fast_mode=False, months_interpolated=0)
+        return {
+            "name": entry["name"],
+            "annual": results["annual"],
+            "months": results["months"],
+            "caveats": self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year),
+            # Export-side only, and scoped to the modelled year: this exists to flag a card
+            # whose EXPORT rates were synthesised from the current-rates fallback (Outgoing
+            # Prime has no history before June 2026), not one whose shared import side fell
+            # back (which would flag every card in the sweep regardless of that tariff's own
+            # export rates), not an unpaid-export month (priced at zero, a distinct failure
+            # from being synthesised), and not the December spill fetch into (year + 1, 1)
+            # which is unrelated to this year's modelled months.
+            "rates_synthesised": any(fb_year == year and fb_side == "export" for fb_year, _, fb_side in tariff.fallback_months),
+        }
 
     async def _plan_months(self, tariff, year, zone, months_to_plan, progress, total_units, completed=0):
         """Plan every requested month against ONE tariff, returning (months, baseline_fallback_months, completed, interpolatable).
@@ -1760,6 +1819,11 @@ class AnnualPredictor:
         export_tariffs = self.config["export_tariffs"]
         if export_tariffs:
             by_export = {}
+            # baseline_tariff is shared across every sweep entry (see run()'s single
+            # construction of self.baseline_tariff above), so a month it fell back on is a
+            # run-wide fact, not a per-export-tariff one - accumulated here across every
+            # iteration rather than reported (or lost) per entry.
+            baseline_fallback_months_sweep = set()
             # One AnnualTariff per export product, each sharing the import side and the
             # standing charge. Built from config["tariff"] with the export keys REPLACED, not
             # merged, so a config that also names an export side on annual.tariff cannot leak
@@ -1771,20 +1835,11 @@ class AnnualPredictor:
                         tariff_config[key] = entry[key]
                 tariff = AnnualTariff(tariff_config, log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
                 months, baseline_fallback_months, completed, _ = await self._plan_months(tariff, year, zone, months_to_plan, progress, total_units * len(export_tariffs), completed)
-                results = self._build_results(months, fast_mode=False, months_interpolated=0)
-                # Attributed to THIS tariff, not merged into the run-wide list. Outgoing Prime
-                # launched in June 2026, so on any month before that it silently falls back to
-                # today's rates repeated - and a synthetic tariff sitting unlabelled beside two
-                # real ones is the one failure mode that makes the comparison actively
-                # misleading. The consumer needs to be able to mark that one card.
-                tariff_caveats = self._tariff_fallback_caveats(tariff.fallback_months, tariff.unpaid_export_months, year)
-                by_export[entry["id"]] = {
-                    "name": entry["name"],
-                    "annual": results["annual"],
-                    "months": results["months"],
-                    "caveats": tariff_caveats,
-                    "rates_synthesised": bool(tariff.fallback_months) or bool(tariff.unpaid_export_months),
-                }
+                baseline_fallback_months_sweep.update(baseline_fallback_months)
+                by_export[entry["id"]] = self._export_card(entry, tariff, months, year)
+            baseline_fallback_caveat = self._baseline_fallback_caveat(baseline_fallback_months_sweep)
+            if baseline_fallback_caveat:
+                self.caveats.append(baseline_fallback_caveat)
             return {
                 "year": year,
                 "months_requested": list(self.config["months"]),
@@ -1850,12 +1905,9 @@ class AnnualPredictor:
 
         self.caveats.extend(self._tariff_fallback_caveats(self.tariff.fallback_months, self.tariff.unpaid_export_months, year))
 
-        if baseline_fallback_months:
-            # Falling back to the main tariff keeps the month rather than losing it, but it
-            # silently changes what no_pvbat means there, so it has to be said out loud.
-            self.caveats.append(
-                "No baseline-tariff rates were available for month(s) {}, so the no-PV/battery counterfactual there was priced on the main tariff instead, which understates what the system is worth in those months.".format(sorted(baseline_fallback_months))
-            )
+        baseline_fallback_caveat = self._baseline_fallback_caveat(baseline_fallback_months)
+        if baseline_fallback_caveat:
+            self.caveats.append(baseline_fallback_caveat)
 
         if progress:
             progress(total_units, total_units, "Complete")

@@ -9,7 +9,67 @@
 
 """Tests for the annual engine's multi-export-tariff sweep."""
 
-from annual import AnnualConfigError, validate_config
+import asyncio
+from datetime import date
+
+import pytz
+
+import annual
+from annual import SCENARIO_FIELDS, SCENARIO_KEYS, AnnualConfigError, AnnualPredictor, validate_config
+
+
+class _StubTariff:
+    """A minimal AnnualTariff stand-in: no network, no real rates, records what it is asked.
+
+    Used to prove _plan_one_month/_plan_months/_export_card actually operate on the tariff
+    OBJECT they are given rather than silently falling back to self.tariff - the failure mode
+    that would collapse an export sweep's three cards into one number while leaving the rest
+    of the suite green.
+    """
+
+    def __init__(self, standing_charge_p_per_day=50.0, fallback_months=None, unpaid_export_months=None):
+        """Configure the stub; fallback_months/unpaid_export_months default to empty sets."""
+        self.standing_charge_p_per_day = standing_charge_p_per_day
+        self.fallback_months = set() if fallback_months is None else fallback_months
+        self.unpaid_export_months = set() if unpaid_export_months is None else unpaid_export_months
+        self.fetch_month_calls = []
+        self.rates_for_calls = []
+
+    async def fetch_month(self, year, month):
+        """Record the call and report every month as available."""
+        self.fetch_month_calls.append((year, month))
+        return True
+
+    def rates_for(self, midnight_utc, minutes):
+        """Record the call and return empty (import, export) per-minute rate dicts."""
+        self.rates_for_calls.append((midnight_utc, minutes))
+        return {}, {}
+
+
+def _fake_select_samples(weather, year, month, samples_per_month, has_solar=True, sampling="percentile"):
+    """Return exactly one fixed sample day for the month, regardless of weather.
+
+    Lets _plan_one_month/_plan_months run with self.weather left as None - no real solar
+    series is ever consulted.
+    """
+    return [(date(year, month, 15), 1.0)]
+
+
+def _make_fake_run_day():
+    """Return (fake_run_day, calls): calls records the exact tariff object passed each time.
+
+    The zeroed scenario dict matches what _month_scenarios needs: one entry per
+    SCENARIO_KEYS, each holding every SCENARIO_FIELDS key.
+    """
+    calls = []
+
+    def fake_run_day(predbat, config, weather, tariff, load_source, day, midnight_utc, plans=None, baseline_tariff=None):
+        # Not async: the real run_day() is a plain sync function - _plan_one_month calls it
+        # without awaiting, so an async stub here would hand back an unawaited coroutine.
+        calls.append(tariff)
+        return {key: {field: 0.0 for field in SCENARIO_FIELDS} for key in SCENARIO_KEYS}
+
+    return fake_run_day, calls
 
 
 def base_config():
@@ -109,11 +169,10 @@ def test_annual_export_sweep(my_predbat):
         print("  ERROR: fast_mode=True with no export_tariffs and no explicit months should stay True")
         failed = True
 
-    print("Test: the results document gains by_export only when a sweep is configured")
-    # Shape assertion only - a real run needs network. AnnualPredictor.run() returns the
-    # legacy document when export_tariffs is empty and the by_export document when it is not.
-    from annual import AnnualPredictor
-
+    print("Test: AnnualPredictor.config carries the validated export_tariffs list, not just validate_config()")
+    # This checks the predictor's own wiring (validate_config's return value reaches
+    # self.config unchanged via __init__) - it does NOT touch by_export itself, which needs
+    # a real tariff and rows to assemble; see test_annual_export_sweep_card_shape for that.
     predictor = AnnualPredictor(base_config())
     if predictor.config["export_tariffs"] != []:
         print("  ERROR: a config with no sweep should carry an empty export_tariffs list")
@@ -125,5 +184,240 @@ def test_annual_export_sweep(my_predbat):
     if [entry["id"] for entry in predictor.config["export_tariffs"]] != ["seg"]:
         print("  ERROR: the predictor should carry the validated sweep list")
         failed = True
+
+    return failed
+
+
+def test_annual_export_sweep_dno_region(my_predbat):
+    """A templated {dno_region} export URL is rejected exactly like the identical URL on annual.tariff.
+
+    Without this check, an entry naming a real Octopus product such as Outgoing Fixed/Prime
+    (both {dno_region}-templated in tariff_catalogue.py) against a flat rates_import-only
+    config resolves to export_url=None inside AnnualTariff, which prices every export minute
+    at zero with no fallback triggered and no caveat raised - a real product silently scoring
+    as a legitimate zero-export result.
+    """
+    failed = False
+
+    print("Test: a templated export URL with no dno_region anywhere is rejected")
+    config = base_config()
+    config["annual"]["export_tariffs"] = [{"id": "outgoing_fixed", "name": "Octopus Outgoing Fixed", "export_octopus_url": "https://example.test/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"}]
+    failed = expect_error("templated export URL, no dno_region set", config, "dno_region", failed)
+
+    print("Test: a templated export URL is rejected even when other entries in the list are fine")
+    config = base_config()
+    config["annual"]["export_tariffs"] = [
+        {"id": "seg", "name": "SEG", "rates_export": [{"rate": 4.1}]},
+        {"id": "outgoing_fixed", "name": "Octopus Outgoing Fixed", "export_octopus_url": "https://example.test/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"},
+    ]
+    failed = expect_error("templated export URL among otherwise-valid entries", config, "dno_region", failed)
+
+    print("Test: the same templated export URL is accepted once annual.tariff.dno_region is set")
+    config = base_config()
+    config["annual"]["tariff"]["dno_region"] = "A"
+    config["annual"]["export_tariffs"] = [{"id": "outgoing_fixed", "name": "Octopus Outgoing Fixed", "export_octopus_url": "https://example.test/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"}]
+    try:
+        result = validate_config(config)["export_tariffs"]
+    except AnnualConfigError as error:
+        print("  ERROR: a templated export URL with dno_region set should be accepted, got '{}'".format(error))
+        failed = True
+    else:
+        if [entry["id"] for entry in result] != ["outgoing_fixed"]:
+            print("  ERROR: expected the entry to survive validation, got {}".format(result))
+            failed = True
+
+    print("Test: an untemplated export URL is unaffected by a missing dno_region")
+    config = base_config()
+    config["annual"]["export_tariffs"] = [{"id": "seg", "name": "SEG", "export_octopus_url": "https://example.test/flat-url/"}]
+    try:
+        result = validate_config(config)["export_tariffs"]
+    except AnnualConfigError as error:
+        print("  ERROR: an untemplated export URL should not require dno_region, got '{}'".format(error))
+        failed = True
+    else:
+        if [entry["id"] for entry in result] != ["seg"]:
+            print("  ERROR: expected the entry to survive validation, got {}".format(result))
+            failed = True
+
+    return failed
+
+
+def test_annual_export_sweep_tariff_threading(my_predbat):
+    """_plan_one_month and _plan_months price EACH tariff on the exact object they are given.
+
+    Reverting _plan_one_month's tariff parameter back to reading self.tariff would leave the
+    rest of the annual suite green (nothing else in it calls _plan_one_month against a tariff
+    that differs from self.tariff), while silently collapsing every export-tariff sweep card
+    onto one number - exactly the failure mode this feature exists to prevent. Asserted
+    differentially: identity (`is`) checks on the object run_day/rates_for actually received,
+    not merely "some tariff was passed", which would still pass against that regression.
+    """
+    failed = False
+
+    config = base_config()
+    config["annual"]["solar"] = []  # battery-only: _fake_select_samples ignores has_solar anyway
+    config["annual"]["months"] = [6]
+    predictor = AnnualPredictor(config)
+    predictor.predbat = object()
+    predictor.weather = None
+    predictor.load_source = object()
+    predictor.baseline_tariff = _StubTariff()
+
+    zone = pytz.timezone(predictor.config["timezone"])
+    year = predictor.config["year"]
+    stub_a = _StubTariff(standing_charge_p_per_day=10.0)
+    stub_b = _StubTariff(standing_charge_p_per_day=99.0)
+
+    fake_run_day, run_day_calls = _make_fake_run_day()
+    original_select_samples = annual.select_samples
+    original_run_day = annual.run_day
+    annual.select_samples = _fake_select_samples
+    annual.run_day = fake_run_day
+    try:
+        print("Test: _plan_one_month passes ITS tariff argument to run_day, not self.tariff")
+        asyncio.run(predictor._plan_one_month(stub_a, 6, year, zone, 30, 300.0, True))
+        if not run_day_calls or run_day_calls[-1] is not stub_a:
+            print("  ERROR: run_day should have received stub_a itself, got {!r}".format(run_day_calls[-1] if run_day_calls else None))
+            failed = True
+        if not stub_a.rates_for_calls:
+            print("  ERROR: stub_a.rates_for should have been called for its own month")
+            failed = True
+        if stub_b.rates_for_calls:
+            print("  ERROR: stub_b.rates_for should not have been touched by stub_a's call")
+            failed = True
+
+        print("Test: a second tariff object is threaded through independently of the first")
+        asyncio.run(predictor._plan_one_month(stub_b, 7, year, zone, 31, 310.0, True))
+        if run_day_calls[-1] is not stub_b:
+            print("  ERROR: run_day should have received stub_b itself, got {!r}".format(run_day_calls[-1]))
+            failed = True
+        if not stub_b.rates_for_calls:
+            print("  ERROR: stub_b.rates_for should have been called for its own month")
+            failed = True
+    finally:
+        annual.select_samples = original_select_samples
+        annual.run_day = original_run_day
+
+    print("Test: _plan_months threads its tariff through fetch_month/_plan_one_month and returns a 4-tuple")
+    stub_c = _StubTariff(standing_charge_p_per_day=42.0)
+    fake_run_day_2, run_day_calls_2 = _make_fake_run_day()
+    annual.select_samples = _fake_select_samples
+    annual.run_day = fake_run_day_2
+    try:
+        result = asyncio.run(predictor._plan_months(stub_c, year, zone, [6], None, 1))
+    finally:
+        annual.select_samples = original_select_samples
+        annual.run_day = original_run_day
+
+    if len(result) != 4:
+        print("  ERROR: _plan_months should return a 4-tuple (months, baseline_fallback_months, completed, interpolatable), got {} item(s)".format(len(result)))
+        failed = True
+    else:
+        months, baseline_fallback_months, completed, interpolatable = result
+        if not stub_c.fetch_month_calls:
+            print("  ERROR: _plan_months should have called fetch_month on the tariff it was given, not self.tariff")
+            failed = True
+        if not run_day_calls_2 or any(tariff is not stub_c for tariff in run_day_calls_2):
+            print("  ERROR: every _plan_one_month call inside _plan_months should have received stub_c, got {!r}".format(run_day_calls_2))
+            failed = True
+        if completed != 1:
+            print("  ERROR: expected 1 completed month, got {}".format(completed))
+            failed = True
+        if not months or months[0]["month"] != 6:
+            print("  ERROR: expected month 6's planned row, got {!r}".format(months))
+            failed = True
+
+    return failed
+
+
+def test_annual_export_sweep_card_shape(my_predbat):
+    """_export_card assembles the exact five by_export keys Task 8 renders, from a stub tariff's own rows.
+
+    This is the coverage the original 'results document gains by_export' test claimed to have
+    but did not: that block only re-checked config["export_tariffs"], never touching by_export
+    itself.
+    """
+    failed = False
+
+    predictor = AnnualPredictor(base_config())
+    predictor.caveats = []
+    year = predictor.config["year"]
+    months = [
+        {
+            "month": 6,
+            "status": "ok",
+            "days": 30,
+            "standing_charge_p": 150.0,
+            "scenarios": {key: {field: 1.0 for field in SCENARIO_FIELDS + ["export_credit_p_estimate"]} for key in SCENARIO_KEYS},
+        }
+    ]
+
+    print("Test: the card carries exactly the five keys Task 8 renders")
+    entry = {"id": "seg", "name": "SEG"}
+    card = predictor._export_card(entry, _StubTariff(), months, year)
+    expected_keys = {"name", "annual", "months", "caveats", "rates_synthesised"}
+    if set(card) != expected_keys:
+        print("  ERROR: expected keys {}, got {}".format(sorted(expected_keys), sorted(card)))
+        failed = True
+
+    print("Test: name comes from the entry, months are the rows this tariff actually planned")
+    if card.get("name") != "SEG":
+        print("  ERROR: name should be carried through from entry, got {!r}".format(card.get("name")))
+        failed = True
+    if card.get("months") != months:
+        print("  ERROR: months should be exactly the rows passed in, got {!r}".format(card.get("months")))
+        failed = True
+
+    print("Test: annual is built from those same months (one included month, real totals)")
+    annual_block = card.get("annual") or {}
+    if annual_block.get("months_included") != 1:
+        print("  ERROR: expected 1 included month, got {!r}".format(annual_block))
+        failed = True
+
+    print("Test: caveats and rates_synthesised reflect this tariff's own fallback state, not a default")
+    fallback_card = predictor._export_card(entry, _StubTariff(fallback_months={(year, 6, "export")}), months, year)
+    if not fallback_card["caveats"]:
+        print("  ERROR: a tariff with an export fallback this year should carry a caveat")
+        failed = True
+    if fallback_card["rates_synthesised"] is not True:
+        print("  ERROR: a tariff with an export fallback this year should have rates_synthesised=True")
+        failed = True
+
+    return failed
+
+
+def test_annual_export_sweep_rates_synthesised(my_predbat):
+    """rates_synthesised is export-side only and scoped to the modelled year.
+
+    It exists for exactly one job: mark a card whose EXPORT rates were synthesised from the
+    current-rates fallback (Outgoing Prime has no history before June 2026). It must NOT go
+    true for an unpaid-export month (priced at zero - a different failure from being
+    synthesised), for a fallback on the shared IMPORT side alone (which would flag every card
+    in a sweep regardless of that tariff's own export rates), or for a fallback in the
+    December-spill fetch of (year + 1, 1) (unrelated to this year's modelled months).
+    """
+    failed = False
+
+    predictor = AnnualPredictor(base_config())
+    predictor.caveats = []
+    entry = {"id": "seg", "name": "SEG"}
+    year = predictor.config["year"]
+    months = []
+
+    cases = (
+        ("an export fallback this year", {(year, 6, "export")}, set(), True),
+        ("an import fallback this year, no export fallback", {(year, 6, "import")}, set(), False),
+        ("both sides fell back this year", {(year, 6, "import"), (year, 6, "export")}, set(), True),
+        ("an export fallback only in next year's spill month", {(year + 1, 1, "export")}, set(), False),
+        ("an unpaid export month with no current-rates fallback at all", set(), {(year, 6)}, False),
+        ("no fallback and nothing unpaid", set(), set(), False),
+    )
+    for label, fallback_months, unpaid_export_months, expected in cases:
+        print("Test: rates_synthesised is {} for {}".format(expected, label))
+        stub = _StubTariff(fallback_months=fallback_months, unpaid_export_months=unpaid_export_months)
+        card = predictor._export_card(entry, stub, months, year)
+        if card["rates_synthesised"] is not expected:
+            print("  ERROR: {} should give rates_synthesised={}, got {}".format(label, expected, card["rates_synthesised"]))
+            failed = True
 
     return failed

@@ -280,7 +280,13 @@ from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
 from tests.test_annual_costs import test_annual_costs
-from tests.test_annual_export_sweep import test_annual_export_sweep
+from tests.test_annual_export_sweep import (
+    test_annual_export_sweep,
+    test_annual_export_sweep_card_shape,
+    test_annual_export_sweep_dno_region,
+    test_annual_export_sweep_rates_synthesised,
+    test_annual_export_sweep_tariff_threading,
+)
 from tests.test_debug_history import test_debug_history
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment
 
@@ -663,6 +669,10 @@ def main():
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
         ("annual_export_sweep", test_annual_export_sweep, "Annual multi-export-tariff sweep tests", False),
+        ("annual_export_sweep_dno_region", test_annual_export_sweep_dno_region, "Annual export sweep dno_region templating validation tests", False),
+        ("annual_export_sweep_tariff_threading", test_annual_export_sweep_tariff_threading, "Annual export sweep per-tariff threading regression tests", False),
+        ("annual_export_sweep_card_shape", test_annual_export_sweep_card_shape, "Annual export sweep by_export card shape tests", False),
+        ("annual_export_sweep_rates_synthesised", test_annual_export_sweep_rates_synthesised, "Annual export sweep rates_synthesised semantics tests", False),
         ("tariff_catalogue", test_tariff_catalogue, "Tariff catalogue tests", False),
         ("annual_integration", run_annual_integration_isolated, "Annual prediction integration tests", True),
         ("load_ml", test_load_ml, "ML Load Forecaster tests (MLP, training, persistence, validation)", True),

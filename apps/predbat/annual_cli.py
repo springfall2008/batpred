@@ -56,6 +56,30 @@ def format_table(results, currency="p"):
     so the totals/savings section is skipped entirely instead of dividing ``None`` or
     printing a fabricated zero-cost year.
     """
+    if "by_export" in results:
+        # Stopgap only: an export-tariff sweep document has no top-level "months"/"annual"
+        # keys, so the rendering below would KeyError on it. This exists so the CLI's
+        # --export-compare flag (arriving before the real by-export renderer) doesn't crash
+        # after a multi-minute run - it is deliberately minimal, not the intended presentation.
+        lines = []
+        lines.append("Annual export-tariff comparison for {}".format(results["year"]))
+        lines.append("")
+        for tariff_id, entry in results["by_export"].items():
+            lines.append("{} ({})".format(entry["name"], tariff_id))
+            annual = entry["annual"]
+            if annual["scenarios"] is not None:
+                lines.append("  With Predbat: {}".format(_format_pence(annual["scenarios"]["with_predbat"]["cost_p"], currency)))
+            else:
+                lines.append("  No annual total available: no month produced a usable result.")
+            if entry.get("rates_synthesised"):
+                lines.append("  Note: this tariff's export rates were synthesised from current rates, not modelled historically.")
+            lines.append("")
+        if results.get("caveats"):
+            lines.append("Caveats")
+            for caveat in results["caveats"]:
+                lines.append("  - {}".format(caveat))
+        return "\n".join(lines)
+
     lines = []
     lines.append("Annual prediction for {}".format(results["year"]))
     lines.append("")
