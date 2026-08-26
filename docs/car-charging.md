@@ -545,29 +545,62 @@ Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned wit
 
 ## Charging from solar surplus
 
-Predbat plans car charging from energy rates, so it will not start your car just because the sun came out.
-Two sensors are published so you can do that yourself in a Home Assistant automation, or hand the decision to a charger that has its own solar mode:
+Predbat plans car charging from energy rates. It will not start your car because the sun came out.
+Two sensors let you do that yourself in a Home Assistant automation, or switch a charger into its own solar mode:
 
-- **predbat.solar_surplus_power** - the power in kW that a flexible load could take right now without importing or draining the battery, totalled over all of your inverters. Nothing about it is car-specific, so an immersion heater or any other load you can divert to can use it just as well
-- **binary_sensor.predbat_force_export_slot** - 'on' when the plan has a force export slot running now, so the solar is worth more sold than put in the car
+| Entity | Meaning |
+| --- | --- |
+| **predbat.solar_surplus_power** | kW a load could take right now without importing or draining the battery, totalled over all inverters. Nothing about it is car-specific. An immersion heater or any other load you can divert to can use it |
+| **binary_sensor.predbat_force_export_slot** | 'on' when the plan has a force export slot running, so the solar is worth more sold than put in the car |
 
-The surplus is calculated as:
+The surplus is:
 
 ```text
-max(0, grid_power + car_charging_power - max(0, battery_power))
+min(max(0, grid_power + car_charging_power - max(0, battery_power)), max(0, pv_power))
 ```
 
-Your charger sits behind the grid meter, so as soon as the car starts charging the export collapses towards zero.
-**car_charging_power** is added back so the sensor keeps reporting what is available for the car rather than dropping to nothing the moment you act on it.
-Battery discharge is subtracted so battery power is never reported as solar: if a cloud arrives mid-charge, the sensor falls to the real surplus and your automation turns the car back down instead of quietly emptying the battery.
-Battery *charging* power is left in the surplus, as whether the car or the battery gets the spare solar is your choice - the components are published as attributes (**grid_power**, **battery_power**, **car_charging_power** and **car_charging_power_configured**) if you want to decide differently.
+**car_charging_power** is added back because a charger inside the CT clamp sits behind the grid meter, so export collapses to zero as soon as the car starts.
+Without the add-back the sensor would drop to nothing the moment you acted on it.
+The add-back only applies when **switch.predbat_car_energy_reported_load** is On.
+With it Off the charger is outside the clamp, the grid reading never saw the car, and adding it would invent a surplus equal to the whole charger draw.
+The **car_charging_power_included** attribute tells you which applies.
 
-The sensor is always published. With no **car_charging_power** configured it is just the grid export clamped at zero, and **car_charging_power_configured** is False to tell you the add-back is not in play.
-Set **car_charging_power** in `apps.yaml` for the sensor to hold up while the car is charging - see [configure apps.yaml for your car charging](#configure-appsyaml-for-your-car-charging).
-It must be a sensor for the charger at your house. A vehicle-side sensor from the car maker's cloud reports charging away from home too, which would show as a surplus that is not there.
+Battery discharge is subtracted, so battery power is never reported as solar.
+When cloud arrives mid-charge the sensor falls to the real surplus and your automation turns the car down instead of emptying the battery.
 
-If you are diverting to something other than the car, subtract the **car_charging_power** attribute from the state to leave the car's share out:
-`states('predbat.solar_surplus_power') | float(0) - (state_attr('predbat.solar_surplus_power', 'car_charging_power') | float(0))`.
+Battery *charging* power is not added back, so a charging battery takes the solar first and the sensor reads what is left.
+On a sunny morning with the battery filling, that is often 0.0.
+To give the car priority instead, add **battery_power** back yourself. It is negative while charging.
+
+The result is capped at **pv_power**. Nothing can be spare that was never generated.
+With correct sign conventions the arithmetic already comes to PV minus house load, so the cap never clips a real surplus.
+
+The sensor is always published. With no **car_charging_power** configured it is the grid export clamped at zero, and **car_charging_power_configured** is False.
+Set **car_charging_power** in `apps.yaml` to keep the reading up while the car charges. See [configure apps.yaml for your car charging](#configure-appsyaml-for-your-car-charging).
+It must measure the charger at your house. A vehicle-side sensor from the car maker's cloud also reports charging away from home.
+
+Attributes carry the inputs: **grid_power**, **battery_power**, **pv_power**, **car_charging_power**, **car_charging_power_configured** and **car_charging_power_included**.
+To divert to something other than the car, take the car's share back off, but only when it was added:
+
+```text
+{{ states('predbat.solar_surplus_power') | float(0)
+   - (state_attr('predbat.solar_surplus_power', 'car_charging_power') | float(0)
+      if state_attr('predbat.solar_surplus_power', 'car_charging_power_included') else 0) }}
+```
+
+### Check these before driving a load from it
+
+A wrong reading here spends money rather than showing a wrong number.
+
+- **Grid sensor sign.** Watch **predbat.grid_power** while importing. It must go negative. If it goes positive, set **grid_power_invert** in `apps.yaml`. See the [FAQ](faq.md). The PV cap bounds the error and forces 0 after dark, but cannot fix the sign in daylight: importing 3kW under 6kW of sun still reads a 3kW surplus.
+- **PV inventory.** The cap is only as high as the PV Predbat can see. An AC-coupled battery inverter reporting no PV, or a GivEnergy Cloud setup with a separate solar inverter, holds the sensor at 0.0 despite real export. **ge_cloud_automatic_split_pv** is off by default and excludes standalone PV. Add the missing inverters or sensors to **pv_power**.
+- **One CT-clamp setting covers every charger.** **switch.predbat_car_energy_reported_load** is a single switch, so one charger inside the clamp and one outside cannot both be described. Set it Off if any charger is outside.
+- **Freshness.** If Predbat stops updating, Home Assistant serves the last value forever and your charger keeps acting on it. Gate the automation on the entity age.
+
+```yaml
+  - condition: template
+    value_template: "{{ (now() - states.predbat.solar_surplus_power.last_updated).total_seconds() < 600 }}"
+```
 
 ### Example automation
 
@@ -588,23 +621,31 @@ triggers:
     id: no_surplus
   - trigger: state
     entity_id: binary_sensor.predbat_car_charging_slot
+    to: "on"
     id: planned
+  - trigger: state
+    entity_id: binary_sensor.predbat_car_charging_slot
+    to: "off"
   - trigger: state
     entity_id: binary_sensor.predbat_force_export_slot
     to: "on"
-    id: exporting
+  - trigger: state
+    entity_id: binary_sensor.predbat_force_export_slot
+    to: "off"
 actions:
   - choose:
       - conditions:
           - condition: or
             conditions:
-              - condition: trigger
-                id: planned
-                # Predbat planned this slot, so charge regardless of the sun
+              # Predbat planned this slot, so charge regardless of the sun
+              - condition: state
+                entity_id: binary_sensor.predbat_car_charging_slot
+                state: "on"
               - condition: and
                 conditions:
-                  - condition: trigger
-                    id: surplus
+                  - condition: numeric_state
+                    entity_id: predbat.solar_surplus_power
+                    above: 1.2
                   - condition: state
                     entity_id: binary_sensor.predbat_force_export_slot
                     state: "off"
@@ -615,19 +656,35 @@ actions:
 mode: single
 ```
 
-The 1.4kW on and 1.2kW off thresholds give the charger something to sit in, so passing cloud does not switch it on and off repeatedly.
+Every trigger is paired with a `to:` state and every condition reads the entity rather than the trigger that fired.
+A bare `state` trigger fires when a slot *ends* as well as when it starts, and a trigger-id condition would then match and turn the charger on at the end of the cheap slot.
+Triggering on both edges of `force_export_slot` is what lets charging resume when an export slot finishes: a `numeric_state` trigger only fires when the value *crosses* its threshold, so a surplus that sat above 1.4kW throughout the export slot would never re-fire on its own.
+
+The 1.4kW trigger and 1.2kW condition give the charger something to sit in, so passing cloud does not switch it on and off repeatedly.
 Use the `for:` duration to suit how fast your inverter reports - five minutes is a reasonable start.
 
-If your charger can vary its current, set the amps from the surplus rather than switching it on and off:
+If your charger can vary its current, set the amps from the surplus rather than switching it on and off.
+Below the 6A minimum there is no current to set, so the charger still has to be turned off, and the export slot still has to be respected:
 
 ```yaml
-  - action: number.set_value
-    target:
-      entity_id: number.my_charger_current
-    data:
-      value: >
-        {{ [[(states('predbat.solar_surplus_power') | float(0) * 1000 / 230)
-             | round(0), 6] | max, 32] | min }}
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: predbat.solar_surplus_power
+            above: 1.4          # 6A at 230V
+          - condition: state
+            entity_id: binary_sensor.predbat_force_export_slot
+            state: "off"
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.my_charger_current
+            data:
+              value: >
+                {{ [[(states('predbat.solar_surplus_power') | float(0) * 1000 / 230)
+                     | round(0), 6] | max, 32] | min }}
+    default:
+      <commands to turn off your car charger>
 ```
 
 A charger with its own solar mode (Zappi Eco+, Hypervolt Super Eco, Ohme) does not need any of this - use the sensors to switch the charger into and out of that mode, and leave the current modulation to the charger.
@@ -638,7 +695,7 @@ Four entities look similar and are easy to mix up:
 
 | Entity | What it tells you |
 | --- | --- |
-| **predbat.solar_surplus_power** | Spare solar *right now*, updated roughly every minute |
+| **predbat.solar_surplus_power** | Spare solar *right now*, updated about every two minutes (`INVERTER_QUICK_UPDATE_SECONDS`), and longer while a plan is being calculated |
 | **binary_sensor.predbat_export_trigger_NAME** | Export *predicted* in the plan for a future slot - see [Triggers in apps.yaml](apps-yaml.md#triggers) |
 | **binary_sensor.predbat_force_export_slot** | A force export slot in the plan is running now, including freeze export slots where only the solar is being sold |
 | **binary_sensor.predbat_exporting** | Predbat is *commanding* the inverter to export at this moment. Off in read-only mode and while exporting is being held, so it is not a reliable way to tell that a slot is running |

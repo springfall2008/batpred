@@ -287,7 +287,7 @@ Predbat outputs the values it read from your inverters as totals, this gives the
 - predbat.battery_power - The current power of your battery in kW, positive when discharging and negative when charging
 - predbat.pv_power - The current power of your PV system in kW
 - predbat.grid_power - The current grid power flow in kW, positive when exporting and negative when importing
-- predbat.solar_surplus_power - The power in kW a flexible load (a car charger, an immersion heater or anything else you can divert to) could take right now without importing or draining the battery. Attributes give the **grid_power**, **battery_power** and **car_charging_power** it was calculated from, and **car_charging_power_configured** - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
+- predbat.solar_surplus_power - The power in kW a flexible load (a car charger, an immersion heater or anything else you can divert to) could take right now without importing or draining the battery, capped at your current PV generation. Attributes give the **grid_power**, **battery_power**, **pv_power** and **car_charging_power** it was calculated from, plus **car_charging_power_configured** and **car_charging_power_included** - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 - predbat.car_charging_power - The current power drawn by your car charger in kW. Only published when **car_charging_power** is set in `apps.yaml`, or wired up automatically by a supported charger integration (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS or the Predbat gateway) - see [car charging](car-charging.md#configure-appsyaml-for-your-car-charging)
 
 ## Baseline data
