@@ -534,4 +534,31 @@ def test_annual_config(my_predbat):
     config["annual"]["export_limit_kw"] = -1.0
     failed = expect_error("negative export_limit_kw", config, "export_limit_kw", failed)
 
+    print("Test: annual.months defaults to all twelve months")
+    config = base_config()
+    if validate_config(config)["months"] != list(range(1, 13)):
+        print("  ERROR: an absent annual.months should default to months 1-12")
+        failed = True
+
+    print("Test: annual.months accepts an explicit subset and sorts it")
+    config = base_config()
+    config["annual"]["months"] = [7, 3]
+    if validate_config(config)["months"] != [3, 7]:
+        print("  ERROR: annual.months should be normalised to a sorted list")
+        failed = True
+
+    print("Test: annual.months rejects bad values")
+    for bad, fragment in (([], "non-empty"), ([0], "between"), ([13], "between"), ([1, 1], "repeat"), ("july", "list")):
+        config = base_config()
+        config["annual"]["months"] = bad
+        failed = expect_error("annual.months = {}".format(bad), config, fragment, failed)
+
+    print("Test: an explicit annual.months forces fast_mode off")
+    config = base_config()
+    config["annual"]["months"] = [7]
+    config["annual"]["fast_mode"] = True
+    if validate_config(config)["fast_mode"]:
+        print("  ERROR: fast_mode must be forced off when annual.months is set")
+        failed = True
+
     return failed

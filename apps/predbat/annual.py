@@ -310,6 +310,29 @@ def validate_config(config, today=None):
 
     samples_per_month = _require_number(raw.get("samples_per_month", DEFAULT_SAMPLES_PER_MONTH), "annual.samples_per_month", minimum=1, integer=True)
 
+    # An explicit month subset. Absent means the whole year, which is what every config
+    # written before this existed means. Sorted and de-duplicated so the run order and the
+    # results document are stable regardless of how the caller wrote it.
+    raw_months = raw.get("months")
+    explicit_months = raw_months is not None
+    if not explicit_months:
+        months = list(range(1, 13))
+    else:
+        if not isinstance(raw_months, (list, tuple)) or not raw_months:
+            raise AnnualConfigError("annual.months must be a non-empty list of month numbers")
+        months = []
+        for entry in raw_months:
+            # _require_number's generic "must be at least/at most" wording is shared by
+            # every bounded field in this file; a two-sided 1-12 range reads better as one
+            # "between" message, so the bounds are checked here rather than passed through.
+            month = _require_number(entry, "annual.months entry", integer=True)
+            if month < 1 or month > 12:
+                raise AnnualConfigError("annual.months entries must be between 1 and 12, got {}".format(month))
+            months.append(month)
+        if len(set(months)) != len(months):
+            raise AnnualConfigError("annual.months must not repeat a month")
+        months = sorted(months)
+
     if today is None:
         today = date.today()
     # Capped at the most recent COMPLETE calendar year, not the current (in-progress) one:
@@ -322,6 +345,7 @@ def validate_config(config, today=None):
     return {
         "location": dict(location),
         "year": year,
+        "months": months,
         "solar": solar,
         "battery": battery,
         "export_limit_kw": export_limit_kw,
@@ -339,7 +363,10 @@ def validate_config(config, today=None):
         # Plans four seasonal months and interpolates the rest - see annual_interpolate.py.
         # _coerce_bool for the same reason as "debug": an explicit fast_mode: "false" in a
         # hand-written YAML must not read as truthy.
-        "fast_mode": _coerce_bool(raw.get("fast_mode", False)),
+        # Fast mode plans four seasonal anchors and interpolates the other eight against the
+        # year's solar curve. With an explicit month subset there is nothing to interpolate
+        # and no curve to fit, so it is forced off rather than half-applied.
+        "fast_mode": _coerce_bool(raw.get("fast_mode", False)) and not explicit_months,
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),
@@ -1538,16 +1565,27 @@ class AnnualPredictor:
         # is never quietly interpolated over.
         interpolatable = []
         fast_mode = self.config["fast_mode"]
-        if fast_mode:
+        # _fast_mode_viable downloads the anchor months' rates to measure price variability.
+        # validate_config already forces fast_mode off for an explicit month subset, so this
+        # can never fire on one - but check the config directly rather than relying on that,
+        # because paying four months of downloads to decide something already decided is the
+        # exact waste this run exists to avoid.
+        if fast_mode and len(self.config["months"]) == 12:
             fast_mode = await self._fast_mode_viable(year, zone)
+        else:
+            fast_mode = False
         # Rate downloads and availability checks still cover all twelve months even in fast
         # mode - they are network-bound and cheap next to planning, and skipping them would
         # let interpolation paper over a month that genuinely had no rates.
-        months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(range(1, 13))
+        months_to_plan = list(ANCHOR_MONTHS) if fast_mode else list(self.config["months"])
         total_units = len(months_to_plan) + (1 if fast_mode else 0)
         completed = 0
 
-        for month in range(1, 13):
+        # Only the requested months are visited at all. Rate downloads for months nobody
+        # asked about are pure waste on a single-month run, and a twelve-entry results
+        # document listing eleven "unavailable" months would misrepresent a deliberate subset
+        # as a failure.
+        for month in sorted(set(months_to_plan) | set(self.config["months"])):
             if progress and month in months_to_plan:
                 progress(completed, total_units, "Month {:02d}/{}".format(month, year))
 
