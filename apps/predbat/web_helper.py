@@ -6323,6 +6323,7 @@ def get_plan_css():
     }
 
     function toggleTimeSelection(time, dropdownId, clickEvent) {
+        clickEvent = clickEvent || window.event;
         if (_predbatPeriodStart !== null) {
             selectPeriod(_predbatPeriodStart, time);
             openDropdown(dropdownId);

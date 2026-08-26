@@ -28,6 +28,7 @@ def test_plan_renderer_renders_batch_controls():
     assert "addToBatchSelection('${timeDisplay}', '${dropdownId}')" in renderer_js
     assert 'class="cancel-batch"' in renderer_js
     assert "startPeriodSelection('${timeDisplay}')" in renderer_js
+    assert "clickEvent = clickEvent || window.event;" in get_plan_css()
     assert "clickEvent.shiftKey" in get_plan_css()
 
     plan_css = get_plan_css()
