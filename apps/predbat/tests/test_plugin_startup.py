@@ -188,3 +188,51 @@ def test_plugin_discovery_skips_imported_base_class(my_predbat):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
     return failed
+
+
+def test_plugin_discovery_fallback_skips_imported_base_class(my_predbat):
+    """
+    The SAME guard must hold on the attribute-based fallback (strategy 2).
+
+    PredBatPlugin sets PREDBAT_PLUGIN = True as its own discovery marker, so it
+    matches strategy 2 in every plugin that imports it. Guarding only the
+    name-based strategy leaves the identical bug reachable whenever strategy 1
+    declines — here the plugin class does not end in "Plugin", so discovery falls
+    straight through to the fallback and, unguarded, constructs the abstract base:
+    plugin logged as loaded, no hooks registered, silently does nothing.
+    """
+    print("*** Running test: Plugin discovery fallback skips imported base classes")
+    failed = 0
+
+    base = MagicMock()
+    base.log = MagicMock()
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        # Three properties here are all load-bearing:
+        #   - the FILE ends "_plugin.py", or discover_plugins never reads it;
+        #   - the CLASS does not end in "Plugin", so strategy 1 finds nothing and
+        #     discovery falls through to the PREDBAT_PLUGIN attribute match;
+        #   - the CLASS sorts AFTER "PredBatPlugin", because inspect.getmembers()
+        #     is alphabetical and strategy 2 breaks on its first match. A name
+        #     sorting before the base hides the bug entirely - which is how the
+        #     first draft of this test passed with and without the fix.
+        with open(os.path.join(tmpdir, "attribute_only_plugin.py"), "w", encoding="utf-8") as fh:
+            fh.write("from plugin_system import PredBatPlugin\n\n\nclass ZzAttributeWorker(PredBatPlugin):\n    pass\n")
+
+        plugin_system = PluginSystem(base)
+        plugin_system.discover_plugins([tmpdir])
+        loaded = list(plugin_system.plugins.values())
+
+        if len(loaded) != 1:
+            print("ERROR: expected exactly one discovered plugin, got {}".format(len(loaded)))
+            failed = 1
+        elif type(loaded[0]).__name__ != "ZzAttributeWorker":
+            print("ERROR: fallback instantiated {}, expected ZzAttributeWorker".format(type(loaded[0]).__name__))
+            failed = 1
+        else:
+            print("OK: attribute-based fallback instantiated the plugin class, not the imported base")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return failed

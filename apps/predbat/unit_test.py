@@ -71,7 +71,7 @@ from tests.test_futurerate_auto import test_futurerate_auto
 from tests.test_futurerate_agilepredict import test_futurerate_agilepredict
 from tests.test_car_charging_smart import run_car_charging_smart_tests
 from tests.test_battery_accuracy import run_battery_accuracy_tests
-from tests.test_plugin_startup import test_plugin_startup_order, test_plugin_discovery_skips_imported_base_class
+from tests.test_plugin_startup import test_plugin_startup_order, test_plugin_discovery_skips_imported_base_class, test_plugin_discovery_fallback_skips_imported_base_class
 from tests.test_active_flag import test_active_flag
 from tests.test_time_loop_guard import test_time_loop_guard
 from tests.test_component_health_status import (
@@ -572,6 +572,7 @@ def main():
         ("octopus_slots_change", test_octopus_slots_change, "Octopus slots change-detection signature tests (in-progress re-clock vs genuine change)", False),
         ("plugin_startup", test_plugin_startup_order, "Plugin startup order tests", False),
         ("plugin_discovery", test_plugin_discovery_skips_imported_base_class, "Plugin discovery skips imported base classes", False),
+        ("plugin_discovery_fallback", test_plugin_discovery_fallback_skips_imported_base_class, "Plugin discovery fallback skips imported base classes", False),
         ("active_flag", test_active_flag, "Active flag cleared on exception tests", False),
         ("time_loop_guard", test_time_loop_guard, "Run-loop guard reports a missing HA interface and sets fatal_error (#5135)", False),
         ("component_health_status", test_component_health_status, "Component errors fail the recorded run status tests", False),
