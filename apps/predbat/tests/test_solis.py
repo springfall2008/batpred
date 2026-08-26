@@ -1298,6 +1298,35 @@ async def test_automatic_config_skips_no_battery_named_only_in_battery_list():
     return failed
 
 
+async def test_automatic_config_keeps_battery_when_battery_list_contradicts_battery_type():
+    """A real batteryType beats a "No Battery" batteryList entry - the pack is there.
+
+    Seen in the field: batteryType 'PYLON_LV' with SoC 72%, SoH 94% and 50.31V on the wire, while
+    batteryList still carried a "No Battery" entry. Believing the list drops the inverter, and a
+    dropped inverter means automatic_config sets no args at all - so Predbat then raises
+    "unable to read charge window time" every cycle and the installation is dead until someone
+    intervenes. Costly enough that a disagreement must resolve in favour of the battery existing.
+    """
+    failed = False
+    print("**** Testing automatic_config keeps a real battery when batteryList contradicts batteryType ****")
+
+    detail = {
+        "batteryType": "PYLON_LV",
+        "batteryTypeCode": "0001",
+        "batteryHealthSoh": 94.0,
+        "batteryList": [{"batteryTypeName": "No Battery", "battSn": "", "noBattery": True, "batteryVoltage": 0.0}],
+    }
+    recorded, _ = await _run_automatic_config({"6000000000000002": detail})
+
+    if recorded.get("num_inverters") != 1:
+        print("ERROR: batteryType 'PYLON_LV' must win over a 'No Battery' batteryList entry, got num_inverters={}".format(recorded.get("num_inverters")))
+        failed = True
+
+    if not failed:
+        print("PASSED: automatic_config keeps a real battery when batteryList contradicts batteryType")
+    return failed
+
+
 async def test_automatic_config_keeps_real_battery_reporting_zero_soh():
     """SoH 0 on a real pack is a valid SolisCloud response - such an inverter must stay enrolled."""
     failed = False
@@ -1337,6 +1366,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_skips_no_battery_inverter())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_on_alt_firmware())
         failed |= asyncio.run(test_automatic_config_skips_no_battery_named_only_in_battery_list())
+        failed |= asyncio.run(test_automatic_config_keeps_battery_when_battery_list_contradicts_battery_type())
         failed |= asyncio.run(test_automatic_config_keeps_real_battery_reporting_zero_soh())
         failed |= asyncio.run(test_read_cid())
         failed |= asyncio.run(test_read_batch())
