@@ -1623,13 +1623,20 @@ class Inverter:
         # Construct discharge window from GivTCP settings
         self.export_window = []
 
+        # Record which source we read from, rather than re-deriving it below. Three branches
+        # reach the empty-value handling and only one of them is REST, so a ternary over
+        # rest_api/ge_cloud_direct mislabels the configured-entity case and sends the user to
+        # check credentials for a source they are not using.
         if self.rest_data:
+            export_source = "REST"
             discharge_start = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_start_time_slot_1"])
             discharge_end = time_string_to_stamp(self.rest_data["Timeslots"]["Discharge_end_time_slot_1"])
         elif "discharge_start_time" in self.base.args:
+            export_source = "discharge_start_time"
             discharge_start = time_string_to_stamp(self.base.get_arg("discharge_start_time", index=self.id))
             discharge_end = time_string_to_stamp(self.base.get_arg("discharge_end_time", index=self.id))
         elif self.rest_api or self.base.get_arg("ge_cloud_direct", False, indirect=False):
+            export_source = "REST" if self.rest_api else "GE Cloud"
             # Same reasoning as the charge window above, and it has to be here too or that fix is
             # defeated: on a cloud fetch failure the charge window degrades gracefully and then
             # this branch crashes the whole update loop on the very same cycle, so the inverter
@@ -1647,14 +1654,22 @@ class Inverter:
         if discharge_start is None or discharge_end is None:
             # Name the source that came back empty, as the charge window does - "discharge_start is
             # None" sends users to apps.yaml, which is the one thing that is fine here.
-            source = "GE Cloud" if (not self.rest_api and self.base.get_arg("ge_cloud_direct", False, indirect=False)) else "REST"
-            hint = "check the {} credentials and that the account still has this inverter attached".format(source)
-            self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, source, hint))
-            self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, source, hint), had_errors=True)
-            # Set safe defaults to allow graceful recovery on next update
+            if export_source == "discharge_start_time":
+                hint = "check the discharge_start_time/discharge_end_time entities in apps.yaml are reporting"
+            else:
+                hint = "check the {} credentials and that the account still has this inverter attached".format(export_source)
+            self.log("Warn: Inverter {} unable to read Export window - {} returned no data, {}, will retry next update".format(self.id, export_source, hint))
+            self.base.record_status("Warn: Inverter {} unable to read Export window - {} returned no data, {}".format(self.id, export_source, hint), had_errors=True)
+            # Safe defaults must be INERT, not merely disabled. forecast_minutes parks the window
+            # beyond the horizon, exactly as the charge window does. The previous 0/0 is midnight,
+            # i.e. in the PAST: execute.py takes `discharge_start_time_minutes <= minutes_now` as
+            # "the window has begun", which is trivially true at 0, so a discharge command gets
+            # backdated to the start of the day. That was survivable while this path was reached
+            # only rarely; the transient branch above makes it reachable on any cloud hiccup, so
+            # the landing state has to be genuinely inert or this trades a crash for a bad write.
             self.discharge_enable_time = False
-            self.discharge_start_time_minutes = 0
-            self.discharge_end_time_minutes = 0
+            self.discharge_start_time_minutes = self.base.forecast_minutes
+            self.discharge_end_time_minutes = self.base.forecast_minutes
             self.track_discharge_start = "00:00:00"
             self.track_discharge_end = "00:00:00"
         else:

@@ -1751,11 +1751,71 @@ def test_export_window_ge_cloud_configured_but_no_data_yet(test_name, my_predbat
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes}, got {inv.discharge_end_time_minutes}")
+        failed = True
+
+    # The retry warning is what a user actually sees for this failure, so it must name GE Cloud
+    # rather than sending them to apps.yaml - the same misdirection the charge window fixed.
+    if "GE Cloud" not in my_predbat.current_status:
+        print(f"ERROR: {test_name} - status should name GE Cloud as the source that returned no data, got: {my_predbat.current_status}")
+        failed = True
+
+    restore()
+    return failed
+
+
+def test_export_window_no_source_configured_raises(test_name, my_predbat, dummy_items):
+    """With no source configured at all this is a real apps.yaml gap and must still raise.
+
+    The transient branch must not swallow a genuine setup gap - an instance that can never
+    produce an export window should say so, not retry silently forever.
+    """
+    failed = False
+    print(f"**** Running Test: {test_name} ****")
+
+    inv = Inverter(my_predbat, 0)
+    inv.sleep = dummy_sleep
+    inv.inv_has_charge_enable_time = True
+    inv.rest_api = None
+    inv.rest_data = None
+
+    original_charge_start_time = my_predbat.args.pop("charge_start_time", None)
+    original_charge_end_time = my_predbat.args.pop("charge_end_time", None)
+    original_discharge_start_time = my_predbat.args.pop("discharge_start_time", None)
+    original_discharge_end_time = my_predbat.args.pop("discharge_end_time", None)
+    original_ge_cloud_direct = my_predbat.args.pop("ge_cloud_direct", None)
+    dummy_items["switch.scheduled_charge_enable"] = "on"
+
+    def restore():
+        """Restore the config this test mutated so later tests are unaffected."""
+        for key, value in (
+            ("charge_start_time", original_charge_start_time),
+            ("charge_end_time", original_charge_end_time),
+            ("discharge_start_time", original_discharge_start_time),
+            ("discharge_end_time", original_discharge_end_time),
+            ("ge_cloud_direct", original_ge_cloud_direct),
+        ):
+            if value is not None:
+                my_predbat.args[key] = value
+
+    raised = False
+    try:
+        inv.update_status(my_predbat.minutes_now)
+    except ValueError as e:
+        raised = True
+        # The bare `raise ValueError` this replaces produced "Error: Exception raised " with
+        # nothing after it, which told support nothing at all.
+        if not str(e):
+            print(f"ERROR: {test_name} - the raise must carry a message, got an empty ValueError")
+            failed = True
+
+    if not raised:
+        print(f"ERROR: {test_name} - no source configured is a permanent setup gap and must raise")
         failed = True
 
     restore()
@@ -1786,11 +1846,12 @@ def test_discharge_window_none_illegal_time(test_name, my_predbat, dummy_items):
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_end_time_minutes}")
         failed = True
     if inv.track_discharge_start != "00:00:00":
         print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
@@ -1865,11 +1926,12 @@ def test_discharge_window_invalid_format_time(test_name, my_predbat, dummy_items
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_end_time_minutes}")
         failed = True
     if inv.track_discharge_start != "00:00:00":
         print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
@@ -1906,11 +1968,12 @@ def test_discharge_window_none_value(test_name, my_predbat, dummy_items):
     if inv.discharge_enable_time != False:
         print(f"ERROR: {test_name} - discharge_enable_time should be False, got {inv.discharge_enable_time}")
         failed = True
-    if inv.discharge_start_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_start_time_minutes should be 0, got {inv.discharge_start_time_minutes}")
+    # Inert, not merely disabled: 0 is midnight, which execute.py reads as "already started".
+    if inv.discharge_start_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_start_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_start_time_minutes}")
         failed = True
-    if inv.discharge_end_time_minutes != 0:
-        print(f"ERROR: {test_name} - discharge_end_time_minutes should be 0, got {inv.discharge_end_time_minutes}")
+    if inv.discharge_end_time_minutes != my_predbat.forecast_minutes:
+        print(f"ERROR: {test_name} - discharge_end_time_minutes should be {my_predbat.forecast_minutes} (inert), got {inv.discharge_end_time_minutes}")
         failed = True
     if inv.track_discharge_start != "00:00:00":
         print(f"ERROR: {test_name} - track_discharge_start should be '00:00:00', got {inv.track_discharge_start}")
@@ -3515,6 +3578,7 @@ charge_start_service:
 
     failed |= test_charge_window_ge_cloud_configured_but_no_data_yet("charge_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
     failed |= test_export_window_ge_cloud_configured_but_no_data_yet("export_window_ge_cloud_configured_but_no_data_yet", my_predbat, dummy_items)
+    failed |= test_export_window_no_source_configured_raises("export_window_no_source_configured_raises", my_predbat, dummy_items)
     if failed:
         return failed
 
