@@ -397,6 +397,10 @@ def validate_config(config, today=None):
                     "annual.months includes {}-{:02d}, which is not complete enough to model: the Open-Meteo archive runs about {} days behind, so a month is only usable once it ended at least that long ago".format(year, month, WEATHER_ARCHIVE_LAG_DAYS)
                 )
 
+    # Validated ahead of fast_mode below, so the fast_mode expression sees the final list
+    # rather than raw, unvalidated input.
+    export_tariffs = _validate_export_tariffs(raw.get("export_tariffs"))
+
     return {
         "location": dict(location),
         "year": year,
@@ -416,7 +420,7 @@ def validate_config(config, today=None):
         # standing charge, weather and sampled days as everything else in this run - see
         # AnnualPredictor.run()'s by_export branch. Absent or empty means no sweep: run()
         # returns today's single-tariff document unchanged.
-        "export_tariffs": _validate_export_tariffs(raw.get("export_tariffs")),
+        "export_tariffs": export_tariffs,
         "samples_per_month": samples_per_month,
         "sampling": sampling,
         "costs": _validated_costs(raw.get("costs")),
@@ -426,8 +430,14 @@ def validate_config(config, today=None):
         # hand-written YAML must not read as truthy.
         # Fast mode plans four seasonal anchors and interpolates the other eight against the
         # year's solar curve. With an explicit month subset there is nothing to interpolate
-        # and no curve to fit, so it is forced off rather than half-applied.
-        "fast_mode": _coerce_bool(raw.get("fast_mode", False)) and not explicit_months,
+        # and no curve to fit, so it is forced off rather than half-applied. An export-tariff
+        # sweep is forced off the same way and for a related reason: each swept tariff would
+        # only plan the four anchor months, and the by_export branch always reports a full
+        # run (fast_mode=False, months_interpolated=0) with no interpolation step to fill the
+        # other eight - so a silent anchors-only sample would be misreported as a complete
+        # year. Forced rather than rejected, mirroring the months rule, so a hand-written
+        # config that sets both keeps working rather than failing outright.
+        "fast_mode": _coerce_bool(raw.get("fast_mode", False)) and not explicit_months and not export_tariffs,
         "timezone": raw.get("timezone", DEFAULT_TIMEZONE),
         "pv10_derate_fallback": _require_number(raw.get("pv10_derate_fallback", DEFAULT_PV10_DERATE_FALLBACK), "annual.pv10_derate_fallback", minimum=0, exclusive_minimum=True, maximum=1),
         "raw": scrub_secrets(raw),

@@ -80,6 +80,35 @@ def test_annual_export_sweep(my_predbat):
         print("  ERROR: an empty export_tariffs list should be accepted, got '{}'".format(error))
         failed = True
 
+    print("Test: export_tariffs forces fast_mode off, mirroring the explicit-months rule")
+    # A sweep tariff would only plan the four anchor months, and the by_export branch
+    # always reports fast_mode=False/months_interpolated=0 with no interpolation step - so
+    # left alone, fast mode would silently under-sample a sweep and report it as complete.
+    config = base_config()
+    config["annual"]["fast_mode"] = True
+    config["annual"]["export_tariffs"] = [{"id": "seg", "name": "SEG", "rates_export": [{"rate": 4.1}]}]
+    if validate_config(config)["fast_mode"] is not False:
+        print("  ERROR: export_tariffs + fast_mode=True with no months should force fast_mode to False")
+        failed = True
+
+    print("Test: export_tariffs still forces fast_mode off alongside an explicit month subset")
+    config = base_config()
+    config["annual"]["fast_mode"] = True
+    config["annual"]["months"] = [7]
+    config["annual"]["export_tariffs"] = [{"id": "seg", "name": "SEG", "rates_export": [{"rate": 4.1}]}]
+    if validate_config(config)["fast_mode"] is not False:
+        print("  ERROR: export_tariffs + fast_mode=True + an explicit month subset should still force fast_mode to False")
+        failed = True
+
+    print("Test: negative control - fast_mode survives when there is no export_tariffs sweep")
+    # Without this, a validate_config that just hardcoded fast_mode to False would also
+    # pass the two tests above.
+    config = base_config()
+    config["annual"]["fast_mode"] = True
+    if validate_config(config)["fast_mode"] is not True:
+        print("  ERROR: fast_mode=True with no export_tariffs and no explicit months should stay True")
+        failed = True
+
     print("Test: the results document gains by_export only when a sweep is configured")
     # Shape assertion only - a real run needs network. AnnualPredictor.run() returns the
     # legacy document when export_tariffs is empty and the by_export document when it is not.
