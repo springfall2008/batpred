@@ -1580,6 +1580,68 @@ class AnnualPredictor:
             caveats.append("No export rates at all (historical or current) could be found for {} on this tariff, so export was priced at zero for those months. If this tariff pays for export, savings for those months are understated.".format(unpaid_list))
         return caveats
 
+    async def _plan_months(self, tariff, year, zone, months_to_plan, progress, total_units, completed=0):
+        """Plan every requested month against ONE tariff, returning (months, baseline_fallback_months, completed, interpolatable).
+
+        This is the body that used to live inline in run(). It is parameterised on the tariff
+        so the export sweep can call it once per export product over the SAME already-resolved
+        weather, load source and sampled days - which is the whole point: the comparison is
+        only meaningful if the three tariffs are scored against identical conditions.
+
+        ``interpolatable`` (months fast mode skipped, carrying the figures the interpolation
+        step needs) is still returned, unlike a bare month/baseline/completed triple: run()'s
+        fast-mode assembly lives just after this call and reads it for the single-tariff path.
+        A sweep call is free to discard it, since a sweep never runs in fast mode.
+        """
+        baseline_fallback_months = []
+        months = []
+        # Months fast mode skipped, carrying the figures the interpolation step needs. Only
+        # months whose rates downloaded cleanly get in here, so a genuinely unavailable month
+        # is never quietly interpolated over.
+        interpolatable = []
+
+        # Only the requested months are visited at all. Rate downloads for months nobody
+        # asked about are pure waste on a single-month run, and a twelve-entry results
+        # document listing eleven "unavailable" months would misrepresent a deliberate subset
+        # as a failure.
+        for month in sorted(set(months_to_plan) | set(self.config["months"])):
+            if progress and month in months_to_plan:
+                progress(completed, total_units, "Month {:02d}/{}".format(month, year))
+
+            days_in_month = calendar.monthrange(year, month)[1]
+            standing_charge_p = tariff.standing_charge_p_per_day * days_in_month
+
+            baseline_ready = await self.baseline_tariff.fetch_month(year, month)
+            if not baseline_ready:
+                # Falls back to the main tariff for this month rather than losing it, but
+                # that silently changes what no_pvbat means, so it is recorded.
+                baseline_fallback_months.append(month)
+            if not await tariff.fetch_month(year, month):
+                months.append({"month": month, "status": "unavailable", "reason": "no rate data available", "days": days_in_month, "standing_charge_p": standing_charge_p})
+                if month in months_to_plan:
+                    completed += 1
+                continue
+            # The 48 hour plan for the last sampled day can spill into the next month
+            next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
+            if not await tariff.fetch_month(next_year, next_month):
+                spill_message = "Rate data for {}-{:02d} could not be downloaded, so any plan hours for month {} spilling into it may be costed as free.".format(next_year, next_month, month)
+                self.log("Warn: Annual: {}".format(spill_message))
+                if spill_message not in self.caveats:
+                    self.caveats.append(spill_message)
+
+            if month not in months_to_plan:
+                # Nothing planned here; the row is built after the loop by interpolation.
+                # Reached only once this month's rates are known good, which is what keeps an
+                # unavailable month unavailable rather than fabricated.
+                interpolatable.append((month, days_in_month, standing_charge_p))
+                continue
+
+            row = await self._plan_one_month(tariff, month, year, zone, days_in_month, standing_charge_p, baseline_ready)
+            months.append(row)
+            completed += 1
+
+        return months, baseline_fallback_months, completed, interpolatable
+
     async def run(self, progress=None):
         """Run the full annual projection and return the results document."""
         year = self.config["year"]
@@ -1628,13 +1690,7 @@ class AnnualPredictor:
         # may be a completely different product with its own rate downloads and cache.
         self.baseline_tariff = AnnualTariff(self.config["baseline_tariff"], log=self.log, predbat=self.predbat, storage=self.storage, timezone=self.config["timezone"])
 
-        baseline_fallback_months = []
         zone = pytz.timezone(self.config["timezone"])
-        months = []
-        # Months fast mode skipped, carrying the figures the interpolation step needs. Only
-        # months whose rates downloaded cleanly get in here, so a genuinely unavailable month
-        # is never quietly interpolated over.
-        interpolatable = []
         fast_mode = self.config["fast_mode"]
         # _fast_mode_viable downloads the anchor months' rates to measure price variability.
         # validate_config already forces fast_mode off for an explicit month subset, so this
@@ -1652,45 +1708,7 @@ class AnnualPredictor:
         total_units = len(months_to_plan) + (1 if fast_mode else 0)
         completed = 0
 
-        # Only the requested months are visited at all. Rate downloads for months nobody
-        # asked about are pure waste on a single-month run, and a twelve-entry results
-        # document listing eleven "unavailable" months would misrepresent a deliberate subset
-        # as a failure.
-        for month in sorted(set(months_to_plan) | set(self.config["months"])):
-            if progress and month in months_to_plan:
-                progress(completed, total_units, "Month {:02d}/{}".format(month, year))
-
-            days_in_month = calendar.monthrange(year, month)[1]
-            standing_charge_p = self.tariff.standing_charge_p_per_day * days_in_month
-
-            baseline_ready = await self.baseline_tariff.fetch_month(year, month)
-            if not baseline_ready:
-                # Falls back to the main tariff for this month rather than losing it, but
-                # that silently changes what no_pvbat means, so it is recorded.
-                baseline_fallback_months.append(month)
-            if not await self.tariff.fetch_month(year, month):
-                months.append({"month": month, "status": "unavailable", "reason": "no rate data available", "days": days_in_month, "standing_charge_p": standing_charge_p})
-                if month in months_to_plan:
-                    completed += 1
-                continue
-            # The 48 hour plan for the last sampled day can spill into the next month
-            next_year, next_month = (year, month + 1) if month < 12 else (year + 1, 1)
-            if not await self.tariff.fetch_month(next_year, next_month):
-                spill_message = "Rate data for {}-{:02d} could not be downloaded, so any plan hours for month {} spilling into it may be costed as free.".format(next_year, next_month, month)
-                self.log("Warn: Annual: {}".format(spill_message))
-                if spill_message not in self.caveats:
-                    self.caveats.append(spill_message)
-
-            if month not in months_to_plan:
-                # Nothing planned here; the row is built after the loop by interpolation.
-                # Reached only once this month's rates are known good, which is what keeps an
-                # unavailable month unavailable rather than fabricated.
-                interpolatable.append((month, days_in_month, standing_charge_p))
-                continue
-
-            row = await self._plan_one_month(month, year, zone, days_in_month, standing_charge_p, baseline_ready)
-            months.append(row)
-            completed += 1
+        months, baseline_fallback_months, completed, interpolatable = await self._plan_months(self.tariff, year, zone, months_to_plan, progress, total_units)
 
         interpolated_count = 0
         if fast_mode:
@@ -1713,7 +1731,7 @@ class AnnualPredictor:
                     baseline_ready = await self.baseline_tariff.fetch_month(year, month)
                     if not baseline_ready:
                         baseline_fallback_months.append(month)
-                    months.append(await self._plan_one_month(month, year, zone, days_in_month, standing_charge_p, baseline_ready))
+                    months.append(await self._plan_one_month(self.tariff, month, year, zone, days_in_month, standing_charge_p, baseline_ready))
                     completed += 1
                 months.sort(key=lambda entry: entry["month"])
                 fast_mode = False
@@ -1809,13 +1827,18 @@ class AnnualPredictor:
         self.caveats.append(reason)
         return False
 
-    async def _plan_one_month(self, month, year, zone, days_in_month, standing_charge_p, baseline_ready):
-        """Plan and cost one month, returning its results row.
+    async def _plan_one_month(self, tariff, month, year, zone, days_in_month, standing_charge_p, baseline_ready):
+        """Plan and cost one month against the given tariff, returning its results row.
 
         Extracted from run()'s loop so the fast-mode fallback can plan a month it originally
         skipped without duplicating the body. Always returns a row - an "unavailable" one when
         the month produced nothing usable - so the caller appends unconditionally rather than
         reproducing the loop's branching.
+
+        Takes ``tariff`` explicitly (rather than reading ``self.tariff``) so an export sweep's
+        per-tariff call through ``_plan_months`` actually prices each day on ITS export product;
+        without this parameter every swept tariff would silently re-price against ``self.tariff``
+        and the comparison would be meaningless.
         """
         samples_per_month = self.config["samples_per_month"]
         has_solar = bool(self.config["solar"])
@@ -1832,7 +1855,7 @@ class AnnualPredictor:
             midnight_utc = zone.localize(datetime(day.year, day.month, day.day)).astimezone(pytz.utc)
             day_plans = [] if self.config["debug"] else None
             try:
-                result = run_day(self.predbat, self.config, self.weather, self.tariff, self.load_source, day, midnight_utc, plans=day_plans, baseline_tariff=self.baseline_tariff if baseline_ready else None)
+                result = run_day(self.predbat, self.config, self.weather, tariff, self.load_source, day, midnight_utc, plans=day_plans, baseline_tariff=self.baseline_tariff if baseline_ready else None)
             except Exception as exc:  # noqa: BLE001 - one bad sample must not abort the whole year
                 self.log("Warn: Annual: {} in month {} failed to plan/cost ({}: {}); excluding it from this month's total".format(day.isoformat(), month, type(exc).__name__, exc))
                 failed_days.append(day.isoformat())
@@ -1850,7 +1873,7 @@ class AnnualPredictor:
 
         totals = self._month_scenarios(surviving_samples, day_results)
         first_midnight = zone.localize(datetime(surviving_samples[0][0].year, surviving_samples[0][0].month, surviving_samples[0][0].day)).astimezone(pytz.utc)
-        _, rate_export = self.tariff.rates_for(first_midnight, DAY_MINUTES)
+        _, rate_export = tariff.rates_for(first_midnight, DAY_MINUTES)
         export_rate = average_rate(rate_export, DAY_MINUTES)
 
         scenarios = {}
@@ -1878,7 +1901,7 @@ class AnnualPredictor:
             # carried onto the row itself, not just into a run-wide caveat, so a
             # synthesised month is not indistinguishable from a real one in the
             # JSON, the chart or the table.
-            "rates_synthesised": self._synthesised_sides(self.tariff.fallback_months, year, month),
+            "rates_synthesised": self._synthesised_sides(tariff.fallback_months, year, month),
         }
         if self.config["debug"]:
             row["plans"] = month_plans
