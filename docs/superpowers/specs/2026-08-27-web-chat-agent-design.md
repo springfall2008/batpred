@@ -238,6 +238,21 @@ If the index cannot be fetched, the tool returns
 `{"success": false, "error": "Documentation index unavailable"}` and the model falls back to
 what it knows.
 
+**Documentation is fetched rather than shipped, deliberately.** Installing `docs/` alongside the
+source would make this tool offline and exactly version-matched, which is the same argument that
+puts source reading locally (section 7.2). It is rejected here because the cost lands in the
+wrong place: `match_archive_member` (`apps/predbat/download.py:325`) accepts only files sitting
+directly in `apps/predbat`, and staging is flat — `<filename>.<tag>` beside the installed file.
+Shipping docs means teaching the updater a second root *and* nested paths, creating directories
+during staging, extending the rollback that removes staged files, and adding a second GitHub
+directory listing — all inside the SHA1-verified staged-update path, which is the code whose
+failure mode is a broken install. The published index already gives version-current
+documentation for one cached request a day.
+
+Should that trade ever change, `search_docs` can prefer a local `docs/` when one exists and fall
+back to the index otherwise; `.md` is already on the source allowlist (section 7.2) so nothing
+else would need to move.
+
 ### 7.2 `search_source` and `read_source` — local, not GitHub
 
 **The source is already on disk.** Predbat is a Python application that reads its own directory
@@ -269,11 +284,14 @@ Both enforce:
 
 1. The path is resolved with `os.path.realpath` and must remain under the realpath of the source
    root, which blocks `../` traversal and symlinks pointing outward.
-2. **The extension must be on the allowlist**: `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh`.
-   That is every file type Predbat's source actually uses — 312 `.py`, the
-   `prediction_kernel.cpp`, two `.proto`, two build `.sh` — with headers included so a future
-   kernel split needs no change here. It is deliberately an **allowlist, not a denylist**, and
-   deliberately an extension rule rather than a directory rule. Section 7.2.1 explains why.
+2. **The extension must be on the allowlist**: `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh`,
+   `.md`. That covers every file type Predbat's source actually uses — 312 `.py`, the
+   `prediction_kernel.cpp`, two `.proto` defining the Enphase and gateway wire formats, two
+   build `.sh` that answer "why will the kernel not build on my Pi" — plus `.h`/`.hpp` so a
+   future kernel header split needs no change here, and `.md` so the tool works unchanged if
+   documentation ever lands locally (section 7.1). It is deliberately an **allowlist, not a
+   denylist**, and deliberately an extension rule rather than a directory rule. Section 7.2.1
+   explains why.
 3. `venv/` and `__pycache__/` are skipped, or a search would drag in every installed dependency.
 4. Caps: 100 matches, 400 lines, 64 KB per response, and a wall-clock budget on the scan. A
    pattern over 200 characters, or one `re.compile` rejects, returns a plain error rather than
@@ -286,10 +304,14 @@ The guards exist to stop the tool reaching *beyond* the source into configuratio
 
 A directory rule cannot work, because the source directory and the configuration directory can
 be the same one. `CONFIG_ROOTS` is `["/config", "/conf", "/homeassistant", "./"]`
-(`apps/predbat/const.py:33`), so `config_root` falls back to the working directory; the
-repository additionally ships `apps/predbat/config/apps.yaml` and
-`apps/predbat/config/secrets.yaml`, and `StorageLocalFiles` puts its cache at
-`config_root/cache` (`apps/predbat/storage.py:199`).
+(`apps/predbat/const.py:33`), so `config_root` falls back to the working directory — which for
+a Docker or from-source run is the source directory itself. `StorageLocalFiles` then puts its
+cache at `config_root/cache` (`apps/predbat/storage.py:199`), inside the tree being searched.
+
+A checkout additionally carries `apps/predbat/config/apps.yaml` and `config/secrets.yaml`.
+Those are not present on an add-on install, because `match_archive_member`
+(`apps/predbat/download.py:325`) installs only files sitting *directly* in `apps/predbat` and
+excludes every subdirectory — but anyone running Predbat from a clone has them right there.
 
 That makes the source tree a plausible home for all of the following:
 
@@ -876,8 +898,8 @@ New tests, registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py`.
   pointing outside the source root, and any off-allowlist extension — specifically `apps.yaml`,
   `secrets.yaml`, `predbat.log`, `cache/*.json`, a `.bak` and a `.so` placed in the source
   directory, which is the case that matters when `config_root` coincides with it.
-- `search_source` matches inside a `.cpp` as well as a `.py`, and never reports a hit from an
-  off-allowlist file.
+- `search_source` matches inside a `.cpp` and a `.md` as well as a `.py`, and never reports a
+  hit from an off-allowlist file.
 
 **`tests/test_chat.py`** — driving `ChatAgent` against a fake OpenRouter that replays canned SSE
 byte streams:
@@ -944,6 +966,7 @@ a user until step 6.
 - Letting the agent define new tools.
 - Reading source from a branch or release other than the installed one, except by fetching it
   from GitHub through `fetch_url`.
+- Shipping `docs/` with the installer so documentation search can work offline (section 7.1).
 - MCP client mode (the chat agent consuming *external* MCP servers).
 - Voice input, or a Home Assistant conversation-agent integration.
 
