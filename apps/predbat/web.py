@@ -69,7 +69,7 @@ from web_helper import (
     get_dashboard_collapsible_js,
 )
 
-from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args
+from utils import calc_percent_limit, str2time, dp0, dp2, dp4, format_time_ago, get_override_time_from_string, history_attribute, prune_today, mask_secret_args, read_predbat_log, classify_log_line, log_line_included
 from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
@@ -2267,16 +2267,7 @@ chart.render();
             return "".join(result_parts)
 
         try:
-            logfile = "predbat.log"
-            logfile_1 = "predbat.1.log"
-            logdata = ""
-
-            if os.path.exists(logfile):
-                with open(logfile, "r") as f:
-                    logdata = f.read()
-            if os.path.exists(logfile_1):
-                with open(logfile_1, "r") as f:
-                    logdata = f.read() + "\n" + logdata
+            logdata = read_predbat_log()
 
             # Get query parameters
             args = request.query
@@ -2304,22 +2295,10 @@ chart.render();
                     lineno -= 1
                     continue
 
-                # Apply log level filtering first
-                include_line = False
-                line_type = "log"
-
-                if "error" in line_lower:  # any error log lines will appear on all, info, warning and error tabs
-                    line_type = "error"
-                    include_line = True
-                elif "warn" in line_lower:  # warning log lines appear on all and warning tabs
-                    line_type = "warning"
-                    include_line = filter_type in ["all", "warnings"]
-                elif "info" in line_lower:  # info log lines appear on all and info tabs
-                    line_type = "info"
-                    include_line = filter_type in ["all", "info"]
-                else:  # all other log lines appear on just the all tab
-                    line_type = "log"
-                    include_line = filter_type == "all"
+                # Apply log level filtering first - shared with the get_log MCP tool so the
+                # two views of the same log can't drift apart (#4768)
+                line_type = classify_log_line(line)
+                include_line = log_line_included(line_type, filter_type)
 
                 # Apply search filter if search term is provided
                 if include_line and search_term:

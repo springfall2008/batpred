@@ -17,12 +17,28 @@ and historical data extraction from incrementing energy counters.
 """
 
 import array
+import os
 from datetime import datetime, timedelta, timezone, time
 from functools import lru_cache
 from const import LOW_POWER_PV_THRESHOLD, MINUTE_WATT, PREDICT_STEP, TIME_FORMAT, TIME_FORMAT_SECONDS, TIME_FORMAT_OCTOPUS, MAX_INCREMENT, TIME_FORMAT_DAILY
 import copy
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+# The live log and the one rotated out from under it - both read whole when serving logs.
+PREDBAT_LOG_FILE = "predbat.log"
+PREDBAT_LOG_FILE_PREV = "predbat.1.log"
+
+# Key-name substrings that mark an apps.yaml value as a credential, for mask_secret_args().
+# "_key" and "password" were the original pair; "secret" and "token" were added for #4768,
+# which promotes apps.yaml over MCP as the config-review route and so hands it to a cloud AI -
+# sigenergy_app_secret, solis_api_secret, solis_access_token, gateway_mqtt_token and
+# mcp_secret were all being served in the clear.
+SECRET_KEY_SUBSTRINGS = ("_key", "password", "secret", "token")
+
+# Key suffixes that match a credential substring but hold no secret. A token expiry time is
+# what you want to see when debugging "my cloud integration stopped working", so keep it.
+SECRET_KEY_EXEMPT_SUFFIXES = ("_expires_at",)
 
 # Use datetime.fromisoformat in str2time rather than strptime, set False to revert to strptime
 STR2TIME_USE_FROMISOFORMAT = True
@@ -83,15 +99,85 @@ class MinuteArray:
         return new
 
 
+def is_secret_key(key):
+    """
+    Return True when an apps.yaml key name looks like it holds a credential.
+    """
+    key_lower = str(key).lower()
+    if key_lower.endswith(SECRET_KEY_EXEMPT_SUFFIXES):
+        return False
+    return any(substring in key_lower for substring in SECRET_KEY_SUBSTRINGS)
+
+
 def mask_secret_args(args):
     """
     Return a deep copy of an apps.yaml-style args dict with credential-like keys redacted.
     """
     masked = copy.deepcopy(args)
     for key in masked:
-        if ("_key" in key.lower()) or ("password" in key.lower()):
+        if is_secret_key(key):
             masked[key] = "xxx"
     return masked
+
+
+def read_predbat_log(logfile=PREDBAT_LOG_FILE, logfile_prev=PREDBAT_LOG_FILE_PREV):
+    """
+    Return the contents of predbat.log, prefixed with the rotated previous log when one exists.
+    """
+    logdata = ""
+    if os.path.exists(logfile):
+        with open(logfile, "r") as f:
+            logdata = f.read()
+    if os.path.exists(logfile_prev):
+        with open(logfile_prev, "r") as f:
+            logdata = f.read() + "\n" + logdata
+    return logdata
+
+
+def classify_log_line(line):
+    """
+    Return the severity bucket ("error", "warning", "info" or "log") for one predbat.log line.
+    """
+    line_lower = line.lower()
+    if "error" in line_lower:
+        return "error"
+    if "warn" in line_lower:
+        return "warning"
+    if "info" in line_lower:
+        return "info"
+    return "log"
+
+
+def log_line_included(line_type, filter_type):
+    """
+    Return True when a log line of the given severity belongs in the requested view.
+
+    Errors appear on every view; warnings on "all" and "warnings"; info on "all" and
+    "info"; everything else only on "all".
+    """
+    if line_type == "error":
+        return True
+    if line_type == "warning":
+        return filter_type in ("all", "warnings")
+    if line_type == "info":
+        return filter_type in ("all", "info")
+    return filter_type == "all"
+
+
+def parse_log_timestamp(line):
+    """
+    Return the datetime a predbat.log line was written, or None when it carries no timestamp.
+
+    Lines are written as "{datetime.now()}: {message}", so the stamp is the leading 26
+    characters - or 19 when the microseconds happened to be zero and str() dropped them.
+    """
+    for length, time_format in ((26, "%Y-%m-%d %H:%M:%S.%f"), (19, "%Y-%m-%d %H:%M:%S")):
+        if len(line) >= length:
+            try:
+                return datetime.strptime(line[0:length], time_format)
+            except ValueError:
+                continue
+    return None
 
 
 # Helper to make dict hashable for caching

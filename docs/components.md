@@ -182,12 +182,36 @@ Example usage in VSCode
 
 #### Available commands (mcp)
 
-- Get current system status
-- View and update configuration settings
-- Browse all entities
-- Retrieve battery plan data
-- Override plan for specific time periods
-- Access apps.yaml configuration
+| Tool | What it returns or does |
+| ---- | ----------------------- |
+| `get_status` | Current system status - mode, SoC, live power figures |
+| `get_plan` | The current battery plan, with forecasts and costs |
+| `get_config` | Every Predbat setting, with its current value and its default |
+| `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
+| `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_entities` | All Predbat entities and their states |
+| `set_config` | Change a Predbat setting |
+| `set_plan_override` | Override the plan for one 30 minute period |
+
+#### Asking an AI assistant to review your setup (mcp)
+
+`get_config`, `get_apps` and `get_log` together give an assistant everything a bug report
+normally has to carry, so you can ask it to look over your setup without opening an issue -
+for example *"compare my Predbat settings against their defaults and tell me which changes
+look wrong"*, or *"find the warnings in the last 24 hours of my log and explain them"*.
+
+`get_log` takes optional arguments:
+
+| Argument | Description |
+| -------- | ----------- |
+| `filter` | `all`, `info`, `warnings` (the default) or `errors` |
+| `search` | Only return lines containing this text, case-insensitive |
+| `hours` | Only return lines written in the last N hours |
+| `max_lines` | How many lines to return, most recent first (default 500, maximum 5000) |
+
+`get_apps` redacts credential-like values (anything whose name contains `_key`, `password`,
+`secret` or `token`) and replaces them with `xxx`, so your API keys are not sent to your AI
+provider. Pass `masked: false` if you deliberately want the raw values.
 
 ---
 

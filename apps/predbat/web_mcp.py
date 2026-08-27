@@ -20,7 +20,7 @@ import asyncio
 import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
-from utils import calc_percent_limit, get_override_time_from_string
+from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp
 import re
 from aiohttp import web
 import secrets
@@ -40,6 +40,28 @@ Example usage in VSCode with OAuth
 		}
 	}
 """
+
+
+# Log filter levels accepted by the get_log tool, matching the web log view's tabs
+LOG_FILTER_TYPES = ("all", "info", "warnings", "errors")
+
+# get_log line budget - the default keeps a response small enough for an AI context window,
+# the cap stops a "max_lines": 999999 request pulling a 10MB log through the protocol (#4768)
+MCP_LOG_DEFAULT_LINES = 500
+MCP_LOG_MAX_LINES = 5000
+
+
+def parse_bool_argument(value, default=False):
+    """
+    Coerce an MCP tool argument to a bool, tolerating the strings some clients send.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() not in ("false", "0", "no", "off", "")
 
 
 class PredbatMCPServer(ComponentBase):
@@ -1068,7 +1090,11 @@ class MCPServerWrapper:
     async def _execute_get_apps(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_apps tool"""
         try:
-            configuration = self.base.args
+            # Credentials are redacted unless the caller explicitly opts out - apps.yaml carries
+            # API keys, secrets and tokens, and this tool exists to hand the configuration to an
+            # AI assistant for review (#4768). Matches the web UI's own apps.yaml download.
+            masked = parse_bool_argument(arguments.get("masked", True), default=True)
+            configuration = mask_secret_args(self.base.args) if masked else self.base.args
             return_configuration = {}
             config_id_filter = arguments.get("filter", None)
             for key, value in configuration.items():
@@ -1078,10 +1104,88 @@ class MCPServerWrapper:
                 else:
                     return_configuration[key] = value
 
-            return {"success": True, "error": None, "data": return_configuration, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat apps.yaml configuration"}
+            description = "The contents of the Predbat apps.yaml configuration"
+            if masked:
+                description += " (credential-like values redacted as 'xxx')"
+            return {"success": True, "error": None, "data": return_configuration, "masked": masked, "timestamp": datetime.now().isoformat(), "description": description}
 
         except Exception as e:
             return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
+
+    async def _execute_get_log(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_log tool"""
+        try:
+            filter_type = str(arguments.get("filter", "warnings")).lower()
+            if filter_type not in LOG_FILTER_TYPES:
+                return {"success": False, "error": "Unknown filter '{}', expected one of {}".format(filter_type, ", ".join(LOG_FILTER_TYPES)), "data": None}
+
+            search_term = str(arguments.get("search", "") or "").lower().strip()
+            max_lines = int(arguments.get("max_lines", MCP_LOG_DEFAULT_LINES))
+            max_lines = max(1, min(max_lines, MCP_LOG_MAX_LINES))
+            hours = arguments.get("hours", None)
+            hours = float(hours) if hours is not None else None
+
+            loglines = read_predbat_log().split("\n")
+            total_lines = len(loglines)
+
+            # Cut-off for the hours filter. Lines with no parseable stamp (tracebacks and other
+            # continuation lines) inherit the timestamp of the newer line above them, so a
+            # multi-line entry is kept or dropped as a whole.
+            cutoff = (datetime.now() - timedelta(hours=hours)) if hours else None
+            last_timestamp = None
+
+            result_lines = []
+            truncated = False
+            matched_lines = 0
+
+            # Walk newest-first so max_lines keeps the most recent entries, as the web log view does
+            for lineno in range(total_lines - 1, -1, -1):
+                line = loglines[lineno]
+                if not line.strip():
+                    continue
+
+                timestamp = parse_log_timestamp(line)
+                if timestamp:
+                    last_timestamp = timestamp
+                if cutoff:
+                    effective_time = timestamp or last_timestamp
+                    if effective_time and effective_time < cutoff:
+                        # Everything below this point is older still
+                        break
+
+                line_type = classify_log_line(line)
+                if not log_line_included(line_type, filter_type):
+                    continue
+                if search_term and search_term not in line.lower():
+                    continue
+
+                matched_lines += 1
+                if len(result_lines) >= max_lines:
+                    truncated = True
+                    continue
+
+                result_lines.append({"line_number": lineno, "type": line_type, "line": line})
+
+            # Return oldest-first, which reads the way a log does
+            result_lines.reverse()
+
+            data = {
+                "lines": result_lines,
+                "total_lines": total_lines,
+                "returned_lines": len(result_lines),
+                "matched_lines": matched_lines,
+                "truncated": truncated,
+                "filter": filter_type,
+                "search": search_term,
+                "hours": hours,
+            }
+            description = "The Predbat log filtered to '{}' level".format(filter_type)
+            if truncated:
+                description += ", truncated to the most recent {} of {} matching lines".format(max_lines, matched_lines)
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving log data: {str(e)}", "data": None}
 
     async def _execute_get_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_status tool"""
@@ -1203,8 +1307,29 @@ class MCPServerWrapper:
                 {"name": "get_status", "description": "Get the current Predbat system status and configuration", "inputSchema": {"type": "object", "properties": {}, "required": []}},
                 {
                     "name": "get_apps",
-                    "description": "Get predbat apps.yaml static configuration data",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"}}, "required": []},
+                    "description": "Get predbat apps.yaml static configuration data, with credentials redacted by default",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"},
+                            "masked": {"type": "boolean", "description": "Redact credential-like values such as API keys, secrets and passwords (default true)"},
+                        },
+                        "required": [],
+                    },
+                },
+                {
+                    "name": "get_log",
+                    "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "filter": {"type": "string", "description": "Log level to return: all, info, warnings or errors (default warnings)", "enum": list(LOG_FILTER_TYPES)},
+                            "search": {"type": "string", "description": "Only return lines containing this text, case-insensitive (optional)"},
+                            "hours": {"type": "number", "description": "Only return lines written in the last N hours (optional)"},
+                            "max_lines": {"type": "integer", "description": "Maximum number of lines to return, most recent first (default {}, maximum {})".format(MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES)},
+                        },
+                        "required": [],
+                    },
                 },
                 {
                     "name": "get_config",
@@ -1254,6 +1379,8 @@ class MCPServerWrapper:
                 result = await self._execute_get_apps(arguments)
             elif tool_name == "get_config":
                 result = await self._execute_get_config(arguments)
+            elif tool_name == "get_log":
+                result = await self._execute_get_log(arguments)
             elif tool_name == "get_entities":
                 result = await self._execute_get_entities(arguments)
             elif tool_name == "set_config":
