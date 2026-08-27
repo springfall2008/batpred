@@ -1522,8 +1522,15 @@ easier to test that way, and `os.walk` has no async equivalent worth having. The
 from a turn, which runs on the chat component's own loop — a loop whose only other job is a
 five-second housekeeping tick, so a scan stalling it briefly costs nothing a user can see. The
 web server is a different loop in a different thread, and the SSE stream reads the event buffer
-through a `threading.Lock` rather than through this loop. `SOURCE_SCAN_SECONDS` still bounds the
-worst case.
+through a `threading.Lock` rather than through this loop.
+
+`SOURCE_SCAN_SECONDS` bounds a *slow* scan, not an adversarial one, and the elapsed check must
+run inside the per-line loop as well as between files — between files alone bounds nothing when
+one file is large. Even then, Python's `re` backtracks with no timeout: `(.*)*x` is seven
+characters, well inside the 200-character pattern limit, and hangs inside a single `search()`
+call that no elapsed check can interrupt. Nothing in this function can fix that. The containment
+lives at the call site — Task 7 runs `search_source` on a worker thread so a pathological pattern
+burns that thread instead of the component's only event loop.
 
 **Files:**
 - Modify: `apps/predbat/chat_tools.py`
@@ -3058,6 +3065,8 @@ Add to the imports at the top of `apps/predbat/chat.py`:
 
 ```python
 import aiohttp
+import asyncio
+import functools
 import json
 import time
 
@@ -3166,12 +3175,21 @@ Then append these methods to `ChatAgent`:
             return {"success": True, "error": None, "data": {"title": title}}
         if name == "search_docs":
             return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5))
-        # These are synchronous scans, and they run here on the component's own loop, whose only
-        # other job is a five-second housekeeping tick. Stalling it briefly costs nothing the user
-        # can see: the web server is a different loop in a different thread, and the SSE stream
-        # reads the event buffer through a threading.Lock rather than through this loop.
+        # read_source is bounded work on this loop, which is fine: the component loop's only
+        # other job is a five-second tick, and the web server is a different loop in a different
+        # thread. search_source is different - it runs a MODEL-SUPPLIED regular expression, and
+        # Python's re engine backtracks with no timeout, so a pattern like (.*)*x can hang inside
+        # a single search() call that no elapsed-time check can interrupt. Run it on a worker
+        # thread so a pathological pattern burns that thread rather than killing the component's
+        # only event loop: the component stays alive, other turns still run, and this turn dies on
+        # its own deadline. Containment, not latency.
+        #
+        # Never pass `root` to either function. It is deliberately absent from both tool schemas -
+        # a model that could set it would point the search at /config and walk straight past the
+        # extension allowlist that keeps apps.yaml and the token cache out.
         if name == "search_source":
-            return search_source(arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20))
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, functools.partial(search_source, arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20)))
         if name == "read_source":
             return read_source(arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200))
         if name == "fetch_url":
