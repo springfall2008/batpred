@@ -190,12 +190,12 @@ SOLIS_BIT_GRID_CHARGING = 5  # Allow grid charging
 SOLIS_BIT_FEED_IN_PRIORITY = 6  # Feed-in priority mode
 SOLIS_BIT_PEAK_SHAVING = 11  # Peak-shaving mode
 
-# How long a learnt "this inverter will not take the TOU bit on CID 636" verdict stands before it
-# is tested again. The verdict comes from a single write at one moment, and the inverter's answer
-# can depend on state Predbat does not fully see (#4239 found the bit is only retained while a
-# window is configured), so holding it for the life of the process would risk silently leaving
-# timed charging off on an inverter that does use bit 1. Three extra writes a day buys that back.
-SOLIS_TOU_BIT_REPROBE_HOURS = 8
+# How long to wait before re-reading a register whose verify read disagreed with the write. The
+# verify read is taken within about half a second of the write and a disagreement is not proof the
+# write was refused - the same value verifies successfully minutes either side of one that does not
+# (issue #4774) - so the read is given a chance to settle before the write is called a failure.
+# Only a mismatched write pays this, so the cost is one pause per refused register per cycle.
+SOLIS_VERIFY_SETTLE_SECONDS = 5
 
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
@@ -213,6 +213,47 @@ def parse_cid_int(value, default=None):
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+def time_in_window(current_time, start_time, end_time):
+    """True when a "HH:MM" time falls inside a slot window, including one that wraps midnight.
+
+    A window whose start equals its end is not configured, so nothing is inside it.
+
+    Args:
+        current_time: Time to test, as "HH:MM"
+        start_time: Window start, as "HH:MM"
+        end_time: Window end, as "HH:MM"
+
+    Returns: True when current_time is inside the window
+    """
+    if start_time == end_time:
+        return False
+    if start_time <= end_time:
+        # Normal time range (e.g., 02:00 to 05:00)
+        return start_time <= current_time <= end_time
+    # Overnight time range (e.g., 23:00 to 02:00)
+    return current_time >= start_time or current_time <= end_time
+
+
+def cid_value_matches(read_back, value):
+    """True when a register read-back is the value that was written to it.
+
+    Reads arrive as strings, so a numeric write is compared numerically where it can be - "35.0"
+    and "35" are the same register value - and falls back to a string comparison otherwise.
+
+    Args:
+        read_back: Raw value read back from the register
+        value: Value that was written
+
+    Returns: True when the two are the same register value
+    """
+    if isinstance(value, (int, float)):
+        try:
+            return float(read_back) == float(value)
+        except (ValueError, TypeError):
+            pass  # Fall back to string comparison if float conversion fails
+    return str(read_back) == str(value)
+
 
 def get_solis_mode_enum(value):
     """
@@ -242,11 +283,10 @@ def compute_solis_mode_value(mode_enum, old_value, drop_tou_bit=False):
         mode_enum: The storage mode to select
         old_value: Current register value, so bits this function does not manage are preserved
         drop_tou_bit: Leave the time-of-use bit clear even for the modes that normally set it.
-                      Some inverters will not take it - the control API answers with code 0 and
-                      the register reads back without it - and the remaining modes are still
-                      valid, they just shift down: 35 becomes 33 and 98 becomes 96. Set by
-                      set_storage_mode_if_needed() once a refusal has actually been observed
-                      (see issue #4707).
+                      TOU V2 firmware has no use for it - the timed charge/discharge enable moved
+                      into the per-slot registers (CIDs 5916/5922) and every mode value carrying
+                      bit 1 was dropped from the table, so 35 becomes 33 and 98 becomes 96. Set by
+                      set_storage_mode_if_needed() from is_tou_v2_mode() (see issues #4707, #4774).
 
     Returns: The value to write to CID 636
     """
@@ -381,7 +421,8 @@ class SolisAPI(ComponentBase, OAuthMixin):
         # Tracking
         self.slots_reset = set()  # Track which inverters had slots reset
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
-        self.tou_bit_refused = {}  # Inverter -> when it was seen to reject the TOU bit on CID 636 (issue #4707)
+        self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
+        self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
@@ -931,9 +972,9 @@ class SolisAPI(ComponentBase, OAuthMixin):
                                 success &= result
 
                 # Decide if Solar charges the batter or exports
-                # The inverter only retains the TOU bit on CID 636 when a charge/discharge window is
-                # actually configured on slot 1, so gate the mode choice the same way the V1 branch does
-                # (see the in_charge_slot/in_discharge_slot handling below) to avoid a permanent verify-fail loop.
+                # Gate the mode choice on whether slot 1 has a window configured, the same way the V1
+                # branch does below (see the in_charge_slot/in_discharge_slot handling), so the
+                # inverter is not left in a timed mode with nothing scheduled.
                 if charge_current == 0:
                     if slot1_active:
                         self.log(f"Solis API: Charge current is 0A for {inverter_sn}, setting storage mode to 'Feed-in priority'")
@@ -981,26 +1022,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
                             discharge_current = slot_data.get("discharge_current", discharge_current)
 
                         # Check if we're in a charge slot
-                        if charge_enable and charge_start_time != charge_end_time:  # Slot is enabled
-                            if charge_start_time <= charge_end_time:
-                                # Normal time range (e.g., 02:00 to 05:00)
-                                if charge_start_time <= current_time <= charge_end_time:
-                                    in_charge_slot = slot
-                            else:
-                                # Overnight time range (e.g., 23:00 to 02:00)
-                                if current_time >= charge_start_time or current_time <= charge_end_time:
-                                    in_charge_slot = slot
+                        if charge_enable and time_in_window(current_time, charge_start_time, charge_end_time):
+                            in_charge_slot = slot
 
                         # Check if we're in a discharge slot
-                        if discharge_enable and discharge_start_time != discharge_end_time:  # Slot is enabled
-                            if discharge_start_time <= discharge_end_time:
-                                # Normal time range
-                                if discharge_start_time <= current_time <= discharge_end_time:
-                                    in_discharge_slot = slot
-                            else:
-                                # Overnight time range
-                                if current_time >= discharge_start_time or current_time <= discharge_end_time:
-                                    in_discharge_slot = slot
+                        if discharge_enable and time_in_window(current_time, discharge_start_time, discharge_end_time):
+                            in_discharge_slot = slot
 
                         # Break on the first match, they can't overlap
                         if in_charge_slot or in_discharge_slot:
@@ -1225,19 +1252,21 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log(f"Warn: Solis API: Failed to write CID {cid} {field_description} on {inverter_sn}")
                 return False
 
-            if isinstance(value, (int, float)):
-                try:
-                    if float(old_value) == float(value):
-                        self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}")
-                        return True
-                except (ValueError, TypeError):
-                    pass  # Fall back to string comparison if float conversion fails
-            if str(old_value) == str(value):
+            if cid_value_matches(old_value, value):
                 self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}")
                 return True
-            else:
-                self.log(f"Warn: Solis API: Failed to verify CID {cid} {field_description} on {inverter_sn}, wrote {value} but read back {old_value}")
-                return False
+
+            # A read taken this soon after the write can still be reporting the value from before
+            # it, so read once more after a pause rather than concluding the write was refused
+            # (issue #4774). The settled read also leaves the cache holding the better answer.
+            await asyncio.sleep(self.verify_settle_seconds)
+            settled_value, info = await self.read_cid(inverter_sn, cid)
+            if cid_value_matches(settled_value, value):
+                self.log(f"Solis API: CID {cid} {field_description} on {inverter_sn} is set to {value}, read back {old_value} until it settled {self.verify_settle_seconds}s later")
+                return True
+
+            self.log(f"Warn: Solis API: Failed to verify CID {cid} {field_description} on {inverter_sn}, wrote {value} but read back {old_value} and still {settled_value} after {self.verify_settle_seconds}s")
+            return False
 
         except Exception as e:
             # Log failure
@@ -1362,9 +1391,18 @@ class SolisAPI(ComponentBase, OAuthMixin):
         (batteryTypeCode is '0000' in this state, against '0001'/'0063' for real packs, but it is
         left out on purpose: a code that means "unknown" on some firmware would silently ignore a
         working battery, and the names above already cover every case seen.)
+
+        A top-level batteryType that names a real pack settles it on its own: batteryList is only
+        consulted when batteryType is absent. Accounts exist whose batteryType is 'PYLON_LV' with a
+        live, healthy pack while batteryList still carries a "No Battery" entry, and letting the
+        list win there drops a working battery. Both no-battery accounts observed so far state it
+        in batteryType as well, so nothing that motivated checking the list is lost by this.
         """
-        if str(detail.get("batteryType", "")).strip().lower() == "no battery":
+        battery_type = str(detail.get("batteryType", "")).strip()
+        if battery_type.lower() == "no battery":
             return True
+        if battery_type:
+            return False
         for entry in detail.get("batteryList") or []:
             if not isinstance(entry, dict):
                 continue
@@ -2520,56 +2558,19 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 self.log(f"Error: Unknown storage mode '{mode}' for {inverter_sn}")
                 return
             cached_mode = self.get_current_solis_mode_value(inverter_sn)
-            mode_value = compute_solis_mode_value(mode_enum, cached_mode, drop_tou_bit=self.is_tou_bit_refused(inverter_sn))
+            # TOU V2 firmware dropped bit 1 from the mode table, so asking for it there only
+            # produces a write that reads back without it (issues #4707, #4774)
+            mode_value = compute_solis_mode_value(mode_enum, cached_mode, drop_tou_bit=self.is_tou_v2_mode(inverter_sn))
 
-            if cached_mode != mode_value:
+            # Claimed unconditionally so the claim is spent by whichever write happens this cycle,
+            # rather than being held over and asserting again later in the same window
+            assert_for_window = self.claim_window_mode_assertion(inverter_sn)
+
+            if cached_mode != mode_value or assert_for_window:
                 await self.set_storage_mode_value(inverter_sn, mode_value)
 
         except Exception as e:
             self.log(f"Warn: Solis API set storage mode if needed failed for {inverter_sn}: {e}")
-
-    def is_tou_bit_refused(self, inverter_sn):
-        """True while this inverter is known to reject the time-of-use bit on CID 636.
-
-        The verdict expires after SOLIS_TOU_BIT_REPROBE_HOURS and is re-tested, so a false
-        positive costs one window rather than the life of the process.
-        """
-        noted_at = self.tou_bit_refused.get(inverter_sn)
-        if noted_at is None:
-            return False
-        if (self.now_utc_exact - noted_at) < timedelta(hours=SOLIS_TOU_BIT_REPROBE_HOURS):
-            return True
-        del self.tou_bit_refused[inverter_sn]
-        self.log(f"Solis API: re-testing whether {inverter_sn} accepts the time-of-use bit on CID {SOLIS_CID_STORAGE_MODE} after {SOLIS_TOU_BIT_REPROBE_HOURS} hours")
-        return False
-
-    def note_tou_bit_refused(self, inverter_sn, mode_value):
-        """Record an inverter that took a CID 636 write but left the time-of-use bit clear.
-
-        Only a read-back differing by exactly that one bit counts. A write dropped wholesale says
-        nothing about bit 1 in particular, and acting on it would switch Predbat to a mode value
-        it never asked for.
-
-        Learning this from the inverter rather than predicting it from the firmware generation
-        keeps it correct either way round: on the newer firmware the timed charge/discharge enable
-        moved into the per-slot registers (CIDs 5916/5922) and every value carrying this bit was
-        dropped from the mode table, but an inverter that still honours it keeps getting it.
-
-        Nothing here is persisted, so a restart re-probes and a firmware update cannot be masked
-        by a stale verdict (issue #4707).
-        """
-        if inverter_sn in self.tou_bit_refused:
-            return
-        if not (mode_value & (1 << SOLIS_BIT_TOU_MODE)):
-            return
-        read_back = self.get_current_solis_mode_value(inverter_sn)
-        if read_back != (mode_value & ~(1 << SOLIS_BIT_TOU_MODE)):
-            return
-        self.tou_bit_refused[inverter_sn] = self.now_utc_exact
-        self.log(
-            f"Solis API: {inverter_sn} will not accept the time-of-use bit on CID {SOLIS_CID_STORAGE_MODE} "
-            f"(wrote {mode_value}, read back {read_back}), so Predbat will stop setting it and will re-test after {SOLIS_TOU_BIT_REPROBE_HOURS} hours"
-        )
 
     async def set_storage_mode_value(self, inverter_sn, mode_value):
         """Set storage mode numerical value directly"""
@@ -2577,7 +2578,6 @@ class SolisAPI(ComponentBase, OAuthMixin):
             # Write storage mode CID
             success = await self.read_and_write_cid(inverter_sn, SOLIS_CID_STORAGE_MODE, mode_value, field_description=f"storage mode to {mode_value}")
             if not success:
-                self.note_tou_bit_refused(inverter_sn, mode_value)
                 self.log(f"Warn: Solis API set storage mode encountered errors for {inverter_sn}")
 
         except Exception as e:
@@ -3137,6 +3137,69 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log(f"Warn: Solis API failed to load details for {sn}: {e}")
             return False
 
+    def active_window_key(self, inverter_sn):
+        """Identify the charge or discharge window Predbat has configured for right now.
+
+        Read from charge_discharge_time_windows, which is what Predbat asked for, rather than from
+        the register cache - the point of asking is to find out whether the inverter still agrees.
+
+        The identity carries the slot and its times, so a window rewritten while it is running -
+        which Predbat does whenever the plan moves - is a different window from the one before it.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns: A key identifying the window in force, or None when there is not one
+        """
+        # Local time, to match the windows Predbat writes (as the V1 control path does)
+        current_time = self.now_utc_exact.strftime("%H:%M")
+        for slot, slot_data in self.charge_discharge_time_windows.get(inverter_sn, {}).items():
+            if not slot_data:
+                continue
+            charge_start = slot_data.get("charge_start_time", "00:00")
+            charge_end = slot_data.get("charge_end_time", "00:00")
+            if slot_data.get("charge_enable", 0) and time_in_window(current_time, charge_start, charge_end):
+                return (slot, "charge", charge_start, charge_end)
+            discharge_start = slot_data.get("discharge_start_time", "00:00")
+            discharge_end = slot_data.get("discharge_end_time", "00:00")
+            if slot_data.get("discharge_enable", 0) and time_in_window(current_time, discharge_start, discharge_end):
+                return (slot, "discharge", discharge_start, discharge_end)
+        return None
+
+    def is_inside_active_window(self, inverter_sn):
+        """True when local time falls inside a charge or discharge window Predbat has configured.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns: True when a configured window is in force right now
+        """
+        return self.active_window_key(inverter_sn) is not None
+
+    def claim_window_mode_assertion(self, inverter_sn):
+        """True once for each window that comes into force, so the storage mode is re-asserted there.
+
+        The V1 control path picks its mode from the clock, so the value changes as a window opens
+        and CID 636 is written at the boundary as a matter of course. The V2 path picks from
+        slot1_active - whether slot 1 has a window configured at all - so the mode is written when
+        the slot is programmed and nothing happens when the window actually starts. On the night in
+        issue #4774 the last CID 636 write was 22 minutes before the window opened.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns: True when this window has not been asserted for yet
+        """
+        window = self.active_window_key(inverter_sn)
+        if window is None:
+            # Outside a window, so the next one to start is a fresh claim even if its times repeat
+            self.mode_asserted_for.pop(inverter_sn, None)
+            return False
+        if self.mode_asserted_for.get(inverter_sn) == window:
+            return False
+        self.mode_asserted_for[inverter_sn] = window
+        return True
+
     def is_tou_v2_mode(self, sn):
         """
         Check if Time of Use V2 mode is enabled for the given inverter serial number.
@@ -3241,6 +3304,10 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 if not success:
                     poll_success = False
 
+        # Inverters whose slot registers were successfully read this cycle, so the in-window
+        # re-read below does not read them a second time on an hour boundary
+        slot_registers_polled = set()
+
         # Infrequent polling (every 60 minutes)
         if first or (seconds % 3600 == 0):
             for sn in self.inverter_sn:
@@ -3275,6 +3342,30 @@ class SolisAPI(ComponentBase, OAuthMixin):
                         await self.decode_time_windows(sn)
                     else:
                         await self.fetch_entity_data(sn)
+
+                # Only when the read actually refreshed the cache - a failed poll preserves the
+                # old values, so the in-window re-read below should still get its turn
+                if success:
+                    slot_registers_polled.add(sn)
+
+        # Inside a live window the slot registers are the ones that decide whether the battery
+        # actually charges, and the hourly poll above can leave the inverter drifting from what
+        # Predbat programmed for most of that window. Re-read them every 5 minutes while a window
+        # is in force so write_time_windows_if_changed() below sees the drift and corrects it in
+        # the same cycle (issue #4774). One batch call, and only while it matters.
+        if seconds % 300 == 0:
+            for sn in self.inverter_sn:
+                if sn in slot_registers_polled:
+                    continue
+                if not self.is_battery_inverter(sn) or not self.is_inside_active_window(sn):
+                    continue
+                self.log(f"Solis API: Re-reading charge/discharge slot registers for inverter {sn}, a window is in force")
+                if self.is_tou_v2_mode(sn):
+                    success = await self.poll_inverter_data(sn, SOLIS_CID_LIST_TOU_V2)
+                else:
+                    success = await self.poll_inverter_data(sn, SOLIS_CID_SINGLE, batch=False)
+                if not success:
+                    poll_success = False
 
         # Control mode
         control_success = True

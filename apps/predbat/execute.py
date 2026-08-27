@@ -636,10 +636,11 @@ class Execute:
             # Set the SoC just before or within the charge window
             if self.set_soc_enable:
                 if isExporting:
+                    export_target_percent = self.export_target_soc_percent()
                     if not disabled_export and not self.set_reserve_enable:
                         # If we are discharging and not setting reserve then we should reset the target SoC to the discharge target
                         # as some inverters can use this as a target for discharge
-                        self.adjust_battery_target_multi(inverter, int(self.export_limits_best[0]), isCharging, isExporting)
+                        self.adjust_battery_target_multi(inverter, export_target_percent, isCharging, isExporting)
                     elif not inverter.inv_has_discharge_enable_time:
                         self.adjust_battery_target_multi(inverter, 0, isCharging, isExporting)
                     elif not self.inverter_hybrid and self.inverter_soc_reset and inverter.inv_has_target_soc:
@@ -654,7 +655,7 @@ class Execute:
                     if self.set_export_freeze and self.export_limits_best[0] == EXPORT_LIMIT_FREEZE:
                         inverter.adjust_export_immediate(inverter.soc_percent, freeze=True)
                     elif not disabled_export:
-                        inverter.adjust_export_immediate(int(self.export_limits_best[0]))
+                        inverter.adjust_export_immediate(export_target_percent)
                     else:
                         inverter.adjust_export_immediate(int(EXPORT_LIMIT_IDLE))  # Dead code right, but kept in case other logic changes
 
@@ -810,6 +811,27 @@ class Execute:
         if not check:
             inverter.adjust_battery_target(new_soc_percent, is_charging, is_exporting)
         return new_soc_percent
+
+    def export_target_soc_percent(self):
+        """
+        Work out the SoC % to hand to the inverter as the export target
+
+        Normally this is just the planned export limit. Where Predbat does not own a reserve register
+        (set_reserve_enable off) the target is the only thing carrying the floor, so it is raised to the
+        reserve. A planned limit of 0 means "empty it as far as you are allowed" - discharge_soc resolves
+        that against the reserve when deciding how far to actually export, but an inverter whose service
+        maps this target onto a device reserve would be told to drain the battery flat instead.
+
+        Left alone when Predbat does own the reserve: adjust_reserve enforces the floor there and the two
+        registers are independent, so raising the target would change behaviour for no benefit.
+
+        Returns:
+        - int: export target as a percentage of the battery
+        """
+        target = int(self.export_limits_best[0])
+        if not self.set_reserve_enable:
+            target = max(target, calc_percent_limit(max(self.reserve, self.best_soc_min), self.soc_max))
+        return target
 
     def is_freeze_charge(self, charge_limit_kwh):
         """

@@ -82,9 +82,7 @@ POLL_SECONDS = 300
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"
 SCRATCH_SCOPE = f"//{SCRATCH_DIR.relative_to('/')}/**"
-_ALLOWED_TOOLS_BASE = [
-    # Read the issue, search for duplicates, post the triage comment
-    "Bash(gh *)",
+_ALLOWED_TOOLS_NON_GH = [
     # Git history, and the re-sync/discard the skill does before investigating
     "Bash(git log*)",
     "Bash(git diff*)",
@@ -150,6 +148,8 @@ _ALLOWED_TOOLS_BASE = [
     "Grep",
     "Glob",
 ]
+# Read the issue, search for duplicates, post the triage comment
+_ALLOWED_TOOLS_BASE = ["Bash(gh *)"] + _ALLOWED_TOOLS_NON_GH
 ALLOWED_TOOLS = ",".join(_ALLOWED_TOOLS_BASE)
 # The /issue-pr invocation needs everything the read-only triage flow has, plus
 # committing/pushing its branch, opening the PR, and running pre-commit as a quality gate.
@@ -190,6 +190,75 @@ _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr creat
 # matching can't parse flags, so this is a heuristic, not a guarantee.
 _PR_FORCE_PUSH_DENIALS = ["Bash(git push*--force*)", "Bash(git push*-f*)"]
 DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# The review and cleanup flows do NOT inherit the broad "Bash(gh *)" grant: with it
+# present, carving a scoped exception out of the gh api denial below would do nothing,
+# since "Bash(gh *)" already allows every gh api call once that denial is lifted, and
+# a narrower allow gets no precedence over a broader one - only "deny wins over allow"
+# is a real rule here. Instead, list the specific gh subcommands actually needed, so
+# there is no catch-all for the scoped gh api grant to hide behind.
+_ALLOWED_GH_PR_READ = [
+    "Bash(gh pr view*)",
+    "Bash(gh pr diff*)",
+    "Bash(gh pr list*)",
+    "Bash(gh pr comment*)",
+    "Bash(gh issue view*)",
+    "Bash(gh issue list*)",
+    "Bash(gh search*)",
+]
+# /code-review posts findings as inline PR comments, which needs gh api against the
+# PR-comments endpoint - scoped to this repo only. No write/push/commit access, and
+# deliberately no "gh pr review*" either: that would also allow --approve/
+# --request-changes, a governance action beyond "post a comment."
+_REVIEW_REMOVED_DENIALS = {"Bash(gh api*)"}
+# Prefix-glob matching is literal, so a single "Bash(gh api repos/O/R/*)" rule only fires
+# when the endpoint is the very next token, bare. Two forms the agent reaches for miss it
+# and are denied outright under dontAsk: a quoted endpoint, and a method flag ahead of the
+# endpoint - which is the canonical way to write a POST, and therefore exactly the form the
+# comment-posting step picks. That is what silently reduced PR #4758's review to printed
+# findings, while #4759's POST happened to be endpoint-first and went through. Enumerate the
+# realistic (method flag, quoting) combinations instead. Only POST and PATCH are listed -
+# the flow creates and edits comments, it never needs DELETE or PUT - and every variant stays
+# pinned to this repo, so the extra forms widen the accepted spelling, not the reach.
+# GH_API_ENDPOINT_FIRST_PROMPT below steers the agent onto the bare form, making this list a
+# safety net for the spellings we did not think of rather than the primary mechanism.
+_GH_API_METHOD_FLAGS = ["", "--method POST ", "--method PATCH ", "-X POST ", "-X PATCH "]
+_GH_API_ENDPOINT_QUOTES = ["", '"', "'"]
+_REVIEW_EXTRA_ALLOWED = [f"Bash(gh api {flag}{quote}repos/{REPO}/*)" for flag in _GH_API_METHOD_FLAGS for quote in _GH_API_ENDPOINT_QUOTES]
+ALLOWED_TOOLS_REVIEW = ",".join(_ALLOWED_GH_PR_READ + _ALLOWED_TOOLS_NON_GH + _REVIEW_EXTRA_ALLOWED)
+DISALLOWED_TOOLS_REVIEW = ",".join(item for item in _DISALLOWED_TOOLS_BASE if item not in _REVIEW_REMOVED_DENIALS)
+# BOT_CLEANUP needs the review flow's read access and scoped gh api grant, plus
+# committing/pushing/pre-commit and checking out the PR's own branch (the review flow
+# never needs a local checkout, and never gh pr checks/run view - it doesn't touch CI).
+# Deliberately not the full _ALLOWED_TOOLS_PR_EXTRA: no "gh pr create*" - cleanup
+# pushes to the existing PR's branch, it never opens a new one.
+_CLEANUP_EXTRA_GH = ["Bash(gh pr checkout*)", "Bash(gh pr checks*)", "Bash(gh run view*)", "Bash(gh run list*)"]
+_CLEANUP_EXTRA_WRITE = [
+    "Bash(git add*)",
+    "Bash(git commit*)",
+    "Bash(git push*)",
+    "Bash(./run_pre_commit*)",
+    "Bash(./run_pre_commit)",
+]
+ALLOWED_TOOLS_CLEANUP = ",".join(_ALLOWED_GH_PR_READ + _CLEANUP_EXTRA_GH + _ALLOWED_TOOLS_NON_GH + _CLEANUP_EXTRA_WRITE + _REVIEW_EXTRA_ALLOWED)
+_CLEANUP_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)"} | _REVIEW_REMOVED_DENIALS
+DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _CLEANUP_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
+# The other half of the #4758 fix. /code-review is a built-in skill, so the command form it
+# has to use cannot be pinned in a SKILL.md we own - it goes in as an appended system prompt
+# on the two flows holding the scoped gh api grant. Belt and braces with _REVIEW_EXTRA_ALLOWED
+# above: the allowlist covers the spellings we enumerated, this keeps the agent on the one
+# spelling that is certain to be covered, and asks it to say so loudly when a call is denied
+# anyway - #4758 quietly degraded to printing the comments it could not post, which reads like
+# a finished review in the log.
+GH_API_ENDPOINT_FIRST_PROMPT = (
+    "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
+    "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
+    f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py`. "
+    'Other spellings (e.g. `gh api --method POST repos/...`, `gh api -X POST repos/...`, `gh api -H ... repos/...` or `gh api "repos/..."`) may be denied in restricted sessions even when the same request is allowed in endpoint-first form. '
+    "Keep each call to a single command: piping into head/tail/grep is fine, but redirecting output anywhere outside "
+    f"{SCRATCH_DIR} or the repository clone - /tmp included - is denied as well. "
+    "If a call is denied regardless, state that plainly in your final message and name the command; do not quietly fall back "
+    "to printing the comments you would have posted."
+)
 
 
 def load_state():
@@ -211,6 +280,11 @@ def save_state(state):
 def issue_url(issue_number):
     """Return the GitHub URL for an issue, for easy opening from the daemon's log."""
     return f"https://github.com/{REPO}/issues/{issue_number}"
+
+
+def pr_url(pr_number):
+    """Return the GitHub URL for a PR, for easy opening from the daemon's log."""
+    return f"https://github.com/{REPO}/pull/{pr_number}"
 
 
 def fetch_new_issues(since_number):
@@ -413,6 +487,42 @@ def triage(issue_number):
     print(f"[triage] issue #{issue_number}: exited {result.returncode}", flush=True)
 
 
+def triage_followup(issue_number):
+    """Run the /issue-triage-followup skill for one issue - a re-review incorporating
+    information added since the original triage, under the same triage permission
+    set as first-pass /issue-triage (no commits, pushes, or PR creation).
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/issue-triage-followup {issue_number} scratch={SCRATCH_DIR}",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS,
+        "--disallowedTools",
+        DISALLOWED_TOOLS,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "60",
+        "--max-budget-usd",
+        "10.00",
+    ]
+    log_path = LOG_DIR / f"issue-{issue_number}-followup.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[review] issue #{issue_number}: starting follow-up, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== issue #{issue_number} follow-up started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== issue #{issue_number} follow-up exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print(f"[review] issue #{issue_number}: follow-up exited {result.returncode}", flush=True)
+
+
 def create_pr(issue_number):
     """Run the /issue-pr skill for one issue under the push/PR-create-capable permission set.
 
@@ -488,6 +598,28 @@ def fetch_bot_review_issues():
     return json.loads(result.stdout)
 
 
+def fetch_bot_review_prs():
+    """Return open PRs currently labelled BOT_REVIEW, each with its title."""
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_REVIEW", "--json", "number,title", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
+def fetch_bot_cleanup_prs():
+    """Return open PRs currently labelled BOT_CLEANUP, each with its title."""
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", REPO, "--state", "open", "--label", "BOT_CLEANUP", "--json", "number,title", "--limit", "100"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 def remove_review_label(issue_number):
     """Remove BOT_REVIEW once the issue is confirmed triaged, so it isn't reprocessed."""
     subprocess.run(["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
@@ -517,29 +649,249 @@ def mark_review_failed(issue_number):
     )
 
 
-def process_bot_review_issue(issue):
-    """Run /issue-triage on an issue tagged BOT_REVIEW if it isn't already triaged,
-    then remove the trigger label. Exists for issues older than the daemon's
-    last_processed pointer, which the new-issue poll never sees.
+def remove_pr_review_label(pr_number):
+    """Remove BOT_REVIEW from a PR once the review has been posted, so it isn't reprocessed."""
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW"], check=True)
 
-    A failed triage swaps BOT_REVIEW for BOT_FAILED instead of leaving BOT_REVIEW in
-    place, so a persistently failing issue isn't retried every poll cycle.
+
+def mark_pr_review_failed(pr_number, reason=""):
+    """Post a note and swap BOT_REVIEW for BOT_FAILED on a PR, so a failing review isn't
+    retried every poll cycle. Remove BOT_FAILED and re-add BOT_REVIEW to retry. `reason`
+    names the specific failure when there is one - "see the logs" is poor advice for the
+    run that exits 0 having posted nothing, because its log reads like a finished review.
+    """
+    detail = f" {reason}" if reason else ""
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            REPO,
+            "--body",
+            f"Automated review failed to complete for this PR - see the triage bot's logs for details.{detail} " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_REVIEW` to try again.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
+def remove_pr_cleanup_label(pr_number):
+    """Remove BOT_CLEANUP once fixes have been committed and pushed, so it isn't reprocessed."""
+    subprocess.run(["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP"], check=True)
+
+
+def mark_pr_cleanup_failed(pr_number):
+    """Post a note and swap BOT_CLEANUP for BOT_FAILED on a PR, so a failing cleanup
+    isn't retried every poll cycle. Remove BOT_FAILED and re-add BOT_CLEANUP to retry.
+    """
+    subprocess.run(
+        [
+            "gh",
+            "pr",
+            "comment",
+            str(pr_number),
+            "--repo",
+            REPO,
+            "--body",
+            "Automated cleanup failed to complete for this PR - see the triage bot's logs for details. " "Not retrying automatically; remove `BOT_FAILED` and re-add `BOT_CLEANUP` to try again.",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP", "--add-label", "BOT_FAILED"],
+        check=True,
+    )
+
+
+def process_bot_review_issue(issue):
+    """Run the right BOT_REVIEW action for one issue, then remove the trigger label.
+
+    Three cases: an issue already carrying BOT_TRIAGED gets a follow-up review via
+    /issue-triage-followup, incorporating anything new since the original triage. An
+    old, pre-BOT_TRIAGED-label issue that already has a bot triage comment is just
+    backfilled with the label - catching up on backlog isn't the same as new
+    information having arrived, so no follow-up runs for it. Anything else gets a
+    first-pass /issue-triage, for issues older than the daemon's last_processed
+    pointer, which the new-issue poll never sees.
+
+    A failed triage or follow-up swaps BOT_REVIEW for BOT_FAILED instead of leaving
+    BOT_REVIEW in place, so a persistently failing issue isn't retried every poll cycle.
     """
     issue_number = issue["number"]
     labels = issue.get("labels", [])
     print(f'[review] issue #{issue_number}: "{issue["title"]}" - {issue_url(issue_number)}', flush=True)
-    if ensure_triaged(issue_number, labels):
+
+    if is_already_triaged(labels):
+        action_name, action = "follow-up", triage_followup
+    elif find_triage_comment(issue_number):
+        backfill_triaged_label(issue_number)
         remove_review_label(issue_number)
         return
+    else:
+        action_name, action = "first-pass triage", triage
+
     sync_repo()
     reset_scratch()
     try:
-        triage(issue_number)
+        action(issue_number)
     except subprocess.CalledProcessError as exc:
-        print(f"[review] issue #{issue_number}: triage failed: {exc}", flush=True)
+        print(f"[review] issue #{issue_number}: {action_name} failed: {exc}", flush=True)
         mark_review_failed(issue_number)
         return
     remove_review_label(issue_number)
+
+
+def review_pr(pr_number):
+    """Run /code-review against a PR at the "high" effort level, posting findings as
+    inline PR comments. Read-only otherwise: no code changes, no push, no PR actions.
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/code-review {pr_number} high --comment",
+        "--append-system-prompt",
+        GH_API_ENDPOINT_FIRST_PROMPT,
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS_REVIEW,
+        "--disallowedTools",
+        DISALLOWED_TOOLS_REVIEW,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "100",
+        "--max-budget-usd",
+        "20.00",
+    ]
+    log_path = LOG_DIR / f"pr-{pr_number}-review.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[review-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== PR #{pr_number} review started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== PR #{pr_number} review exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print(f"[review-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
+
+
+def pr_review_activity_count(pr_number):
+    """Return how many review bodies sit on a PR: submitted reviews, inline review
+    comments and plain PR comments, summed. process_bot_review_pr() samples this before
+    and after a run, because the exit status cannot answer the question that matters -
+    `claude -p` exits 0 whether or not the posting step was actually permitted, so the
+    count moving is the only available evidence that a review landed.
+    """
+    total = 0
+    for endpoint in (f"repos/{REPO}/pulls/{pr_number}/reviews", f"repos/{REPO}/pulls/{pr_number}/comments", f"repos/{REPO}/issues/{pr_number}/comments"):
+        result = subprocess.run(["gh", "api", endpoint, "--paginate", "--jq", "length"], capture_output=True, text=True, check=True)
+        total += sum(int(page) for page in result.stdout.split())
+    return total
+
+
+def process_bot_review_pr(pr):
+    """Run the BOT_REVIEW flow for one PR: /code-review posts findings as comments,
+    nothing here ever touches the PR's code. On success, remove BOT_REVIEW - the
+    posted review is the artifact, there's no separate "done" state to track. A
+    failed invocation swaps to BOT_FAILED instead, with an explanatory comment, as
+    does a run that exits 0 without posting anything: PR #4758's review had every
+    inline comment denied by the permission rules, still exited 0, and had BOT_REVIEW
+    cleared - leaving no review, no BOT_FAILED, and nothing marking it for retry.
+    """
+    pr_number = pr["number"]
+    print(f'[review-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    sync_repo()
+    reset_scratch()
+
+    try:
+        before = pr_review_activity_count(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: failed to sample activity count before review: {exc}", flush=True)
+        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.")
+        return
+
+    try:
+        review_pr(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: review failed: {exc}", flush=True)
+        mark_pr_review_failed(pr_number)
+        return
+
+    try:
+        after = pr_review_activity_count(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: failed to sample activity count after review: {exc}", flush=True)
+        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.")
+        return
+
+    if after <= before:
+        print(f"[review-pr] PR #{pr_number}: exited cleanly but posted nothing, marking failed", flush=True)
+        mark_pr_review_failed(pr_number, "The run exited cleanly but posted nothing, so the review step itself did not complete.")
+        return
+    remove_pr_review_label(pr_number)
+
+
+def cleanup_pr(pr_number):
+    """Run the /pr-cleanup skill against a PR: address review feedback and CI
+    failures, then commit and push - under the write-capable cleanup permission set.
+    """
+    cmd = [
+        "claude",
+        "-p",
+        f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
+        "--append-system-prompt",
+        GH_API_ENDPOINT_FIRST_PROMPT,
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        ALLOWED_TOOLS_CLEANUP,
+        "--disallowedTools",
+        DISALLOWED_TOOLS_CLEANUP,
+        "--verbose",
+        "--add-dir",
+        str(SCRATCH_DIR),
+        "--max-turns",
+        "150",
+        "--max-budget-usd",
+        "25.00",
+    ]
+    log_path = LOG_DIR / f"pr-{pr_number}-cleanup.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[cleanup-pr] PR #{pr_number}: starting, logging to {log_path}", flush=True)
+    with log_path.open("a") as log_handle:
+        log_handle.write(f"\n==== PR #{pr_number} cleanup started {time.strftime('%Y-%m-%d %H:%M:%S')} ====\n")
+        log_handle.flush()
+        result = subprocess.run(cmd, cwd=str(CLONE_DIR), stdout=log_handle, stderr=subprocess.STDOUT)
+        log_handle.write(f"==== PR #{pr_number} cleanup exited {result.returncode} ====\n")
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+    print(f"[cleanup-pr] PR #{pr_number}: exited {result.returncode}", flush=True)
+
+
+def process_bot_cleanup_pr(pr):
+    """Run the BOT_CLEANUP flow for one PR: address review feedback and CI failures,
+    then remove the trigger label. A failed run swaps to BOT_FAILED instead, with an
+    explanatory comment.
+    """
+    pr_number = pr["number"]
+    print(f'[cleanup-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
+    sync_repo()
+    reset_scratch()
+    try:
+        cleanup_pr(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[cleanup-pr] PR #{pr_number}: cleanup failed: {exc}", flush=True)
+        mark_pr_cleanup_failed(pr_number)
+        return
+    remove_pr_cleanup_label(pr_number)
 
 
 def main():
@@ -560,6 +912,10 @@ def main():
                 process_bot_pr_issue(issue)
             for issue in fetch_bot_review_issues():
                 process_bot_review_issue(issue)
+            for pr in fetch_bot_review_prs():
+                process_bot_review_pr(pr)
+            for pr in fetch_bot_cleanup_prs():
+                process_bot_cleanup_pr(pr)
         except subprocess.CalledProcessError as exc:
             print(f"[triage] error: {exc}", flush=True)
         time.sleep(POLL_SECONDS)

@@ -2329,9 +2329,7 @@ class Octopus:
         """
 
         if res:
-            dayname = res.group(1)
             daynumber = res.group(2)
-            daysymbol = res.group(3)
             month = res.group(4)
             time_from = res.group(5)
             time_to = res.group(6)
@@ -2380,7 +2378,7 @@ class Octopus:
                 timestamp_start = timestamp_start.replace(hour=int(time_from))
                 timestamp_end = timestamp_end.replace(hour=int(time_to))
                 free_sessions.append({"start": timestamp_start.strftime(TIME_FORMAT), "end": timestamp_end.strftime(TIME_FORMAT), "rate": 0.0})
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError):
                 pass
 
     def download_octopus_free_func(self, url):
@@ -2510,7 +2508,6 @@ class Octopus:
                     start_hour = int(match.group(1))
                     end_hour = int(match.group(2))
                     period = match.group(3).lower()
-                    day_of_week = match.group(4)
                     day_num = int(match.group(5))
                     month = match.group(6)
 

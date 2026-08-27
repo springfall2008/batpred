@@ -522,10 +522,55 @@ def test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat
     return False
 
 
+def test_export_target_soc_percent(my_predbat):
+    """
+    The export target must carry the reserve floor when Predbat owns no reserve register
+
+    A planned export limit of 0 means "empty it as far as you are allowed". Handing that raw to an
+    inverter whose service maps it onto a device reserve tells it to drain the battery flat, which is
+    what a Powerwall driven by service hooks actually did.
+    """
+    print("  - test_export_target_soc_percent")
+    failed = False
+    saved = (my_predbat.export_limits_best, my_predbat.set_reserve_enable, my_predbat.reserve, my_predbat.best_soc_min, my_predbat.soc_max)
+
+    my_predbat.soc_max = 10.0
+    my_predbat.reserve = 1.0  # 10%
+    my_predbat.best_soc_min = 0.0
+
+    cases = [
+        # (export limit, reserve control, expected target)
+        (0, False, 10),  # the reported bug: 0 would drain the battery flat
+        (5, False, 10),  # below the reserve, still raised
+        (20, False, 20),  # above the reserve, left alone
+        (0, True, 0),  # Predbat owns the reserve, so the target is not its job
+        (20, True, 20),
+    ]
+    for limit, reserve_enable, expect in cases:
+        my_predbat.export_limits_best = [limit]
+        my_predbat.set_reserve_enable = reserve_enable
+        got = my_predbat.export_target_soc_percent()
+        if got != expect:
+            print("ERROR: export target for limit {} with set_reserve_enable={} should be {} got {}".format(limit, reserve_enable, expect, got))
+            failed = True
+
+    # best_soc_min above the reserve wins, matching how discharge_soc resolves the floor
+    my_predbat.best_soc_min = 3.0  # 30%
+    my_predbat.export_limits_best = [0]
+    my_predbat.set_reserve_enable = False
+    if my_predbat.export_target_soc_percent() != 30:
+        print("ERROR: export target should follow best_soc_min of 30%, got {}".format(my_predbat.export_target_soc_percent()))
+        failed = True
+
+    my_predbat.export_limits_best, my_predbat.set_reserve_enable, my_predbat.reserve, my_predbat.best_soc_min, my_predbat.soc_max = saved
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
-    failed = test_fetch_inverter_data_extra_pv_sensors(my_predbat)
+    failed = test_export_target_soc_percent(my_predbat)
+    failed |= test_fetch_inverter_data_extra_pv_sensors(my_predbat)
     failed |= test_fetch_inverter_data_extra_pv_sensors_invalid_value(my_predbat)
     failed |= test_fetch_inverter_data_no_extra_pv_when_sensors_match_inverters(my_predbat)
     if failed:

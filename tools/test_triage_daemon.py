@@ -67,6 +67,14 @@ class IssueUrlTests(unittest.TestCase):
         self.assertEqual(triage_daemon.issue_url(4720), "https://github.com/springfall2008/batpred/issues/4720")
 
 
+class PrUrlTests(unittest.TestCase):
+    """Tests for pr_url(), new - used to print an openable link when work starts."""
+
+    def test_builds_the_github_pr_url(self):
+        """Returns the standard GitHub PR URL for the configured repo."""
+        self.assertEqual(triage_daemon.pr_url(4720), "https://github.com/springfall2008/batpred/pull/4720")
+
+
 class FetchNewIssuesTests(unittest.TestCase):
     """Characterisation tests for fetch_new_issues() - pre-existing, except for also
     requesting the title field (used to print an openable link when work starts)."""
@@ -374,6 +382,258 @@ class PermissionModelTests(unittest.TestCase):
         self.assertTrue(any("force" in entry for entry in pr_denied), pr_denied)
         self.assertTrue(any("-f" in entry for entry in pr_denied), pr_denied)
 
+    def test_review_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
+        """The BOT_REVIEW-on-PR flow keeps every dangerous gh subcommand denied,
+        including generic gh api calls against another repo."""
+        still_denied = [
+            "Bash(gh pr merge*)",
+            "Bash(gh pr close*)",
+            "Bash(gh pr create*)",
+            "Bash(gh repo*)",
+            "Bash(gh release*)",
+            "Bash(gh workflow*)",
+            "Bash(gh auth*)",
+            "Bash(gh secret*)",
+            "mcp__*",
+        ]
+        review_denied = triage_daemon.DISALLOWED_TOOLS_REVIEW.split(",")
+        for entry in still_denied:
+            self.assertIn(entry, review_denied)
+
+    def test_review_disallowed_tools_carves_out_only_gh_api(self):
+        """Only the blanket gh api denial is removed - everything else stays denied."""
+        base = set(triage_daemon.DISALLOWED_TOOLS.split(","))
+        review = set(triage_daemon.DISALLOWED_TOOLS_REVIEW.split(","))
+        self.assertEqual(base - review, {"Bash(gh api*)"})
+
+    def test_review_allowed_tools_does_not_inherit_the_broad_gh_grant(self):
+        """Regression test for the actual bug: with "Bash(gh *)" present, removing the
+        blanket gh api denial would un-restrict gh api entirely (any repo, any
+        endpoint, including merge/close via REST) - a narrower allow gets no
+        precedence over a broader one, only deny-wins-over-allow is a real rule.
+        The scoped gh api grant only means something if this entry is absent."""
+        review = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        self.assertNotIn("Bash(gh *)", review)
+
+    def test_review_allowed_tools_does_not_grant_formal_review_actions(self):
+        """No "gh pr review*": that would also allow --approve/--request-changes,
+        a governance action beyond "post a comment"."""
+        review = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        self.assertNotIn("Bash(gh pr review*)", review)
+
+    def test_review_allowed_tools_still_covers_the_read_only_base(self):
+        """Dropping the broad gh grant must not drop the non-gh read tools (git
+        history, file reads, the scoped Edit rules) every other flow still has."""
+        non_gh = set(triage_daemon._ALLOWED_TOOLS_NON_GH)
+        review = set(triage_daemon.ALLOWED_TOOLS_REVIEW.split(","))
+        self.assertTrue(non_gh.issubset(review))
+
+    def test_review_allowed_tools_grants_exactly_the_expected_gh_entries(self):
+        """The complete, curated gh surface for the review flow - specific
+        subcommands plus the scoped api grants, nothing broader."""
+        review = set(triage_daemon.ALLOWED_TOOLS_REVIEW.split(","))
+        gh_entries = {entry for entry in review if entry.startswith("Bash(gh")}
+        self.assertEqual(
+            gh_entries,
+            {
+                "Bash(gh pr view*)",
+                "Bash(gh pr diff*)",
+                "Bash(gh pr list*)",
+                "Bash(gh pr comment*)",
+                "Bash(gh issue view*)",
+                "Bash(gh issue list*)",
+                "Bash(gh search*)",
+            }
+            | set(triage_daemon._REVIEW_EXTRA_ALLOWED),
+        )
+
+    def test_review_allowed_tools_covers_the_method_flag_first_gh_api_form(self):
+        """The bug that silently dropped PR #4758's review: the agent wrote the POST as
+        `gh api --method POST repos/...`, the canonical form for a POST, which the single
+        endpoint-first prefix glob does not match - so every inline comment was denied while
+        `claude -p` still exited 0. #4759's POST happened to be endpoint-first and went through."""
+        review = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        for form in [
+            "Bash(gh api repos/springfall2008/batpred/*)",
+            "Bash(gh api --method POST repos/springfall2008/batpred/*)",
+            "Bash(gh api --method PATCH repos/springfall2008/batpred/*)",
+            "Bash(gh api -X POST repos/springfall2008/batpred/*)",
+            "Bash(gh api -X PATCH repos/springfall2008/batpred/*)",
+        ]:
+            self.assertIn(form, review)
+
+    def test_review_allowed_tools_covers_quoted_gh_api_endpoints(self):
+        """The other observed denial: a quoted endpoint (`gh api "repos/..."`) also misses a
+        prefix glob written for the bare form."""
+        review = triage_daemon.ALLOWED_TOOLS_REVIEW.split(",")
+        self.assertIn('Bash(gh api "repos/springfall2008/batpred/*)', review)
+        self.assertIn("Bash(gh api 'repos/springfall2008/batpred/*)", review)
+
+    def test_every_scoped_gh_api_grant_stays_pinned_to_this_repo(self):
+        """Broadening the grant to cover more command forms must not broaden its reach:
+        every variant still names this repo, and none degrades to a bare "gh api*"."""
+        for flow in [triage_daemon.ALLOWED_TOOLS_REVIEW, triage_daemon.ALLOWED_TOOLS_CLEANUP]:
+            api_entries = [entry for entry in flow.split(",") if entry.startswith("Bash(gh api")]
+            self.assertTrue(api_entries)
+            for entry in api_entries:
+                self.assertIn("repos/springfall2008/batpred/", entry)
+                self.assertTrue(entry.endswith("repos/springfall2008/batpred/*)"), entry)
+
+    def test_scoped_gh_api_grants_never_allow_destructive_methods(self):
+        """Only POST and PATCH are enumerated - the review flow creates and edits comments,
+        it never needs DELETE or PUT, and spelling those out would hand it the REST routes to
+        remove reviews or replace branch contents."""
+        for flow in [triage_daemon.ALLOWED_TOOLS_REVIEW, triage_daemon.ALLOWED_TOOLS_CLEANUP]:
+            for entry in flow.split(","):
+                if entry.startswith("Bash(gh api"):
+                    self.assertNotIn("DELETE", entry)
+                    self.assertNotIn("PUT", entry)
+
+    def test_cleanup_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
+        """The BOT_CLEANUP flow keeps every dangerous gh subcommand denied."""
+        still_denied = [
+            "Bash(gh pr merge*)",
+            "Bash(gh pr close*)",
+            "Bash(gh repo*)",
+            "Bash(gh release*)",
+            "Bash(gh workflow*)",
+            "Bash(gh auth*)",
+            "Bash(gh secret*)",
+            "mcp__*",
+        ]
+        cleanup_denied = triage_daemon.DISALLOWED_TOOLS_CLEANUP.split(",")
+        for entry in still_denied:
+            self.assertIn(entry, cleanup_denied)
+
+    def test_cleanup_disallowed_tools_still_blocks_force_push_variants(self):
+        """Same defense-in-depth as the PR flow: force-push stays denied even though push is allowed."""
+        cleanup_denied = triage_daemon.DISALLOWED_TOOLS_CLEANUP.split(",")
+        self.assertTrue(any("force" in entry for entry in cleanup_denied), cleanup_denied)
+        self.assertTrue(any("-f" in entry for entry in cleanup_denied), cleanup_denied)
+
+    def test_cleanup_allowed_tools_does_not_inherit_the_broad_gh_grant(self):
+        """Same regression as the review flow: "Bash(gh *)" must be absent, or the
+        scoped gh api grant would do nothing once the blanket gh api denial is lifted."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        self.assertNotIn("Bash(gh *)", cleanup)
+
+    def test_cleanup_allowed_tools_does_not_grant_pr_create(self):
+        """Cleanup pushes to the existing PR's branch - it never opens a new one, so
+        it must not inherit "gh pr create*" the way the BOT_PR flow does."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        self.assertNotIn("Bash(gh pr create*)", cleanup)
+        self.assertIn("Bash(gh pr create*)", triage_daemon.DISALLOWED_TOOLS_CLEANUP.split(","))
+
+    def test_cleanup_allowed_tools_still_covers_the_read_only_base(self):
+        """Dropping the broad gh grant must not drop the non-gh read tools (git
+        history, file reads, the scoped Edit rules) every other flow still has."""
+        non_gh = set(triage_daemon._ALLOWED_TOOLS_NON_GH)
+        cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        self.assertTrue(non_gh.issubset(cleanup))
+
+    def test_cleanup_allowed_tools_grants_exactly_the_expected_gh_entries(self):
+        """The complete, curated gh surface for the cleanup flow: the review flow's
+        read access, plus checkout/checks/run-log access and the scoped api grant."""
+        cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        gh_entries = {entry for entry in cleanup if entry.startswith("Bash(gh")}
+        self.assertEqual(
+            gh_entries,
+            {
+                "Bash(gh pr view*)",
+                "Bash(gh pr diff*)",
+                "Bash(gh pr list*)",
+                "Bash(gh pr comment*)",
+                "Bash(gh issue view*)",
+                "Bash(gh issue list*)",
+                "Bash(gh search*)",
+                "Bash(gh pr checkout*)",
+                "Bash(gh pr checks*)",
+                "Bash(gh run view*)",
+                "Bash(gh run list*)",
+            }
+            | set(triage_daemon._REVIEW_EXTRA_ALLOWED),
+        )
+
+    def test_cleanup_allowed_tools_covers_the_method_flag_first_gh_api_form(self):
+        """Cleanup shares the review flow's scoped api grant, so it inherits the same
+        command-form coverage rather than only the endpoint-first spelling."""
+        cleanup = triage_daemon.ALLOWED_TOOLS_CLEANUP.split(",")
+        self.assertIn("Bash(gh api --method POST repos/springfall2008/batpred/*)", cleanup)
+        self.assertIn("Bash(gh api repos/springfall2008/batpred/*)", cleanup)
+
+    def test_cleanup_allowed_tools_grants_write_access(self):
+        """Commit/push/pre-commit, matching the PR flow's write capability."""
+        cleanup = set(triage_daemon.ALLOWED_TOOLS_CLEANUP.split(","))
+        self.assertTrue(
+            {
+                "Bash(git add*)",
+                "Bash(git commit*)",
+                "Bash(git push*)",
+                "Bash(./run_pre_commit*)",
+                "Bash(./run_pre_commit)",
+            }.issubset(cleanup)
+        )
+
+
+class GhApiFormPromptTests(unittest.TestCase):
+    """Tests for GH_API_ENDPOINT_FIRST_PROMPT - the belt-and-braces half of the #4758 fix.
+    The allowlist covers the command forms we thought of; this steers the agent onto the one
+    form we know is covered, which matters because /code-review is a built-in skill whose
+    command spellings cannot be edited in a SKILL.md we own."""
+
+    def test_names_the_repo_and_the_endpoint_first_rule(self):
+        """The prompt has to be concrete enough to copy: it names this repo and states that
+        the endpoint goes immediately after `gh api`."""
+        prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
+        self.assertIn("springfall2008/batpred", prompt)
+        self.assertIn("gh api", prompt)
+
+    def test_calls_out_each_form_observed_to_be_denied(self):
+        """Every spelling seen denied in the #4758/#4759 transcripts is named explicitly:
+        a method flag before the endpoint, and a quoted endpoint."""
+        prompt = triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT
+        self.assertIn("--method", prompt)
+        self.assertIn("-X", prompt)
+        self.assertIn("-H", prompt)
+
+    def test_tells_the_agent_to_report_a_denial_rather_than_print_findings(self):
+        """The #4758 run degraded to printing the comments it could not post, which read as a
+        completed review in the log. The prompt asks for a denial to be stated plainly."""
+        self.assertIn("denied", triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+
+
+class PrReviewActivityCountTests(unittest.TestCase):
+    """Tests for pr_review_activity_count(), new - the evidence check behind verify-then-label."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_sums_reviews_inline_comments_and_pr_comments(self, mock_run):
+        """All three places a review body can land are counted, because /code-review may post
+        a formal review, inline comments, or a plain PR comment depending on what it can reach."""
+        mock_run.return_value = MagicMock(stdout="2\n", returncode=0)
+        self.assertEqual(triage_daemon.pr_review_activity_count(4742), 6)
+        endpoints = [call.args[0][2] for call in mock_run.call_args_list]
+        self.assertEqual(
+            endpoints,
+            [
+                "repos/springfall2008/batpred/pulls/4742/reviews",
+                "repos/springfall2008/batpred/pulls/4742/comments",
+                "repos/springfall2008/batpred/issues/4742/comments",
+            ],
+        )
+
+    @patch("triage_daemon.subprocess.run")
+    def test_sums_across_paginated_pages(self, mock_run):
+        """--paginate emits one length per page, so the counts have to be added rather than
+        the last one taken - otherwise a busy PR under-counts and reads as "posted nothing"."""
+        mock_run.return_value = MagicMock(stdout="30\n30\n4\n", returncode=0)
+        self.assertEqual(triage_daemon.pr_review_activity_count(4742), 192)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_handles_an_empty_response(self, mock_run):
+        """A PR with no reviews at all counts as zero, not a crash."""
+        mock_run.return_value = MagicMock(stdout="", returncode=0)
+        self.assertEqual(triage_daemon.pr_review_activity_count(4742), 0)
+
 
 class SyncRepoTests(unittest.TestCase):
     """Tests for sync_repo(), modified to always return to main first."""
@@ -571,38 +831,111 @@ class MarkReviewFailedTests(unittest.TestCase):
         )
 
 
+class TriageFollowupTests(DaemonPathsTestCase):
+    """Tests for triage_followup(), new - the BOT_REVIEW follow-up flow for issues
+    that already carry BOT_TRIAGED."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_read_only_triage_permission_set(self, mock_run):
+        """Runs /issue-triage-followup with the same triage allow/deny lists as
+        first-pass triage (no commits, pushes, or PR creation)."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/issue-triage-followup 4720", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_raises_on_a_non_zero_exit(self, mock_run):
+        """Unlike create_pr(), a follow-up failure raises - process_bot_review_issue()
+        treats this the same way as a first-pass triage failure."""
+        mock_run.return_value = MagicMock(returncode=1)
+        with self.assertRaises(subprocess.CalledProcessError):
+            triage_daemon.triage_followup(4720)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-issue follow-up log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.triage_followup(4720)
+        self.assertTrue((self.log_dir / "issue-4720-followup.log").exists())
+
+
 class ProcessBotReviewIssueTests(unittest.TestCase):
-    """Tests for process_bot_review_issue(), new in the BOT_REVIEW flow."""
+    """Tests for process_bot_review_issue(), covering all three BOT_REVIEW paths:
+    first-pass triage, follow-up review, and old pre-label-ticket backfill."""
 
     def setUp(self):
         """Patch every collaborator process_bot_review_issue() calls."""
         self.patches = {}
-        for name in ["ensure_triaged", "sync_repo", "reset_scratch", "triage", "remove_review_label", "mark_review_failed"]:
+        for name in [
+            "is_already_triaged",
+            "find_triage_comment",
+            "backfill_triaged_label",
+            "sync_repo",
+            "reset_scratch",
+            "triage",
+            "triage_followup",
+            "remove_review_label",
+            "mark_review_failed",
+        ]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_already_triaged_just_removes_the_label(self):
-        """An already-triaged issue skips triage() entirely."""
-        self.patches["ensure_triaged"].return_value = True
+    def test_already_triaged_runs_a_follow_up_review(self):
+        """An issue already carrying BOT_TRIAGED gets a follow-up review, not a fresh
+        first-pass triage, and not the old-ticket backfill path."""
+        self.patches["is_already_triaged"].return_value = True
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}], "title": "Old ticket needing review"})
+        self.patches["find_triage_comment"].assert_not_called()
         self.patches["triage"].assert_not_called()
+        self.patches["sync_repo"].assert_called_once()
+        self.patches["reset_scratch"].assert_called_once()
+        self.patches["triage_followup"].assert_called_once_with(3100)
         self.patches["remove_review_label"].assert_called_once_with(3100)
         self.patches["mark_review_failed"].assert_not_called()
 
-    def test_not_triaged_runs_triage_then_removes_the_label(self):
-        """An untriaged issue is synced, triaged, then the trigger label is removed."""
-        self.patches["ensure_triaged"].return_value = False
+    def test_old_pre_label_ticket_backfills_without_a_follow_up(self):
+        """A pre-BOT_TRIAGED-label ticket with an existing comment is backfilled and
+        left alone - catching up on backlog is not the same as new information having
+        arrived, so no follow-up runs."""
+        self.patches["is_already_triaged"].return_value = False
+        self.patches["find_triage_comment"].return_value = True
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
+        self.patches["backfill_triaged_label"].assert_called_once_with(3100)
+        self.patches["triage"].assert_not_called()
+        self.patches["triage_followup"].assert_not_called()
+        self.patches["sync_repo"].assert_not_called()
+        self.patches["reset_scratch"].assert_not_called()
+        self.patches["remove_review_label"].assert_called_once_with(3100)
+        self.patches["mark_review_failed"].assert_not_called()
+
+    def test_never_triaged_runs_first_pass_triage(self):
+        """An issue with neither the label nor an existing comment gets a first-pass triage."""
+        self.patches["is_already_triaged"].return_value = False
+        self.patches["find_triage_comment"].return_value = False
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         self.patches["sync_repo"].assert_called_once()
         self.patches["reset_scratch"].assert_called_once()
         self.patches["triage"].assert_called_once_with(3100)
+        self.patches["triage_followup"].assert_not_called()
         self.patches["remove_review_label"].assert_called_once_with(3100)
         self.patches["mark_review_failed"].assert_not_called()
 
-    def test_failed_triage_marks_failed_instead_of_removing_the_label(self):
-        """A triage() failure swaps to BOT_FAILED rather than retrying next poll."""
-        self.patches["ensure_triaged"].return_value = False
+    def test_failed_follow_up_marks_failed_instead_of_removing_the_label(self):
+        """A triage_followup() failure swaps to BOT_FAILED rather than retrying next poll."""
+        self.patches["is_already_triaged"].return_value = True
+        self.patches["triage_followup"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_review_issue({"number": 3100, "labels": [{"name": "BOT_TRIAGED"}], "title": "Old ticket needing review"})
+        self.patches["mark_review_failed"].assert_called_once_with(3100)
+        self.patches["remove_review_label"].assert_not_called()
+
+    def test_failed_first_pass_triage_marks_failed_instead_of_removing_the_label(self):
+        """A triage() failure (first-pass path) also swaps to BOT_FAILED."""
+        self.patches["is_already_triaged"].return_value = False
+        self.patches["find_triage_comment"].return_value = False
         self.patches["triage"].side_effect = subprocess.CalledProcessError(1, ["claude"])
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         self.patches["mark_review_failed"].assert_called_once_with(3100)
@@ -611,11 +944,283 @@ class ProcessBotReviewIssueTests(unittest.TestCase):
     @patch("builtins.print")
     def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
         """Prints the issue's title and an openable GitHub link as soon as work starts."""
-        self.patches["ensure_triaged"].return_value = True
+        self.patches["is_already_triaged"].return_value = True
         triage_daemon.process_bot_review_issue({"number": 3100, "labels": [], "title": "Old ticket needing review"})
         printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
         self.assertIn("Old ticket needing review", printed)
         self.assertIn("https://github.com/springfall2008/batpred/issues/3100", printed)
+
+
+class FetchBotReviewPrsTests(unittest.TestCase):
+    """Tests for fetch_bot_review_prs(), new - the BOT_REVIEW-on-PR flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_queries_open_prs_labelled_bot_review(self, mock_run):
+        """Calls gh pr list scoped to the BOT_REVIEW label and returns the parsed PRs."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742, "title": "Add confirmed findings"}]))
+        result = triage_daemon.fetch_bot_review_prs()
+        self.assertEqual(result, [{"number": 4742, "title": "Add confirmed findings"}])
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args[:3], ["gh", "pr", "list"])
+        self.assertIn("--label", args)
+        self.assertEqual(args[args.index("--label") + 1], "BOT_REVIEW")
+        self.assertIn("--limit", args)
+
+
+class FetchBotCleanupPrsTests(unittest.TestCase):
+    """Tests for fetch_bot_cleanup_prs(), new - the BOT_CLEANUP flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_queries_open_prs_labelled_bot_cleanup(self, mock_run):
+        """Calls gh pr list scoped to the BOT_CLEANUP label and returns the parsed PRs."""
+        mock_run.return_value = MagicMock(stdout=json.dumps([{"number": 4742, "title": "Add confirmed findings"}]))
+        result = triage_daemon.fetch_bot_cleanup_prs()
+        self.assertEqual(result, [{"number": 4742, "title": "Add confirmed findings"}])
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args[:3], ["gh", "pr", "list"])
+        self.assertIn("--label", args)
+        self.assertEqual(args[args.index("--label") + 1], "BOT_CLEANUP")
+        self.assertIn("--limit", args)
+
+
+class RemovePrReviewLabelTests(unittest.TestCase):
+    """Tests for remove_pr_review_label(), new - the BOT_REVIEW-on-PR flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_removes_bot_review_label_from_the_pr(self, mock_run):
+        """Removes BOT_REVIEW via gh pr edit, scoped to the configured repo."""
+        triage_daemon.remove_pr_review_label(4742)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--remove-label", "BOT_REVIEW"])
+
+
+class MarkPrReviewFailedTests(unittest.TestCase):
+    """Tests for mark_pr_review_failed(), new - the BOT_REVIEW-on-PR flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_comments_then_swaps_labels(self, mock_run):
+        """Posts an explanatory comment, then swaps BOT_REVIEW for BOT_FAILED, both on the PR."""
+        triage_daemon.mark_pr_review_failed(4742)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertEqual(calls[0][:3], ["gh", "pr", "comment"])
+        self.assertIn("--repo", calls[0])
+        self.assertEqual(
+            calls[1],
+            ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--remove-label", "BOT_REVIEW", "--add-label", "BOT_FAILED"],
+        )
+
+
+class ReviewPrTests(DaemonPathsTestCase):
+    """Tests for review_pr(), new - runs /code-review under the comment-only permission set."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_review_permission_set(self, mock_run):
+        """Runs /code-review at the high effort level with --comment, under the
+        review-only allow/deny lists - no write/push/commit access."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/code-review 4742 high --comment", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS_REVIEW, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS_REVIEW, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_appends_the_gh_api_form_system_prompt(self, mock_run):
+        """/code-review is built in, so the only place to pin its gh api command form is an
+        appended system prompt - without it the posting step picks `--method POST` first and
+        is denied, which is exactly how PR #4758's review came back empty."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--append-system-prompt", cmd)
+        self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_raises_on_a_non_zero_exit(self, mock_run):
+        """Matches triage()/triage_followup(): a failed invocation raises."""
+        mock_run.return_value = MagicMock(returncode=1)
+        with self.assertRaises(subprocess.CalledProcessError):
+            triage_daemon.review_pr(4742)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-PR review log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.review_pr(4742)
+        self.assertTrue((self.log_dir / "pr-4742-review.log").exists())
+
+
+class ProcessBotReviewPrTests(unittest.TestCase):
+    """Tests for process_bot_review_pr(), new - the BOT_REVIEW-on-PR orchestrator."""
+
+    def setUp(self):
+        """Patch every collaborator process_bot_review_pr() calls. The activity counter
+        defaults to "one more review body afterwards than before", i.e. a review that posted."""
+        self.patches = {}
+        for name in ["sync_repo", "reset_scratch", "review_pr", "remove_pr_review_label", "mark_pr_review_failed", "pr_review_activity_count"]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+        self.patches["pr_review_activity_count"].side_effect = [3, 4]
+
+    def test_reviews_then_removes_the_label(self):
+        """A successful review syncs, reviews, then removes BOT_REVIEW."""
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["sync_repo"].assert_called_once()
+        self.patches["reset_scratch"].assert_called_once()
+        self.patches["review_pr"].assert_called_once_with(4742)
+        self.patches["remove_pr_review_label"].assert_called_once_with(4742)
+        self.patches["mark_pr_review_failed"].assert_not_called()
+
+    def test_failed_review_marks_failed_instead_of_removing_the_label(self):
+        """A review_pr() failure swaps to BOT_FAILED rather than retrying next poll."""
+        self.patches["review_pr"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["mark_pr_review_failed"].assert_called_once()
+        self.assertEqual(self.patches["mark_pr_review_failed"].call_args.args[0], 4742)
+        self.patches["remove_pr_review_label"].assert_not_called()
+
+    def test_a_review_that_posted_nothing_marks_failed_instead_of_removing_the_label(self):
+        """Regression test for PR #4758: the posting step was denied by the permission rules,
+        `claude -p` still exited 0, and BOT_REVIEW was cleared - so the PR ended up with no
+        review, no BOT_FAILED and nothing to retry. An unchanged activity count is the only
+        evidence available that nothing landed, since the exit status cannot show it."""
+        self.patches["pr_review_activity_count"].side_effect = [3, 3]
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["mark_pr_review_failed"].assert_called_once()
+        self.patches["remove_pr_review_label"].assert_not_called()
+
+    def test_the_posted_nothing_comment_says_why_rather_than_just_pointing_at_the_logs(self):
+        """The generic "see the logs" wording sends the maintainer to a log that, in the #4758
+        case, reads like a finished review. The comment has to name the actual failure."""
+        self.patches["pr_review_activity_count"].side_effect = [3, 3]
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        reason = self.patches["mark_pr_review_failed"].call_args.args[1]
+        self.assertIn("posted nothing", reason)
+
+    def test_samples_the_activity_count_before_and_after_the_review(self):
+        """The before-sample has to be taken ahead of review_pr(), or a PR that already had
+        comments would always look like it gained one."""
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.assertEqual(self.patches["pr_review_activity_count"].call_count, 2)
+        for call in self.patches["pr_review_activity_count"].call_args_list:
+            self.assertEqual(call.args, (4742,))
+
+    def test_a_failed_review_does_not_sample_the_count_twice(self):
+        """When review_pr() raises there is nothing to compare against - the failure is
+        already known, so the second gh round trip is skipped."""
+        self.patches["review_pr"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.assertEqual(self.patches["pr_review_activity_count"].call_count, 1)
+
+    @patch("builtins.print")
+    def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
+        """Prints the PR's title and an openable GitHub link as soon as work starts."""
+        triage_daemon.process_bot_review_pr({"number": 4742, "title": "Add confirmed findings"})
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("Add confirmed findings", printed)
+        self.assertIn("https://github.com/springfall2008/batpred/pull/4742", printed)
+
+
+class RemovePrCleanupLabelTests(unittest.TestCase):
+    """Tests for remove_pr_cleanup_label(), new - the BOT_CLEANUP flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_removes_bot_cleanup_label_from_the_pr(self, mock_run):
+        """Removes BOT_CLEANUP via gh pr edit, scoped to the configured repo."""
+        triage_daemon.remove_pr_cleanup_label(4742)
+        args = mock_run.call_args[0][0]
+        self.assertEqual(args, ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--remove-label", "BOT_CLEANUP"])
+
+
+class MarkPrCleanupFailedTests(unittest.TestCase):
+    """Tests for mark_pr_cleanup_failed(), new - the BOT_CLEANUP flow."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_comments_then_swaps_labels(self, mock_run):
+        """Posts an explanatory comment, then swaps BOT_CLEANUP for BOT_FAILED, both on the PR."""
+        triage_daemon.mark_pr_cleanup_failed(4742)
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        self.assertEqual(calls[0][:3], ["gh", "pr", "comment"])
+        self.assertIn("--repo", calls[0])
+        self.assertEqual(
+            calls[1],
+            ["gh", "pr", "edit", "4742", "--repo", "springfall2008/batpred", "--remove-label", "BOT_CLEANUP", "--add-label", "BOT_FAILED"],
+        )
+
+
+class CleanupPrTests(DaemonPathsTestCase):
+    """Tests for cleanup_pr(), new - runs /pr-cleanup under the write-capable cleanup permission set."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_invokes_claude_with_the_cleanup_permission_set(self, mock_run):
+        """Runs /pr-cleanup under the write-capable cleanup allow/deny lists."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("/pr-cleanup 4742", cmd[2])
+        self.assertIn(triage_daemon.ALLOWED_TOOLS_CLEANUP, cmd)
+        self.assertIn(triage_daemon.DISALLOWED_TOOLS_CLEANUP, cmd)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_appends_the_gh_api_form_system_prompt(self, mock_run):
+        """Cleanup holds the same scoped gh api grant as the review flow, so it gets the same
+        command-form guidance - it reads and replies to review threads through the REST API too."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("--append-system-prompt", cmd)
+        self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], triage_daemon.GH_API_ENDPOINT_FIRST_PROMPT)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_raises_on_a_non_zero_exit(self, mock_run):
+        """Matches triage()/triage_followup()/review_pr(): a failed invocation raises."""
+        mock_run.return_value = MagicMock(returncode=1)
+        with self.assertRaises(subprocess.CalledProcessError):
+            triage_daemon.cleanup_pr(4742)
+
+    @patch("triage_daemon.subprocess.run")
+    def test_writes_a_log_file(self, mock_run):
+        """A per-PR cleanup log file is created under LOG_DIR."""
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        self.assertTrue((self.log_dir / "pr-4742-cleanup.log").exists())
+
+
+class ProcessBotCleanupPrTests(unittest.TestCase):
+    """Tests for process_bot_cleanup_pr(), new - the BOT_CLEANUP orchestrator."""
+
+    def setUp(self):
+        """Patch every collaborator process_bot_cleanup_pr() calls."""
+        self.patches = {}
+        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "remove_pr_cleanup_label", "mark_pr_cleanup_failed"]:
+            patcher = patch.object(triage_daemon, name)
+            self.patches[name] = patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_cleans_up_then_removes_the_label(self):
+        """A successful cleanup syncs, cleans up, then removes BOT_CLEANUP."""
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["sync_repo"].assert_called_once()
+        self.patches["reset_scratch"].assert_called_once()
+        self.patches["cleanup_pr"].assert_called_once_with(4742)
+        self.patches["remove_pr_cleanup_label"].assert_called_once_with(4742)
+        self.patches["mark_pr_cleanup_failed"].assert_not_called()
+
+    def test_failed_cleanup_marks_failed_instead_of_removing_the_label(self):
+        """A cleanup_pr() failure swaps to BOT_FAILED rather than retrying next poll."""
+        self.patches["cleanup_pr"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["mark_pr_cleanup_failed"].assert_called_once_with(4742)
+        self.patches["remove_pr_cleanup_label"].assert_not_called()
+
+    @patch("builtins.print")
+    def test_prints_the_title_and_link_before_doing_anything(self, mock_print):
+        """Prints the PR's title and an openable GitHub link as soon as work starts."""
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
+        printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
+        self.assertIn("Add confirmed findings", printed)
+        self.assertIn("https://github.com/springfall2008/batpred/pull/4742", printed)
 
 
 if __name__ == "__main__":

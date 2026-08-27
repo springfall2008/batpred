@@ -778,7 +778,7 @@ def test_compute_schedule_scheduler_enabled_charge(my_predbat):
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
     # Call compute_schedule (sync wrapper since it's now a regular method)
-    result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify charge schedule was extracted
     assert deviceSN in fox.local_schedule
@@ -825,7 +825,7 @@ def test_compute_schedule_scheduler_enabled_discharge(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify discharge schedule was extracted
     assert deviceSN in fox.local_schedule
@@ -864,7 +864,7 @@ def test_compute_schedule_scheduler_disabled_battery_times(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify charge schedule was created from battery times
     assert deviceSN in fox.local_schedule
@@ -921,7 +921,7 @@ def test_compute_schedule_both_charge_and_discharge(my_predbat):
     fox.device_settings[deviceSN] = {"MinSocOnGrid": {"value": 10}}
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
-    result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify both schedules were extracted
     assert "charge" in fox.local_schedule[deviceSN]
@@ -973,7 +973,7 @@ def test_compute_schedule_no_enabled_windows(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify no charge or discharge schedules were created
     assert "charge" not in fox.local_schedule[deviceSN]
@@ -1013,7 +1013,7 @@ def test_compute_schedule_end_time_midnight(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {"reserve": 10}
 
-    result = asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
+    asyncio.run(FoxAPI.compute_schedule(fox, deviceSN))
 
     # Verify charge schedule with midnight handling
     charge = fox.local_schedule[deviceSN]["charge"]
@@ -1547,7 +1547,7 @@ def test_api_get_device_detail(my_predbat):
         },
     )
 
-    result = asyncio.run(fox.get_device_detail(deviceSN))
+    asyncio.run(fox.get_device_detail(deviceSN))
 
     assert deviceSN in fox.device_detail
     assert fox.device_detail[deviceSN]["deviceType"] == "KH8"
@@ -2311,7 +2311,7 @@ def test_api_set_scheduler(my_predbat):
         }
     ]
 
-    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+    asyncio.run(fox.set_scheduler(deviceSN, groups))
 
     # Verify request was made
     assert len(fox.request_log) == 1
@@ -2336,7 +2336,7 @@ def test_api_set_scheduler_enabled(my_predbat):
 
     fox.set_mock_response("/op/v1/device/scheduler/set/flag", {})
 
-    result = asyncio.run(fox.set_scheduler_enabled(deviceSN, True))
+    asyncio.run(fox.set_scheduler_enabled(deviceSN, True))
 
     # Verify request was made
     assert len(fox.request_log) == 1
@@ -2865,7 +2865,7 @@ def test_api_get_real_time_data(my_predbat):
         ],
     )
 
-    result = asyncio.run(fox.get_real_time_data(deviceSN))
+    asyncio.run(fox.get_real_time_data(deviceSN))
 
     assert deviceSN in fox.device_values
     assert fox.device_values[deviceSN]["pvPower"]["value"] == 3.5
@@ -2893,7 +2893,7 @@ def test_api_get_device_production_year(my_predbat):
         ],
     )
 
-    result = asyncio.run(fox.get_device_production_year(deviceSN))
+    asyncio.run(fox.get_device_production_year(deviceSN))
 
     assert deviceSN in fox.device_production_year
     assert len(fox.device_production_year[deviceSN]) == 3
@@ -2977,7 +2977,7 @@ def test_api_get_device_production_month(my_predbat):
         ],
     )
 
-    result = asyncio.run(fox.get_device_production_year(deviceSN))
+    asyncio.run(fox.get_device_production_year(deviceSN))
 
     assert deviceSN in fox.device_production_year
     assert len(fox.device_production_year[deviceSN]) == 3
@@ -2996,7 +2996,7 @@ def test_api_get_device_power_generation(my_predbat):
 
     fox.set_mock_response("/op/v0/device/generation", {"month": 867.6, "today": 17.7, "cumulative": 5765.7})
 
-    result = asyncio.run(fox.get_device_power_generation(deviceSN))
+    asyncio.run(fox.get_device_power_generation(deviceSN))
 
     assert deviceSN in fox.device_power_generation
     assert fox.device_power_generation[deviceSN]["today"] == 17.7
@@ -3093,7 +3093,7 @@ def test_api_set_scheduler_no_change(my_predbat):
     # Setup existing scheduler with same groups
     fox.device_scheduler[deviceSN] = {"enable": True, "groups": groups.copy()}
 
-    result = asyncio.run(fox.set_scheduler(deviceSN, groups))
+    asyncio.run(fox.set_scheduler(deviceSN, groups))
 
     # Should not have made any API request since schedule is the same
     assert len(fox.request_log) == 0
@@ -3116,7 +3116,7 @@ def test_api_set_scheduler_disable_when_empty(my_predbat):
     fox.set_mock_response("/op/v1/device/scheduler/set/flag", {})
 
     # Call with empty groups
-    result = asyncio.run(fox.set_scheduler(deviceSN, []))
+    asyncio.run(fox.set_scheduler(deviceSN, []))
 
     # Should have called set_scheduler_enabled to disable
     assert len(fox.request_log) == 1
@@ -3157,7 +3157,7 @@ def test_api_get_schedule_settings_ha(my_predbat):
     fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_discharge_power", 5000)
     fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_discharge_enable", "on")
 
-    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.get_schedule_settings_ha(deviceSN))
 
     # Verify reserve was read at top level
     assert fox.local_schedule[deviceSN]["reserve"] == 15
@@ -3197,7 +3197,7 @@ def test_api_get_schedule_settings_ha_defaults(my_predbat):
 
     # Don't set any mock HA states - should use defaults
 
-    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.get_schedule_settings_ha(deviceSN))
 
     # Reserve should default to minSocOnGrid (10) since 0 < 10
     assert fox.local_schedule[deviceSN]["reserve"] == 10
@@ -3238,7 +3238,7 @@ def test_api_get_schedule_settings_ha_reserve_clamped(my_predbat):
     # Set reserve to a value below minSocOnGrid
     fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_reserve", 5)
 
-    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.get_schedule_settings_ha(deviceSN))
 
     # Reserve should be clamped to minSocOnGrid (15), not 5
     assert fox.local_schedule[deviceSN]["reserve"] == 15
@@ -3264,7 +3264,7 @@ def test_api_get_schedule_settings_ha_enable_off(my_predbat):
     fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_charge_enable", "off")
     fox.set_mock_ha_state("switch.predbat_fox_test123456_battery_schedule_discharge_enable", "off")
 
-    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.get_schedule_settings_ha(deviceSN))
 
     # Enable should be 0 for both charge and discharge
     assert fox.local_schedule[deviceSN]["charge"]["enable"] == 0
@@ -3290,7 +3290,7 @@ def test_api_get_schedule_settings_ha_invalid_values(my_predbat):
     # Set invalid numeric value for reserve
     fox.set_mock_ha_state("number.predbat_fox_test123456_battery_schedule_reserve", "invalid")
 
-    result = asyncio.run(fox.get_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.get_schedule_settings_ha(deviceSN))
 
     # Reserve should fall back to minSocOnGrid (10) since invalid value becomes 0, then clamped to 10
     assert fox.local_schedule[deviceSN]["reserve"] == 10
@@ -3331,7 +3331,7 @@ def test_api_publish_schedule_settings_ha(my_predbat):
         },
     }
 
-    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
 
     # Verify reserve entity was published
     reserve_entity = "number.predbat_fox_test123456_battery_schedule_reserve"
@@ -3407,7 +3407,7 @@ def test_api_publish_schedule_settings_ha_no_battery(my_predbat):
     # Setup device without battery
     fox.device_detail[deviceSN] = {"hasBattery": False}
 
-    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
 
     # No dashboard items should have been published
     assert len(fox.dashboard_items) == 0
@@ -3430,7 +3430,7 @@ def test_api_publish_schedule_settings_ha_defaults(my_predbat):
     fox.fdpwr_max[deviceSN] = 8000
     fox.local_schedule[deviceSN] = {}
 
-    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
 
     # Verify reserve defaults to 0
     reserve_entity = "number.predbat_fox_test123456_battery_schedule_reserve"
@@ -3483,7 +3483,7 @@ def test_api_publish_schedule_settings_ha_enable_off(my_predbat):
         },
     }
 
-    result = asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
+    asyncio.run(fox.publish_schedule_settings_ha(deviceSN))
 
     # Verify charge enable is "off"
     charge_enable = "switch.predbat_fox_test123456_battery_schedule_charge_enable"
@@ -3522,7 +3522,7 @@ def test_api_publish_schedule_settings_ha_invalid_time(my_predbat):
         },
     }
 
-    result = run_async(fox.publish_schedule_settings_ha(deviceSN))
+    run_async(fox.publish_schedule_settings_ha(deviceSN))
 
     # Invalid time should be replaced with "00:00:00"
     charge_start = "select.predbat_fox_test123456_battery_schedule_charge_start_time"
@@ -3586,7 +3586,6 @@ class MockFoxAPIWithHTTPSimulation(MockFoxAPIWithRequests):
         # Simulate successful response with potential Fox API errors
         if status_code in [200, 201]:
             errno = response.get("errno", 0)
-            msg = response.get("msg", "")
 
             if errno != 0:
                 self.failures_total += 1
@@ -4306,7 +4305,7 @@ def test_request_get_rate_limiting_prevents_retry(my_predbat):
             return create_aiohttp_mock_session(mock_response)
 
         with patch("fox.aiohttp.ClientSession", side_effect=session_side_effect):
-            with patch("fox.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            with patch("fox.asyncio.sleep", new_callable=AsyncMock):
                 result = run_async(fox.request_get("/op/v0/device/list"))
 
     # Verify NO retry occurred due to rate limiting
@@ -6635,7 +6634,7 @@ def test_fox_rate_limiting_midnight_reset(my_predbat):
     for key in FOX_CACHE_KEYS:
         fox.data_age[key] = day2_time
 
-    with patch("fox.datetime") as mock_datetime, patch.object(fox, "log") as mock_log, patch.object(fox, "should_allow_retry", return_value=True):
+    with patch("fox.datetime") as mock_datetime, patch.object(fox, "log"), patch.object(fox, "should_allow_retry", return_value=True):
         # Mock datetime.now() to return day2_time
         mock_datetime.now.return_value = day2_time
         # Mock datetime.now(timezone.utc) calls inside run()
