@@ -54,6 +54,7 @@ batteryb
 batusecap
 beforeunload
 bierner
+BLAS
 boostable
 brickatius
 byok
@@ -575,6 +576,7 @@ Teslemetry
 testname
 thirdparty
 threadpool
+threadpoolctl
 timea
 timeb
 timec
@@ -617,6 +619,8 @@ unparseable
 unpickled
 unpickles
 unpushed
+unredacted
+unreproduced
 unsmoothed
 unstaged
 untriaged

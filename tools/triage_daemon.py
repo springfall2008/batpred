@@ -188,7 +188,16 @@ _PR_REMOVED_DENIALS = {"Bash(git push*)", "Bash(git commit*)", "Bash(gh pr creat
 # Even though the PR flow can push, force-push variants stay denied - defense in depth
 # against a prompt-injected instruction attempting to rewrite history. Prefix-glob
 # matching can't parse flags, so this is a heuristic, not a guarantee.
-_PR_FORCE_PUSH_DENIALS = ["Bash(git push*--force*)", "Bash(git push*-f*)"]
+#
+# The "-f" entry needs a space on both sides of the flag, not "git push*-f*" - that
+# unanchored form matches "-f" as a substring anywhere in the command, including
+# inside a perfectly ordinary branch name. "git push -u origin
+# fix/power-flow-car-outside-ct-clamp-4788" contains "-flow", which the old pattern
+# read as a force-push flag and denied outright (issue #4788: the branch never made
+# it past a manual push). Anchoring "-f" to its own token still catches "git push -f
+# ...", "git push ... -f" and "--force"/"--force-with-lease", without also catching
+# "-flow", "-fix", "-format" or any other word that merely contains "-f".
+_PR_FORCE_PUSH_DENIALS = ["Bash(git push* --force*)", "Bash(git push* -f)", "Bash(git push* -f *)"]
 DISALLOWED_TOOLS_PR = ",".join([item for item in _DISALLOWED_TOOLS_BASE if item not in _PR_REMOVED_DENIALS] + _PR_FORCE_PUSH_DENIALS)
 # The review and cleanup flows do NOT inherit the broad "Bash(gh *)" grant: with it
 # present, carving a scoped exception out of the gh api denial below would do nothing,
