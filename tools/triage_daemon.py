@@ -810,14 +810,29 @@ def process_bot_review_pr(pr):
     print(f'[review-pr] PR #{pr_number}: "{pr["title"]}" - {pr_url(pr_number)}', flush=True)
     sync_repo()
     reset_scratch()
-    before = pr_review_activity_count(pr_number)
+
+    try:
+        before = pr_review_activity_count(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: failed to sample activity count before review: {exc}", flush=True)
+        mark_pr_review_failed(pr_number, "Unable to sample PR review activity before running the review, so the result could not be verified.")
+        return
+
     try:
         review_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[review-pr] PR #{pr_number}: review failed: {exc}", flush=True)
         mark_pr_review_failed(pr_number)
         return
-    if pr_review_activity_count(pr_number) <= before:
+
+    try:
+        after = pr_review_activity_count(pr_number)
+    except subprocess.CalledProcessError as exc:
+        print(f"[review-pr] PR #{pr_number}: failed to sample activity count after review: {exc}", flush=True)
+        mark_pr_review_failed(pr_number, "The review run finished, but the activity count check failed, so it could not be verified that anything was posted.")
+        return
+
+    if after <= before:
         print(f"[review-pr] PR #{pr_number}: exited cleanly but posted nothing, marking failed", flush=True)
         mark_pr_review_failed(pr_number, "The run exited cleanly but posted nothing, so the review step itself did not complete.")
         return
