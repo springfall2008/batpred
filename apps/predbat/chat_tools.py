@@ -17,14 +17,9 @@ because it needs the conversation the turn belongs to and nothing in this module
 """
 
 import aiohttp
-import asyncio
-import ipaddress
 import json
-import os
 import re
-import socket
-import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -53,14 +48,30 @@ CHAT_TOOL_DEFS = [
     {
         "name": "search_source",
         "description": "Search Predbat's own installed source code with a Python regular expression. This is the exact version that is running. Search first, then read_source the interesting part.",
-        "parameters": {"type": "object", "properties": {"pattern": {"type": "string", "description": "Python regular expression to search for, case-insensitive"}, "file": {"type": "string", "description": "Restrict the search to this file, relative to the install directory (optional)"}, "max_results": {"type": "integer", "description": "Maximum matches to return (default 20, maximum 100)"}}, "required": ["pattern"]},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Python regular expression to search for, case-insensitive"},
+                "file": {"type": "string", "description": "Restrict the search to this file, relative to the install directory (optional)"},
+                "max_results": {"type": "integer", "description": "Maximum matches to return (default 20, maximum 100)"},
+            },
+            "required": ["pattern"],
+        },
         "writes": False,
         "chat_omit_properties": [],
     },
     {
         "name": "read_source",
         "description": "Read a numbered slice of one Predbat source file. Files are large, so read the part search_source pointed at rather than starting at line 1.",
-        "parameters": {"type": "object", "properties": {"file": {"type": "string", "description": "Path relative to the install directory, for example 'plan.py'"}, "start_line": {"type": "integer", "description": "First line to return, 1-based (default 1)"}, "max_lines": {"type": "integer", "description": "Lines to return (default 200, maximum 400)"}}, "required": ["file"]},
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string", "description": "Path relative to the install directory, for example 'plan.py'"},
+                "start_line": {"type": "integer", "description": "First line to return, 1-based (default 1)"},
+                "max_lines": {"type": "integer", "description": "Lines to return (default 200, maximum 400)"},
+            },
+            "required": ["file"],
+        },
         "writes": False,
         "chat_omit_properties": [],
     },
