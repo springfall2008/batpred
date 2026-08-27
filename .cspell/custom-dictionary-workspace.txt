@@ -1,4 +1,5 @@
 # Custom Dictionary Words
+aaaabbbbccccdddd
 activepower
 adata
 adbase
@@ -119,6 +120,7 @@ dateutil
 dayname
 daynumber
 daysymbol
+deadbeefdeadbeef
 dedup
 dedupe
 dend
@@ -611,6 +613,7 @@ unconfigured
 underivable
 undiscounted
 undriven
+unflushed
 unnormalised
 unparseable
 unpickled
