@@ -34,11 +34,59 @@ import time
 PLAN_PASS_WINDOW_BUDGET = 8
 
 
+def available_cpu_count():
+    """Return how many CPUs this process may actually use.
+
+    cpu_count() reports the machine's cores, which is the wrong number inside a container. A Docker
+    --cpus or a Kubernetes CPU limit is a cgroup bandwidth quota, and the host's full core count
+    stays visible through both cpu_count() and sched_getaffinity() - so 'auto' sizes the pool to the
+    host and the CFS scheduler then throttles it. Measured on a Kubernetes pod with a 4-core limit on
+    a 12-core node: cpu_count() reports 12, cpu.max reports "400000 100000", and the pod sat pegged
+    at its quota with twelve lanes contending for four cores.
+
+    Falls back to cpu_count() on bare metal, in a container with no limit set, and on any platform
+    without cgroups, so behaviour outside a constrained container is unchanged.
+    """
+    quota = None
+
+    # cgroup v2: "$MAX $PERIOD", where $MAX is the string "max" when unlimited.
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as handle:
+            field_max, field_period = handle.read().split()
+        if field_max != "max":
+            period = int(field_period)
+            if period > 0:
+                quota = int(field_max) / period
+    except (OSError, ValueError):
+        pass
+
+    # cgroup v1: a quota of -1 means unlimited.
+    if quota is None:
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as handle:
+                cfs_quota = int(handle.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as handle:
+                cfs_period = int(handle.read())
+            if cfs_quota > 0 and cfs_period > 0:
+                quota = cfs_quota / cfs_period
+        except (OSError, ValueError):
+            pass
+
+    host_count = max(cpu_count() or 1, 1)
+    if quota is None:
+        return host_count
+
+    # Round down - a 3.5-core quota sustains three fully-busy lanes - but never below one, and never
+    # above what the host actually has.
+    return max(1, min(host_count, int(quota)))
+
+
 def resolve_batch_threads(threads, cpu_count_value):
     """Map the threads setting onto how many kernel lanes one batch may use.
 
-    'auto' takes the core count and is deliberately not capped. On a fast machine the curve is very
-    flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
+    'auto' takes the usable core count - see available_cpu_count(), which is the host's cores except
+    inside a container with a CPU limit - and is deliberately not capped beyond that. On a fast
+    machine the curve is very flat and peaks slightly below the core count - measured on the 20-scenario benchmark, best of 3:
     serial 26.33s, 4 threads 24.89s, 6 threads 24.71s, 8 threads 24.91s, 16 threads 25.04s - so a cap
     looks attractive. But re-running with each job made eight times dearer, which is how a machine
     where the kernel dominates behaves, the curve stops turning over entirely: 48.92s serial, 32.03s
@@ -1446,7 +1494,7 @@ class Plan:
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
-        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), cpu_count())
+        self.prediction.batch_threads = resolve_batch_threads(self.get_arg("threads", "auto"), available_cpu_count())
         self.log("Prediction batch using {} kernel thread(s)".format(self.prediction.batch_threads))
         kernel_message, kernel_is_warning = kernel_status_summary(self.prediction)
         self.log("{}Prediction kernel: {}".format("Warn: " if kernel_is_warning else "", kernel_message))

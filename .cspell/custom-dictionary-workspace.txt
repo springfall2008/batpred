@@ -219,6 +219,7 @@ generationmix
 generationpower
 geserial
 geseriale
+getaffinity
 getall
 getrusage
 Ginlong
