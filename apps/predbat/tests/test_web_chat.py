@@ -14,6 +14,7 @@ one performs no network I/O, which is the same trick test_web_annual.py uses.
 """
 
 import asyncio
+import json
 
 from aiohttp import web as aiohttp_web
 
@@ -171,6 +172,76 @@ def test_delete_refuses_the_active_conversation(my_predbat):
     return failed
 
 
+def test_history_reads_via_snapshot_not_get_messages(my_predbat):
+    """The history route serves a lock-guarded snapshot, never the live messages list.
+
+    get_messages() hands back the store's live list; serialising that to JSON on the web thread
+    while the component thread is still appending to it is exactly the race snapshot() exists to
+    avoid. Both methods return the same messages here, so asserting only on the returned payload
+    would not catch a regression back to get_messages() - the test also asserts on which store
+    method was actually called.
+    """
+    failed = False
+    print("**** Testing chat history reads via snapshot(), not get_messages() ****")
+
+    calls = []
+    expected_messages = [{"role": "user", "content": "hi"}]
+
+    class RichAgent:
+        """An agent stand-in with a store rich enough to exercise the history success path."""
+
+        active = None
+
+        class store:
+            """A store stand-in recording which read method the handler actually calls."""
+
+            @staticmethod
+            def get_meta(cid):
+                """Resolve the one known conversation."""
+                return {"id": cid, "title": "known", "model": "test-model", "usage_total": {"cost": 0}} if cid == "aaaabbbbccccdddd" else None
+
+            @staticmethod
+            async def snapshot(cid):
+                """Record the call and return the expected transcript - the correct code path."""
+                calls.append("snapshot")
+                return expected_messages
+
+            @staticmethod
+            async def get_messages(cid):
+                """Record the call - taking this path would be the regression under test."""
+                calls.append("get_messages")
+                return expected_messages
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await the coroutine inline, standing in for the real cross-loop marshalling."""
+            return await coro
+
+        @staticmethod
+        def events_since(cursor, conversation_id):
+            """Return no events and cursor 0, as a freshly created conversation would."""
+            return [], 0, False
+
+    page = _make_web(my_predbat, agent=RichAgent()).chat_page
+    response = asyncio.run(page.html_chat_history(FakeRequest(query={"conversation": "aaaabbbbccccdddd"})))
+    if response.status != 200:
+        print("ERROR: history for a known conversation returned {}, expected 200".format(response.status))
+        failed = True
+    body = json.loads(response.text)
+    if body.get("messages") != expected_messages:
+        print("ERROR: history did not return the expected messages: {}".format(body.get("messages")))
+        failed = True
+    if calls != ["snapshot"]:
+        print(
+            "ERROR: history called {} instead of exactly ['snapshot'] - it must read via snapshot(), never get_messages(), because get_messages() hands back the live list the component thread may still be appending to while this request serialises it to JSON".format(
+                calls
+            )
+        )
+        failed = True
+
+    return failed
+
+
 def test_sse_framing(my_predbat):
     """Events are framed with id/event/data lines and JSON-encoded payloads."""
     failed = False
@@ -231,6 +302,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_routes_registered_only_when_enabled(my_predbat)
     failed |= test_send_is_busy_and_unknown_is_404(my_predbat)
     failed |= test_delete_refuses_the_active_conversation(my_predbat)
+    failed |= test_history_reads_via_snapshot_not_get_messages(my_predbat)
     failed |= test_sse_framing(my_predbat)
     failed |= test_markdown_escapes_before_transforming(my_predbat)
     return failed

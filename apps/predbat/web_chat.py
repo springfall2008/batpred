@@ -73,7 +73,9 @@ class WebChat:
         pending = {entry["conversation_id"] for entry in agent.pending_confirm.values()}
         conversations = []
         for meta in agent.store.list_conversations():
-            conversations.append({"id": meta["id"], "title": meta.get("title"), "updated": meta.get("updated"), "message_count": meta.get("message_count", 0), "cost": (meta.get("usage_total") or {}).get("cost", 0), "pending_confirm": meta["id"] in pending})
+            conversations.append(
+                {"id": meta["id"], "title": meta.get("title"), "updated": meta.get("updated"), "message_count": meta.get("message_count", 0), "cost": (meta.get("usage_total") or {}).get("cost", 0), "pending_confirm": meta["id"] in pending}
+            )
         return web.json_response({"conversations": conversations, "active": agent.active, "default_model": agent.default_model})
 
     async def html_chat_create(self, request):
