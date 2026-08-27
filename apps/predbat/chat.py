@@ -310,6 +310,15 @@ class ChatAgent(ComponentBase):
 
         message = {"role": "assistant", "content": content or None}
         if accumulator:
+            # Real OpenAI-compatible providers always send an id, but the invariant that every
+            # stored tool_call_id matches a stored call id must hold by construction, not by the
+            # provider's goodwill - an id-less call would otherwise store as {"id": None, ...},
+            # and downstream code would have to invent a per-call synthetic id anyway. Doing it
+            # once here, keyed on the accumulator's own index, keeps two id-less calls in the same
+            # message distinct instead of colliding on a single turn-wide fallback.
+            for index in accumulator:
+                if not accumulator[index].get("id"):
+                    accumulator[index]["id"] = "call_auto_{}".format(index)
             message["tool_calls"] = [accumulator[index] for index in sorted(accumulator)]
         return message, usage, sources
 
@@ -451,7 +460,10 @@ class ChatAgent(ComponentBase):
                 # events - nothing ran, and the transcript should not suggest otherwise.
                 for call in calls:
                     refused = {"success": False, "error": "Not run: the {} tool call limit for one turn was reached".format(self.max_tool_calls), "data": None}
-                    await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call.get("id") or "call_{}".format(turn_id), "name": (call.get("function") or {}).get("name") or "", "content": json.dumps(refused)})
+                    # call["id"] is guaranteed by _run_completion's normalisation - every stored
+                    # tool_calls entry carries one, real or synthetic - so no turn-wide fallback
+                    # is needed (and one would collide two id-less calls in the same message).
+                    await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call.get("id"), "name": (call.get("function") or {}).get("name") or "", "content": json.dumps(refused)})
                 break
             for call in calls:
                 await self._run_one_tool(conversation_id, turn_id, call)
@@ -463,7 +475,9 @@ class ChatAgent(ComponentBase):
     async def _run_one_tool(self, conversation_id, turn_id, call):
         """Execute one tool call and append its result as a tool message."""
         name = (call.get("function") or {}).get("name") or ""
-        call_id = call.get("id") or "call_{}".format(turn_id)
+        # call["id"] is guaranteed by _run_completion's normalisation, so no turn-wide fallback is
+        # needed here either - see the note beside the refusal loop in _turn_loop.
+        call_id = call.get("id")
         raw = (call.get("function") or {}).get("arguments") or "{}"
         try:
             arguments = json.loads(raw) if raw.strip() else {}

@@ -298,6 +298,20 @@ def _tool_call_response(name, arguments, call_id="call_1"):
     ]
 
 
+def _two_tool_calls_response_without_ids(specs):
+    """Build a chunk list for two tool calls streamed in one message, neither carrying an id.
+
+    Real providers always send an id, but this is exactly the shape the id-normalisation code in
+    _run_completion exists for: an id-less call must not end up unanswerable, and two id-less
+    calls in the same message must not collide onto the same synthetic id.
+    """
+    chunks = []
+    for index, (name, arguments) in enumerate(specs):
+        chunks.append({"choices": [{"delta": {"tool_calls": [{"index": index, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}}]})
+    chunks.append({"choices": [{"delta": {}, "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 20, "completion_tokens": 8, "cost": 0.0004}})
+    return chunks
+
+
 def _dangling_tool_calls(messages):
     """Return a description of every assistant tool_calls left without a matching tool reply.
 
@@ -409,6 +423,49 @@ def test_tool_call_round_trip(my_predbat):
             if expected not in tool_names:
                 print("ERROR: {} was not offered to the model".format(expected))
                 failed = True
+
+    return failed
+
+
+def test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat):
+    """Two id-less tool calls in one message get distinct synthetic ids, and both still run.
+
+    Real OpenAI-compatible providers always send an id, but the invariant that every stored
+    tool_call_id matches a stored call id must hold by construction, not by the provider's
+    goodwill. Without normalisation an id-less call stores as {"id": None, ...}; its reply then
+    falls back to a fallback keyed on the turn rather than the call, which never matches the
+    stored None and - with two id-less calls in one message - collapses both replies onto the
+    same id. Either way the call ends up effectively unanswered, which is the same
+    API-rejection shape the tool-call cap fix closed, on the ordinary round-trip path instead of
+    at the cap.
+    """
+    failed = False
+    print("**** Testing that id-less tool calls get distinct synthetic ids ****")
+    calls = _two_tool_calls_response_without_ids([("get_status", {}), ("get_plan", {})])
+    agent = _agent_with_fake(my_predbat, calls, _text_response("both checked"))
+    cid = asyncio.run(agent.store.create())
+
+    asyncio.run(agent.run_turn(cid, "check status and plan"))
+
+    messages = asyncio.run(agent.store.get_messages(cid))
+    with_calls = [message for message in messages if message.get("role") == "assistant" and message.get("tool_calls")]
+    if not with_calls:
+        print("ERROR: no assistant message with tool_calls was stored: {}".format(messages))
+        return True
+    ids = [call.get("id") for call in with_calls[0]["tool_calls"]]
+    if len(ids) != 2 or any(not call_id for call_id in ids) or len(set(ids)) != 2:
+        print("ERROR: id-less tool calls did not get distinct, non-empty synthetic ids: {}".format(ids))
+        failed = True
+
+    problems = _dangling_tool_calls(messages)
+    if problems:
+        print("ERROR: id-less tool calls left the stored history API-invalid: {}".format(problems))
+        failed = True
+
+    tool_starts = [event for event in agent.events_since(0, cid)[0] if event["type"] == "tool_start"]
+    if len(tool_starts) != 2:
+        print("ERROR: expected both id-less calls to run separately, got {} tool_start event(s) - normalisation may have merged them".format(len(tool_starts)))
+        failed = True
 
     return failed
 
@@ -715,6 +772,7 @@ def run_chat_tests(my_predbat):
     failed |= test_release_stale_turn(my_predbat)
     failed |= test_plain_answer(my_predbat)
     failed |= test_tool_call_round_trip(my_predbat)
+    failed |= test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat)
     failed |= test_tool_call_cap(my_predbat)
     failed |= test_tool_failures_are_results(my_predbat)
     failed |= test_titles(my_predbat)
