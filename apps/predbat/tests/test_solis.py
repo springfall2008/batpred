@@ -61,6 +61,7 @@ class MockSolisAPI(SolisAPI):
         # No wall-clock pause in tests; the settle re-read itself is asserted by the tests that
         # care about it, and every other test would just be waiting for nothing.
         self.verify_settle_seconds = 0
+        self.mode_asserted_for = {}
         self.control_enable = True
         self.inverter_sn = []
 
@@ -1407,6 +1408,9 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_a_write_that_never_verifies_is_still_a_failure())
         failed |= asyncio.run(test_is_inside_active_window())
         failed |= asyncio.run(test_slot_registers_are_re_read_while_a_window_is_live())
+        failed |= asyncio.run(test_active_window_key_identifies_the_window_in_force())
+        failed |= asyncio.run(test_the_storage_mode_is_re_asserted_when_a_window_opens())
+        failed |= asyncio.run(test_a_window_rewritten_mid_flight_gets_its_own_mode_assertion())
         failed |= asyncio.run(test_get_solis_mode_enum())
         failed |= asyncio.run(test_compute_solis_mode_value())
         failed |= asyncio.run(test_get_solis_mode_enum_compute_roundtrip())
@@ -4735,6 +4739,138 @@ async def test_slot_registers_are_re_read_while_a_window_is_live():
 
     if not failed:
         print("PASSED: slot registers are re-read every 5 minutes while a window is live")
+    return failed
+
+
+async def test_active_window_key_identifies_the_window_in_force():
+    """Issue #4774: name the window that is running, so one window can be told from the next.
+
+    The identity carries the slot and its times, because Predbat rewrites slot 1 while a window is
+    running when the plan moves - the 23:30-23:45 window in the report became 00:00-01:30 - and
+    that has to count as a new window rather than the one already seen.
+    """
+    failed = False
+    print("\n=== Test: active_window_key identifies the window in force ===")
+
+    inverter_sn = "INV001"
+    api = MockSolisAPI()
+    api.inverter_sn = [inverter_sn]
+    api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
+
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 25, tzinfo=api.local_tz)
+    if api.active_window_key(inverter_sn) is not None:
+        print("ERROR: expected no window before it opens, got {}".format(api.active_window_key(inverter_sn)))
+        failed = True
+
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 35, tzinfo=api.local_tz)
+    first_key = api.active_window_key(inverter_sn)
+    if first_key is None:
+        print("ERROR: expected a window key inside the window")
+        failed = True
+
+    # Steady inside the same window
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 40, tzinfo=api.local_tz)
+    if api.active_window_key(inverter_sn) != first_key:
+        print("ERROR: expected the same key throughout one window, got {} then {}".format(first_key, api.active_window_key(inverter_sn)))
+        failed = True
+
+    # The plan moves the window while it is running
+    api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "00:00", "charge_end_time": "01:30"}}
+    api._test_now_utc_exact = datetime(2026, 8, 26, 0, 10, tzinfo=api.local_tz)
+    if api.active_window_key(inverter_sn) == first_key:
+        print("ERROR: expected a rewritten window to get its own key")
+        failed = True
+
+    if not failed:
+        print("PASSED: active_window_key identifies the window in force")
+    return failed
+
+
+async def test_the_storage_mode_is_re_asserted_when_a_window_opens():
+    """Issue #4774: write CID 636 once when a window comes into force, even if it already matches.
+
+    The V1 control path chooses its mode from the clock, so the mode value changes at the moment a
+    window opens and CID 636 is written there anyway. The V2 path chooses from slot1_active, which
+    is "slot 1 has a window configured" - Predbat's intent, not the time - so the mode is written
+    when the slot is programmed and then nothing happens at the window boundary at all. On the
+    reported night the last CID 636 write was at 23:08 and the window opened at 23:30 with no write
+    anywhere near it. Assert it once per window so V2 matches V1.
+    """
+    failed = False
+    print("\n=== Test: the storage mode is re-asserted when a window opens ===")
+
+    inverter_sn = "6031052254150188"
+    # Already in the value V2 computes, so nothing but the window open can trigger a write.
+    api = _StorageModeInverter(register=33)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33", SOLIS_CID_TOU_V2_MODE: "43605"}
+    api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
+
+    # Slot programmed, window not yet open: the mode already matches, so nothing is written.
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 25, tzinfo=api.local_tz)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes:
+        print("ERROR: expected no write before the window opens, got {}".format(api.writes))
+        failed = True
+
+    # Window opens: assert the mode even though it equals the cache.
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 30, tzinfo=api.local_tz)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes != [33]:
+        print("ERROR: expected one mode write when the window opened, got {}".format(api.writes))
+        failed = True
+
+    # Still the same window: asserted once, not every cycle.
+    for minute in (35, 40):
+        api._test_now_utc_exact = datetime(2026, 8, 25, 23, minute, tzinfo=api.local_tz)
+        await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes != [33]:
+        print("ERROR: expected the assertion to happen once per window, got {}".format(api.writes))
+        failed = True
+
+    # Window over, then the same times come round again the next night: a new window, asserted again.
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 50, tzinfo=api.local_tz)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    api._test_now_utc_exact = datetime(2026, 8, 26, 23, 30, tzinfo=api.local_tz)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+    if api.writes != [33, 33]:
+        print("ERROR: expected the next night's window to be asserted too, got {}".format(api.writes))
+        failed = True
+
+    if not failed:
+        print("PASSED: the storage mode is re-asserted once when a window opens")
+    return failed
+
+
+async def test_a_window_rewritten_mid_flight_gets_its_own_mode_assertion():
+    """Issue #4774: a window whose times move while it is running is a new window.
+
+    This is the case that demonstrably worked in the report - charging began only after the plan
+    rewrote slot 1 at 00:01 to a window that was already in progress - so it must not be mistaken
+    for the window already asserted for.
+    """
+    failed = False
+    print("\n=== Test: a window rewritten mid-flight gets its own mode assertion ===")
+
+    inverter_sn = "6031052254150188"
+    api = _StorageModeInverter(register=33)
+    api.inverter_sn = [inverter_sn]
+    api.cached_values[inverter_sn] = {SOLIS_CID_STORAGE_MODE: "33", SOLIS_CID_TOU_V2_MODE: "43605"}
+    api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "23:45"}}
+
+    api._test_now_utc_exact = datetime(2026, 8, 25, 23, 35, tzinfo=api.local_tz)
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+
+    # The plan moves slot 1 to a window that is already in progress.
+    api.charge_discharge_time_windows[inverter_sn] = {1: {"charge_enable": 1, "charge_start_time": "23:30", "charge_end_time": "01:30"}}
+    await api.set_storage_mode_if_needed(inverter_sn, "Self-Use")
+
+    if api.writes != [33, 33]:
+        print("ERROR: expected the rewritten window to be asserted as well, got {}".format(api.writes))
+        failed = True
+
+    if not failed:
+        print("PASSED: a window rewritten mid-flight gets its own mode assertion")
     return failed
 
 

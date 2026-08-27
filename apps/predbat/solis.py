@@ -422,6 +422,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slots_reset = set()  # Track which inverters had slots reset
         self.capacity_voltage_warned = set()  # Inverters already warned about an estimated capacity voltage
         self.verify_settle_seconds = SOLIS_VERIFY_SETTLE_SECONDS  # Pause before a verify read is re-taken, 0 in tests
+        self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
 
         self.log(f"Solis API: Initialised with inverter_sn={self.configured_inverter_sn}, automatic={automatic}")
 
@@ -2552,7 +2553,11 @@ class SolisAPI(ComponentBase, OAuthMixin):
             # produces a write that reads back without it (issues #4707, #4774)
             mode_value = compute_solis_mode_value(mode_enum, cached_mode, drop_tou_bit=self.is_tou_v2_mode(inverter_sn))
 
-            if cached_mode != mode_value:
+            # Claimed unconditionally so the claim is spent by whichever write happens this cycle,
+            # rather than being held over and asserting again later in the same window
+            assert_for_window = self.claim_window_mode_assertion(inverter_sn)
+
+            if cached_mode != mode_value or assert_for_window:
                 await self.set_storage_mode_value(inverter_sn, mode_value)
 
         except Exception as e:
@@ -3123,27 +3128,68 @@ class SolisAPI(ComponentBase, OAuthMixin):
             self.log(f"Warn: Solis API failed to load details for {sn}: {e}")
             return False
 
-    def is_inside_active_window(self, inverter_sn):
-        """True when local time falls inside a charge or discharge window Predbat has configured.
+    def active_window_key(self, inverter_sn):
+        """Identify the charge or discharge window Predbat has configured for right now.
 
         Read from charge_discharge_time_windows, which is what Predbat asked for, rather than from
         the register cache - the point of asking is to find out whether the inverter still agrees.
+
+        The identity carries the slot and its times, so a window rewritten while it is running -
+        which Predbat does whenever the plan moves - is a different window from the one before it.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns: A key identifying the window in force, or None when there is not one
+        """
+        # Local time, to match the windows Predbat writes (as the V1 control path does)
+        current_time = self.now_utc_exact.strftime("%H:%M")
+        for slot, slot_data in self.charge_discharge_time_windows.get(inverter_sn, {}).items():
+            if not slot_data:
+                continue
+            charge_start = slot_data.get("charge_start_time", "00:00")
+            charge_end = slot_data.get("charge_end_time", "00:00")
+            if slot_data.get("charge_enable", 0) and time_in_window(current_time, charge_start, charge_end):
+                return (slot, "charge", charge_start, charge_end)
+            discharge_start = slot_data.get("discharge_start_time", "00:00")
+            discharge_end = slot_data.get("discharge_end_time", "00:00")
+            if slot_data.get("discharge_enable", 0) and time_in_window(current_time, discharge_start, discharge_end):
+                return (slot, "discharge", discharge_start, discharge_end)
+        return None
+
+    def is_inside_active_window(self, inverter_sn):
+        """True when local time falls inside a charge or discharge window Predbat has configured.
 
         Args:
             inverter_sn: Inverter serial number
 
         Returns: True when a configured window is in force right now
         """
-        # Local time, to match the windows Predbat writes (as the V1 control path does)
-        current_time = self.now_utc_exact.strftime("%H:%M")
-        for slot_data in self.charge_discharge_time_windows.get(inverter_sn, {}).values():
-            if not slot_data:
-                continue
-            if slot_data.get("charge_enable", 0) and time_in_window(current_time, slot_data.get("charge_start_time", "00:00"), slot_data.get("charge_end_time", "00:00")):
-                return True
-            if slot_data.get("discharge_enable", 0) and time_in_window(current_time, slot_data.get("discharge_start_time", "00:00"), slot_data.get("discharge_end_time", "00:00")):
-                return True
-        return False
+        return self.active_window_key(inverter_sn) is not None
+
+    def claim_window_mode_assertion(self, inverter_sn):
+        """True once for each window that comes into force, so the storage mode is re-asserted there.
+
+        The V1 control path picks its mode from the clock, so the value changes as a window opens
+        and CID 636 is written at the boundary as a matter of course. The V2 path picks from
+        slot1_active - whether slot 1 has a window configured at all - so the mode is written when
+        the slot is programmed and nothing happens when the window actually starts. On the night in
+        issue #4774 the last CID 636 write was 22 minutes before the window opened.
+
+        Args:
+            inverter_sn: Inverter serial number
+
+        Returns: True when this window has not been asserted for yet
+        """
+        window = self.active_window_key(inverter_sn)
+        if window is None:
+            # Outside a window, so the next one to start is a fresh claim even if its times repeat
+            self.mode_asserted_for.pop(inverter_sn, None)
+            return False
+        if self.mode_asserted_for.get(inverter_sn) == window:
+            return False
+        self.mode_asserted_for[inverter_sn] = window
+        return True
 
     def is_tou_v2_mode(self, sn):
         """
