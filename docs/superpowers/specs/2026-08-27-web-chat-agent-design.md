@@ -1,7 +1,14 @@
 # Predbat Web Chat Agent — Design
 
 Date: 2026-08-27
-Status: Awaiting review
+Status: Approved for implementation planning
+
+**Prerequisite:** this design assumes the nine-tool MCP surface from PR #4775
+(`feat/mcp-log-and-apps-redaction-4768`) — `get_log`, `get_state`, and `get_apps` with its
+`masked` argument, plus `is_secret_key` and `DEBUG_EXCLUDE_LIST` in `utils.py`. On `main` there
+are seven tools and `_execute_get_apps` returns `self.base.args` verbatim with no redaction at
+all, which would send every credential to a third-party model. `feat/web-chat-agent` is
+therefore branched from #4775 and rebases onto `main` once that merges.
 
 ## 1. Purpose
 
