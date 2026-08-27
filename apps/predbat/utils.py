@@ -99,6 +99,44 @@ class MinuteArray:
         return new
 
 
+# Predbat member variables never included in a debug dump or served over MCP - live object
+# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+DEBUG_EXCLUDE_LIST = [
+    "ha_interface",
+    "components",
+    "prediction",
+    "logfile",
+    "predheat",
+    "inverters",
+    "run_list",
+    "threads",
+    "EVENT_LISTEN_LIST",
+    "local_tz",
+    "CONFIG_ITEMS",
+    "config_index",
+    "comparison",
+    "plugin_system",
+    "ge_url_cache",
+    "github_url_cache",
+    "octopus_url_cache",
+    "secrets",
+]
+
+
+def is_debug_excluded_key(key):
+    """
+    Return True when a Predbat member variable must be kept out of a debug dump or state query.
+
+    The "db" prefix drops the database internals and "_key" drops credentials; both predate
+    is_secret_key(), which is applied on top so secrets and tokens are caught here too (#4768).
+    """
+    if key.startswith("__") or key.startswith("db"):
+        return True
+    if key in DEBUG_EXCLUDE_LIST:
+        return True
+    return is_secret_key(key)
+
+
 def is_secret_key(key):
     """
     Return True when an apps.yaml key name looks like it holds a credential.

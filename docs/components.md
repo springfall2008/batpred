@@ -189,6 +189,7 @@ Example usage in VSCode
 | `get_config` | Every Predbat setting, with its current value and its default |
 | `get_apps` | Your `apps.yaml` configuration, with credentials redacted |
 | `get_log` | Lines from `predbat.log`, filtered by level, search term and age |
+| `get_state` | Predbat's internal state variables - the same data a debug yaml carries |
 | `get_entities` | All Predbat entities and their states |
 | `set_config` | Change a Predbat setting |
 | `set_plan_override` | Override the plan for one 30 minute period |
@@ -209,9 +210,26 @@ look wrong"*, or *"find the warnings in the last 24 hours of my log and explain 
 | `hours` | Only return lines written in the last N hours |
 | `max_lines` | How many lines to return, most recent first (default 500, maximum 5000) |
 
-`get_apps` redacts credential-like values (anything whose name contains `_key`, `password`,
-`secret` or `token`) and replaces them with `xxx`, so your API keys are not sent to your AI
-provider. Pass `masked: false` if you deliberately want the raw values.
+`get_state` exposes the same internal state a `predbat_debug.yaml` carries, but a variable at a
+time rather than as a 5MB file. Called with no arguments it returns every variable small enough
+to be worth reading - a few hundred of them, together well under a page - and *describes* the
+handful of large ones (the per-minute series such as `load_minutes`, `rate_import` and
+`pv_today`) in an `omitted` section giving each one's type, length and value range. Ask for one
+of those by name with `keys`, narrow by name with `filter`, or raise the per-variable budget
+with `max_bytes`.
+
+| Argument | Description |
+| -------- | ----------- |
+| `keys` | Specific variable names to return (omit for every small variable) |
+| `filter` | Only return variables whose name matches this Python regex |
+| `max_bytes` | Per-variable size budget before a value is described instead of returned (default 2048, maximum 262144) |
+
+`get_state` and `get_apps` both redact credentials. `get_apps` replaces credential-like values
+(anything whose name contains `_key`, `password`, `secret` or `token`) with `xxx`, so your API
+keys are not sent to your AI provider; pass `masked: false` if you deliberately want the raw
+values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
+return anything a debug dump would not - credentials, the Home Assistant interface, loaded
+secrets and the URL caches are not reachable through it at all.
 
 ---
 

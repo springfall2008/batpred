@@ -20,7 +20,7 @@ import asyncio
 import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
-from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp
+from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key
 import re
 from aiohttp import web
 import secrets
@@ -49,6 +49,97 @@ LOG_FILTER_TYPES = ("all", "info", "warnings", "errors")
 # the cap stops a "max_lines": 999999 request pulling a 10MB log through the protocol (#4768)
 MCP_LOG_DEFAULT_LINES = 500
 MCP_LOG_MAX_LINES = 5000
+
+
+# get_state size guards. A real debug dump is ~5MB, but 272 of its 313 top-level keys are under
+# 1KB and total under 10KB between them - the whole scalar state of Predbat. The per-key budget
+# returns those freely while the handful of per-minute series (load_minutes, rate_import, ...)
+# are described rather than serialised (#4768).
+MCP_STATE_DEFAULT_MAX_BYTES = 2048
+MCP_STATE_MAX_BYTES_LIMIT = 262144
+MCP_STATE_TOTAL_BYTES_LIMIT = 262144
+
+# Collections longer than this are summarised without serialising them first - measuring a 2880
+# entry per-minute dict by encoding it would cost more than the tool call is worth.
+MCP_STATE_LARGE_COLLECTION = 200
+
+# How many entries of a large collection to show in its summary
+MCP_STATE_SAMPLE_ENTRIES = 3
+
+
+def json_safe_value(value, depth=0):
+    """
+    Convert a Predbat state value into something json.dumps can encode.
+
+    Tool results are serialised with a plain json.dumps, so a stray datetime or inverter object
+    would fail the whole call - anything unrecognised becomes its str() rather than an error.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if depth >= 6:
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_safe_value(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe_value(item, depth + 1) for item in value]
+    return str(value)
+
+
+def summarise_state_value(value):
+    """
+    Describe a state value that is too large to return in full, so the caller can still see its
+    shape and decide whether to ask for it another way.
+    """
+    summary = {"type": type(value).__name__}
+    try:
+        summary["length"] = len(value)
+    except TypeError:
+        pass
+
+    if isinstance(value, dict):
+        keys = list(value.keys())[:MCP_STATE_SAMPLE_ENTRIES]
+        summary["sample_keys"] = [str(key) for key in keys]
+        numbers = [item for item in value.values() if isinstance(item, (int, float)) and not isinstance(item, bool)]
+    elif isinstance(value, (list, tuple, set)):
+        numbers = [item for item in value if isinstance(item, (int, float)) and not isinstance(item, bool)]
+        summary["sample_entries"] = [json_safe_value(item, depth=5) for item in list(value)[:MCP_STATE_SAMPLE_ENTRIES]]
+    elif isinstance(value, str):
+        summary["preview"] = value[:200]
+        numbers = []
+    else:
+        numbers = []
+
+    if numbers:
+        summary["min"] = min(numbers)
+        summary["max"] = max(numbers)
+        summary["mean"] = sum(numbers) / len(numbers)
+
+    return summary
+
+
+def measure_state_value(value, max_bytes):
+    """
+    Return (fits, safe_value, size_bytes) for a state value.
+
+    fits is a separate flag rather than a None safe_value because plenty of Predbat state is
+    legitimately None, and a None sentinel would report every one of those as omitted.
+
+    Long collections are rejected on their entry count alone so the per-minute series are never
+    serialised just to discover they don't fit.
+    """
+    if isinstance(value, (dict, list, tuple, set)) and len(value) > MCP_STATE_LARGE_COLLECTION:
+        return False, None, None
+    safe = json_safe_value(value)
+    try:
+        size = len(json.dumps(safe))
+    except (TypeError, ValueError):
+        safe = str(value)
+        size = len(safe) + 2
+    if size > max_bytes:
+        return False, None, None
+    return True, safe, size
 
 
 def parse_bool_argument(value, default=False):
@@ -1112,6 +1203,81 @@ class MCPServerWrapper:
         except Exception as e:
             return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
 
+    async def _execute_get_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_state tool"""
+        try:
+            requested = arguments.get("keys", None)
+            if isinstance(requested, str):
+                requested = [requested]
+            if requested is not None and not isinstance(requested, list):
+                return {"success": False, "error": "'keys' must be a list of state variable names", "data": None}
+
+            key_filter = arguments.get("filter", None)
+            max_bytes = int(arguments.get("max_bytes", MCP_STATE_DEFAULT_MAX_BYTES))
+            max_bytes = max(1, min(max_bytes, MCP_STATE_MAX_BYTES_LIMIT))
+
+            state = {}
+            omitted = {}
+            total_bytes = 0
+            budget_exhausted = False
+            unknown_keys = []
+
+            # Snapshot the key list up front - the plan thread can add attributes while we walk it
+            available = list(self.base.__dict__.keys())
+            if requested is not None:
+                unknown_keys = [key for key in requested if key not in available]
+                candidates = [key for key in requested if key in available]
+            else:
+                candidates = available
+
+            for key in candidates:
+                # Same filter the debug yaml uses, so this can never return what a debug dump won't
+                if is_debug_excluded_key(key):
+                    continue
+                if key_filter and not re.search(key_filter, key):
+                    continue
+                try:
+                    value = self.base.__dict__[key]
+                except KeyError:
+                    continue
+                if callable(value):
+                    continue
+                if key == "args":
+                    value = mask_secret_args(value)
+
+                fits, safe, size = measure_state_value(value, max_bytes)
+                if not fits:
+                    # Too large to return, but say what it is so the caller isn't guessing
+                    omitted[key] = summarise_state_value(value)
+                    continue
+                if total_bytes + size > MCP_STATE_TOTAL_BYTES_LIMIT:
+                    budget_exhausted = True
+                    omitted[key] = summarise_state_value(value)
+                    continue
+                state[key] = safe
+                total_bytes += size
+
+            data = {
+                "state": state,
+                "omitted": omitted,
+                "returned_keys": len(state),
+                "omitted_keys": len(omitted),
+                "approx_bytes": total_bytes,
+                "max_bytes": max_bytes,
+            }
+            if unknown_keys:
+                data["unknown_keys"] = unknown_keys
+
+            description = "Predbat internal state - {} variables returned".format(len(state))
+            if omitted:
+                description += ", {} described in 'omitted' instead of being returned in full (ask for one by name, or raise max_bytes)".format(len(omitted))
+            if budget_exhausted:
+                description += ". The overall response budget was reached, so narrow the request with 'keys' or 'filter'"
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving state data: {str(e)}", "data": None}
+
     async def _execute_get_log(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_log tool"""
         try:
@@ -1318,6 +1484,19 @@ class MCPServerWrapper:
                     },
                 },
                 {
+                    "name": "get_state",
+                    "description": "Get Predbat's internal state variables - the same data a debug yaml carries, one key at a time. Called with no arguments it returns every small variable and describes the large ones (per-minute series) without returning them.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "keys": {"type": "array", "items": {"type": "string"}, "description": "Specific state variable names to return (optional - omit for every small variable)"},
+                            "filter": {"type": "string", "description": "Only return variables whose name matches this Python regex (optional)"},
+                            "max_bytes": {"type": "integer", "description": "Per-variable size budget before it is described rather than returned (default {}, maximum {})".format(MCP_STATE_DEFAULT_MAX_BYTES, MCP_STATE_MAX_BYTES_LIMIT)},
+                        },
+                        "required": [],
+                    },
+                },
+                {
                     "name": "get_log",
                     "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors",
                     "inputSchema": {
@@ -1381,6 +1560,8 @@ class MCPServerWrapper:
                 result = await self._execute_get_config(arguments)
             elif tool_name == "get_log":
                 result = await self._execute_get_log(arguments)
+            elif tool_name == "get_state":
+                result = await self._execute_get_state(arguments)
             elif tool_name == "get_entities":
                 result = await self._execute_get_entities(arguments)
             elif tool_name == "set_config":

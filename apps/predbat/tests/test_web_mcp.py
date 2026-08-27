@@ -24,8 +24,20 @@ from datetime import datetime, timedelta
 import web
 import web_mcp
 from web import WebInterface
-from web_mcp import MCPServerWrapper, LOG_FILTER_TYPES, MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES, parse_bool_argument
-from utils import mask_secret_args, is_secret_key, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp
+from web_mcp import (
+    MCPServerWrapper,
+    LOG_FILTER_TYPES,
+    MCP_LOG_DEFAULT_LINES,
+    MCP_LOG_MAX_LINES,
+    parse_bool_argument,
+    json_safe_value,
+    summarise_state_value,
+    measure_state_value,
+    MCP_STATE_DEFAULT_MAX_BYTES,
+    MCP_STATE_LARGE_COLLECTION,
+    MCP_STATE_MAX_BYTES_LIMIT,
+)
+from utils import mask_secret_args, is_secret_key, is_debug_excluded_key, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp
 
 
 class FakeRequest:
@@ -415,6 +427,289 @@ def test_mcp_get_log(my_predbat):
     return failed
 
 
+class FakeBase:
+    """A stand-in for the PredBat instance, carrying only the attributes get_state walks."""
+
+    def __init__(self, log_func):
+        """Populate a mix of small, large, excluded and awkward state variables."""
+        self.log = log_func
+        self.prefix = "predbat"
+        self.plan_interval_minutes = 30
+
+        # Small scalars - the bulk of a real dump, and what get_state exists to return
+        self.current_status = "Charging"
+        self.soc_max = 9.52
+        self.num_cars = 1
+        self.carbon_enable = False
+        self.charge_limit_best = [9.52, 4.0]
+
+        # A per-minute series - too long to serialise, must be described instead
+        self.load_minutes = {minute: minute * 0.01 for minute in range(2880)}
+
+        # Short but bulky - rejected on byte size rather than entry count
+        self.html_plan = "x" * (MCP_STATE_DEFAULT_MAX_BYTES + 500)
+
+        # Values a plain json.dumps would choke on
+        self.midnight_utc = datetime(2026, 8, 27, 0, 0, 0)
+        self.inverter_object = object()
+
+        # Legitimately-None state - a great deal of Predbat's is, so None must not double as
+        # the "too large to return" sentinel
+        self.plan_last_updated = None
+        self.previous_status = None
+        self.empty_dict = {}
+
+        # Must never be returned: credentials and live object graphs
+        self.ha_key = "ha-key-value"
+        self.mcp_secret = "mcp-secret-value"
+        self.solis_access_token = "solis-token-value"
+        self.ha_interface = object()
+        self.components = object()
+        self.octopus_url_cache = {"https://example.invalid": "cached"}
+        self.db_connection = object()
+        self.args = {"ha_key": "ha-key-value", "battery_rate_max_charge": 3.0}
+
+    def is_running(self):
+        """Callables are skipped by get_state - present so that path is exercised."""
+        return True
+
+
+def test_state_value_helpers(my_predbat):
+    """json_safe_value coerces anything json.dumps would reject, and summarise_state_value
+    describes a value's shape well enough to decide whether to ask for it.
+    """
+    failed = False
+    print("**** Testing get_state value helpers ****")
+
+    safe = json_safe_value({"when": datetime(2026, 8, 27, 9, 0, 0), "nested": [1, {"deep": object()}], "ok": 2.5, "flag": True})
+    try:
+        json.dumps(safe)
+    except TypeError as error:
+        print("  ERROR: json_safe_value left a value json.dumps cannot encode: {}".format(error))
+        failed = True
+    if safe["when"] != "2026-08-27T09:00:00":
+        print("  ERROR: expected a datetime to become an ISO string, got {!r}".format(safe["when"]))
+        failed = True
+    if safe["ok"] != 2.5 or safe["flag"] is not True:
+        print("  ERROR: plain values should pass through untouched, got {!r}".format(safe))
+        failed = True
+
+    print("Test: deeply nested values stop recursing rather than blowing the stack")
+    deep = {}
+    node = deep
+    for _ in range(40):
+        node["next"] = {}
+        node = node["next"]
+    try:
+        json.dumps(json_safe_value(deep))
+    except (TypeError, ValueError, RecursionError) as error:
+        print("  ERROR: deep nesting was not handled: {}".format(error))
+        failed = True
+
+    print("Test: a numeric series is summarised with its range")
+    summary = summarise_state_value({minute: float(minute) for minute in range(1000)})
+    if summary.get("type") != "dict" or summary.get("length") != 1000:
+        print("  ERROR: expected a dict of 1000 entries, got {}".format(summary))
+        failed = True
+    if summary.get("min") != 0.0 or summary.get("max") != 999.0:
+        print("  ERROR: expected min/max over the values, got {}".format(summary))
+        failed = True
+    if len(summary.get("sample_keys", [])) != 3:
+        print("  ERROR: expected three sample keys, got {}".format(summary.get("sample_keys")))
+        failed = True
+
+    print("Test: measure_state_value reports fit separately from the value itself")
+    fits, safe, size = measure_state_value(None, MCP_STATE_DEFAULT_MAX_BYTES)
+    if not fits or safe is not None or size != len("null"):
+        print("  ERROR: None should fit and come back as None, got fits={} safe={!r} size={}".format(fits, safe, size))
+        failed = True
+    fits, safe, _ = measure_state_value({minute: minute for minute in range(MCP_STATE_LARGE_COLLECTION + 1)}, MCP_STATE_DEFAULT_MAX_BYTES)
+    if fits or safe is not None:
+        print("  ERROR: a long collection should not fit, got fits={}".format(fits))
+        failed = True
+    fits, _, _ = measure_state_value("z" * (MCP_STATE_DEFAULT_MAX_BYTES + 1), MCP_STATE_DEFAULT_MAX_BYTES)
+    if fits:
+        print("  ERROR: an oversized string should not fit")
+        failed = True
+
+    print("Test: a long string is summarised with a preview, not its full contents")
+    summary = summarise_state_value("y" * 5000)
+    if summary.get("length") != 5000 or len(summary.get("preview", "")) != 200:
+        print("  ERROR: expected a 200 character preview of a 5000 character string, got {}".format({k: v for k, v in summary.items() if k != "preview"}))
+        failed = True
+
+    return failed
+
+
+def test_debug_excluded_keys(my_predbat):
+    """The state query and the debug yaml share one exclusion filter, so a variable that never
+    reaches a debug dump can't be read over MCP either.
+    """
+    failed = False
+    print("**** Testing is_debug_excluded_key ****")
+
+    for key in ["ha_interface", "components", "secrets", "octopus_url_cache", "github_url_cache", "inverters", "CONFIG_ITEMS", "logfile"]:
+        if not is_debug_excluded_key(key):
+            print("  ERROR: expected {} to be excluded".format(key))
+            failed = True
+
+    print("Test: credentials are excluded via the shared secret matcher, including secrets and tokens")
+    for key in ["ha_key", "octopus_api_key", "mcp_secret", "solis_access_token", "deye_password"]:
+        if not is_debug_excluded_key(key):
+            print("  ERROR: expected the credential {} to be excluded".format(key))
+            failed = True
+
+    print("Test: database internals and double-underscore names are excluded by prefix")
+    for key in ["db_connection", "db_manage", "__class__"]:
+        if not is_debug_excluded_key(key):
+            print("  ERROR: expected {} to be excluded by prefix".format(key))
+            failed = True
+
+    print("Test: ordinary diagnostic state is not excluded")
+    for key in ["soc_max", "charge_limit_best", "load_minutes", "current_status", "dashboard_values", "solis_token_expires_at"]:
+        if is_debug_excluded_key(key):
+            print("  ERROR: expected {} to be readable".format(key))
+            failed = True
+
+    return failed
+
+
+def test_mcp_get_state(my_predbat):
+    """get_state returns the small variables, describes the large ones instead of returning them,
+    honours keys/filter/max_bytes, and never leaks a credential or a live object graph (#4768).
+    """
+    failed = False
+    print("**** Testing MCP get_state ****")
+
+    mcp = _make_mcp(my_predbat)
+    mcp.base = FakeBase(my_predbat.log)
+
+    print("Test: with no arguments the small variables come back and the big ones are described")
+    result, _ = _call_tool(mcp, "get_state")
+    if not result.get("success"):
+        print("  ERROR: get_state failed: {}".format(result.get("error")))
+        return True
+    data = result["data"]
+    state, omitted = data["state"], data["omitted"]
+
+    for key in ["current_status", "soc_max", "num_cars", "carbon_enable", "charge_limit_best"]:
+        if key not in state:
+            print("  ERROR: expected the small variable {} to be returned".format(key))
+            failed = True
+    if state.get("soc_max") != 9.52 or state.get("carbon_enable") is not False:
+        print("  ERROR: small values came back altered: {!r}".format({k: state.get(k) for k in ["soc_max", "carbon_enable"]}))
+        failed = True
+
+    print("Test: None-valued state is returned as null, not reported as omitted")
+    for key in ["plan_last_updated", "previous_status"]:
+        if key in omitted:
+            print("  ERROR: {} is None, not too large - it must not be listed as omitted".format(key))
+            failed = True
+        if key not in state or state[key] is not None:
+            print("  ERROR: expected {} to come back as null, got {!r}".format(key, state.get(key)))
+            failed = True
+    if "empty_dict" not in state or state["empty_dict"] != {}:
+        print("  ERROR: expected an empty collection to be returned, got {!r}".format(state.get("empty_dict")))
+        failed = True
+
+    print("Test: a per-minute series is described, not returned")
+    if "load_minutes" in state:
+        print("  ERROR: the 2880 entry series should not have been returned in full")
+        failed = True
+    if omitted.get("load_minutes", {}).get("length") != 2880:
+        print("  ERROR: expected load_minutes to be described with its length, got {}".format(omitted.get("load_minutes")))
+        failed = True
+    if "max" not in omitted.get("load_minutes", {}):
+        print("  ERROR: expected a numeric summary for load_minutes, got {}".format(omitted.get("load_minutes")))
+        failed = True
+
+    print("Test: a bulky string is rejected on size even though it is a single value")
+    if "html_plan" in state or "html_plan" not in omitted:
+        print("  ERROR: expected html_plan to be described rather than returned")
+        failed = True
+
+    print("Test: credentials and live object graphs never appear, in state or in omitted")
+    for key in ["ha_key", "mcp_secret", "solis_access_token", "ha_interface", "components", "octopus_url_cache", "db_connection"]:
+        if key in state or key in omitted:
+            print("  ERROR: excluded key {} was exposed".format(key))
+            failed = True
+    blob = json.dumps(data)
+    for secret in ["ha-key-value", "mcp-secret-value", "solis-token-value"]:
+        if secret in blob:
+            print("  ERROR: the secret {!r} leaked into the response".format(secret))
+            failed = True
+
+    print("Test: args is masked if it is returned at all")
+    if "args" in state and state["args"].get("ha_key") != "xxx":
+        print("  ERROR: expected args to be masked, got {!r}".format(state.get("args")))
+        failed = True
+
+    print("Test: values json.dumps could not encode are coerced rather than failing the call")
+    if state.get("midnight_utc") != "2026-08-27T00:00:00":
+        print("  ERROR: expected the datetime to be returned as an ISO string, got {!r}".format(state.get("midnight_utc")))
+        failed = True
+    if not isinstance(state.get("inverter_object"), str):
+        print("  ERROR: expected an opaque object to become a string, got {!r}".format(state.get("inverter_object")))
+        failed = True
+
+    print("Test: methods are skipped")
+    if "is_running" in state or "is_running" in omitted:
+        print("  ERROR: callables should not be reported as state")
+        failed = True
+
+    print("Test: keys= returns just those variables, and reports the ones that don't exist")
+    result, _ = _call_tool(mcp, "get_state", {"keys": ["soc_max", "num_cars", "not_a_real_key"]})
+    data = result["data"]
+    if sorted(data["state"].keys()) != ["num_cars", "soc_max"]:
+        print("  ERROR: expected only the two named keys, got {}".format(sorted(data["state"].keys())))
+        failed = True
+    if data.get("unknown_keys") != ["not_a_real_key"]:
+        print("  ERROR: expected the unknown key to be reported back, got {}".format(data.get("unknown_keys")))
+        failed = True
+
+    print("Test: a single key may be given as a bare string")
+    result, _ = _call_tool(mcp, "get_state", {"keys": "soc_max"})
+    if list(result["data"]["state"].keys()) != ["soc_max"]:
+        print("  ERROR: expected a bare string key to work, got {}".format(result["data"]["state"]))
+        failed = True
+
+    print("Test: asking for an excluded key by name still refuses it")
+    result, _ = _call_tool(mcp, "get_state", {"keys": ["ha_key", "mcp_secret", "ha_interface"]})
+    data = result["data"]
+    if data["state"] or data["omitted"]:
+        print("  ERROR: naming an excluded key explicitly must not return it, got {}".format(data))
+        failed = True
+
+    print("Test: filter narrows by variable name")
+    result, _ = _call_tool(mcp, "get_state", {"filter": "^charge_"})
+    if list(result["data"]["state"].keys()) != ["charge_limit_best"]:
+        print("  ERROR: expected only charge_ variables, got {}".format(list(result["data"]["state"].keys())))
+        failed = True
+
+    print("Test: raising max_bytes lets a previously omitted value through")
+    result, _ = _call_tool(mcp, "get_state", {"keys": ["html_plan"], "max_bytes": MCP_STATE_DEFAULT_MAX_BYTES + 2000})
+    if "html_plan" not in result["data"]["state"]:
+        print("  ERROR: expected html_plan to fit once max_bytes was raised")
+        failed = True
+
+    print("Test: max_bytes cannot be raised past the protocol cap, and a long series still won't fit")
+    result, _ = _call_tool(mcp, "get_state", {"keys": ["load_minutes"], "max_bytes": MCP_STATE_MAX_BYTES_LIMIT * 100})
+    if result["data"]["max_bytes"] != MCP_STATE_MAX_BYTES_LIMIT:
+        print("  ERROR: expected max_bytes to be clamped to the cap, got {}".format(result["data"]["max_bytes"]))
+        failed = True
+    if "load_minutes" in result["data"]["state"]:
+        print("  ERROR: a {} entry collection should be refused on entry count regardless of max_bytes".format(MCP_STATE_LARGE_COLLECTION))
+        failed = True
+
+    print("Test: a non-list keys argument is rejected with a clear error")
+    result, _ = _call_tool(mcp, "get_state", {"keys": {"soc_max": True}})
+    if result.get("success") or "keys" not in (result.get("error") or ""):
+        print("  ERROR: expected an error naming the bad argument, got {}".format(result))
+        failed = True
+
+    return failed
+
+
 def test_mcp_tools_list(my_predbat):
     """get_log is advertised by tools/list with a usable schema, and tools/call routes to it."""
     failed = False
@@ -427,6 +722,21 @@ def test_mcp_tools_list(my_predbat):
     if "get_log" not in by_name:
         print("  ERROR: get_log is missing from tools/list")
         return True
+    if "get_state" not in by_name:
+        print("  ERROR: get_state is missing from tools/list")
+        return True
+
+    state_schema = by_name["get_state"]["inputSchema"]
+    for prop in ["keys", "filter", "max_bytes"]:
+        if prop not in state_schema["properties"]:
+            print("  ERROR: get_state schema is missing the {} property".format(prop))
+            failed = True
+    if state_schema["properties"]["keys"].get("type") != "array":
+        print("  ERROR: get_state keys should be declared as an array")
+        failed = True
+    if state_schema.get("required"):
+        print("  ERROR: get_state should have no required arguments")
+        failed = True
 
     schema = by_name["get_log"]["inputSchema"]
     for prop in ["filter", "search", "hours", "max_lines"]:
@@ -514,6 +824,9 @@ def run_web_mcp_tests(my_predbat):
     failed |= test_log_filter_helpers(my_predbat)
     failed |= test_mcp_get_apps(my_predbat)
     failed |= test_mcp_get_log(my_predbat)
+    failed |= test_state_value_helpers(my_predbat)
+    failed |= test_debug_excluded_keys(my_predbat)
+    failed |= test_mcp_get_state(my_predbat)
     failed |= test_mcp_tools_list(my_predbat)
     failed |= test_web_api_log_unchanged(my_predbat)
     return failed
