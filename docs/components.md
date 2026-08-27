@@ -11,6 +11,7 @@ This document provides a comprehensive overview of all Predbat components, their
     - [Home Assistant History (ha_history)](#home-assistant-history-ha_history)
     - [Web Interface (web)](#web-interface-web)
     - [MCP Server (mcp)](#mcp-server-mcp)
+    - [AI Chat Agent (chat)](#ai-chat-agent-chat)
     - [GivEnergy Cloud Direct (gecloud)](#givenergy-cloud-direct-gecloud)
     - [GivEnergy Cloud Data (gecloud_data)](#givenergy-cloud-data-gecloud_data)
     - [Octopus Energy Direct (octopus)](#octopus-energy-direct-octopus)
@@ -230,6 +231,94 @@ keys are not sent to your AI provider; pass `masked: false` if you deliberately 
 values. `get_state` applies the same rule *and* the debug yaml's exclusion list, so it can never
 return anything a debug dump would not - credentials, the Home Assistant interface, loaded
 secrets and the URL caches are not reachable through it at all.
+
+---
+
+### AI Chat Agent (chat)
+
+**Can be restarted:** Yes
+
+#### What it does (chat)
+
+Adds a Chat tab to the web interface, backed by a large language model served through
+[OpenRouter](https://openrouter.ai). The model can call the same read-only tools the MCP server
+exposes, plus a handful of chat-only tools for searching Predbat's documentation and its own
+installed source code, and can propose the same two write actions MCP has - each one held for
+your approval before it runs. See [the Chat tab](web-interface.md#chat-view) for how to use it
+day to day.
+
+#### When to enable (chat)
+
+- You want a conversational way to ask about your Predbat setup, without running an MCP client
+- You are comfortable with log lines and configuration being sent to a third-party AI provider
+- You have (or are willing to create) an OpenRouter account and API key
+
+#### Security note (chat)
+
+***CAUTION*** The web UI has **no authentication** of its own. Anyone who can reach port 5052 can
+open the Chat tab, read every saved conversation, and spend your OpenRouter credit - the same
+caution about exposing the web/MCP port outside your home network applies here, more so.
+
+- Tool results - including log lines and configuration - are sent to OpenRouter, and on to
+  whichever provider serves the model you selected. `get_apps` always redacts credential-like
+  values before they leave; unlike MCP, chat cannot ask for the unmasked `masked: false` form.
+- Conversations are stored on disk and expire after `chat_expiry_days` of inactivity. Deleting a
+  conversation hides it immediately, but Predbat's storage layer has no delete operation -
+  deletion is a flag, not a removal - so **its stored copy remains readable to anyone with
+  filesystem access until it expires**.
+- The agent can read its own installed source (`search_source`, `read_source`), but the allowlist
+  is by file extension, not by directory: `apps.yaml`, `secrets.yaml`, `predbat.log` and cached
+  OAuth tokens can all sit in the same directory as the source being searched. `get_apps` and
+  `get_log` are the only routes to that content, and both redact and filter what they return.
+- `chat_web_search` costs roughly $0.001-0.015 per request. It is an OpenRouter-only plugin - if
+  `openrouter_base_url` points somewhere else it is silently not sent, and a warning is logged
+  once.
+- `fetch_url` can only reach a small allowlist of hosts (the Predbat docs site and GitHub). This
+  is deliberate, not a limitation to work around.
+
+#### Configuration Options (chat)
+
+| Option | Type | Required | Default | Config Key | Description |
+| ------ | ---- | -------- | ------- | ---------- | ----------- |
+| `api_key` | String | Yes | - | `openrouter_api_key` | Your OpenRouter API key. Together with `openrouter_model`, this is what enables the component - there is no separate `chat_enable` setting |
+| `model` | String | Yes | - | `openrouter_model` | The OpenRouter model id to use by default, e.g. `openai/gpt-4o-mini` |
+| `base_url` | String | No | `https://openrouter.ai/api/v1` | `openrouter_base_url` | Chat-completions endpoint. Point it at another OpenAI-compatible endpoint if you want one, but doing so disables the OpenRouter-only web search plugin |
+| `max_tokens` | Integer | No | 0 | `openrouter_max_tokens` | Maximum tokens per completion; `0` leaves it to the model/provider's own default |
+| `max_tool_calls` | Integer | No | 8 | `chat_max_tool_calls` | Maximum tool calls allowed within one turn before Predbat stops and asks you to continue |
+| `max_history` | Integer | No | 40 | `chat_max_history` | Maximum recent messages sent to the model each turn, trimmed at a user-message boundary so a tool call and its reply are never split apart. Bounds cost, not how much of the conversation is stored |
+| `max_conversations` | Integer | No | 20 | `chat_max_conversations` | Maximum conversations kept; the least recently updated are pruned once you go over this |
+| `expiry_days` | Integer | No | 30 | `chat_expiry_days` | Days of inactivity before a conversation's stored copy expires |
+| `turn_timeout` | Integer | No | 180 | `chat_turn_timeout` | Seconds a single reply is allowed to run before Predbat stops it |
+| `fetch_allowlist` | List | No | `springfall2008.github.io`, `github.com`, `raw.githubusercontent.com` | `chat_fetch_allowlist` | Hosts `fetch_url` is allowed to reach. Replaces the default list rather than adding to it |
+
+Two switches also control the chat agent, both found under [Config](web-interface.md#config-view):
+
+| Entity | Default | Description |
+| ------ | ------- | ----------- |
+| `switch.predbat_chat_confirm_writes` | On | Hold every `set_config` and `set_plan_override` call for your Approve/Reject before it runs |
+| `switch.predbat_chat_web_search` | Off | Let the model search the web through OpenRouter's plugin - costs money per request, see above |
+
+#### Available tools (chat)
+
+Nine tools are shared with the [MCP server](#mcp-server-mcp) - see
+[its tool table](#available-commands-mcp) above for what each one returns or does:
+
+`get_status`, `get_plan`, `get_config`, `get_apps`, `get_log`, `get_state`, `get_entities`,
+`set_config`, `set_plan_override`
+
+`set_config` and `set_plan_override` are the two that write. With `switch.predbat_chat_confirm_writes`
+on (the default), each one pauses in the transcript for your Approve or Reject before it runs,
+showing the tool name and the exact arguments the model wants to call it with.
+
+Five more tools only exist in chat:
+
+| Tool | What it returns or does |
+| ---- | ------------------------ |
+| `set_chat_title` | Sets the conversation's title - the agent calls this itself, early in a new conversation |
+| `search_docs` | Searches the published Predbat documentation, returning matching pages with links and excerpts (up to 10 results) |
+| `search_source` | Searches Predbat's own installed source code - the exact version that is running - with a Python regular expression. Covers `.py`, `.cpp`, `.h`, `.hpp`, `.proto`, `.sh` and `.md` files only (up to 100 matches, five-second scan budget) |
+| `read_source` | Reads a numbered slice of one source file found by `search_source` (up to 400 lines at a time) |
+| `fetch_url` | Fetches a web page as text, restricted to the hosts in `fetch_allowlist` |
 
 ---
 

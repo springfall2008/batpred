@@ -127,6 +127,44 @@ The Compare View provides access to Predbat's [Compare Energy Tariff feature](co
 
 ![image](images/web-interface-compare-view.png)
 
+### Chat View
+
+The Chat tab only appears once the [AI Chat Agent component](components.md#ai-chat-agent-chat) is
+configured with an `openrouter_api_key` and `openrouter_model`. It gives you a conversational way
+to ask about your Predbat setup, backed by a large language model served through OpenRouter.
+
+A banner across the top of the page is a standing reminder that tool results - including log
+lines and configuration - are sent to OpenRouter and on to whichever provider serves the selected
+model; dismissing it only hides it for that browser session. Read the
+[chat component's security note](components.md#security-note-chat) before enabling the feature -
+in particular, the web interface has no login of its own, so anyone who can reach it can use the
+chat and read every saved conversation.
+
+The sidebar lists your saved conversations, newest first, each showing when it was last updated
+and its running cost; click **+ New chat** to start another, click a conversation to switch to it,
+and click the &#10005; next to one to delete it. Deleting hides a conversation immediately, but its
+stored copy is not removed - it remains on disk until it ages out after `chat_expiry_days` of
+inactivity, the same as any conversation you have not touched.
+
+Only one reply runs at a time across the whole installation - not just per conversation - so the
+composer locks itself while a reply is in progress, whichever conversation it belongs to, and a
+banner names the conversation that is busy.
+
+If the model wants to change a setting or override the plan, and
+`switch.predbat_chat_confirm_writes` is on (the default), it does not run immediately: a
+confirmation card appears in the transcript showing the tool name and the exact arguments it wants
+to call it with, and the turn waits for you to **Approve** or **Reject** it. Turn the switch off
+if you would rather the agent act without asking first.
+
+A model picker under the message box lets you choose a different model for that one conversation,
+overriding the `openrouter_model` configured in `apps.yaml`; leaving it on "Default model" uses
+the configured one. If OpenRouter's model catalogue cannot be fetched, only the configured model
+is offered.
+
+Beside the model picker, Predbat shows the token usage and cost of the turn that just completed,
+and the running total cost for the whole conversation - both come from OpenRouter's own reported
+pricing for the model in use.
+
 ### Log View
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so the Log view provides an easy way to see and download the Predbat logfile.
