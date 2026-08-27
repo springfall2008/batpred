@@ -477,7 +477,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         try:
             timestamp_key = str2time(key)
             oldest_date = min(oldest_date, timestamp_key)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             continue
 
         value = data[key]
@@ -520,7 +520,6 @@ def minute_data(
     adata = {}
     io_adjusted = {}
     newest_state = 0
-    prev_state = 0
     newest_age = 999999
 
     # Bounds on the data we store
@@ -674,7 +673,6 @@ def minute_data(
 
         if minutes < newest_age:
             newest_age = minutes
-            prev_state = newest_state
             newest_state = state
 
         # Power to Energy

@@ -817,7 +817,6 @@ class Prediction(PredictionBatch):
             # Iboost
             iboost_rate_okay = True
             iboost_amount = 0
-            iboost_freeze = False
 
             # IBoost energy rate control
             if self.iboost_enable:
@@ -852,7 +851,6 @@ class Prediction(PredictionBatch):
 
                 # Freeze discharge on iboost
                 if iboost_amount > 0 and self.iboost_prevent_discharge and set_charge_window:
-                    iboost_freeze = True
                     discharge_rate_now = battery_rate_min  # 0
 
                 # Iboost running

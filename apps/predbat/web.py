@@ -4623,7 +4623,6 @@ chart.render();
             from components import COMPONENT_LIST
 
             component_info = COMPONENT_LIST.get(component_name, {})
-            component = self.base.components.get_component(component_name)
             is_alive = self.base.components.is_alive(component_name)
             can_restart = self.base.components.can_restart(component_name)
             is_active = component_name in active_components
@@ -5597,7 +5596,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 

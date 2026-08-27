@@ -570,7 +570,6 @@ class UserInterface:
 
         if enable:
             enabled_value = self.get_arg(enable, default=False)
-            citem = self.config_index.get(enable, None)
             if enable_condition:
                 # Evaluate the condition in python
                 try:

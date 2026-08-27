@@ -385,6 +385,7 @@ class PredbatMCPServer(ComponentBase):
                 # Try to decode without verification to see what's in the token (for debugging)
                 try:
                     unverified = pyjwt.decode(token, options={"verify_signature": False})
+                    self.log(f"MCP: Token claims (unverified): {unverified}")
                 except Exception as e2:
                     self.log(f"MCP: Could not even decode without verification: {e2}")
 
@@ -883,7 +884,6 @@ class PredbatMCPServer(ComponentBase):
         """Handle authorization_code grant type"""
         code = data.get("code")
         client_id = data.get("client_id")
-        client_secret = data.get("client_secret")
         redirect_uri = data.get("redirect_uri")
         code_verifier = data.get("code_verifier")  # For PKCE
         resource = data.get("resource")  # RECOMMENDED by MCP spec (RFC 8707)
