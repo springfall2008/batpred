@@ -229,6 +229,22 @@ def test_release_stale_turn(my_predbat):
         print("ERROR: a turn with no 'started' timestamp was released - this must be the safe (untouched) direction")
         failed = True
 
+    # Strictly between turn_timeout (30) and turn_timeout + STALE_TURN_GRACE_SECONDS (90): past the
+    # bare timeout but still within its grace period. A dropped "+ STALE_TURN_GRACE_SECONDS" term
+    # would release this turn; the correct comparison must not. This is a different boundary from
+    # the "just started" case above, not a duplicate of it - it is the one that actually exercises
+    # the grace period rather than merely the timeout.
+    agent.active = {"turn_id": 4, "started": time.monotonic() - (agent.turn_timeout + STALE_TURN_GRACE_SECONDS / 2)}
+    events_before = len(agent.events)
+    agent._release_stale_turn()
+    if agent.active is None:
+        print("ERROR: a turn within its grace period (past timeout, not past timeout+grace) was released")
+        failed = True
+    new_events = agent.events[events_before:]
+    if any(event["type"] == "idle" and event["conversation_id"] is None for event in new_events):
+        print("ERROR: a turn within its grace period emitted an idle event, got {}".format(new_events))
+        failed = True
+
     events_before = len(agent.events)
     agent.active = {"turn_id": 3, "started": time.monotonic() - (agent.turn_timeout + STALE_TURN_GRACE_SECONDS + 5)}
     agent._release_stale_turn()
