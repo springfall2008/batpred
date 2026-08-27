@@ -253,6 +253,10 @@ def get_chat_styles():
     --chat-input-bg: #ffffff;
     --chat-code-bg: #ececec;
     --chat-badge-bg: #ff9800;
+    --chat-banner-bg: #fff3cd;
+    --chat-banner-border: #ffe08a;
+    --chat-banner-text: #664d03;
+    --chat-error-text: #c62828;
 }
 
 body.dark-mode {
@@ -268,6 +272,10 @@ body.dark-mode {
     --chat-input-bg: #2b2b2b;
     --chat-code-bg: #262626;
     --chat-badge-bg: #b96a00;
+    --chat-banner-bg: #4d3c00;
+    --chat-banner-border: #8a6d00;
+    --chat-banner-text: #ffe08a;
+    --chat-error-text: #ff6b6b;
 }
 
 #chat-page {
@@ -380,9 +388,9 @@ body.dark-mode {
 
 #chat-banner {
     display: none;
-    background: #fff3cd;
-    border: 1px solid #ffe08a;
-    color: #664d03;
+    background: var(--chat-banner-bg);
+    border: 1px solid var(--chat-banner-border);
+    color: var(--chat-banner-text);
     padding: 8px 12px;
     border-radius: 4px;
     margin-bottom: 8px;
@@ -510,7 +518,7 @@ body.dark-mode {
 }
 
 .chat-tool-error {
-    color: #c62828;
+    color: var(--chat-error-text);
 }
 
 .chat-tool-elapsed {
@@ -934,9 +942,10 @@ function resolveConfirmCard(data) {
         return;
     }
     card.innerHTML = '';
+    var verb = data.approved ? 'Approved' : 'Rejected';
     var heading = document.createElement('div');
     heading.className = 'chat-confirm-heading';
-    heading.innerHTML = data.approved ? 'Approved <code>' + escapeHtml(data.name || '') + '</code>' : 'Rejected <code>' + escapeHtml(data.name || '') + '</code>';
+    heading.innerHTML = verb + ' <code>' + escapeHtml(data.name || '') + '</code>';
     card.appendChild(heading);
     var outcome = document.createElement('div');
     outcome.className = 'chat-confirm-outcome';
@@ -1084,10 +1093,57 @@ function renderHistory(payload) {
 
 function on(source, type, handler) {
     source.addEventListener(type, function (event) {
+        // Every SSE frame carries its buffer position as `id:`, delivered here as lastEventId - so
+        // state.cursor always reflects what has actually been seen, not just what the URL was
+        // opened with. This is what lets a client-driven reconnect (below) resume from the live
+        // position instead of replaying the whole buffer.
         if (event.lastEventId) {
             state.cursor = Number(event.lastEventId) || state.cursor;
         }
         handler(event.data ? JSON.parse(event.data) : {});
+    });
+}
+
+function scheduleReconnect(conversationId) {
+    // A short delay before reopening, so a server that is genuinely down does not produce a tight
+    // reconnect loop. Re-checked against current state when it fires, in case the browser has since
+    // switched conversations or another reconnect already succeeded in the meantime.
+    setTimeout(function () {
+        if (state.conversation === conversationId && !state.source) {
+            openStream();
+        }
+    }, 1000);
+}
+
+function attachConnectionHandling(source) {
+    // 'error' is dispatched for two unrelated things on the same EventSource: a genuine
+    // `event: error` SSE frame from the server (a chat-turn failure, which arrives as a proper
+    // MessageEvent with `data`), and, confusingly, a native browser-level event with no `data` at
+    // all when the connection itself drops. Only the first is a chat error to show the user.
+    source.addEventListener('error', function (event) {
+        if (typeof event.data === 'string') {
+            if (event.lastEventId) {
+                state.cursor = Number(event.lastEventId) || state.cursor;
+            }
+            handleError(JSON.parse(event.data));
+            return;
+        }
+        // No data: the connection dropped (a WiFi blip, laptop sleep/wake, a backgrounded tab).
+        // readyState === CONNECTING means the browser is about to retry on its own, but it would
+        // retry against the exact URL this EventSource was constructed with - a cursor frozen at
+        // whatever it was when the stream first opened - and the server only ever reads that query
+        // parameter, never the Last-Event-ID header the browser also sends. Left alone, that retry
+        // replays every event since the connection first opened, not just the ones actually missed
+        // (a replayed tool_start recreates an already-resolved tool row that never receives its
+        // tool_end). Taking over here rebuilds the URL from the live, continuously-advanced cursor
+        // instead.
+        if (source.readyState === EventSource.CONNECTING) {
+            source.close();
+            if (state.source === source) {
+                state.source = null;
+            }
+            scheduleReconnect(state.conversation);
+        }
     });
 }
 
@@ -1109,11 +1165,11 @@ function openStream() {
     on(source, 'confirm_result', resolveConfirmCard);
     on(source, 'usage', renderUsageEvent);
     on(source, 'title', handleTitle);
-    on(source, 'error', handleError);
     on(source, 'done', handleDone);
     on(source, 'busy', function (data) { setBusy(data.conversation_id, data.title); });
     on(source, 'idle', function () { setIdle(); });
     on(source, 'reload', function () { handleReload(); });
+    attachConnectionHandling(source);
     state.source = source;
 }
 

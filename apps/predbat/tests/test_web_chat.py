@@ -15,6 +15,7 @@ one performs no network I/O, which is the same trick test_web_annual.py uses.
 
 import asyncio
 import json
+import re
 
 from aiohttp import web as aiohttp_web
 
@@ -374,31 +375,133 @@ def test_chat_page_assembles_real_content(my_predbat):
     return failed
 
 
-def test_sources_and_tool_output_are_escaped():
-    """Web-search sources and tool call arguments/results reach the DOM only via an escape path.
+def _extract_inner_html_assignments(script):
+    """Return the right-hand side of every ``.innerHTML = ...;`` assignment in the script."""
+    return re.findall(r"\.innerHTML\s*=\s*([^;]+);", script)
 
-    Both are untrusted: a url_citation title or URL comes back from a web search, and tool
-    arguments/results can carry arbitrary text a prior tool call fetched from the web. This walks
-    the code around every place data.sources, call arguments and tool previews are turned into
-    markup and requires escapeHtml (directly, or via renderMarkdown which itself escapes first)
-    to appear nearby - it is not proof of correctness, but it does fail if one of those sinks
-    starts string-concatenating raw text into innerHTML.
+
+def _inner_html_rhs_is_safe(rhs):
+    """Return whether an innerHTML right-hand side can only ever insert escaped/trusted content.
+
+    Allow-listed: an empty-string clear, a bare ``renderMarkdown(...)`` call (renderMarkdown itself
+    escapes first - covered separately by test_markdown_escapes_before_transforming), or a literal
+    built from string constants and ``escapeHtml(...)`` calls. Everything else is checked for a
+    dotted property read (``data.name``, ``message.content``, ``source.title``, ...) surviving
+    outside both of those forms - that shape is how every piece of untrusted data in this client
+    actually arrives (an SSE event payload, a history message, a tool result), so a bare local
+    variable (no dot) is allowed through without needing to special-case it by name.
+    """
+    rhs = rhs.strip()
+    if rhs in ("''", '""'):
+        return True
+    if re.fullmatch(r"renderMarkdown\(.*\)", rhs):
+        return True
+    working = re.sub(r"'(?:[^'\\]|\\.)*'", "SAFE", rhs)
+    working = re.sub(r"escapeHtml\([^()]*\)", "SAFE", working)
+    return re.search(r"[A-Za-z_$][\w$]*\.[A-Za-z_$]", working) is None
+
+
+def test_inner_html_sinks_only_ever_receive_escaped_content(my_predbat):
+    """Every innerHTML sink in the client is a clear, renderMarkdown output, or escaped literal.
+
+    Unlike a proximity scan (which would still pass if a sink's own escaping were removed, as long
+    as an unrelated escapeHtml/renderMarkdown/textContent happened to sit nearby in the file), this
+    is anchored to each sink's own right-hand side - so it fails the moment one of them starts
+    concatenating a raw property read into innerHTML.
     """
     failed = False
-    print("**** Testing that sources and tool call text are escaped before rendering ****")
+    print("**** Testing every innerHTML sink is escaped or renderMarkdown-derived ****")
     script = web_chat.get_chat_script()
-    for marker in ["sources", "arguments", "preview"]:
-        index = script.find(marker)
-        seen = False
-        while index >= 0:
-            window = script[max(0, index - 300) : index + 300]
-            if "escapeHtml(" in window or "renderMarkdown(" in window or "textContent" in window:
-                seen = True
-                break
-            index = script.find(marker, index + 1)
-        if not seen:
-            print("ERROR: could not find an escapeHtml/renderMarkdown/textContent guard near any use of {!r}".format(marker))
+    assignments = _extract_inner_html_assignments(script)
+    if not assignments:
+        print("ERROR: found no .innerHTML assignments to audit - has the sink pattern changed?")
+        return True
+    for rhs in assignments:
+        if not _inner_html_rhs_is_safe(rhs):
+            print("ERROR: an innerHTML assignment is not provably escaped: {!r}".format(rhs.strip()))
             failed = True
+    return failed
+
+
+def _extract_function_body(script, name):
+    """Return a top-level JS function's body, found by counting braces from its signature.
+
+    A regex alone cannot reliably find where a function ends without understanding nesting;
+    counting braces from the first ``{`` after the signature until the count returns to zero
+    handles that, which is all that is needed here - none of these functions embed a brace inside
+    a string literal.
+    """
+    match = re.search(r"function\s+{}\s*\([^)]*\)\s*\{{".format(re.escape(name)), script)
+    if not match:
+        return None
+    depth = 1
+    index = match.end()
+    start = index
+    while index < len(script) and depth > 0:
+        if script[index] == "{":
+            depth += 1
+        elif script[index] == "}":
+            depth -= 1
+        index += 1
+    return script[start : index - 1]
+
+
+def test_stream_cursor_advances_from_every_event(my_predbat):
+    """The SSE dispatcher advances state.cursor from each event's lastEventId.
+
+    This is what lets a client-driven reconnect resume from the position actually seen, instead of
+    the browser's own automatic retry reopening the exact URL the stream was first constructed
+    with - which would replay everything since the connection originally opened, not just what was
+    missed. Anchored to the on(source, type, handler) dispatcher's own body, not a scan of the
+    whole file, so it fails if that assignment is moved out of the dispatcher or removed.
+
+    This is a static check on the source text, not an executed one - the repository's test
+    infrastructure has no JavaScript runtime to run the client script against. The full
+    cursor-advance-then-reconnect behaviour (including that a genuine `event: error` SSE frame is
+    told apart from a dropped connection) was verified by hand with a stubbed EventSource under
+    Node, on the machine that wrote this fix - see the task report; that verification does not run
+    as part of this suite.
+    """
+    failed = False
+    print("**** Testing the SSE cursor advances from every event's lastEventId ****")
+    script = web_chat.get_chat_script()
+    body = _extract_function_body(script, "on")
+    if body is None:
+        print("ERROR: could not find the on(source, type, handler) dispatcher to inspect")
+        return True
+    if "event.lastEventId" not in body or "state.cursor" not in body:
+        print("ERROR: the SSE dispatcher no longer advances state.cursor from event.lastEventId: {!r}".format(body))
+        failed = True
+    return failed
+
+
+def test_dropped_connection_is_told_apart_from_a_real_error_frame(my_predbat):
+    """The reconnect handler only takes over for a dropped connection, never a real error frame.
+
+    'error' is dispatched on the same EventSource for two unrelated things: a genuine
+    `event: error` SSE frame from the server (a chat-turn failure, arriving with `data`) and a
+    native browser event when the connection itself drops (no `data` at all). Rebuilding the
+    stream is only correct for the second case - doing it for the first would tear down a healthy
+    connection every time a chat turn merely failed. This checks the reconnect body is actually
+    gated on the presence of `data`, not just present somewhere in the file.
+    """
+    failed = False
+    print("**** Testing the reconnect handler is gated on a data-less (dropped-connection) event ****")
+    script = web_chat.get_chat_script()
+    body = _extract_function_body(script, "attachConnectionHandling")
+    if body is None:
+        print("ERROR: could not find attachConnectionHandling() to inspect")
+        return True
+    if "typeof event.data" not in body and "event.data ===" not in body and "event.data !==" not in body:
+        print("ERROR: the reconnect handler does not appear to branch on whether the event carries data: {!r}".format(body))
+        failed = True
+    if "EventSource.CONNECTING" not in body:
+        print("ERROR: the reconnect handler does not check readyState against EventSource.CONNECTING")
+        failed = True
+    reconnect_body = _extract_function_body(script, "scheduleReconnect")
+    if reconnect_body is None or "openStream" not in reconnect_body:
+        print("ERROR: scheduleReconnect() does not appear to call openStream()")
+        failed = True
     return failed
 
 
@@ -414,5 +517,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_nav_link_visibility(my_predbat)
     failed |= test_client_script_contract(my_predbat)
     failed |= test_chat_page_assembles_real_content(my_predbat)
-    failed |= test_sources_and_tool_output_are_escaped()
+    failed |= test_inner_html_sinks_only_ever_receive_escaped_content(my_predbat)
+    failed |= test_stream_cursor_advances_from_every_event(my_predbat)
+    failed |= test_dropped_connection_is_told_apart_from_a_real_error_frame(my_predbat)
     return failed
