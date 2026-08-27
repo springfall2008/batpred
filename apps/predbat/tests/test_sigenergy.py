@@ -1867,6 +1867,54 @@ def test_sigenergy_fetch_inverter_realtime(my_predbat):
     return failed
 
 
+def test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback(my_predbat):
+    """Regression test for #4663: realtimeInfo spells PV power "pVPower" (capital V), not the
+    natural-looking "pvPower" read by the code before the fix - which silently defaulted PV to 0
+    forever. Covers the fallback chain pVPower -> pvTotalPower -> pvPower in priority order."""
+    failed = False
+
+    def _fetch_pv(realtime_info):
+        api = MockSigenergyAPI()
+        api.access_token = "fake_token"
+        api.token_expires_at = 9_999_999_999
+        api._last_request_time = 0
+        api.devices["SYS1"] = [{"deviceType": "Inverter", "serialNumber": "INV001"}]
+
+        fake_response = {
+            "code": 0,
+            "data": {
+                "systemId": "SYS1",
+                "serialNumber": "INV001",
+                "deviceType": "Inverter",
+                "realTimeInfo": realtime_info,
+            },
+        }
+        mock_response = _make_mock_response(status=200, json_data=fake_response)
+        mock_session = _make_mock_session(mock_response)
+        with patch("sigenergy.aiohttp.ClientSession", return_value=mock_session):
+            ok = run_async(api.fetch_inverter_realtime("SYS1"))
+        assert ok is True, "fetch_inverter_realtime should return True"
+        return api.energy_flow.get("SYS1", {}).get("pvPower")
+
+    # pVPower is primary - used even when the other two spellings are also present and disagree.
+    pv = _fetch_pv({"batSoc": 50.0, "pVPower": 4.66, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.66, "pVPower should be read as the primary PV key, got {}".format(pv)
+
+    # No pVPower - falls back to pvTotalPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvTotalPower": 4.38, "pvPower": 0.0})
+    assert pv == 4.38, "should fall back to pvTotalPower when pVPower is absent, got {}".format(pv)
+
+    # Neither pVPower nor pvTotalPower - falls back to pvPower.
+    pv = _fetch_pv({"batSoc": 50.0, "pvPower": 2.1})
+    assert pv == 2.1, "should fall back to pvPower when the other two are absent, got {}".format(pv)
+
+    # None of the three present - the #4663 regression case: silently stuck at 0, not an error.
+    pv = _fetch_pv({"batSoc": 50.0})
+    assert pv == 0.0, "should read 0.0, not error, when no PV key is present at all, got {}".format(pv)
+
+    return failed
+
+
 def test_sigenergy_fetch_energy_flow(my_predbat):
     """Test fetch_energy_flow negates the raw batteryPower to Predbat convention.
 
@@ -3011,6 +3059,7 @@ def run_sigenergy_tests(my_predbat):
         ("mqtt_listener_loop", test_sigenergy_mqtt_listener_loop),
         ("mqtt_listener_loop_ignores_other_systems", test_sigenergy_mqtt_listener_loop_ignores_other_systems),
         ("fetch_inverter_realtime", test_sigenergy_fetch_inverter_realtime),
+        ("fetch_inverter_realtime_pv_power_key_fallback", test_sigenergy_fetch_inverter_realtime_pv_power_key_fallback),
         ("fetch_energy_flow", test_sigenergy_fetch_energy_flow),
         ("fetch_inverter_realtime_no_inverter", test_sigenergy_fetch_inverter_realtime_no_inverter),
         ("get_inverter_serial", test_sigenergy_get_inverter_serial),
