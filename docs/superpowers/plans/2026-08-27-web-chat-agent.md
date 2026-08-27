@@ -19,6 +19,7 @@
 - **Naming:** `lower_case_with_underscores`.
 - **File access:** must go through the Storage component. Never `open()`/`os.remove()` for cached data. The one exception is `chat_tools.py` reading Predbat's own source files, which is a read-only bounded scan of the install directory, not cache data.
 - **No loop-bound state in the chat component.** Components each run in their own thread with their own `asyncio.run()` (`apps/predbat/hass.py:223`), but web handlers await other components' coroutines on the *web* loop (`apps/predbat/web.py:4866`). So: create `aiohttp.ClientSession` per request inside `async with`; guard shared state with `threading.Lock`; never use `asyncio.Queue`, `asyncio.Event` or `asyncio.Lock` anywhere in `chat.py`, `chat_store.py` or `chat_tools.py`.
+- **Never block the web event loop.** A turn runs on the *web* component's loop, not the chat component's, so any synchronous work inside a tool freezes the web server — SSE stops mid-token and every other Predbat tab hangs. Synchronous tool bodies must be offloaded with `await asyncio.get_running_loop().run_in_executor(None, function, *args)`, the pattern at `apps/predbat/db_manager.py:152`. **Do not use `base.run_in_executor`**: its `with ThreadPoolExecutor() as pool` exits via `shutdown(wait=True)`, so it blocks the loop until the callback finishes and then returns the raw `Future` rather than the result (`apps/predbat/hass.py:203`). Storage is safe — it uses `aiofiles` throughout.
 - **Tests are not pytest.** Each test is a function taking `my_predbat`, printing diagnostics, and returning `True` on failure. A `run_<name>_tests(my_predbat)` driver aggregates with `failed |= ...` and returns `failed`. Register in `TEST_REGISTRY` in `apps/predbat/unit_test.py` as `("<name>", run_<name>_tests, "<description>", False)`.
 - **Running tests:** from `coverage/`, `./run_all --test <name>`. Always redirect output to a file and grep the file afterwards — never pipe straight to grep, or a wrong search means re-running.
 - **Every new `.py` file starts with the house header** (copy verbatim from `apps/predbat/web_mcp.py:1-9`):
@@ -339,6 +340,20 @@ class PredbatTools:
 `set_state_external` is used by `_execute_set_config`; on `PredbatTools` it becomes
 `await self.base.ha_interface.set_state_external(entity_id, value)`, which is what
 `ComponentBase.set_state_external` does anyway (`apps/predbat/component_base.py:305`).
+
+**One behavioural change while moving `_execute_get_log`:** it calls `read_predbat_log()`
+(`apps/predbat/utils.py:162`), which does a synchronous `open().read()` on a file that reaches
+10MB before rotation, plus the rotated previous log. Today that only stalls the MCP component's
+own thread. The chat agent runs its tools on the *web* loop, where a multi-second synchronous
+read freezes the web server and stops the SSE stream mid-token. Offload it:
+
+```python
+        loop = asyncio.get_running_loop()
+        logdata = await loop.run_in_executor(None, read_predbat_log)
+```
+
+Add `import asyncio` to `agent_tools.py`. This benefits the MCP server too, and the existing
+`test_web_mcp` get_log tests assert on the returned lines, which are unchanged.
 
 - [ ] **Step 6: Add `TOOL_DEFS` and the two projections**
 
@@ -1500,6 +1515,12 @@ falls back to the working directory, and `StorageLocalFiles` puts its cache at
 `config_root/cache` (`apps/predbat/storage.py:199`). On a Docker or from-source run the token
 cache, `apps.yaml` and `predbat.log` all sit inside the tree being searched. A directory rule
 cannot exclude them; the extension allowlist can.
+
+`search_source` and `read_source` are deliberately plain synchronous functions: they are far
+easier to test that way, and `os.walk` has no async equivalent worth having. They are **not safe
+to call directly from a turn** — a full-tree scan would freeze the web loop for up to
+`SOURCE_SCAN_SECONDS`, stalling every other Predbat tab and this turn's own SSE stream. Task 7's
+`_dispatch` is what offloads them to an executor; this task's job is only to make them correct.
 
 **Files:**
 - Modify: `apps/predbat/chat_tools.py`
@@ -2879,7 +2900,56 @@ def test_busy_rejects_a_second_turn(my_predbat):
     return failed
 ```
 
-Extend the driver with `test_plain_answer`, `test_tool_call_round_trip`, `test_tool_call_cap`, `test_tool_failures_are_results`, `test_titles` and `test_busy_rejects_a_second_turn`.
+```python
+def test_source_tools_do_not_block_the_loop(my_predbat):
+    """A synchronous source scan is offloaded, so the event loop keeps running during it.
+
+    This is the regression guard for the whole no-blocking rule: a turn runs on the web
+    component's loop, so a scan called directly would freeze the web server and stall this
+    turn's own SSE stream.
+    """
+    failed = False
+    print("**** Testing that source tools do not block the event loop ****")
+    import chat as chat_module
+
+    def slow_search(*args, **kwargs):
+        """Stand in for a slow synchronous full-tree scan."""
+        time.sleep(0.3)
+        return {"success": True, "error": None, "data": [], "total_matches": 0}
+
+    agent = _agent_with_fake(my_predbat, _tool_call_response("search_source", {"pattern": "def "}), _text_response("found it"))
+    cid = asyncio.run(agent.store.create())
+    ticks = {"count": 0}
+
+    async def heartbeat():
+        """Tick continuously; a blocked loop stops this dead."""
+        while True:
+            ticks["count"] += 1
+            await asyncio.sleep(0.01)
+
+    async def drive():
+        """Run the turn alongside the heartbeat."""
+        beat = asyncio.ensure_future(heartbeat())
+        try:
+            await agent.run_turn(cid, "search the source")
+        finally:
+            beat.cancel()
+
+    original = chat_module.search_source
+    chat_module.search_source = slow_search
+    try:
+        asyncio.run(drive())
+    finally:
+        chat_module.search_source = original
+
+    if ticks["count"] < 5:
+        print("ERROR: the loop ticked {} times during a 0.3s scan - it is being blocked, not offloaded".format(ticks["count"]))
+        failed = True
+
+    return failed
+```
+
+Add `import time` to the test file's imports. Extend the driver with `test_plain_answer`, `test_tool_call_round_trip`, `test_tool_call_cap`, `test_tool_failures_are_results`, `test_titles`, `test_busy_rejects_a_second_turn` and `test_source_tools_do_not_block_the_loop`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -2897,6 +2967,7 @@ Add to the imports at the top of `apps/predbat/chat.py`:
 ```python
 import aiohttp
 import asyncio
+import functools
 import json
 import time
 
@@ -3006,10 +3077,14 @@ Then append these methods to `ChatAgent`:
             return {"success": True, "error": None, "data": {"title": title}}
         if name == "search_docs":
             return await search_docs(self.storage, arguments.get("query"), max_results=arguments.get("max_results", 5))
+        # search_source and read_source are synchronous file scans, and this coroutine runs on
+        # the web component's event loop. Calling them directly would freeze the web server - and
+        # with it this turn's own SSE stream - for as long as the scan takes. Offload both.
+        loop = asyncio.get_running_loop()
         if name == "search_source":
-            return search_source(arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20))
+            return await loop.run_in_executor(None, functools.partial(search_source, arguments.get("pattern"), file=arguments.get("file"), max_results=arguments.get("max_results", 20)))
         if name == "read_source":
-            return read_source(arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200))
+            return await loop.run_in_executor(None, functools.partial(read_source, arguments.get("file"), start_line=arguments.get("start_line", 1), max_lines=arguments.get("max_lines", 200)))
         if name == "fetch_url":
             return await fetch_url(arguments.get("url"), allowlist=self.fetch_allowlist)
         return await self.tools.execute(name, arguments)
