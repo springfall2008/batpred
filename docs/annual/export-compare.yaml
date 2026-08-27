@@ -33,7 +33,9 @@ annual:
     - panels: 8
       panel_watts: 400
       declination: 35
-      # Engine convention: 0 = north, 90 = east, 180 = south, 270 = west.
+      # Azimuth convention: see solar_model.py's convert_azimuth() docstring for the
+      # authoritative mapping rather than restating it here - a restated copy is exactly what
+      # went stale and had east and west swapped in an earlier version of this comment.
       azimuth: 180
       # 0.85, not the engine's 0.95 default: real UK systems run at a ~85% performance ratio
       # once inverter, temperature, wiring and soiling losses are counted.

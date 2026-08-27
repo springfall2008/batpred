@@ -199,7 +199,15 @@ def format_table(results, currency="p"):
             # failed" apart from "this tariff was never swept at all".
             lines.append("{:<32}{:>18}".format(block["name"], "no usable result - see its table above"))
             continue
-        row = "{:<32}{:>18}{:>18}{:>18}".format(block["name"], _format_pence(with_p, currency), _format_pence(without_p, currency), _format_pence_delta(without_p - with_p, currency))
+        # _format_pence_delta, not _format_pence, for With/Without too: an annual cost_p can
+        # legitimately go negative (a net-credit month/year - an export-heavy tariff in a
+        # sunny month is the common case here, not an edge case), and _format_pence renders
+        # that as the sign-inside-the-currency "£-57.13". _format_pence_delta puts the sign
+        # outside ("-£57.13") - already used below for the Saving column, extended here to
+        # the two absolute-cost columns since they can be just as negative as any delta.
+        # _format_pence itself is left untouched: it is shared by every other caller in this
+        # file, including the per-tariff tables above, and changing it would ripple there too.
+        row = "{:<32}{:>18}{:>18}{:>18}".format(block["name"], _format_pence_delta(with_p, currency), _format_pence_delta(without_p, currency), _format_pence_delta(without_p - with_p, currency))
         baseline_with = cost(baseline_id, "with_predbat")
         if tariff_id != baseline_id and baseline_with is not None:
             row += "   ({} vs {})".format(_format_pence_delta(baseline_with - with_p, currency), results["by_export"][baseline_id]["name"])

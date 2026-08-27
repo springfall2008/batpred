@@ -1635,6 +1635,25 @@ class AnnualPredictor:
         return "No baseline-tariff rates were available for month(s) {}, so the no-PV/battery counterfactual there was priced on the main tariff instead, which understates what the system is worth in those months.".format(sorted(months))
 
     @staticmethod
+    def _p10_fallback_caveat(fallback_months, requested_months, derate):
+        """Return the caveat for month(s) whose P10 used the flat derate, or None if none apply.
+
+        ``fallback_months`` is ``WeatherYear.fallback_months`` - it always covers all 12
+        months of the calendar year, because ``AnnualWeather._derive_p10_ratios`` iterates
+        ``range(1, 13)`` regardless of any explicit month window (see annual_weather.py): it
+        has no way to tell "genuinely deficient" from "never fetched because nobody asked for
+        it". Filtered down to ``requested_months`` here - the same window ``run()`` actually
+        plans - so a deliberate single-month run is not told eleven unrequested months "had
+        too few forecast/actual day pairs". Returns None (no caveat at all, matching
+        ``_baseline_fallback_caveat``'s convention) once none of the REQUESTED months are
+        left, rather than always firing on a subset run.
+        """
+        requested_fallback_months = sorted(month for month in fallback_months if month in requested_months)
+        if not requested_fallback_months:
+            return None
+        return "Months {} had too few forecast/actual day pairs, so their P10 used the flat {} derate.".format(requested_fallback_months, derate)
+
+    @staticmethod
     def _tariff_fallback_caveats(fallback_months, unpaid_export_months, year):
         """Return the caveat strings describing a tariff's current-rates fallback and/or wholly-unpriced export months.
 
@@ -1771,8 +1790,10 @@ class AnnualPredictor:
         self.weather = await weather_client.fetch(year) if has_solar else None
         if has_solar and not self.weather.forecast_available:
             self.caveats.append("The Open-Meteo forecast archive did not cover {}, so Predbat planned against actuals and P10 used the flat {} derate. Savings are likely overstated.".format(year, self.config["pv10_derate_fallback"]))
-        elif has_solar and self.weather.fallback_months:
-            self.caveats.append("Months {} had too few forecast/actual day pairs, so their P10 used the flat {} derate.".format(sorted(self.weather.fallback_months), self.config["pv10_derate_fallback"]))
+        elif has_solar:
+            p10_caveat = self._p10_fallback_caveat(self.weather.fallback_months, self.config["months"], self.config["pv10_derate_fallback"])
+            if p10_caveat:
+                self.caveats.append(p10_caveat)
         if has_solar:
             self.caveats.append("The forecast-versus-ERA5 gap includes systematic model bias as well as forecast error, so measured solar uncertainty is slightly overstated.")
         self.caveats.append(
@@ -2074,7 +2095,7 @@ class AnnualPredictor:
         total_kwp = sum(float(array.get("kwp", 0) or 0) for array in self.config.get("solar") or [])
         battery_kwh = float((self.config.get("battery") or {}).get("size_kwh", 0) or 0)
         costs = build_costs(total_kwp, battery_kwh, self.config["costs"])
-        payback = build_payback(annual_scenarios, costs, len(included), self.config["costs"])
+        payback = build_payback(annual_scenarios, costs, len(included), self.config["costs"], months_requested=len(self.config["months"]))
         if not payback.get("available"):
             payback_message = "Payback could not be calculated: {}".format(payback["reason"])
         else:

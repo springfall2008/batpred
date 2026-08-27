@@ -733,6 +733,35 @@ def test_annual_cli_export_compare_table(my_predbat):
         print("  ERROR: the single-tariff table header changed")
         failed = True
 
+    print("Test: a net-credit annual cost renders sign-outside ('-£X'), not sign-inside ('£-X'), in the comparison summary")
+    # A July export-heavy tariff can legitimately cost less than nothing over the year (net
+    # credit) - the common case for an export-tariff sweep, not an edge case. _format_pence
+    # alone renders a negative value with the sign INSIDE the currency symbol ("£-57.13");
+    # the summary's With/Without columns must get the same sign-outside treatment
+    # (_format_pence_delta) the Saving column already had. Scoped to the comparison summary
+    # section only - the per-tariff card tables above it deliberately still use _format_pence
+    # unchanged, so checking the whole rendered text would wrongly fail on that section.
+    net_credit_results = {
+        "year": 2026,
+        "months_requested": [7],
+        "by_export": {"net_credit": tariff_block("Net Credit Tariff", -5713.0, -2000.0)},
+        "caveats": [],
+    }
+    net_credit_text = format_table(net_credit_results)
+    comparison_section = net_credit_text.split("Export tariff comparison", 1)[-1]
+    if "-£57.13" not in comparison_section:
+        print("  ERROR: expected '-£57.13' (sign outside) for a -5713p With-Predbat cost in the comparison summary, got:\n{}".format(comparison_section))
+        failed = True
+    if "£-57.13" in comparison_section:
+        print("  ERROR: found '£-57.13' (sign inside) in the comparison summary - With/Without must use _format_pence_delta like Saving does")
+        failed = True
+    if "-£20.00" not in comparison_section:
+        print("  ERROR: expected '-£20.00' (sign outside) for a -2000p Without-Predbat cost in the comparison summary, got:\n{}".format(comparison_section))
+        failed = True
+    if "£-20.00" in comparison_section:
+        print("  ERROR: found '£-20.00' (sign inside) in the comparison summary")
+        failed = True
+
     return failed
 
 
