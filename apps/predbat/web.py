@@ -5591,7 +5591,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     import linecache
 
                                     line_code = linecache.getline(code.co_filename, line_no).strip()
-                                except:
+                                except Exception:
                                     line_code = ""
 
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
@@ -5770,7 +5770,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 except Exception as e:
                     try:
                         yaml_key = str(key)
-                    except:
+                    except Exception:
                         yaml_key = f"<unprintable_key_{hash(key)}>"
                     result[yaml_key] = f"<error: {type(e).__name__}>"
             # Remove from visited after processing to allow same object in different branches
@@ -5801,7 +5801,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if len(str_value) > 200:
                 return str_value[:200] + "..."
             return str_value
-        except:
+        except Exception:
             return f"<{type(obj).__name__}>"
 
     def _get_object_members(self, obj, path):
@@ -5906,7 +5906,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     display_value = str_value[:100] + "..."
                 else:
                     display_value = str_value
-            except:
+            except Exception:
                 display_value = f"<{value_type}>"
 
         # Build the full path for this item using :: as separator
