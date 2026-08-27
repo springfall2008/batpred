@@ -3300,6 +3300,15 @@ Then append these methods to `ChatAgent`:
             if not calls:
                 return
             if iteration >= self.max_tool_calls:
+                # Answer the calls we are refusing to run. Leaving an assistant message that
+                # carries tool_calls with no matching tool replies is exactly the shape
+                # trim_history exists to avoid: the next turn sends the pair back, the API
+                # rejects the whole request with a 400, and the conversation stays broken until
+                # the pair ages out of the trim window. Deliberately no tool_start/tool_end
+                # events - nothing ran, and the transcript should not suggest otherwise.
+                for call in calls:
+                    refused = {"success": False, "error": "Not run: the {} tool call limit for one turn was reached".format(self.max_tool_calls), "data": None}
+                    await self.store.append(conversation_id, {"role": "tool", "tool_call_id": call.get("id") or "call_{}".format(turn_id), "name": (call.get("function") or {}).get("name") or "", "content": json.dumps(refused)})
                 break
             for call in calls:
                 await self._run_one_tool(conversation_id, turn_id, call)
