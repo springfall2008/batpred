@@ -250,11 +250,10 @@ DISALLOWED_TOOLS_CLEANUP = ",".join([item for item in _DISALLOWED_TOOLS_BASE if 
 # anyway - #4758 quietly degraded to printing the comments it could not post, which reads like
 # a finished review in the log.
 GH_API_ENDPOINT_FIRST_PROMPT = (
-    "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted in one exact shape. "
-    "Put the endpoint first, immediately after `gh api`, unquoted and ahead of every flag - for example "
+    "Permission rules in this session match a literal command prefix, so `gh api` calls are only permitted when the current allowlist covers the exact spelling you use. "
+    "Prefer the endpoint-first, unquoted form (endpoint immediately after `gh api`) and put flags after the endpoint - for example "
     f"`gh api repos/{REPO}/pulls/123/comments --method POST -f path=apps/predbat/example.py`. "
-    'Writing `gh api --method POST repos/...`, `gh api -X POST repos/...`, `gh api -H ... repos/...` or `gh api "repos/..."` '
-    "is denied, even though the identical request in endpoint-first form is allowed. "
+    'Other spellings (e.g. `gh api --method POST repos/...`, `gh api -X POST repos/...`, `gh api -H ... repos/...` or `gh api "repos/..."`) may be denied in restricted sessions even when the same request is allowed in endpoint-first form. '
     "Keep each call to a single command: piping into head/tail/grep is fine, but redirecting output anywhere outside "
     f"{SCRATCH_DIR} or the repository clone - /tmp included - is denied as well. "
     "If a call is denied regardless, state that plainly in your final message and name the command; do not quietly fall back "
