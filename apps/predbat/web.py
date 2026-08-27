@@ -76,6 +76,7 @@ from component_base import ComponentBase
 from config import APPS_SCHEMA
 import debug_history
 from web_annual import AnnualPage
+from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
@@ -307,6 +308,7 @@ class WebInterface(ComponentBase):
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
+        self.chat_page = WebChat(self)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -431,6 +433,32 @@ class WebInterface(ComponentBase):
         app.router.add_get("/annual_view", self.annual_page.html_annual_view)
         app.router.add_get("/annual_compare", self.annual_page.html_annual_compare)
 
+    def chat_enabled(self):
+        """Return whether the chat component is configured and running."""
+        components = getattr(self.base, "components", None)
+        return bool(components and components.get_component("chat"))
+
+    def _register_chat_routes(self, app):
+        """Register the Chat tab's routes on ``app``, but only when chat is configured.
+
+        Split out of start() the same way the annual routes are, so a test can assert the routes
+        exist against a bare aiohttp Application without opening a socket.
+        """
+        if not self.chat_enabled():
+            return
+        app.router.add_get("/chat", self.chat_page.html_chat)
+        app.router.add_get("/chat/conversations", self.chat_page.html_chat_conversations)
+        app.router.add_post("/chat/conversations", self.chat_page.html_chat_create)
+        app.router.add_post("/chat/rename", self.chat_page.html_chat_rename)
+        app.router.add_post("/chat/delete", self.chat_page.html_chat_delete)
+        app.router.add_get("/chat/history", self.chat_page.html_chat_history)
+        app.router.add_post("/chat/send", self.chat_page.html_chat_send)
+        app.router.add_get("/chat/stream", self.chat_page.html_chat_stream)
+        app.router.add_post("/chat/confirm", self.chat_page.html_chat_confirm)
+        app.router.add_post("/chat/cancel", self.chat_page.html_chat_cancel)
+        app.router.add_get("/chat/models", self.chat_page.html_chat_models)
+        app.router.add_post("/chat/model", self.chat_page.html_chat_model)
+
     async def start(self):
         # Start the web server
         app = web.Application()
@@ -463,6 +491,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/compare", self.html_compare)
         app.router.add_post("/compare", self.html_compare_post)
         self._register_annual_routes(app)
+        self._register_chat_routes(app)
         app.router.add_get("/apps_editor", self.html_apps_editor)
         app.router.add_post("/apps_editor", self.html_apps_editor_post)
         app.router.add_get("/apps_editor_checksum", self.html_apps_editor_checksum)
