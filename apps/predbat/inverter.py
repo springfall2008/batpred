@@ -306,8 +306,6 @@ class Inverter:
         if self.rest_data and ("Battery_Details" in self.rest_data):
             average_temp = 0
             battery_count = 0
-            battery_capacity = 0
-            battery_voltage = 0
             for battery in self.rest_data["Battery_Details"]:
                 battery_details = self.rest_data["Battery_Details"][battery]
                 if "BMS_Temperature" in battery_details:
@@ -3385,7 +3383,7 @@ class Inverter:
         data = {"state": "enable" if enable else "disable"}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"].get("Enable_Charge_Target", "disable")
             if isinstance(new_value, str):
@@ -3408,7 +3406,7 @@ class Inverter:
         url = self.rest_api + "/setChargeTarget"
         data = {"chargeToPercent": target}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if float(self.rest_data["Control"]["Target_SOC"]) == target:
                 self.count_register_writes += 1
@@ -3428,7 +3426,7 @@ class Inverter:
         url = self.rest_api + "/setChargeRate"
         data = {"chargeRate": rate}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Charge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_charge * MINUTE_WATT / 12):
@@ -3449,7 +3447,7 @@ class Inverter:
         url = self.rest_api + "/setDischargeRate"
         data = {"dischargeRate": rate}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new = int(self.rest_data["Control"]["Battery_Discharge_Rate"])
             if abs(new - rate) < (self.battery_rate_max_discharge * MINUTE_WATT / 25):
@@ -3470,7 +3468,7 @@ class Inverter:
         data = {"mode": inverter_mode}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if inverter_mode == self.rest_data["Control"]["Mode"]:
                 self.count_register_writes += 1
@@ -3490,7 +3488,7 @@ class Inverter:
         data = {"state": pause_mode}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if pause_mode == self.rest_data["Control"]["Battery_pause_mode"]:
                 self.count_register_writes += 1
@@ -3511,7 +3509,7 @@ class Inverter:
         url = self.rest_api + "/setBatteryReserve"
         data = {"reservePercent": target}
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             result = int(float(self.rest_data["Control"]["Battery_Power_Reserve"]))
             if result == target:
@@ -3532,7 +3530,7 @@ class Inverter:
         data = {"state": "enable" if enable else "disable"}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Charge_Schedule"]
             if isinstance(new_value, str):
@@ -3558,7 +3556,7 @@ class Inverter:
         data = {"state": "enable" if enable else "disable"}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             new_value = self.rest_data["Control"]["Enable_Discharge_Schedule"]
             if isinstance(new_value, str):
@@ -3584,7 +3582,7 @@ class Inverter:
         data = {"start": start[:5], "finish": finish[:5]}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Battery_pause_start_time_slot"] == start and self.rest_data["Timeslots"]["Battery_pause_end_time_slot"] == finish:
                 self.count_register_writes += 1
@@ -3604,7 +3602,7 @@ class Inverter:
         data = {"start": start[:5], "finish": finish[:5]}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Charge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Charge_end_time_slot_1"] == finish:
                 self.count_register_writes += 1
@@ -3661,7 +3659,7 @@ class Inverter:
         result = None
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             # GivTCP's write handler updates Control.Discharge_Target_SOC_1 synchronously the
             # moment it accepts the command (confirmed against GivTCP's own source - write.py's
             # setDischargeTarget() calls updateControlCache() straight after the Modbus write), so
@@ -3695,7 +3693,7 @@ class Inverter:
         data = {"start": start[:5], "finish": finish[:5]}
 
         for retry in range(INVERTER_MAX_RETRY_REST):
-            r = self.rest_postCommand(url, json=data)
+            self.rest_postCommand(url, json=data)
             self.rest_data = self.rest_runAll(self.rest_data)
             if self.rest_data["Timeslots"]["Discharge_start_time_slot_1"] == start and self.rest_data["Timeslots"]["Discharge_end_time_slot_1"] == finish:
                 self.count_register_writes += 1
