@@ -349,7 +349,7 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         try:
             timestamp_key = str2time(key)
             oldest_date = min(oldest_date, timestamp_key)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             continue
 
         value = data[key]

@@ -2380,7 +2380,7 @@ class Octopus:
                 timestamp_start = timestamp_start.replace(hour=int(time_from))
                 timestamp_end = timestamp_end.replace(hour=int(time_to))
                 free_sessions.append({"start": timestamp_start.strftime(TIME_FORMAT), "end": timestamp_end.strftime(TIME_FORMAT), "rate": 0.0})
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError):
                 pass
 
     def download_octopus_free_func(self, url):

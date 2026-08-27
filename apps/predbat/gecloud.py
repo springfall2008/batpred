@@ -2346,10 +2346,10 @@ class GECloudData(ComponentBase):
                         return {}, None
                     try:
                         data = await response.json()
-                    except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
+                    except (aiohttp.ContentTypeError, json.JSONDecodeError):
                         record_api_call("givenergy", False, "decode_error")
                         return {}, None
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        except (aiohttp.ClientError, asyncio.TimeoutError):
             record_api_call("givenergy", False, "connection_error")
             return {}, None
 

@@ -1860,7 +1860,7 @@ class Inverter:
 
         try:
             current_rate = int(current_rate)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             self.base.log("Error: Inverter {} charge discharge {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
             current_rate = self.battery_rate_max_raw
 
@@ -1879,7 +1879,7 @@ class Inverter:
                 current_rate = self.base.get_arg("charge_rate", index=self.id, default=self.battery_rate_max_raw, required_unit="W")
         try:
             current_rate = int(current_rate)
-        except (ValueError, TypeError) as e:
+        except (ValueError, TypeError):
             self.base.log("Error: Inverter {} charge rate {} is not a number, setting to {}W".format(current_rate, self.id, self.battery_rate_max_raw))
             current_rate = self.battery_rate_max_raw
 
@@ -2718,7 +2718,7 @@ class Inverter:
                 current = self.base.get_arg("discharge_target_soc", index=self.id, required_unit="%")
                 try:
                     current = float(current)
-                except (ValueError, TypeError) as e:
+                except (ValueError, TypeError):
                     current = None
                 if current is None:
                     self.log("Inverter {} No current discharge target to read, export target not written".format(self.id))

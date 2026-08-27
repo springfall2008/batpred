@@ -5618,7 +5618,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 stack.append({"file": code.co_filename, "line": line_no, "name": code.co_name, "code": line_code})
 
                             task_info["stack"] = stack
-                except Exception as e:
+                except Exception:
                     # If we can't get the coroutine stack, just skip it
                     pass
 
