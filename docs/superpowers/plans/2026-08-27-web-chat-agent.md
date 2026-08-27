@@ -41,7 +41,8 @@
 # pylint: disable=attribute-defined-outside-init
 ```
 
-- **Pre-commit:** `./run_pre_commit` from the repo root must pass before each commit. Note it only checks git-tracked files, so `git add` a new file *before* running it or it sails through unchecked.
+- **Pre-commit:** `./run_pre_commit` lives in `coverage/`, not the repo root — run it as `cd coverage && ./run_pre_commit`. It must pass before each commit. It only checks git-tracked files, so `git add` a new file *before* running it or it sails through unchecked. It auto-fixes: ruff and black will rewrite files, so re-stage and re-run until it is clean.
+- **Never leave an import a task does not use.** Ruff deletes unused imports automatically, so a task cannot "pre-import" names for a later task — the hook will strip them and the later task will fail. Each task adds exactly the imports its own code uses. Likewise, do not hand-format long dict literals: black reformats them, and the plan's single-line forms are illustrative, not normative.
 
 ---
 
@@ -1366,14 +1367,9 @@ because it needs the conversation the turn belongs to and nothing in this module
 """
 
 import aiohttp
-import asyncio
-import ipaddress
 import json
-import os
 import re
-import socket
-import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 DOCS_SITE_ROOT = "https://springfall2008.github.io/batpred/"
 DOCS_INDEX_URL = DOCS_SITE_ROOT + "search/search_index.json"
@@ -1754,7 +1750,7 @@ Expected: FAIL with `ImportError: cannot import name 'search_source' from 'chat_
 
 - [ ] **Step 3: Implement the source tools**
 
-Append to `apps/predbat/chat_tools.py`:
+Add `import os` and `import time` to `chat_tools.py`'s imports, then append:
 
 ```python
 # Source access. The allowlist is an extension rule rather than a directory rule on purpose:
@@ -2063,7 +2059,8 @@ Expected: FAIL with `ImportError: cannot import name 'host_allowed' from 'chat_t
 
 - [ ] **Step 3: Implement the fetch guards**
 
-Append to `apps/predbat/chat_tools.py`:
+Add `import asyncio`, `import ipaddress`, `import socket` and extend the urllib import to
+`from urllib.parse import urljoin, urlparse` in `chat_tools.py`, then append:
 
 ```python
 # fetch_url is the one tool that sends data to an address the model picks, so it is fenced by an
