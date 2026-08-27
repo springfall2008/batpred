@@ -46,6 +46,21 @@ def _format_pence(pence, currency):
     return "{:.2f} {}".format(amount, currency)
 
 
+def _format_pence_delta(pence, currency):
+    """Format a pence DELTA (which may be negative) with the sign outside the currency label.
+
+    ``_format_pence`` puts a negative amount's sign after the currency symbol - e.g.
+    ``"£{:.2f}".format(-8.0)`` is ``"£-8.00"`` - which is fine for an absolute cost (never
+    negative in practice) but reads oddly for a delta, which can genuinely go negative (a
+    swept tariff that is worse than the baseline, or a "saving" that is actually a loss).
+    Deliberately not fixed inside ``_format_pence`` itself, which every other caller in this
+    module depends on rendering exactly as it always has.
+    """
+    if pence < 0:
+        return "-{}".format(_format_pence(-pence, currency))
+    return _format_pence(pence, currency)
+
+
 def _format_single_table(results, currency):
     """Render a single-tariff results document as a human-readable table.
 
@@ -88,7 +103,16 @@ def _format_single_table(results, currency):
         lines.append("No annual total available: no month produced a usable result.")
 
     lines.append("")
-    lines.append("Based on {} of 12 months.".format(annual["months_included"]))
+    months_requested = results.get("months_requested")
+    if months_requested is not None:
+        # A sweep card carries the run's own months_requested (Task 8's format_table passes
+        # it through per tariff): a deliberate single-month --months run must not read as
+        # "1 of 12 months" - that phrasing implies eleven months failed, when in fact only
+        # one was ever asked for. A plain single-tariff document never carries this key, so
+        # this branch never fires there and the wording below is untouched.
+        lines.append("Based on {} of {} requested month(s).".format(annual["months_included"], len(months_requested)))
+    else:
+        lines.append("Based on {} of 12 months.".format(annual["months_included"]))
     if annual["months_excluded"]:
         lines.append("Excluded months: {}".format(", ".join(calendar.month_abbr[month] for month in annual["months_excluded"])))
 
@@ -124,7 +148,14 @@ def format_table(results, currency="p"):
         lines.append("=== {} ({}) ===".format(block["name"], tariff_id))
         # This tariff's OWN caveats, not the run-wide list: a tariff whose rates were
         # synthesised must say so where its figures are, not in a shared footnote.
-        lines.append(_format_single_table({"year": results["year"], "annual": block["annual"], "months": block["months"], "caveats": block.get("caveats", [])}, currency))
+        # months_requested is threaded through from the run-wide document so a single
+        # requested month is not misreported as "1 of 12" below (see _format_single_table).
+        lines.append(
+            _format_single_table(
+                {"year": results["year"], "annual": block["annual"], "months": block["months"], "caveats": block.get("caveats", []), "months_requested": results.get("months_requested")},
+                currency,
+            )
+        )
         lines.append("")
 
     lines.append("Export tariff comparison")
@@ -140,16 +171,38 @@ def format_table(results, currency="p"):
     baseline_id = "outgoing_fixed" if "outgoing_fixed" in results["by_export"] else order[0]
 
     def cost(tariff_id, scenario):
-        """Return one scenario's cost in pence for a tariff in the sweep."""
-        return results["by_export"][tariff_id]["annual"]["scenarios"][scenario]["cost_p"]
+        """Return one scenario's cost in pence for a tariff in the sweep, or None if that tariff produced no usable annual result.
+
+        ``annual["scenarios"]`` is ``None`` when no month for this tariff planned
+        successfully (``_build_results``' documented "nothing usable" case - see
+        ``test_annual_results.py``). Each swept tariff is planned independently against its
+        own rate downloads, so one product can fail this way while the other two succeed;
+        returning ``None`` here (rather than raising) lets the row loop and the ranking below
+        skip just that one card instead of the whole comparison blowing up.
+        """
+        scenarios = results["by_export"][tariff_id]["annual"]["scenarios"]
+        if scenarios is None:
+            return None
+        return scenarios[scenario]["cost_p"]
+
+    # Only tariffs with a usable annual result can be ranked or used as the delta anchor - a
+    # card with none is still listed (below), just never picked as "best" or as the baseline
+    # for a "(vs baseline)" delta.
+    usable = [tariff_id for tariff_id in order if cost(tariff_id, "with_predbat") is not None]
 
     for tariff_id in order:
         block = results["by_export"][tariff_id]
         with_p = cost(tariff_id, "with_predbat")
         without_p = cost(tariff_id, "without_predbat")
-        row = "{:<32}{:>18}{:>18}{:>18}".format(block["name"], _format_pence(with_p, currency), _format_pence(without_p, currency), _format_pence(without_p - with_p, currency))
-        if tariff_id != baseline_id:
-            row += "   ({} vs {})".format(_format_pence(cost(baseline_id, "with_predbat") - with_p, currency), results["by_export"][baseline_id]["name"])
+        if with_p is None or without_p is None:
+            # Rendered explicitly, not skipped: a reader must be able to tell "this tariff
+            # failed" apart from "this tariff was never swept at all".
+            lines.append("{:<32}{:>18}".format(block["name"], "no usable result - see its table above"))
+            continue
+        row = "{:<32}{:>18}{:>18}{:>18}".format(block["name"], _format_pence(with_p, currency), _format_pence(without_p, currency), _format_pence_delta(without_p - with_p, currency))
+        baseline_with = cost(baseline_id, "with_predbat")
+        if tariff_id != baseline_id and baseline_with is not None:
+            row += "   ({} vs {})".format(_format_pence_delta(baseline_with - with_p, currency), results["by_export"][baseline_id]["name"])
         if block.get("rates_synthesised"):
             # Marked inline, not footnoted: a synthetic tariff compared against two real ones
             # is the difference between a useful answer and a misleading one. This is the
@@ -159,13 +212,17 @@ def format_table(results, currency="p"):
             row += "   [rates synthesised - not this month's real rates]"
         lines.append(row)
 
-    best_with = min(order, key=lambda tariff_id: cost(tariff_id, "with_predbat"))
-    best_without = min(order, key=lambda tariff_id: cost(tariff_id, "without_predbat"))
     lines.append("")
-    lines.append("Best with Predbat:    {}".format(results["by_export"][best_with]["name"]))
-    lines.append("Best without Predbat: {}".format(results["by_export"][best_without]["name"]))
-    if best_with != best_without:
-        lines.append("The best tariff DIFFERS with and without Predbat - optimisation is what makes {} the right choice.".format(results["by_export"][best_with]["name"]))
+    if usable:
+        best_with = min(usable, key=lambda tariff_id: cost(tariff_id, "with_predbat"))
+        best_without = min(usable, key=lambda tariff_id: cost(tariff_id, "without_predbat"))
+        lines.append("Best with Predbat:    {}".format(results["by_export"][best_with]["name"]))
+        lines.append("Best without Predbat: {}".format(results["by_export"][best_without]["name"]))
+        if best_with != best_without:
+            lines.append("The best tariff DIFFERS with and without Predbat - optimisation is what makes {} the right choice.".format(results["by_export"][best_with]["name"]))
+    else:
+        lines.append("Best with Predbat:    no tariff in this sweep produced a usable result.")
+        lines.append("Best without Predbat: no tariff in this sweep produced a usable result.")
 
     if results.get("caveats"):
         lines.append("")

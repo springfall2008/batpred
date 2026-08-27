@@ -734,3 +734,245 @@ def test_annual_cli_export_compare_table(my_predbat):
         failed = True
 
     return failed
+
+
+def test_annual_cli_export_compare_table_partial_failure(my_predbat):
+    """A card with no usable annual result (scenarios: None) must not crash the sweep summary.
+
+    Regression test for a review finding: each swept tariff is planned independently against
+    its own rate downloads, so one product can produce annual["scenarios"] = None (the
+    documented "nothing usable" shape - see test_annual_results.py) while the other two
+    succeed. The comparison summary must skip that one card's ranking, but still name it
+    with an explicit failure marker rather than silently dropping it - a reader must be able
+    to tell "this tariff failed" apart from "this tariff wasn't in the sweep".
+    """
+    failed = False
+    from annual_cli import format_table
+
+    def scenarios(with_predbat_p, without_predbat_p):
+        """Build a minimal four-scenario block with the two figures the summary uses."""
+        blank = {"cost_p": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0}
+        return {
+            "no_pvbat": dict(blank, cost_p=10000.0),
+            "pv_only": dict(blank, cost_p=8000.0),
+            "without_predbat": dict(blank, cost_p=without_predbat_p),
+            "with_predbat": dict(blank, cost_p=with_predbat_p),
+        }
+
+    def ok_tariff_block(name, with_p, without_p):
+        """Build a by_export entry that planned successfully."""
+        return {
+            "name": name,
+            "annual": {
+                "scenarios": scenarios(with_p, without_p),
+                "standing_charge_p": 1550.0,
+                "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": without_p - with_p},
+                "months_included": 1,
+                "months_excluded": [],
+                "costs": {},
+                "payback": {},
+            },
+            "months": [{"month": 7, "status": "ok", "scenarios": scenarios(with_p, without_p)}],
+            "caveats": [],
+        }
+
+    def failed_tariff_block(name):
+        """Mirror _build_results' documented 'nothing usable' shape (see test_annual_results.py)."""
+        return {
+            "name": name,
+            "annual": {
+                "scenarios": None,
+                "standing_charge_p": None,
+                "savings": {},
+                "months_included": 0,
+                "months_excluded": [7],
+                "costs": {},
+                "payback": {},
+            },
+            "months": [{"month": 7, "status": "unavailable", "reason": "no rate data available"}],
+            "caveats": [],
+        }
+
+    results = {
+        "year": 2026,
+        "months_requested": [7],
+        "by_export": {
+            # Fixed wins with-Predbat (4800p); Agile wins without-Predbat (5800p) - two
+            # distinct winners, so the ranking logic has to pick each independently rather
+            # than happening to agree by coincidence.
+            "outgoing_fixed": ok_tariff_block("Octopus Outgoing Fixed", 4800.0, 6000.0),
+            "outgoing_prime": failed_tariff_block("Octopus Outgoing Prime"),
+            "agile_outgoing": ok_tariff_block("Octopus Agile Outgoing", 5000.0, 5800.0),
+        },
+        "caveats": [],
+    }
+
+    print("Test: a failed middle card does not crash the sweep summary")
+    try:
+        text = format_table(results)
+    except Exception as error:  # noqa: BLE001 - the whole point is that nothing raises
+        print("  ERROR: format_table raised {} on a card with scenarios=None: {}".format(type(error).__name__, error))
+        return True
+
+    print("Test: the two usable tariffs still render and still rank")
+    if "Octopus Outgoing Fixed" not in text or "Octopus Agile Outgoing" not in text:
+        print("  ERROR: the usable tariffs should still appear")
+        failed = True
+    if "Best with Predbat:    {}".format("Octopus Outgoing Fixed") not in text:
+        print("  ERROR: the cheaper usable tariff (Outgoing Fixed, 4800p with-Predbat) should still win with-Predbat, got:\n{}".format(text))
+        failed = True
+    if "Best without Predbat: {}".format("Octopus Agile Outgoing") not in text:
+        print("  ERROR: the cheaper usable tariff without Predbat (Agile Outgoing, 5800p) should still win, got:\n{}".format(text))
+        failed = True
+
+    print("Test: the failed tariff is still named, with an explicit failure marker, not silently dropped")
+    if "Octopus Outgoing Prime" not in text:
+        print("  ERROR: the failed tariff must still be named in the comparison table")
+        failed = True
+    if "no usable result" not in text:
+        print("  ERROR: the failed tariff should be marked as having no usable result, got:\n{}".format(text))
+        failed = True
+
+    return failed
+
+
+def test_annual_cli_export_compare_table_baseline_fallback(my_predbat):
+    """Without an 'outgoing_fixed' entry, the comparison anchors on the first tariff instead of crashing.
+
+    Also covers the sign-formatting minor fix: Agile Outgoing (4800p with-Predbat) is worse
+    than the anchor Outgoing Prime (4200p with-Predbat) here, so its "(vs baseline)" delta is
+    genuinely negative - it must render as "-£6.00", not "£-6.00".
+    """
+    failed = False
+    from annual_cli import format_table
+
+    def scenarios(with_predbat_p, without_predbat_p):
+        """Build a minimal four-scenario block with the two figures the summary uses."""
+        blank = {"cost_p": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0}
+        return {
+            "no_pvbat": dict(blank, cost_p=10000.0),
+            "pv_only": dict(blank, cost_p=8000.0),
+            "without_predbat": dict(blank, cost_p=without_predbat_p),
+            "with_predbat": dict(blank, cost_p=with_predbat_p),
+        }
+
+    def tariff_block(name, with_p, without_p):
+        """Build one by_export entry covering a single month."""
+        return {
+            "name": name,
+            "annual": {
+                "scenarios": scenarios(with_p, without_p),
+                "standing_charge_p": 1550.0,
+                "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": without_p - with_p},
+                "months_included": 1,
+                "months_excluded": [],
+                "costs": {},
+                "payback": {},
+            },
+            "months": [{"month": 7, "status": "ok", "scenarios": scenarios(with_p, without_p)}],
+            "caveats": [],
+        }
+
+    results = {
+        "year": 2026,
+        "months_requested": [7],
+        # Deliberately no "outgoing_fixed" key: order[0] ("outgoing_prime") must become the
+        # baseline instead of the lookup crashing or silently anchoring on nothing.
+        "by_export": {
+            "outgoing_prime": tariff_block("Octopus Outgoing Prime", 4200.0, 6400.0),
+            "agile_outgoing": tariff_block("Octopus Agile Outgoing", 4800.0, 5800.0),
+        },
+        "caveats": [],
+    }
+
+    print("Test: a sweep without 'outgoing_fixed' does not crash and both tariffs still render")
+    text = format_table(results)
+    if "Octopus Outgoing Prime" not in text or "Octopus Agile Outgoing" not in text:
+        print("  ERROR: both tariffs should still render, got:\n{}".format(text))
+        failed = True
+
+    print("Test: the non-first tariff's row is annotated against the first entry (order[0]), not a hardcoded id")
+    if "vs Octopus Outgoing Prime" not in text:
+        print("  ERROR: expected the Agile Outgoing row to compare against Outgoing Prime (order[0]), got:\n{}".format(text))
+        failed = True
+
+    print("Test: a negative 'vs baseline' delta renders as '-£6.00', not '£-6.00'")
+    if "-£6.00" not in text:
+        print("  ERROR: expected a '-£6.00' delta (Agile Outgoing is 600p worse with Predbat than the baseline), got:\n{}".format(text))
+        failed = True
+    if "£-6.00" in text:
+        print("  ERROR: the sign must render outside the currency symbol, got:\n{}".format(text))
+        failed = True
+
+    return failed
+
+
+def test_annual_cli_export_compare_table_months_requested_wording(my_predbat):
+    """The 'Based on N of M months' line adapts to a sweep's months_requested, and stays 'of 12 months' when absent."""
+    failed = False
+    from annual_cli import format_table
+
+    def scenarios(with_predbat_p, without_predbat_p):
+        """Build a minimal four-scenario block with the two figures the summary uses."""
+        blank = {"cost_p": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "pv_generated_kwh": 0.0, "battery_throughput_kwh": 0.0, "battery_cycles": 0.0, "export_credit_p_estimate": 0.0}
+        return {
+            "no_pvbat": dict(blank, cost_p=10000.0),
+            "pv_only": dict(blank, cost_p=8000.0),
+            "without_predbat": dict(blank, cost_p=without_predbat_p),
+            "with_predbat": dict(blank, cost_p=with_predbat_p),
+        }
+
+    print("Test: a sweep's per-tariff table states 'of N requested month(s)', not 'of 12 months'")
+    sweep_results = {
+        "year": 2026,
+        "months_requested": [7],
+        "by_export": {
+            "outgoing_fixed": {
+                "name": "Octopus Outgoing Fixed",
+                "annual": {
+                    "scenarios": scenarios(5000.0, 6000.0),
+                    "standing_charge_p": 1550.0,
+                    "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": 1000.0},
+                    "months_included": 1,
+                    "months_excluded": [],
+                    "costs": {},
+                    "payback": {},
+                },
+                "months": [{"month": 7, "status": "ok", "scenarios": scenarios(5000.0, 6000.0)}],
+                "caveats": [],
+            },
+        },
+        "caveats": [],
+    }
+    text = format_table(sweep_results)
+    if "Based on 1 of 1 requested month(s)." not in text:
+        print("  ERROR: expected 'Based on 1 of 1 requested month(s).', got:\n{}".format(text))
+        failed = True
+    if "of 12 months" in text:
+        print("  ERROR: a sweep card must not use the 'of 12 months' wording, got:\n{}".format(text))
+        failed = True
+
+    print("Test: a single-tariff document with no months_requested keeps 'of 12 months' verbatim")
+    legacy = {
+        "year": 2025,
+        "annual": {
+            "scenarios": scenarios(5000.0, 6000.0),
+            "standing_charge_p": 1550.0,
+            "savings": {"pv_battery_vs_none_p": 2000.0, "predbat_vs_baseline_p": 1000.0},
+            "months_included": 12,
+            "months_excluded": [],
+            "costs": {},
+            "payback": {},
+        },
+        "months": [{"month": month, "status": "ok", "scenarios": scenarios(5000.0, 6000.0)} for month in range(1, 13)],
+        "caveats": [],
+    }
+    legacy_text = format_table(legacy)
+    if "Based on 12 of 12 months." not in legacy_text:
+        print("  ERROR: the legacy wording must be unchanged, got:\n{}".format(legacy_text))
+        failed = True
+    if "requested month" in legacy_text:
+        print("  ERROR: the legacy single-tariff document must not gain sweep wording, got:\n{}".format(legacy_text))
+        failed = True
+
+    return failed

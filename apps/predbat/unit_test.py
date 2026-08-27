@@ -277,6 +277,7 @@ from tests.test_annual_results import test_annual_results
 from tests.test_annual_integration import test_annual_integration
 from tests.test_annual_cli import test_annual_cli, test_annual_cli_fast_flag, test_annual_cli_machine, test_annual_cli_machine_end_to_end, test_annual_cli_export_compare_flags, test_annual_cli_apply_cli_overrides_config_shapes
 from tests.test_annual_cli import test_annual_cli_export_compare_table
+from tests.test_annual_cli import test_annual_cli_export_compare_table_partial_failure, test_annual_cli_export_compare_table_baseline_fallback, test_annual_cli_export_compare_table_months_requested_wording
 from tests.test_annual_job import test_annual_job
 from tests.test_tariff_catalogue import test_tariff_catalogue
 from tests.test_annual_store import test_annual_store
@@ -669,6 +670,9 @@ def main():
         ("annual_cli_export_compare", test_annual_cli_export_compare_flags, "Annual CLI export-compare flag tests", False),
         ("annual_cli_overrides_shapes", test_annual_cli_apply_cli_overrides_config_shapes, "Annual CLI apply_cli_overrides config-shape and error-handling tests", False),
         ("annual_cli_export_compare_table", test_annual_cli_export_compare_table, "Annual CLI export-compare table tests", False),
+        ("annual_cli_export_compare_table_partial_failure", test_annual_cli_export_compare_table_partial_failure, "Annual CLI export-compare table partial-failure (scenarios=None) tests", False),
+        ("annual_cli_export_compare_table_baseline_fallback", test_annual_cli_export_compare_table_baseline_fallback, "Annual CLI export-compare table baseline-fallback and delta-sign tests", False),
+        ("annual_cli_export_compare_table_months_requested_wording", test_annual_cli_export_compare_table_months_requested_wording, "Annual CLI export-compare table months_requested wording tests", False),
         ("annual_job", test_annual_job, "Annual subprocess job control tests", False),
         ("annual_store", test_annual_store, "Annual run store tests", False),
         ("annual_costs", test_annual_costs, "Annual install cost and payback model tests", False),
