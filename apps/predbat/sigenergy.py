@@ -2178,6 +2178,7 @@ class SigenergyAPI(ComponentBase):
                 new_mode = "export"
                 active_mode = SIGENERGY_ACTIVE_MODE_DISCHARGE
                 discharge_priority_type = "PV"
+                charge_power_kw = export_rate_w / 1000.0
         elif charge_window and charge_start_dt and charge_end_dt:
             duration_min = max(1, int((charge_end_dt - now).total_seconds() / 60))
             effective_target = max(charge_target_soc, reserve_soc)
