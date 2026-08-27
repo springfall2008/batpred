@@ -1368,6 +1368,8 @@ class GatewayMQTT(ComponentBase):
             self.set_arg("car_charging_now", [f"binary_sensor.{pfx}_session_active"])
         self.set_arg("car_charging_soc", [f"sensor.{pfx}_soc"])
         self.set_arg("car_charging_energy", f"sensor.{pfx}_session_energy")
+        # Live charge power - display only, for the web power flow diagram
+        self.set_arg("car_charging_power", f"sensor.{pfx}_power")
         # car_charging_rate is a UI config item (input_number), so update it via
         # expose_config. get_arg() consults HA/UI config before args, so set_arg() would
         # be ignored (and indirect entity resolution would never run).

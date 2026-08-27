@@ -110,6 +110,7 @@ from tests.test_web_debug_history_routes import test_web_debug_history_routes
 from tests.test_debug_history_client_js import test_debug_history_client_js
 from tests.test_metrics_dashboard_soc_refresh import test_soc_chart_center_text_reads_live_data
 from tests.test_web_functions import run_web_functions_tests, run_web_logo_image_tests
+from tests.test_web_power_flow import run_web_power_flow_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
@@ -150,6 +151,8 @@ from tests.test_override_time import test_get_override_time_from_string
 from tests.test_units import run_test_units
 from tests.test_previous_days_modal import test_previous_days_modal_filter
 from tests.test_load_forecast_history import test_load_forecast_history
+from tests.test_holiday_mode import test_holiday_mode
+from tests.test_inday_adjustment_carry import test_inday_adjustment_carry
 from tests.test_filtered_load_minute import test_filtered_load_minute
 from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from_power
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
@@ -171,6 +174,8 @@ from tests.test_octopus_fetch_previous_dispatch import test_octopus_fetch_previo
 from tests.test_octopus_intelligent_devices import test_octopus_intelligent_devices_wrapper
 from tests.test_octopus_sensor_due import test_octopus_sensor_due_wrapper
 from tests.test_octopus_day_night_rates import test_octopus_day_night_rates_wrapper
+from tests.test_octopus_tou_windows import test_octopus_tou_windows_wrapper
+from tests.test_basic_rates_utc import test_basic_rates_utc
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
@@ -252,6 +257,7 @@ from tests.test_kraken import run_kraken_tests
 from tests.test_kraken_auth_mixin import run_kraken_auth_mixin_tests
 from tests.test_clip_export_slots import run_clip_export_slots_tests
 from tests.test_manual_overrides import run_manual_overrides_tests
+from tests.test_charge_freeze_only import run_charge_freeze_only_tests
 from tests.test_prune_dead_slots import run_prune_dead_slots_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
@@ -409,6 +415,8 @@ def main():
         ("override_time", test_get_override_time_from_string, "Override time from string tests", False),
         ("previous_days_modal", test_previous_days_modal_filter, "Previous days modal filter tests", False),
         ("load_forecast_history", test_load_forecast_history, "Weighted historical load forecast tests", False),
+        ("holiday_mode", test_holiday_mode, "Holiday mode load forecast tests", False),
+        ("inday_adjustment_carry", test_inday_adjustment_carry, "In-day adjustment midnight carry-over tests", False),
         ("filtered_load_minute", test_filtered_load_minute, "Filtered load minute / window tests", False),
         ("fill_load_from_power", test_fill_load_from_power, "Fill load from power sensor tests", False),
         ("fetch_pv_forecast", test_fetch_pv_forecast, "Fetch PV forecast with relative_time offset tests", False),
@@ -428,6 +436,8 @@ def main():
         ("octopus_intelligent_devices", test_octopus_intelligent_devices_wrapper, "Octopus intelligent devices tests (flexPlannedDispatches, energyAddedKwh)", False),
         ("octopus_sensor_due", test_octopus_sensor_due_wrapper, "Octopus intelligent sensor 2-minute update scheduling tests", False),
         ("octopus_day_night_rates", test_octopus_day_night_rates_wrapper, "Octopus day/night rate window selection tests (IOG TOU, GO, Economy 7)", False),
+        ("octopus_tou_windows", test_octopus_tou_windows_wrapper, "Octopus TOU window detection and UTC-anchored fallback window tests", False),
+        ("basic_rates_utc", test_basic_rates_utc, "basic_rates utc option tests", False),
         ("download_octopus_rates", test_octopus_download_rates_wrapper, "Test download octopus rates", False),
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
@@ -452,6 +462,7 @@ def main():
         ("debug_history_client_js", test_debug_history_client_js, "Debug-history client-side JS structure tests (#4438 review item 22)", False),
         ("metrics_dashboard_soc_refresh", test_soc_chart_center_text_reads_live_data, "Metrics dashboard SoC chart live-refresh tests", False),
         ("web_functions", run_web_functions_tests, "Web function unit tests", False),
+        ("web_power_flow", run_web_power_flow_tests, "Power flow diagram car charging tests", False),
         ("web_logo_image", run_web_logo_image_tests, "Local logo image route tests (issue #4562)", False),
         ("web_annual", test_web_annual, "Annual web tab prefill tests", False),
         ("web_annual_form", test_web_annual_form, "Annual web tab form tests", False),
@@ -610,6 +621,7 @@ def main():
         ("kraken_auth", run_kraken_auth_mixin_tests, "Kraken auth mixin tests (API key, email, refresh, 401 handling)", False),
         ("clip_export_slots", run_clip_export_slots_tests, "Clip export slots tests", False),
         ("manual_overrides", run_manual_overrides_tests, "Manual window override tests", False),
+        ("charge_freeze_only", run_charge_freeze_only_tests, "set_charge_freeze_only (no grid charging) tests", False),
         ("prune_dead_slots", run_prune_dead_slots_tests, "Prune dead plan slots tests", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),

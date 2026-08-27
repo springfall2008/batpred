@@ -220,6 +220,12 @@ pred_bat:
   #car_charging_energy:
   #  - sensor.evvc3efe773bc_active_energy_conn1
 
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  #car_charging_power:
+  #  - sensor.evvc3efe773bc_power_conn1
+
   #car_charging_planned:
   #- binary_sensor.evcc_garage_connected
 

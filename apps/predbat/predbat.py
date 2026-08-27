@@ -35,7 +35,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v8.53.1"
+THIS_VERSION = "v8.53.3"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, DEFAULT_PREDBAT_REPOSITORY
@@ -448,6 +448,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_power = 0
         self.battery_power = 0
         self.grid_power = 0
+        self.car_charging_power = 0
+        self.car_charging_power_configured = False
         self.io_adjusted = {}
         self.current_charge_limit = 0.0
         self.current_charge_limit_kwh = 0.0
@@ -510,9 +512,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
         self.load_inday_adjustment = 1.0
+        self.holiday_load_scaling = 0.7
         self.set_read_only = True
         self.set_read_only_axle = False
         self.set_reserve_enable = False
+        self.set_charge_freeze_only = False
         self.metric_cloud_coverage = 0.0
         self.future_energy_rates_import = {}
         self.future_energy_rates_export = {}
@@ -1641,6 +1645,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
                                         self.arg_errors[name] = "Invalid value None in element {}".format(sensor)
                                         errors += 1
                                         break
+
+                                if spec.get("transient_ok", False) and isinstance(state, str) and state.strip().lower() in ["unavailable", "unknown", "none", ""]:
+                                    # Home Assistant reports these while an entity is offline or has
+                                    # not produced a reading yet. For a sensor that legitimately drops
+                                    # out - an EV charger with nothing plugged into it - that is normal
+                                    # rather than a misconfiguration, and flagging it leaves the whole
+                                    # run reporting errors. A missing entity is still an error above,
+                                    # so a typo in the name is still caught.
+                                    continue
 
                                 validated = False
                                 if "float" in sensor_types and self.validate_is_float(state):

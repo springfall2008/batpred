@@ -22,6 +22,12 @@ repos:
     language: python
     entry: python .cspell/sort_dictionary.py
     files: ^\.cspell\/custom-dictionary-workspace\.txt$
+  - id: triage-daemon-tests
+    name: triage daemon unit tests
+    language: python
+    entry: python tools/test_triage_daemon.py
+    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+    pass_filenames: false
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0
   hooks:

@@ -35,8 +35,8 @@ def build_load_minutes(day_rates, extra_minutes=10):
     return MinuteArray(data, size)
 
 
-def expected_day_weight(now_utc, day, holiday_factor=1.0):
-    """Re-implement the static weekday*age weighting (holiday applied separately) to validate the forecast."""
+def expected_day_weight(now_utc, day):
+    """Re-implement the static weekday*age weighting (holiday matching applied separately) to validate the forecast."""
     today_dow = now_utc.weekday()
     hist_dow = (now_utc - timedelta(days=day)).weekday()
     if hist_dow == today_dow:
@@ -46,7 +46,7 @@ def expected_day_weight(now_utc, day, holiday_factor=1.0):
     else:
         weekday_factor = 0.5
     age_factor = max(0.1, 0.9 - (day - 1) * 0.03)
-    return weekday_factor * holiday_factor * age_factor
+    return weekday_factor * age_factor
 
 
 def step_energy_at(load_forecast, minute_absolute):
@@ -94,7 +94,7 @@ def test_load_forecast_history(my_predbat):
     my_predbat.load_minutes = build_load_minutes(day_rates)
     my_predbat.load_minutes_age = num_days
 
-    my_predbat.get_holiday_minutes = lambda now, n: None  # no holiday history -> neutral holiday factor (1.0)
+    my_predbat.get_holiday_minutes = lambda now, n: None  # no holiday history -> every sample treated as not on holiday
 
     forecast = my_predbat.compute_load_forecast_history(now_utc)
 
@@ -125,7 +125,7 @@ def test_load_forecast_history(my_predbat):
     day_rates = {1: 0.002, 2: 0.0, 3: 0.004}  # day 2 entirely missing/zero
     my_predbat.load_minutes = build_load_minutes(day_rates)
     my_predbat.load_minutes_age = 3
-    my_predbat.get_holiday_minutes = lambda now, n: None  # neutral holiday factor
+    my_predbat.get_holiday_minutes = lambda now, n: None  # no holiday history
 
     forecast = my_predbat.compute_load_forecast_history(now_utc)
 
@@ -249,7 +249,7 @@ def test_load_forecast_history(my_predbat):
         print("ERROR: empty history should return None")
         failed = True
     else:
-        print("Empty history returns None (neutral holiday factor)")
+        print("Empty history returns None (samples then treated as not on holiday)")
     my_predbat.get_history_wrapper = original_history
     my_predbat.holiday_days_left = 0
 
@@ -263,8 +263,8 @@ def test_load_forecast_history(my_predbat):
     toggle_minutes = {ma: (3.0 if 1 <= ma <= 720 else 0.0) for ma in range(3 * 24 * 60)}
 
     # End-to-end: yesterday (d=1) had a holiday toggle mid-day; today is not on holiday.
-    # Morning buckets match today's state (factor 1.0), afternoon buckets do not (factor 0.5),
-    # so a morning slot and an afternoon slot must produce different weighted averages.
+    # Morning buckets match today's state and are averaged in, afternoon buckets do not and are
+    # excluded outright, so a morning slot and an afternoon slot must produce different averages.
     setup_predbat(my_predbat, now_utc)
     my_predbat.forecast_minutes = 24 * 60  # cover a full day so afternoon slots map within yesterday
     day_rates = {1: 0.002, 2: 0.004}  # distinct so the holiday weight shift is observable
@@ -275,13 +275,14 @@ def test_load_forecast_history(my_predbat):
     forecast = my_predbat.compute_load_forecast_history(now_utc)
 
     def expected_with_holiday(slot_minute):
+        """Weighted mean of the buckets whose holiday state matches today's; mismatched ones are excluded."""
         num = 0.0
         den = 0.0
         for d in (1, 2):
             minute_previous = 24 * 60 - slot_minute + 24 * 60 * (d - 1)
-            holiday_active = toggle_minutes.get(minute_previous, 0) > 0
-            holiday_factor = 1.0 if (holiday_active == False) else 0.5  # today_holiday is False
-            w = expected_day_weight(now_utc, d, holiday_factor=holiday_factor)
+            if toggle_minutes.get(minute_previous, 0) > 0:
+                continue  # today is not on holiday, so a holiday bucket carries no weight at all
+            w = expected_day_weight(now_utc, d)
             num += 5 * day_rates[d] * w
             den += w
         return num / den

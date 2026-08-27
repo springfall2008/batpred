@@ -794,6 +794,9 @@ class AlphaESSAPI(ComponentBase):
         if ev_devices:
             self.set_arg_auto("car_charging_energy", [self._sensor_name(sn, "ev_energy_today") for sn in ev_devices])
             self.log("Info: AlphaESS mapped car_charging_energy to the EV charger energy of {} inverter(s): {}. It only affects the plan once car_charging_hold is enabled.".format(len(ev_devices), ev_devices))
+            # The live power reading of the same chargers. Display only - it feeds the web power
+            # flow diagram and the predbat.car_charging_power sensor, never the plan.
+            self.set_arg_auto("car_charging_power", [self._sensor_name(sn, "ev_power") for sn in ev_devices])
         else:
             self.log("Info: AlphaESS found no EV charger on any inverter, so car_charging_energy is left unset")
 

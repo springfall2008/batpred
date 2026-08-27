@@ -104,6 +104,33 @@ class Fetch:
             id += 1
         return new_data
 
+    def inday_yesterday_weight(self, minutes_now):
+        """
+        Weight the previous day's in-day load adjustment carries at a point in the day: full weight for the
+        first three hours (too little of today has happened to measure a divergence), then decaying linearly
+        to zero by midnight as today's own measurement takes over.
+        """
+        if minutes_now < 180:
+            return 1.0
+        return (24 * 60 - minutes_now) / (24 * 60)
+
+    def inday_adjustment_at(self, minute_absolute, scale_today):
+        """
+        In-day load adjustment factor to apply at a given minute from midnight today.
+
+        Today keeps the factor in full. Tomorrow it decays on exactly the curve load_today_comparison() will
+        use when it seeds tomorrow's factor from today's final value, so the plan agrees with what Predbat
+        will actually apply a few hours later - resetting to 1.0 at midnight instead left tonight's overnight
+        charge sized against a forecast Predbat was about to correct (batpred#4732). Beyond tomorrow there is
+        no measurement left to carry and the factor is neutral.
+        """
+        day_offset = minute_absolute // (24 * 60)
+        if day_offset <= 0:
+            return scale_today
+        if day_offset > 1:
+            return 1.0
+        return 1.0 + (scale_today - 1.0) * self.inday_yesterday_weight(minute_absolute % (24 * 60))
+
     def step_data_history(
         self,
         item,
@@ -135,9 +162,9 @@ class Fetch:
             if load_scaling_dynamic:
                 scaling_dynamic = load_scaling_dynamic.get(minute_absolute, scaling_dynamic)
 
-            # Reset in-day adjustment for tomorrow
-            if (minute + minutes_now) > 24 * 60:
-                scale_today = 1.0
+            # Carry the in-day adjustment over midnight on the decay curve load_today_comparison() will
+            # apply tomorrow, rather than resetting it to 1.0 (batpred#4732)
+            scale_slot = self.inday_adjustment_at(minute_absolute, scale_today)
 
             if type_load and not forward:
                 if self.load_forecast_only:
@@ -163,7 +190,7 @@ class Fetch:
             if load_adjust:
                 load_extra += load_adjust.get(minute_absolute, 0) * step / float(self.plan_interval_minutes)  # The kWh figure is for the plan interval period, so divide by plan_interval_minutes and times by step
             load_extra = max(load_extra, -value)  # Don't allow going to negative load values
-            values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_today * scale_fixed)
+            values[minute] = dp4((value + load_extra) * scaling_dynamic * scale_slot * scale_fixed)
 
             # Apply dynamic baseline
             if minute_absolute in load_baseline:
@@ -1920,6 +1947,17 @@ class Fetch:
                 if end_minutes <= start_minutes:
                     end_minutes += 24 * 60
 
+                # A window flagged utc is given in UTC rather than local wall-clock time, so shift it
+                # by the local offset. That keeps a UTC-fixed schedule - an Economy 7 smart meter, for
+                # instance - aligned with the meter through British Summer Time instead of running an
+                # hour early. The offset is taken at local midnight, which is the reference the
+                # returned minute keys are relative to.
+                if this_rate.get("utc", False):
+                    utc_offset = self.midnight_utc.utcoffset()
+                    offset_minutes = int(utc_offset.total_seconds() // 60) if utc_offset else 0
+                    start_minutes += offset_minutes
+                    end_minutes += offset_minutes
+
                 # Adjust for date if specified
                 if date:
                     delta_minutes = minutes_to_time(date, self.midnight)
@@ -2286,6 +2324,13 @@ class Fetch:
         Build a per-minute history of the holiday_days_left value (indexed by minutes-ago) from the recorded
         entity history using minute_data, which holds each state forward until the next change.
 
+        Covers num_days + 1 days rather than num_days: a sample taken "num_days whole days ago at time of
+        day tod" reaches minutes_now past the num_days boundary, so a num_days map leaves the oldest day
+        in the window unreadable for every slot with tod <= minutes_now (batpred#4732). This mirrors the
+        load history window, which is deliberately max_days_previous = window_days + 1 for the same reason.
+        Both the fetch and the minute_data span have to be widened - minute_data bounds its map at
+        days * 24 * 60, so raising the index alone would just return the not-on-holiday default instead.
+
         Returns the minute_data dict, or None when no usable history is available.
         """
         item = self.config_index.get("holiday_days_left", None) if getattr(self, "config_index", None) else None
@@ -2293,15 +2338,16 @@ class Fetch:
         if not entity_id:
             return None
 
+        history_days = num_days + 1
         try:
-            history = self.get_history_wrapper(entity_id=entity_id, days=num_days, required=False)
+            history = self.get_history_wrapper(entity_id=entity_id, days=history_days, required=False)
         except (ValueError, TypeError):
             history = None
 
         if not history or not isinstance(history, list) or not history[0]:
             return None
 
-        holiday_minutes, _ = minute_data(history[0], num_days, now_utc, "state", "last_updated", backwards=True)
+        holiday_minutes, _ = minute_data(history[0], history_days, now_utc, "state", "last_updated", backwards=True)
         return holiday_minutes or None
 
     def compute_load_forecast_history(self, now_utc):
@@ -2311,13 +2357,21 @@ class Fetch:
 
         For each forward 5-minute slot the historical sample at the same time-of-day is gathered from each
         available past day and combined as a weighted average, ignoring zero (missing-data) buckets entirely.
-        Per-sample weight = weekday_factor * holiday_factor * age_factor:
+
+        Only days whose holiday state matches that of the day the slot falls on are averaged - the holiday
+        state is matched per sample (not per whole day) so a mid-day change of holiday mode is handled
+        correctly, and per forward day (not just today's) so the day you come home is planned against
+        non-holiday history. Per-sample weight = weekday_factor * age_factor:
           - weekday_factor: 1.0 if the historical day is the same weekday as today; else 0.7 if both are
-            weekend or both are weekday; else 0.5 (one weekday, one weekend).
-          - holiday_factor: 1.0 if the holiday state when that individual 5-minute sample was recorded matches
-            today's holiday state; else 0.5. This is matched per sample (not per whole day) so a mid-day change
-            of holiday mode is handled correctly.
+            weekend or both are weekday; else 0.5 (one weekday, one weekend). Held at 1.0 between two
+            holiday days: holiday load has no weekday structure, and discarding weight from a pool of two
+            or three matching days only amplifies noise.
           - age_factor: 0.9 for yesterday, reducing by 0.03 per day down to a floor of 0.1.
+
+        A slot with no matching history at all - the first 24 hours of a holiday, or a return from one
+        longer than the search window - falls back to the plain weighted average of every day scaled by
+        holiday_load_scaling (or divided by it when coming home), so holiday mode acts from the moment it
+        is switched on rather than waiting for a day of holiday history to accumulate (batpred#4732).
 
         Returns a cumulative-from-midnight kWh dict (same format as the ML load forecast), or {} if no data.
         """
@@ -2329,12 +2383,17 @@ class Fetch:
             return {}
 
         today_dow = now_utc.weekday()
-        today_holiday = self.holiday_days_left > 0
         holiday_minutes = self.get_holiday_minutes(now_utc, num_days)
-        max_holiday_index = num_days * 24 * 60 - 1
+        # get_holiday_minutes covers num_days + 1 days so the oldest day in the window stays readable for
+        # every slot; anything older than that is genuinely unknown (a purged or short recorder history)
+        max_holiday_index = (num_days + 1) * 24 * 60 - 1
+        # Assumed holiday load as a fraction of normal, used only for slots with no matching history
+        holiday_load_scaling = min(max(self.holiday_load_scaling, 0.1), 1.0)
 
-        # Precompute the static per-day weight (weekday * age); the holiday factor is applied per 5-minute bucket
+        # Precompute the per-day weights; the holiday state is matched per 5-minute bucket below. The age-only
+        # weight is what a holiday-to-holiday match uses, the weekday * age weight everything else.
         day_static_weight = {}
+        day_age_weight = {}
         for d in range(1, num_days + 1):
             hist_dow = (now_utc - timedelta(days=d)).weekday()
             if hist_dow == today_dow:
@@ -2346,6 +2405,7 @@ class Fetch:
                 weekday_factor = 0.5
             # Age: 0.9 for yesterday (d=1), reducing by 0.03 per day down to a floor of 0.1
             age_factor = max(0.1, 0.9 - (d - 1) * 0.03)
+            day_age_weight[d] = age_factor
             day_static_weight[d] = weekday_factor * age_factor
 
         # Build the per-step (5-minute) weighted-average estimate, keyed by minute-from-midnight, across the
@@ -2355,8 +2415,14 @@ class Fetch:
         per_step = {}
         for minute_absolute in range(0, horizon_end, PREDICT_STEP):
             tod = minute_absolute % (24 * 60)  # time of day of this slot
-            total = 0.0
-            total_weight = 0.0
+            # Holiday state of the day this slot falls on, not of today. holiday_days_left counts whole days
+            # remaining including today and is decremented at midnight, so the day you travel home (and every
+            # day after it) is planned against non-holiday history while you are still away.
+            slot_holiday = self.holiday_days_left > (minute_absolute // (24 * 60))
+            match_total = 0.0
+            match_weight = 0.0
+            all_total = 0.0
+            all_weight = 0.0
             for d in range(1, num_days + 1):
                 # Sample d whole days ago at this slot's time of day. Counting in whole days from today keeps
                 # each day distinct and handles midnight crossings (the slot may be tomorrow or later).
@@ -2367,18 +2433,29 @@ class Fetch:
                 sample, raw = self.get_filtered_load_minute(self.load_minutes, minute_previous, historical=False, step=PREDICT_STEP, base_in_raw=False)
                 if raw <= 0:
                     continue
-                # Match the holiday state at the moment this individual sample was recorded (per bucket). If
-                # the sample is older than the holiday history we have, treat it as matching today (neutral)
-                # rather than reusing the oldest known state.
+                # Holiday state at the moment this individual sample was recorded (per bucket). A sample older
+                # than the holiday history we hold is treated as not on holiday, the same default minute_data
+                # gives for a gap inside the window - treating it as matching instead would hand full weight to
+                # exactly the pre-holiday days holiday mode exists to discount.
                 if holiday_minutes is None or minute_previous > max_holiday_index:
-                    holiday_active = today_holiday
+                    holiday_active = False
                 else:
                     holiday_active = holiday_minutes.get(minute_previous, 0) > 0
-                holiday_factor = 1.0 if (holiday_active == today_holiday) else 0.5
-                weight = day_static_weight[d] * holiday_factor
-                total += sample * weight
-                total_weight += weight
-            per_step[minute_absolute] = (total / total_weight) if total_weight > 0 else 0.0
+                all_total += sample * day_static_weight[d]
+                all_weight += day_static_weight[d]
+                if holiday_active == slot_holiday:
+                    weight = day_age_weight[d] if slot_holiday else day_static_weight[d]
+                    match_total += sample * weight
+                    match_weight += weight
+            if match_weight > 0:
+                per_step[minute_absolute] = match_total / match_weight
+            elif all_weight > 0:
+                # Nothing in the window shares this slot's holiday state. Rather than leaving holiday mode inert
+                # (a normalised mean cannot express "all of my data is wrong"), fall back to every day scaled by
+                # the assumed holiday ratio - or divided by it when we are home and the whole window was holiday.
+                per_step[minute_absolute] = (all_total / all_weight) * (holiday_load_scaling if slot_holiday else 1.0 / holiday_load_scaling)
+            else:
+                per_step[minute_absolute] = 0.0
 
         # Convert per-step kWh buckets into a cumulative-from-midnight dict, filling every minute by linear
         # interpolation across each 5-minute span so get_from_incrementing(..., backwards=False) reproduces
@@ -2543,6 +2620,7 @@ class Fetch:
 
         # Days previous
         self.holiday_days_left = self.get_arg("holiday_days_left")
+        self.holiday_load_scaling = self.get_arg("holiday_load_scaling", 0.7)
         self.load_forecast_only = self.get_arg("load_forecast_only", False)
 
         self.days_previous = self.get_arg("days_previous", [7])
@@ -2709,6 +2787,7 @@ class Fetch:
         self.set_reserve_hold = True
         self.set_export_freeze = self.get_arg("set_export_freeze")
         self.set_charge_freeze = self.get_arg("set_charge_freeze")
+        self.set_charge_freeze_only = self.get_arg("set_charge_freeze_only")
         self.set_charge_low_power = self.get_arg("set_charge_low_power")
         self.set_export_low_power = self.get_arg("set_export_low_power")
         self.charge_low_power_margin = self.get_arg("charge_low_power_margin")

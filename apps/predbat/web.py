@@ -564,6 +564,24 @@ class WebInterface(ComponentBase):
             icon = '<span class="mdi mdi-{}"></span>'.format(icon.replace("mdi:", ""))
         return icon
 
+    def get_battery_icon(self, soc_percent, charging):
+        """
+        Pick the Material Design Icon showing how full the battery is and whether it is charging
+
+        The charging variants carry the same three levels plus a bolt, so the level survives in
+        both directions. battery-plus and battery-minus exist but have no level in them, so they
+        would trade the state of charge away for the sign.
+        """
+        if soc_percent < 30:
+            level = 0
+        elif soc_percent < 70:
+            level = 1
+        else:
+            level = 2
+        if charging:
+            return ["&#xF12A4;", "&#xF12A5;", "&#xF12A6;"][level]  # battery-charging low/medium/high
+        return ["&#xF12A1;", "&#xF12A2;", "&#xF12A3;"][level]  # battery low/medium/high
+
     def get_power_flow_diagram(self):
         """
         Generate a graphical power flow diagram showing energy movement between grid, battery, PV, and house load
@@ -583,14 +601,25 @@ class WebInterface(ComponentBase):
         pv_power = self.base.pv_power
         load_power = self.base.load_power
 
-        # Determine flow directions
-        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
-        grid_exporting = grid_power >= 10  # Grid is exporting power (positive value)
+        # Car charging only appears when a car_charging_power sensor is configured (execute.py
+        # update_car_charging_power). The charger sits on the house side of the meter, so its power
+        # is already inside load_power - subtract it so the House circle reads as the rest of the
+        # house rather than counting the car twice. Clamped at zero because the two readings come
+        # from different meters and a slow-updating load sensor can briefly read below the car.
+        car_configured = self.base.car_charging_power_configured
+        car_power = self.base.car_charging_power
+        house_power = max(0, load_power - car_power) if car_configured else load_power
 
-        battery_charging = battery_power >= 10  # Battery is charging (positive value)
-        battery_discharging = battery_power <= -10  # Battery is discharging (negative value)
+        # Determine flow directions. battery_power is positive when the battery is DISCHARGING
+        # (gateway.py negates the firmware's sign for exactly this reason) and grid_power is
+        # negative when importing, so the reading and the arrow run opposite ways round.
+        grid_importing = grid_power <= -10  # Grid is importing power (negative value)
+
+        battery_to_house = battery_power >= 10  # Battery is discharging into the house
+        battery_charging = battery_power <= -10  # Power is flowing into the battery
 
         pv_generating = pv_power > 0  # PV is generating power
+        battery_icon = self.get_battery_icon(self.base.soc_percent, battery_charging)
         html = ""
 
         html += """
@@ -598,40 +627,89 @@ class WebInterface(ComponentBase):
             <svg width="600" height="400" viewBox="0 0 600 400" xmlns="http://www.w3.org/2000/svg">
 
                 <!-- Grid Circle -->
-                <circle cx="450" cy="300" r="50" fill="#4CAF50" />
-                <text x="450" y="300" text-anchor="middle" dy=".3em" fill="#fff">Grid</text>
+                <circle cx="450" cy="300" r="50" fill="#757575"><title>Grid</title></circle>
+                <text x="450" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D3E;</text>
 
                 <!-- Battery Circle -->
-                <circle cx="150" cy="300" r="50" fill="#FF9800" />
-                <text x="150" y="300" text-anchor="middle" dy=".3em" fill="#fff">Battery</text>
+                <circle cx="150" cy="300" r="50" fill="#43A047"><title>Battery</title></circle>
+                <text x="150" y="300" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">{}</text>
 
                 <!-- PV Circle -->
-                <circle cx="150" cy="100" r="50" fill="#2196F3" />
-                <text x="150" y="100" text-anchor="middle" dy=".3em" fill="#fff">PV</text>
+                <circle cx="150" cy="100" r="50" fill="#FDD835"><title>PV</title></circle>
+                <text x="150" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF0D9B;</text>
 
                 <!-- House Circle -->
-                <circle cx="300" cy="200" r="50" fill="#9C27B0" />
-                <text x="300" y="190" text-anchor="middle" dy=".3em" fill="#fff">House</text>
+                <circle cx="300" cy="200" r="50" fill="#6D4C41"><title>House</title></circle>
+                <text x="300" y="186" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="34" fill="#fff">&#xF02DC;</text>
                 <text x="300" y="215" text-anchor="middle" dy=".3em" fill="#fff">{} W</text>
 
                 <!-- Define animation paths -->
                 <defs>
                     <!-- PV to House path -->
-                    <path id="pv-house-path" d="M200,100 L250,150" stroke="transparent" fill="none" />
+                    <path id="pv-house-path" d="M192,128 L241,161" stroke="transparent" fill="none" />
                     <!-- House to PV path -->
-                    <path id="house-pv-path" d="M250,150 L200,100" stroke="transparent" fill="none" />
+                    <path id="house-pv-path" d="M241,161 L192,128" stroke="transparent" fill="none" />
                     <!-- Battery to House path -->
-                    <path id="battery-house-path" d="M200,300 L250,250" stroke="transparent" fill="none" />
+                    <path id="battery-house-path" d="M192,272 L241,239" stroke="transparent" fill="none" />
                     <!-- House to Battery path -->
-                    <path id="house-battery-path" d="M265,235 L215,275" stroke="transparent" fill="none" />
+                    <path id="house-battery-path" d="M258,228 L209,261" stroke="transparent" fill="none" />
                     <!-- Grid to House path -->
-                    <path id="grid-house-path" d="M410,290 L355,240" stroke="transparent" fill="none" />
+                    <path id="grid-house-path" d="M408,272 L359,239" stroke="transparent" fill="none" />
                     <!-- House to Grid path -->
-                    <path id="house-grid-path" d="M340,230 L390,270" stroke="transparent" fill="none" />
+                    <path id="house-grid-path" d="M342,228 L391,261" stroke="transparent" fill="none" />
                 </defs>
         """.format(
-            dp0(load_power)
+            battery_icon, dp0(house_power)
         )
+
+        # Car charging arm - drawn top right, the corner left free by PV/battery/grid
+        if car_configured:
+            car_charging = car_power >= 10
+            html += """
+                <!-- Car Circle -->
+                <circle cx="450" cy="100" r="50" fill="#E53935"><title>Car</title></circle>
+                <text x="450" y="100" text-anchor="middle" dy=".35em" font-family="Material Design Icons" font-size="44" fill="#fff">&#xF010B;</text>
+
+                <defs>
+                    <!-- House to Car path -->
+                    <path id="house-car-path" d="M342,172 L391,139" stroke="transparent" fill="none" />
+                    <marker id="car-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
+                    </marker>
+                </defs>
+            """
+            if car_charging:
+                # Calculate animation speed based on power flow - faster for higher power
+                car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
+
+                html += """
+                <!-- House to Car Arrow -->
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+
+                <!-- Moving dots for House to Car -->
+                <circle r="4" fill="#E53935" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,172 L391,139" />
+                </circle>
+                <circle r="3" fill="#E53935" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,172 L391,139" />
+                </circle>
+                <circle r="2" fill="#E53935" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,172 L391,139" />
+                </circle>
+                """.format(
+                    dp0(car_power), car_speed, car_speed, car_speed
+                )
+            else:
+                html += """
+                <!-- House to Car Arrow (dashed) -->
+                <line x1="342" y1="172" x2="391" y2="139" stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
+                <text x="356" y="122" text-anchor="middle" fill="#E53935">{} W</text>
+                <!-- No moving dot when the car is not charging -->
+                """.format(
+                    dp0(car_power)
+                )
+
         # Draw arrows and labels
         if pv_generating:
             # Calculate animation speed based on power flow - faster for higher power
@@ -639,18 +717,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- PV to House Arrow -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
 
                 <!-- Moving dots for PV to House -->
-                <circle r="4" fill="#2196F3" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,100 L250,150" />
+                <circle r="4" fill="#F9A825" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,128 L241,161" />
                 </circle>
-                <circle r="3" fill="#2196F3" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,100 L250,150" />
+                <circle r="3" fill="#F9A825" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,128 L241,161" />
                 </circle>
-                <circle r="2" fill="#2196F3" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,100 L250,150" />
+                <circle r="2" fill="#F9A825" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,128 L241,161" />
                 </circle>
             """.format(
                 dp0(pv_power), pv_speed, pv_speed, pv_speed
@@ -659,30 +737,30 @@ class WebInterface(ComponentBase):
             # Make the PV to House line dashed if not generating
             html += """
                 <!-- PV to House Arrow (dashed) -->
-                <line x1="200" y1="100" x2="250" y2="150" stroke="#2196F3" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
-                <text x="250" y="120" text-anchor="middle" fill="#2196F3">{} W</text>
+                <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
+                <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
                 <!-- No moving dot when PV is not generating -->
             """.format(
                 dp0(pv_power)
             )
-        if battery_charging:
+        if battery_to_house:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
 
             html += """
                 <!-- Battery to House Arrow -->
-                <line x1="200" y1="300" x2="250" y2="250" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="192" y1="272" x2="241" y2="239" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for Battery to House -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M200,300 L250,250" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M192,272 L241,239" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M200,300 L250,250" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M192,272 L241,239" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M200,300 L250,250" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,272 L241,239" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -693,18 +771,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Battery Arrow -->
-                <line x1="265" y1="235" x2="215" y2="275" stroke="#FF9800" stroke-width="2" marker-end="url(#battery-arrow)" />
-                <text x="260" y="280" text-anchor="middle" fill="#FF9800">{} W</text>
+                <line x1="258" y1="228" x2="209" y2="261" stroke="#43A047" stroke-width="2" marker-end="url(#battery-arrow)" />
+                <text x="244" y="278" text-anchor="middle" fill="#43A047">{} W</text>
 
                 <!-- Moving dots for House to Battery -->
-                <circle r="4" fill="#FF9800" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M265,235 L215,275" />
+                <circle r="4" fill="#43A047" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M258,228 L209,261" />
                 </circle>
-                <circle r="3" fill="#FF9800" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M265,235 L215,275" />
+                <circle r="3" fill="#43A047" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M258,228 L209,261" />
                 </circle>
-                <circle r="2" fill="#FF9800" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M265,235 L215,275" />
+                <circle r="2" fill="#43A047" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M258,228 L209,261" />
                 </circle>
             """.format(
                 dp0(battery_power), battery_speed, battery_speed, battery_speed
@@ -716,18 +794,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- Grid to House Arrow -->
-                <line x1="410" y1="290" x2="355" y2="240" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="350" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="408" y1="272" x2="359" y2="239" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for Grid to House -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M410,290 L355,240" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M408,272 L359,239" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M410,290 L355,240" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M408,272 L359,239" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M410,290 L355,240" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M408,272 L359,239" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -738,18 +816,18 @@ class WebInterface(ComponentBase):
 
             html += """
                 <!-- House to Grid Arrow -->
-                <line x1="340" y1="230" x2="390" y2="270" stroke="#4CAF50" stroke-width="2" marker-end="url(#grid-arrow)" />
-                <text x="340" y="280" text-anchor="middle" fill="#4CAF50">{} W</text>
+                <line x1="342" y1="228" x2="391" y2="261" stroke="#757575" stroke-width="2" marker-end="url(#grid-arrow)" />
+                <text x="356" y="278" text-anchor="middle" fill="#757575">{} W</text>
 
                 <!-- Moving dots for House to Grid -->
-                <circle r="4" fill="#4CAF50" opacity="0.8">
-                    <animateMotion dur="{}s" repeatCount="indefinite" path="M340,230 L390,270" />
+                <circle r="4" fill="#757575" opacity="0.8">
+                    <animateMotion dur="{}s" repeatCount="indefinite" path="M342,228 L391,261" />
                 </circle>
-                <circle r="3" fill="#4CAF50" opacity="0.6">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M340,230 L390,270" />
+                <circle r="3" fill="#757575" opacity="0.6">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="0.5s" path="M342,228 L391,261" />
                 </circle>
-                <circle r="2" fill="#4CAF50" opacity="0.4">
-                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M340,230 L390,270" />
+                <circle r="2" fill="#757575" opacity="0.4">
+                    <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,228 L391,261" />
                 </circle>
             """.format(
                 dp0(grid_power), grid_speed, grid_speed, grid_speed
@@ -758,13 +836,13 @@ class WebInterface(ComponentBase):
                 <!-- Arrowhead Marker -->
                 <defs>
                     <marker id="pv-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#2196F3"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#F9A825"/>
                     </marker>
                     <marker id="battery-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#FF9800"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#43A047"/>
                     </marker>
                     <marker id="grid-arrow" markerWidth="10" markerHeight="7" refX="0" refY="3.5" orient="auto">
-                    <polygon points="0 0, 10 3.5, 0 7" fill="#4CAF50"/>
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#757575"/>
                     </marker>
                 </defs>
             </svg>
