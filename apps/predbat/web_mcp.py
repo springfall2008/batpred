@@ -20,7 +20,7 @@ import asyncio
 import json
 from typing import Any, Dict
 from datetime import datetime, timezone, timedelta
-from utils import calc_percent_limit, get_override_time_from_string
+from utils import calc_percent_limit, get_override_time_from_string, mask_secret_args, read_predbat_log, classify_log_line, log_line_included, parse_log_timestamp, is_debug_excluded_key
 import re
 from aiohttp import web
 import secrets
@@ -40,6 +40,165 @@ Example usage in VSCode with OAuth
 		}
 	}
 """
+
+
+# Log filter levels accepted by the get_log tool, matching the web log view's tabs
+LOG_FILTER_TYPES = ("all", "info", "warnings", "errors")
+
+# get_log line budget - the default keeps a response small enough for an AI context window,
+# the cap stops a "max_lines": 999999 request pulling a 10MB log through the protocol (#4768)
+MCP_LOG_DEFAULT_LINES = 500
+MCP_LOG_MAX_LINES = 5000
+
+
+# get_state size guards. A real debug dump is ~5MB, but 272 of its 313 top-level keys are under
+# 1KB and total under 10KB between them - the whole scalar state of Predbat. The per-key budget
+# returns those freely while the handful of per-minute series (load_minutes, rate_import, ...)
+# are described rather than serialised (#4768).
+MCP_STATE_DEFAULT_MAX_BYTES = 2048
+MCP_STATE_MAX_BYTES_LIMIT = 262144
+MCP_STATE_TOTAL_BYTES_LIMIT = 262144
+
+# Collections longer than this are summarised without serialising them first - measuring a 2880
+# entry per-minute dict by encoding it would cost more than the tool call is worth.
+MCP_STATE_LARGE_COLLECTION = 200
+
+# How many entries of a large collection to show in its summary
+MCP_STATE_SAMPLE_ENTRIES = 3
+
+
+def json_safe_value(value, depth=0):
+    """
+    Convert a Predbat state value into something json.dumps can encode.
+
+    Tool results are serialised with a plain json.dumps, so a stray datetime or inverter object
+    would fail the whole call - anything unrecognised becomes its str() rather than an error.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if depth >= 6:
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_safe_value(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe_value(item, depth + 1) for item in value]
+    return str(value)
+
+
+def summarise_state_value(value):
+    """
+    Describe a state value that is too large to return in full, so the caller can still see its
+    shape and decide whether to ask for it another way.
+    """
+    summary = {"type": type(value).__name__}
+    try:
+        summary["length"] = len(value)
+    except TypeError:
+        pass
+
+    if isinstance(value, dict):
+        keys = list(value.keys())[:MCP_STATE_SAMPLE_ENTRIES]
+        summary["sample_keys"] = [str(key) for key in keys]
+        numbers = [item for item in value.values() if isinstance(item, (int, float)) and not isinstance(item, bool)]
+    elif isinstance(value, (list, tuple, set)):
+        numbers = [item for item in value if isinstance(item, (int, float)) and not isinstance(item, bool)]
+        summary["sample_entries"] = [json_safe_value(item, depth=5) for item in list(value)[:MCP_STATE_SAMPLE_ENTRIES]]
+    elif isinstance(value, str):
+        summary["preview"] = value[:200]
+        numbers = []
+    else:
+        numbers = []
+
+    if numbers:
+        summary["min"] = min(numbers)
+        summary["max"] = max(numbers)
+        summary["mean"] = sum(numbers) / len(numbers)
+
+    return summary
+
+
+def measure_state_value(value, max_bytes):
+    """
+    Return (fits, safe_value, size_bytes) for a state value.
+
+    fits is a separate flag rather than a None safe_value because plenty of Predbat state is
+    legitimately None, and a None sentinel would report every one of those as omitted.
+
+    Long collections are rejected on their entry count alone so the per-minute series are never
+    serialised just to discover they don't fit.
+    """
+    if isinstance(value, (dict, list, tuple, set)) and len(value) > MCP_STATE_LARGE_COLLECTION:
+        return False, None, None
+    safe = json_safe_value(value)
+    try:
+        size = len(json.dumps(safe))
+    except (TypeError, ValueError):
+        safe = str(value)
+        size = len(safe) + 2
+    if size > max_bytes:
+        return False, None, None
+    return True, safe, size
+
+
+class MCPArgumentError(ValueError):
+    """Raised when a tool argument is the wrong type or shape, so it can be reported clearly."""
+
+
+def parse_number_argument(value, name, default, minimum=None, maximum=None, as_float=False):
+    """
+    Coerce a numeric tool argument, clamping it into range.
+
+    Out-of-range values are clamped rather than rejected - a client asking for more than the cap
+    wants as much as it can have - but a value that is not a number at all is a mistake, and the
+    caller is an AI assistant that can only correct itself if told which argument was wrong.
+    """
+    if value is None:
+        value = default
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise MCPArgumentError("'{}' must be a number, not a boolean".format(name))
+    try:
+        value = float(value) if as_float else int(value)
+    except (TypeError, ValueError):
+        raise MCPArgumentError("'{}' must be a {}, got {!r}".format(name, "number" if as_float else "whole number", value))
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
+def compile_filter_argument(value, name="filter"):
+    """
+    Compile a regex tool argument, or return None when no filter was given.
+
+    Compiling up front turns an invalid pattern into a named argument error instead of a bare
+    Python traceback, and avoids re-compiling it for every entry the caller filters over.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise MCPArgumentError("'{}' must be a string regular expression, got {!r}".format(name, value))
+    try:
+        return re.compile(value)
+    except re.error as error:
+        raise MCPArgumentError("'{}' is not a valid regular expression: {}".format(name, error))
+
+
+def parse_bool_argument(value, default=False):
+    """
+    Coerce an MCP tool argument to a bool, tolerating the strings some clients send.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() not in ("false", "0", "no", "off", "")
 
 
 class PredbatMCPServer(ComponentBase):
@@ -964,7 +1123,7 @@ class MCPServerWrapper:
         Get current Predbat entities
         """
         try:
-            filter = arguments.get("filter", None)
+            filter = compile_filter_argument(arguments.get("filter", None))
             entities = self.base.dashboard_values
             returned_entities = []
             for entity in entities:
@@ -973,7 +1132,7 @@ class MCPServerWrapper:
                 else:
                     entity_id = entity.get("entity_id", "")
                 if filter:
-                    if not re.search(filter, entity_id):
+                    if not filter.search(entity_id):
                         continue
                 if isinstance(entity, str):
                     value = {"entity_id": entity_id}
@@ -994,6 +1153,8 @@ class MCPServerWrapper:
                 returned_entities.append(value)
             return {"success": True, "error": None, "data": returned_entities, "timestamp": datetime.now().isoformat(), "description": "The current Predbat entities and their states"}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving entities data: {str(e)}", "data": None}
 
@@ -1051,37 +1212,199 @@ class MCPServerWrapper:
         Get full HA configuration for Predbat
         """
         try:
-            entity_id_filter = arguments.get("filter", None)
+            entity_id_filter = compile_filter_argument(arguments.get("filter", None))
             config_return = []
             for item in self.base.CONFIG_ITEMS:
                 if entity_id_filter:
                     entity_id = item.get("entity", None)
-                    if entity_id and re.search(entity_id_filter, entity_id):
+                    if entity_id and entity_id_filter.search(entity_id):
                         config_return.append(item)
                 else:
                     config_return.append(item)
             return {"success": True, "error": None, "data": config_return, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat configuration settings"}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving apps.yaml data: {str(e)}", "data": None}
 
     async def _execute_get_apps(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_apps tool"""
         try:
-            configuration = self.base.args
+            # Credentials are redacted unless the caller explicitly opts out - apps.yaml carries
+            # API keys, secrets and tokens, and this tool exists to hand the configuration to an
+            # AI assistant for review (#4768). Matches the web UI's own apps.yaml download.
+            masked = parse_bool_argument(arguments.get("masked", True), default=True)
+            configuration = mask_secret_args(self.base.args) if masked else self.base.args
             return_configuration = {}
-            config_id_filter = arguments.get("filter", None)
+            config_id_filter = compile_filter_argument(arguments.get("filter", None))
             for key, value in configuration.items():
                 if config_id_filter:
-                    if re.search(config_id_filter, key):
+                    if config_id_filter.search(key):
                         return_configuration[key] = value
                 else:
                     return_configuration[key] = value
 
-            return {"success": True, "error": None, "data": return_configuration, "timestamp": datetime.now().isoformat(), "description": "The contents of the Predbat apps.yaml configuration"}
+            description = "The contents of the Predbat apps.yaml configuration"
+            if masked:
+                description += " (credential-like values redacted as 'xxx')"
+            return {"success": True, "error": None, "data": return_configuration, "masked": masked, "timestamp": datetime.now().isoformat(), "description": description}
 
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
         except Exception as e:
             return {"success": False, "error": f"Error retrieving Predbat apps.yaml data: {str(e)}", "data": None}
+
+    async def _execute_get_state(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_state tool"""
+        try:
+            requested = arguments.get("keys", None)
+            if isinstance(requested, str):
+                requested = [requested]
+            if requested is not None and not isinstance(requested, list):
+                raise MCPArgumentError("'keys' must be a list of state variable names, got {!r}".format(requested))
+
+            key_filter = compile_filter_argument(arguments.get("filter", None))
+            max_bytes = parse_number_argument(arguments.get("max_bytes", None), "max_bytes", MCP_STATE_DEFAULT_MAX_BYTES, minimum=1, maximum=MCP_STATE_MAX_BYTES_LIMIT)
+
+            state = {}
+            omitted = {}
+            total_bytes = 0
+            budget_exhausted = False
+            unknown_keys = []
+
+            # Snapshot the key list up front - the plan thread can add attributes while we walk it
+            available = list(self.base.__dict__.keys())
+            if requested is not None:
+                unknown_keys = [key for key in requested if key not in available]
+                candidates = [key for key in requested if key in available]
+            else:
+                candidates = available
+
+            for key in candidates:
+                # Same filter the debug yaml uses, so this can never return what a debug dump won't
+                if is_debug_excluded_key(key):
+                    continue
+                if key_filter and not key_filter.search(key):
+                    continue
+                try:
+                    value = self.base.__dict__[key]
+                except KeyError:
+                    continue
+                if callable(value):
+                    continue
+                if key == "args":
+                    value = mask_secret_args(value)
+
+                fits, safe, size = measure_state_value(value, max_bytes)
+                if not fits:
+                    # Too large to return, but say what it is so the caller isn't guessing
+                    omitted[key] = summarise_state_value(value)
+                    continue
+                if total_bytes + size > MCP_STATE_TOTAL_BYTES_LIMIT:
+                    budget_exhausted = True
+                    omitted[key] = summarise_state_value(value)
+                    continue
+                state[key] = safe
+                total_bytes += size
+
+            data = {
+                "state": state,
+                "omitted": omitted,
+                "returned_keys": len(state),
+                "omitted_keys": len(omitted),
+                "approx_bytes": total_bytes,
+                "max_bytes": max_bytes,
+            }
+            if unknown_keys:
+                data["unknown_keys"] = unknown_keys
+
+            description = "Predbat internal state - {} variables returned".format(len(state))
+            if omitted:
+                description += ", {} described in 'omitted' instead of being returned in full (ask for one by name, or raise max_bytes)".format(len(omitted))
+            if budget_exhausted:
+                description += ". The overall response budget was reached, so narrow the request with 'keys' or 'filter'"
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving state data: {str(e)}", "data": None}
+
+    async def _execute_get_log(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute the get_log tool"""
+        try:
+            filter_type = str(arguments.get("filter", "warnings")).lower()
+            if filter_type not in LOG_FILTER_TYPES:
+                return {"success": False, "error": "Unknown filter '{}', expected one of {}".format(filter_type, ", ".join(LOG_FILTER_TYPES)), "data": None}
+
+            search_term = str(arguments.get("search", "") or "").lower().strip()
+            max_lines = parse_number_argument(arguments.get("max_lines", None), "max_lines", MCP_LOG_DEFAULT_LINES, minimum=1, maximum=MCP_LOG_MAX_LINES)
+            hours = parse_number_argument(arguments.get("hours", None), "hours", None, minimum=0, as_float=True)
+
+            loglines = read_predbat_log().split("\n")
+            total_lines = len(loglines)
+
+            # Cut-off for the hours filter. Lines with no parseable stamp (tracebacks and other
+            # continuation lines) inherit the timestamp of the newer line above them, so a
+            # multi-line entry is kept or dropped as a whole.
+            cutoff = (datetime.now() - timedelta(hours=hours)) if hours else None
+            last_timestamp = None
+
+            result_lines = []
+            truncated = False
+            matched_lines = 0
+
+            # Walk newest-first so max_lines keeps the most recent entries, as the web log view does
+            for lineno in range(total_lines - 1, -1, -1):
+                line = loglines[lineno]
+                if not line.strip():
+                    continue
+
+                timestamp = parse_log_timestamp(line)
+                if timestamp:
+                    last_timestamp = timestamp
+                if cutoff:
+                    effective_time = timestamp or last_timestamp
+                    if effective_time and effective_time < cutoff:
+                        # Everything below this point is older still
+                        break
+
+                line_type = classify_log_line(line)
+                if not log_line_included(line_type, filter_type):
+                    continue
+                if search_term and search_term not in line.lower():
+                    continue
+
+                matched_lines += 1
+                if len(result_lines) >= max_lines:
+                    truncated = True
+                    continue
+
+                result_lines.append({"line_number": lineno, "type": line_type, "line": line})
+
+            # Return oldest-first, which reads the way a log does
+            result_lines.reverse()
+
+            data = {
+                "lines": result_lines,
+                "total_lines": total_lines,
+                "returned_lines": len(result_lines),
+                "matched_lines": matched_lines,
+                "truncated": truncated,
+                "filter": filter_type,
+                "search": search_term,
+                "hours": hours,
+            }
+            description = "The Predbat log filtered to '{}' level".format(filter_type)
+            if truncated:
+                description += ", truncated to the most recent {} of {} matching lines".format(max_lines, matched_lines)
+            return {"success": True, "error": None, "data": data, "timestamp": datetime.now().isoformat(), "description": description}
+
+        except MCPArgumentError as e:
+            return {"success": False, "error": str(e), "data": None}
+        except Exception as e:
+            return {"success": False, "error": f"Error retrieving log data: {str(e)}", "data": None}
 
     async def _execute_get_status(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute the get_status tool"""
@@ -1203,8 +1526,45 @@ class MCPServerWrapper:
                 {"name": "get_status", "description": "Get the current Predbat system status and configuration", "inputSchema": {"type": "object", "properties": {}, "required": []}},
                 {
                     "name": "get_apps",
-                    "description": "Get predbat apps.yaml static configuration data",
-                    "inputSchema": {"type": "object", "properties": {"filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"}}, "required": []},
+                    "description": "Get predbat apps.yaml static configuration data, with credentials redacted by default",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "filter": {"type": "string", "description": "The configuration item name to filter on, as a Python regex (optional)"},
+                            "masked": {"type": "boolean", "description": "Redact credential-like values such as API keys, secrets and passwords (default true)"},
+                        },
+                        "required": [],
+                    },
+                },
+                {
+                    "name": "get_state",
+                    "description": "Get Predbat's internal state variables - the same data a debug yaml carries, one key at a time. Called with no arguments it returns every small variable and describes the large ones (per-minute series) without returning them.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "keys": {"type": "array", "items": {"type": "string"}, "description": "Specific state variable names to return (optional - omit for every small variable)"},
+                            "filter": {"type": "string", "description": "Only return variables whose name matches this Python regex (optional)"},
+                            "max_bytes": {"type": "integer", "description": "Per-variable size budget before it is described rather than returned (default {}, maximum {})".format(MCP_STATE_DEFAULT_MAX_BYTES, MCP_STATE_MAX_BYTES_LIMIT)},
+                        },
+                        "required": [],
+                    },
+                },
+                {
+                    "name": "get_log",
+                    "description": "Get the Predbat log (predbat.log), filtered by level, search term and age - use this to diagnose warnings and errors. Lines are returned oldest-first.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "filter": {"type": "string", "description": "Log level to return: all, info, warnings or errors (default warnings)", "enum": list(LOG_FILTER_TYPES)},
+                            "search": {"type": "string", "description": "Only return lines containing this text, case-insensitive (optional)"},
+                            "hours": {"type": "number", "description": "Only return lines written in the last N hours (optional)"},
+                            "max_lines": {
+                                "type": "integer",
+                                "description": "Maximum number of lines to return. The most recent matching lines are the ones kept, but they are returned oldest-first (default {}, maximum {})".format(MCP_LOG_DEFAULT_LINES, MCP_LOG_MAX_LINES),
+                            },
+                        },
+                        "required": [],
+                    },
                 },
                 {
                     "name": "get_config",
@@ -1254,6 +1614,10 @@ class MCPServerWrapper:
                 result = await self._execute_get_apps(arguments)
             elif tool_name == "get_config":
                 result = await self._execute_get_config(arguments)
+            elif tool_name == "get_log":
+                result = await self._execute_get_log(arguments)
+            elif tool_name == "get_state":
+                result = await self._execute_get_state(arguments)
             elif tool_name == "get_entities":
                 result = await self._execute_get_entities(arguments)
             elif tool_name == "set_config":

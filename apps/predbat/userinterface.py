@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key
 import json
 import yaml
 import re
@@ -31,27 +31,6 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
-
-DEBUG_EXCLUDE_LIST = [
-    "ha_interface",
-    "components",
-    "prediction",
-    "logfile",
-    "predheat",
-    "inverters",
-    "run_list",
-    "threads",
-    "EVENT_LISTEN_LIST",
-    "local_tz",
-    "CONFIG_ITEMS",
-    "config_index",
-    "comparison",
-    "plugin_system",
-    "ge_url_cache",
-    "github_url_cache",
-    "octopus_url_cache",
-    "secrets",
-]
 
 
 class UserInterface:
@@ -789,7 +768,7 @@ class UserInterface:
         # Store all predbat member variables into debug
         for key in self.__dict__:
             if not key.startswith("__") and not callable(getattr(self, key)):
-                if (key.startswith("db")) or ("_key" in key) or key in DEBUG_EXCLUDE_LIST:
+                if is_debug_excluded_key(key):
                     pass
                 else:
                     if key == "args":
