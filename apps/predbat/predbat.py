@@ -76,7 +76,7 @@ from const import (
 )
 from config import APPS_SCHEMA, CONFIG_ITEMS
 import debug_history
-from utils import minutes_since_yesterday, dp1, dp2, dp3
+from utils import minutes_since_yesterday, dp1, dp2, dp3, find_unmasked_secret_paths
 from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
@@ -290,6 +290,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.db_manager = None
         self.plan_debug = False
         self.arg_errors = {}
+        self.arg_warnings = {}
         self.validate_config_retries_remaining = 0
         self.validate_config_next_retry_time = None
         self.ha_interface = None
@@ -1685,7 +1686,53 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         else:
             self.log("Validation of apps.yaml was successful")
 
+        self.check_apps_yaml_secrets()
+
         return errors
+
+    def check_apps_yaml_secrets(self, apps_yaml_path=None):
+        """
+        Re-read apps.yaml with the ruamel round-trip loader (the same one the web config
+        editors use) and warn about credential-like values stored in plain text instead of
+        via a '!secret' reference into secrets.yaml.
+
+        By the time apps.yaml reaches self.args, '!secret' has already been resolved to its
+        real value, so an inline key and a secrets.yaml reference are indistinguishable there -
+        this re-reads the raw file to recover that distinction. Populates self.arg_warnings
+        rather than self.arg_errors: an inline credential is not an invalid configuration, so
+        it should not turn the same red "apps.yaml has N errors" banner on for a large
+        fraction of existing installs.
+        """
+        self.arg_warnings = {}
+        try:
+            from ruamel.yaml import YAML
+        except ImportError:
+            return
+
+        if apps_yaml_path is None:
+            apps_yaml_path = hass.resolve_apps_yaml_path()
+        if not os.path.exists(apps_yaml_path):
+            return
+
+        try:
+            yaml_loader = YAML(typ="rt")
+            with open(apps_yaml_path, "r") as handle:
+                data = yaml_loader.load(handle)
+        except Exception as e:
+            self.log("Warn: Unable to re-read {} to check for unmasked secrets: {}".format(apps_yaml_path, e))
+            return
+
+        if not isinstance(data, dict):
+            return
+        root = data.get("pred_bat")
+        if not isinstance(root, dict):
+            return
+
+        for key_path in find_unmasked_secret_paths(root):
+            self.arg_warnings[key_path] = "Credential-like value is stored in plain text in apps.yaml - consider using '!secret' to reference secrets.yaml instead"
+
+        if self.arg_warnings:
+            self.log("Warn: apps.yaml has {} credential-like value(s) not using the !secret mechanism: {}".format(len(self.arg_warnings), ", ".join(sorted(self.arg_warnings))))
 
     def validate_config_schedule_retry(self, errors):
         """
