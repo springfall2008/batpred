@@ -215,7 +215,11 @@ class WebChat:
         agent = self.agent
         if agent is None:
             return web.json_response({"error": "Chat is not configured"}, status=404)
-        return web.json_response({"models": [{"id": agent.default_model, "name": agent.default_model}], "default_model": agent.default_model})
+        try:
+            models = await agent.run_on_agent_loop(agent.list_models())
+        except AgentNotReadyError:
+            return web.json_response({"error": "The chat component is still starting"}, status=503)
+        return web.json_response({"models": models, "default_model": agent.default_model, "catalogue_available": len(models) > 1})
 
     async def html_chat_model(self, request):
         """Set the model for one conversation."""
@@ -623,6 +627,11 @@ body.dark-mode {
     background: var(--chat-input-bg);
     color: var(--chat-text);
 }
+
+#chat-model-note {
+    margin-left: 6px;
+    font-style: italic;
+}
 </style>
 """
 
@@ -653,7 +662,10 @@ def get_chat_body():
             <button id="chat-send" type="button">Send</button>
         </div>
         <div id="chat-footer">
-            <select id="chat-model"><option value="">Default model</option></select>
+            <span id="chat-model-wrap">
+                <select id="chat-model"><option value="">Default model</option></select>
+                <span id="chat-model-note"></span>
+            </span>
             <span id="chat-turn-usage"></span>
             <span id="chat-total-cost"></span>
         </div>
@@ -701,7 +713,7 @@ function setTitleText(node, title) {
 // the server's only shared state is the single active turn, broadcast via the busy/idle events.
 // ---------------------------------------------------------------------------------------------
 
-var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null };
+var state = { conversation: localStorage.getItem('predbatChatConversation'), cursor: 0, source: null, busy: null, models: [], defaultModel: '', currentModel: null, catalogueAvailable: true };
 var toolRows = {};
 var confirmCards = {};
 var pendingBubble = null;
@@ -749,6 +761,60 @@ function formatRelativeTime(iso) {
 
 function formatCost(cost) {
     return '$' + (Number(cost) || 0).toFixed(4);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Model picker. Model ids and names come from a third-party catalogue (OpenRouter) and are
+// untrusted, so every option is built with createElement/textContent - never by concatenating a
+// catalogue string into innerHTML. The model is stored per conversation: selecting 'Use default'
+// posts an empty id, which the server stores as None so a later apps.yaml change takes effect
+// rather than freezing the conversation on today's default.
+// ---------------------------------------------------------------------------------------------
+
+function populateModelPicker(models, selectedId) {
+    var select = byId('chat-model');
+    select.innerHTML = '';
+    var defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.textContent = 'Use default' + (state.defaultModel ? ' (' + state.defaultModel + ')' : '');
+    select.appendChild(defaultOption);
+    (models || []).forEach(function (model) {
+        var option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = model.name || model.id;
+        select.appendChild(option);
+    });
+    select.value = selectedId || '';
+}
+
+function updateModelNote() {
+    byId('chat-model-note').textContent = state.catalogueAvailable ? '' : '(catalogue unavailable - only the configured model is offered)';
+}
+
+function loadModels() {
+    return fetch('./chat/models')
+        .then(function (response) { return response.json(); })
+        .then(function (payload) {
+            state.models = payload.models || [];
+            state.defaultModel = payload.default_model || '';
+            state.catalogueAvailable = payload.catalogue_available !== false;
+            populateModelPicker(state.models, state.currentModel);
+            updateModelNote();
+        })
+        .catch(function (error) { console.error('Failed to load chat models', error); });
+}
+
+function changeModel() {
+    var id = byId('chat-model').value || null;
+    state.currentModel = id;
+    if (!state.conversation) {
+        return;
+    }
+    fetch('./chat/model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversation: state.conversation, id: id })
+    }).catch(function (error) { console.error('Failed to set chat model', error); });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1184,6 +1250,8 @@ function loadConversationData(id) {
         .then(function (payload) {
             renderHistory(payload);
             state.cursor = payload.cursor || 0;
+            state.currentModel = payload.model || null;
+            populateModelPicker(state.models, state.currentModel);
             if (payload.active) {
                 setBusy(payload.active.conversation_id, payload.active.title);
             } else {
@@ -1403,6 +1471,7 @@ function sendMessage() {
 document.addEventListener('DOMContentLoaded', function () {
     byId('chat-new').addEventListener('click', createConversation);
     byId('chat-send').addEventListener('click', sendMessage);
+    byId('chat-model').addEventListener('change', changeModel);
     byId('chat-input').addEventListener('keydown', function (event) {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
@@ -1427,6 +1496,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // Storage unavailable - leave the banner showing.
     }
 
+    loadModels();
     refreshConversations();
     if (state.conversation) {
         selectConversation(state.conversation);

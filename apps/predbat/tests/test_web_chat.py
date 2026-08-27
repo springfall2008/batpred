@@ -20,6 +20,7 @@ import re
 from aiohttp import web as aiohttp_web
 
 import web_chat
+from chat import AgentNotReadyError
 from web import WebInterface
 from web_chat import WebChat, format_sse_event
 
@@ -505,6 +506,214 @@ def test_dropped_connection_is_told_apart_from_a_real_error_frame(my_predbat):
     return failed
 
 
+def test_model_catalogue(my_predbat):
+    """Only tool-capable models are offered, and the apps.yaml model always is."""
+    failed = False
+    print("**** Testing the model catalogue ****")
+    import chat as chat_module
+
+    agent = chat_module.ChatAgent.__new__(chat_module.ChatAgent)
+    agent.default_model = "configured/model"
+    agent.base_url = "https://openrouter.example/api/v1"
+    agent.log = print
+    agent.storage_override = None
+
+    async def fake_catalogue():
+        """Return a catalogue with one tool-capable model and one without."""
+        return {"data": [{"id": "good/model", "name": "Good", "supported_parameters": ["tools", "temperature"]}, {"id": "bad/model", "name": "Bad", "supported_parameters": ["temperature"]}]}
+
+    agent.storage = None
+    agent._fetch_model_catalogue = fake_catalogue
+    models = asyncio.run(agent.list_models())
+    ids = [entry["id"] for entry in models]
+    if "good/model" not in ids:
+        print("ERROR: a tool-capable model was dropped: {}".format(ids))
+        failed = True
+    if "bad/model" in ids:
+        print("ERROR: a model without tool support was offered: {}".format(ids))
+        failed = True
+    if "configured/model" not in ids:
+        print("ERROR: the apps.yaml model must always be offered, even when absent from the catalogue")
+        failed = True
+
+    async def broken_catalogue():
+        """Simulate an unreachable catalogue."""
+        return None
+
+    agent._fetch_model_catalogue = broken_catalogue
+    fallback = asyncio.run(agent.list_models())
+    if [entry["id"] for entry in fallback] != ["configured/model"]:
+        print("ERROR: an unreachable catalogue should degrade to the configured model: {}".format(fallback))
+        failed = True
+
+    return failed
+
+
+def test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat):
+    """The /chat/models route marshals list_models() onto the agent's own loop.
+
+    The interface contract (see the task brief) is that the web layer never awaits
+    ``agent.list_models()`` directly - it performs Storage I/O and an outbound HTTP request, both
+    of which belong on the component's own loop, reached only via ``run_on_agent_loop``. A stand-in
+    whose ``run_on_agent_loop`` refuses to run anything (exactly what the real component does
+    before its own loop exists) proves that: if the handler instead awaited ``list_models()``
+    directly, this would not raise AgentNotReadyError and the assertions below would fail.
+    """
+    failed = False
+    print("**** Testing the /chat/models route ****")
+
+    class RichAgent:
+        """An agent stand-in whose list_models() is only reachable via run_on_agent_loop."""
+
+        default_model = "configured/model"
+
+        @staticmethod
+        async def list_models():
+            """Return a catalogue with more than just the configured model."""
+            return [{"id": "configured/model", "name": "configured/model"}, {"id": "good/model", "name": "Good"}]
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await the coroutine inline, standing in for the real cross-loop marshalling."""
+            return await coro
+
+    page = _make_web(my_predbat, agent=RichAgent()).chat_page
+    response = asyncio.run(page.html_chat_models(FakeRequest()))
+    if response.status != 200:
+        print("ERROR: /chat/models returned {}, expected 200".format(response.status))
+        failed = True
+    body = json.loads(response.text)
+    if [entry["id"] for entry in body.get("models", [])] != ["configured/model", "good/model"]:
+        print("ERROR: unexpected model list: {}".format(body.get("models")))
+        failed = True
+    if body.get("catalogue_available") is not True:
+        print("ERROR: catalogue_available should be True when more than the configured model is on offer: {}".format(body))
+        failed = True
+
+    calls = []
+
+    class NotReadyAgent:
+        """An agent stand-in whose loop has not started yet."""
+
+        default_model = "configured/model"
+
+        @staticmethod
+        async def list_models():
+            """Should never run - reachable only via run_on_agent_loop, which is not ready."""
+            calls.append("list_models")
+            return []
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Refuse to run the coroutine, exactly as the real component does before its loop exists."""
+            coro.close()
+            raise AgentNotReadyError("not ready")
+
+    page = _make_web(my_predbat, agent=NotReadyAgent()).chat_page
+    response = asyncio.run(page.html_chat_models(FakeRequest()))
+    if response.status != 503:
+        print("ERROR: /chat/models with a not-yet-started agent returned {}, expected 503 - this proves list_models() is only reached via run_on_agent_loop".format(response.status))
+        failed = True
+    if calls:
+        print("ERROR: list_models() ran directly, bypassing run_on_agent_loop: {}".format(calls))
+        failed = True
+
+    class SingleModelAgent:
+        """An agent stand-in whose catalogue degraded to just the configured model."""
+
+        default_model = "configured/model"
+
+        @staticmethod
+        async def list_models():
+            """Return only the configured model, as list_models() does when the catalogue is unreachable."""
+            return [{"id": "configured/model", "name": "configured/model"}]
+
+        @staticmethod
+        async def run_on_agent_loop(coro):
+            """Await the coroutine inline, standing in for the real cross-loop marshalling."""
+            return await coro
+
+    page = _make_web(my_predbat, agent=SingleModelAgent()).chat_page
+    response = asyncio.run(page.html_chat_models(FakeRequest()))
+    body = json.loads(response.text)
+    if body.get("catalogue_available") is not False:
+        print("ERROR: catalogue_available should be False when only the configured model is on offer: {}".format(body))
+        failed = True
+
+    return failed
+
+
+def test_model_picker_script_wires_routes_and_persists_selection(my_predbat):
+    """The model picker is built with createElement/textContent and persists per conversation.
+
+    Static checks on the client script's source text, in the same spirit as
+    test_stream_cursor_advances_from_every_event: there is no JavaScript runtime in this suite, so
+    the wiring is verified by inspecting the actual function bodies rather than merely scanning the
+    whole file for nearby-looking strings.
+    """
+    failed = False
+    print("**** Testing the model picker's client wiring ****")
+    script = web_chat.get_chat_script()
+
+    if "/chat/models" not in script:
+        print("ERROR: the client script never calls GET /chat/models to populate the picker")
+        failed = True
+    if "/chat/model" not in script.replace("/chat/models", ""):
+        print("ERROR: the client script never calls POST /chat/model to persist a selection")
+        failed = True
+
+    populate_body = _extract_function_body(script, "populateModelPicker")
+    if populate_body is None:
+        print("ERROR: could not find a populateModelPicker() function to inspect")
+        failed = True
+    else:
+        if "createElement" not in populate_body:
+            print("ERROR: populateModelPicker() does not build options with createElement")
+            failed = True
+        # Reuses the same sink audit as test_inner_html_sinks_only_ever_receive_escaped_content,
+        # rather than a fresh regex, because a naive `\.innerHTML\s*=\s*(?!'')` check backtracks
+        # around the whitespace before the quotes and silently stops catching anything - the
+        # allow-listed helper already gets this right and is exercised elsewhere in this suite.
+        for rhs in _extract_inner_html_assignments(populate_body):
+            if not _inner_html_rhs_is_safe(rhs):
+                print("ERROR: populateModelPicker() assigns catalogue content straight into innerHTML: {!r}".format(rhs.strip()))
+                failed = True
+        if ".textContent" not in populate_body:
+            print("ERROR: populateModelPicker() does not set option labels via textContent")
+            failed = True
+        if "''" not in populate_body and '""' not in populate_body:
+            print("ERROR: populateModelPicker() never offers an empty-value 'use default' option")
+            failed = True
+
+    # The picker's change handler must send both the conversation id and the chosen model id to
+    # POST /chat/model - persistence is per-conversation, not global. Anchored to the handler's own
+    # body (found by brace-counting, not a proximity regex) so it fails if the post is moved
+    # somewhere that no longer carries the conversation id, or dropped altogether.
+    change_body = _extract_function_body(script, "changeModel")
+    if change_body is None:
+        print("ERROR: could not find a changeModel() handler for the picker's change event")
+        failed = True
+    else:
+        if "state.conversation" not in change_body or "/chat/model" not in change_body:
+            print("ERROR: changeModel() does not post to /chat/model with the conversation id: {!r}".format(change_body))
+            failed = True
+        if "conversation:" not in change_body or ("id:" not in change_body):
+            print("ERROR: changeModel() does not post both conversation and id: {!r}".format(change_body))
+            failed = True
+    if "addEventListener('change', changeModel)" not in script and 'addEventListener("change", changeModel)' not in script:
+        print("ERROR: changeModel() is never wired to #chat-model's change event")
+        failed = True
+
+    # Reloading a conversation must restore its own stored model, not silently keep showing
+    # whatever was selected for the previous one.
+    load_body = _extract_function_body(script, "loadConversationData")
+    if load_body is None or "payload.model" not in load_body:
+        print("ERROR: loadConversationData() does not read the conversation's stored model back from the history payload")
+        failed = True
+
+    return failed
+
+
 def run_web_chat_tests(my_predbat):
     """Run every Chat tab web layer test, returning True if any of them failed."""
     failed = False
@@ -520,4 +729,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_inner_html_sinks_only_ever_receive_escaped_content(my_predbat)
     failed |= test_stream_cursor_advances_from_every_event(my_predbat)
     failed |= test_dropped_connection_is_told_apart_from_a_real_error_frame(my_predbat)
+    failed |= test_model_catalogue(my_predbat)
+    failed |= test_models_route_uses_agent_loop_and_reports_catalogue_availability(my_predbat)
+    failed |= test_model_picker_script_wires_routes_and_persists_selection(my_predbat)
     return failed

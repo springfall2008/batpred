@@ -30,6 +30,11 @@ from chat_tools import CHAT_TOOL_DEFS, DEFAULT_FETCH_ALLOWLIST, fetch_url, read_
 
 EVENT_BUFFER_MAX = 2000
 
+# How long a fetched model catalogue is trusted before list_models() refreshes it, and the extra
+# window past that during which a stale copy is served while one caller refreshes in the
+# background. OpenRouter's catalogue changes rarely enough that once a day is plenty.
+MODEL_CACHE_MINUTES = 1440
+
 # How long past its own deadline a turn must go before its slot is assumed abandoned. Only a
 # component restart can strand a slot, and that is rare - so the grace period is generous.
 STALE_TURN_GRACE_SECONDS = 60
@@ -146,11 +151,34 @@ class ChatAgent(ComponentBase):
         self.active = None
         self.pending_confirm = {}
         self.warned_web_search_base_url = False
+        # Left None here, storage_override never changes what self.storage resolves to - it exists
+        # purely so a test can inject a stand-in (or force storage off) on a bare ChatAgent built
+        # with ChatAgent.__new__, which has no base and no component registry to resolve against.
+        self.storage_override = None
         self.store = ConversationStore(self.storage, self.log, max_history=self.max_history, max_conversations=max_conversations or 20, expiry_days=expiry_days or 30)
         self.index_loaded = False
         self.turn_counter = 0
         self.tools = PredbatTools(self.base, log_func=self.log)
         self.tool_defs_by_name = {entry["name"]: entry for entry in list(TOOL_DEFS) + list(CHAT_TOOL_DEFS)}
+
+    @property
+    def storage(self):
+        """Return the Storage component, or a value a test has injected directly.
+
+        ComponentBase's own property re-resolves the component from the registry on every access,
+        which matters because Storage (phase 0) may not exist yet when a component built later
+        initializes. Overridden here with a setter purely so a test can stand up a bare ChatAgent
+        via __new__ - with no base and no component registry at all - and still control what
+        list_models() sees without needing Storage's real fetch_cached().
+        """
+        if self.storage_override is not None:
+            return self.storage_override
+        return super().storage
+
+    @storage.setter
+    def storage(self, value):
+        """Record a direct value for storage, letting a test inject a stand-in or force it off."""
+        self.storage_override = value
 
     def emit(self, conversation_id, event_type, data=None):
         """Append an event to the buffer and return its sequence number.
@@ -253,6 +281,48 @@ class ChatAgent(ComponentBase):
     def tool_payload(self):
         """Return the tool list offered to the model: the shared tools plus the chat-only ones."""
         return openai_tool_list() + openai_tool_list(CHAT_TOOL_DEFS)
+
+    async def _fetch_model_catalogue(self):
+        """Download the model catalogue from the configured endpoint."""
+        headers = {"Authorization": "Bearer {}".format(self.api_key)}
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get("{}/models".format(self.base_url), headers=headers) as response:
+                if response.status != 200:
+                    return None
+                return await response.json()
+
+    async def list_models(self):
+        """Return the tool-capable models on offer, always including the configured one.
+
+        A model with no tool support cannot drive this agent at all - it would answer from the
+        snapshot alone and never call get_plan - so the picker hides them rather than letting a
+        user select one and wonder why the answers got worse. The catalogue itself is cached once
+        a day via Storage's stale-while-revalidate helper, because it is only ever consulted to
+        populate a dropdown and does not need to be fetched on every page load; a custom
+        openrouter_base_url with no /models endpoint at all still works because the configured
+        model is added whether or not the catalogue could be read.
+        """
+        catalogue = None
+        storage = self.storage
+        try:
+            if storage:
+                catalogue = await storage.fetch_cached("chat", "models", self._fetch_model_catalogue, fresh_minutes=MODEL_CACHE_MINUTES, stale_minutes=MODEL_CACHE_MINUTES + 60, format="json")
+            else:
+                catalogue = await self._fetch_model_catalogue()
+        except Exception as error:
+            self.log("Warn: could not fetch the model catalogue from {}: {}".format(self.base_url, error))
+
+        models = []
+        for entry in (catalogue or {}).get("data") or []:
+            if "tools" not in (entry.get("supported_parameters") or []):
+                continue
+            pricing = entry.get("pricing") or {}
+            models.append({"id": entry.get("id"), "name": entry.get("name") or entry.get("id"), "prompt_price": pricing.get("prompt"), "completion_price": pricing.get("completion")})
+        models.sort(key=lambda entry: str(entry.get("id")))
+        if self.default_model not in [entry["id"] for entry in models]:
+            models.insert(0, {"id": self.default_model, "name": "{} (from apps.yaml)".format(self.default_model), "prompt_price": None, "completion_price": None})
+        return models
 
     async def _stream_chunks(self, payload):
         """Yield decoded chunk dicts from the chat-completions endpoint.
